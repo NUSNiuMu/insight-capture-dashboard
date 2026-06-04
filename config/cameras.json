@@ -1,0 +1,92 @@
+{
+  "ros_domain_id": 20,
+  "fixed_frame": "world",
+  "max_path_length": 3000,
+  "recording": {
+    "include_tf_static": true
+  },
+  "dashboard": {
+    "window_title": "Insight Monitoring Dashboard",
+    "fullscreen": true,
+    "trajectory": {
+      "max_points": 1500,
+      "view_yaw_deg": -35,
+      "view_pitch_deg": 28,
+      "ui_refresh_ms": 100,
+      "title": "3D VIO Trajectory",
+      "subtitle": "Interactive 3D view of x/y/z using current VIO poses.",
+      "axis_label": "y/z proj"
+    }
+  },
+  "cameras": [
+    {
+      "name": "insight7_a",
+      "enabled": true,
+      "namespace": "insight7_a",
+      "label": "Insight7 A",
+      "record_streams": [
+        "color_compressed",
+        "imu",
+        "vio_100hz",
+        "vio_20hz",
+        "vio_status"
+      ],
+      "path_pose_stream": "vio_20hz",
+      "path_topic": "/viz/insight7_a/path",
+      "dashboard_image_stream": "color_compressed",
+      "dashboard_label": "Insight7 A Color",
+      "dashboard_pose_stream": "vio_100hz",
+      "dashboard_color": "#ff5a5a",
+      "dashboard_row": 0,
+      "dashboard_column": 0,
+      "dashboard_row_span": 1,
+      "dashboard_column_span": 1
+    },
+    {
+      "name": "insight7_b",
+      "enabled": true,
+      "namespace": "insight7_b",
+      "label": "Insight7 B",
+      "record_streams": [
+        "color_compressed",
+        "imu",
+        "vio_100hz",
+        "vio_20hz",
+        "vio_status"
+      ],
+      "path_pose_stream": "vio_20hz",
+      "path_topic": "/viz/insight7_b/path",
+      "dashboard_image_stream": "color_compressed",
+      "dashboard_label": "Insight7 B Color",
+      "dashboard_pose_stream": "vio_100hz",
+      "dashboard_color": "#4aa8ff",
+      "dashboard_row": 1,
+      "dashboard_column": 0,
+      "dashboard_row_span": 1,
+      "dashboard_column_span": 1
+    },
+    {
+      "name": "insight9_a",
+      "enabled": true,
+      "namespace": "insight9_a",
+      "label": "Insight9 A",
+      "record_streams": [
+        "color_compressed",
+        "imu",
+        "vio_100hz",
+        "vio_20hz",
+        "vio_status"
+      ],
+      "path_pose_stream": "vio_20hz",
+      "path_topic": "/viz/insight9_a/path",
+      "dashboard_image_stream": "color_compressed",
+      "dashboard_label": "Insight9 A Color",
+      "dashboard_pose_stream": "vio_100hz",
+      "dashboard_color": "#57d67c",
+      "dashboard_row": 0,
+      "dashboard_column": 1,
+      "dashboard_row_span": 2,
+      "dashboard_column_span": 1
+    }
+  ]
+}

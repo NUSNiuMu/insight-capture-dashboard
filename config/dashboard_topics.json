@@ -1,0 +1,60 @@
+{
+  "window_title": "Insight Monitoring Dashboard",
+  "fixed_domain_id": 10,
+  "fullscreen": true,
+  "trajectory": {
+    "max_points": 1500,
+    "view_yaw_deg": 0,
+    "view_pitch_deg": 0,
+    "ui_refresh_ms": 100,
+    "title": "XY VIO Trajectory",
+    "subtitle": "Top-down x/y view using current VIO poses.",
+    "axis_label": "y"
+  },
+  "cameras": [
+    {
+      "name": "insight3_a_infra1",
+      "label": "Insight3 A Infra1",
+      "topic": "/insight3_a/camera/infra1/image_rect_raw",
+      "type": "image",
+      "row": 0,
+      "column": 0,
+      "column_span": 1
+    },
+    {
+      "name": "insight3_b_infra1",
+      "label": "Insight3 B Infra1",
+      "topic": "/insight3_b/camera/infra1/image_rect_raw",
+      "type": "image",
+      "row": 1,
+      "column": 0,
+      "column_span": 1
+    },
+    {
+      "name": "insight9_a_color",
+      "label": "Insight9 A Color",
+      "topic": "/insight9_a/camera/color/image_rect_raw/compressed",
+      "type": "compressed",
+      "row": 0,
+      "column": 1,
+      "column_span": 1
+    }
+  ],
+  "poses": [
+    {
+      "name": "insight3_a",
+      "topic": "/insight3_a/camera/vio_100hz",
+      "color": "#ff5a5a"
+    },
+    {
+      "name": "insight3_b",
+      "topic": "/insight3_b/camera/vio_100hz",
+      "color": "#4aa8ff"
+    },
+    {
+      "name": "insight9_a",
+      "topic": "/insight9_a/camera/vio_100hz",
+      "color": "#57d67c"
+    }
+  ]
+}
