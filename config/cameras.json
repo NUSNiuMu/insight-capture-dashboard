@@ -12,9 +12,9 @@
       "max_points": 1500,
       "view_yaw_deg": -35,
       "view_pitch_deg": 28,
-      "ui_refresh_ms": 100,
+      "ui_refresh_ms": 50,
       "image_decode_reduction": 4,
-      "display_fps_limit": 10,
+      "display_fps_limit": 0,
       "title": "3D VIO Trajectory",
       "subtitle": "Interactive 3D view of x/y/z using current VIO poses.",
       "axis_label": "y/z proj"

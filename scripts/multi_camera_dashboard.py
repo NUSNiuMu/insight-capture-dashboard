@@ -145,7 +145,7 @@ class DashboardNode(Node):
             image = self._convert_ros_image(msg)
             if image is not None:
                 self.latest_images[camera_name] = image
-                self.image_stats[camera_name] = f"{msg.width}x{msg.height} {msg.encoding}"
+                self.image_stats[camera_name] = "receiving"
                 self.image_versions[camera_name] += 1
 
         return callback
@@ -164,7 +164,7 @@ class DashboardNode(Node):
             if frame is not None:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 self.latest_images[camera_name] = frame
-                self.image_stats[camera_name] = f"compressed bytes={len(msg.data)}"
+                self.image_stats[camera_name] = "receiving"
                 self.image_versions[camera_name] += 1
 
         return callback
@@ -248,6 +248,7 @@ class DashboardApp:
             pose.name: tk.BooleanVar(value=True) for pose in self.node.poses
         }
         self.last_image_render_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
+        self.image_display_fps: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.last_image_versions: Dict[str, int] = {camera.name: -1 for camera in self.node.cameras}
         self.last_pose_versions: Dict[str, int] = {pose.name: -1 for pose in self.node.poses}
         self.last_panel_sizes: Dict[str, Tuple[int, int]] = {camera.name: (0, 0) for camera in self.node.cameras}
@@ -387,7 +388,7 @@ class DashboardApp:
     def _create_image_panel(self, parent: tk.Widget, title: str):
         frame = tk.Frame(parent, bg=self.PANEL, highlightbackground=self.BORDER, highlightthickness=1)
         tk.Label(frame, text=title, bg=self.PANEL, fg=self.TEXT, font=("Helvetica", 13, "bold")).pack(anchor="w", padx=12, pady=(10, 0))
-        stats = tk.Label(frame, text="waiting", bg=self.PANEL, fg=self.MUTED, font=("Helvetica", 9))
+        stats = tk.Label(frame, text="waiting", bg=self.PANEL, fg=self.MUTED, font=("Helvetica", 9, "bold"))
         stats.pack(anchor="w", padx=12, pady=(4, 8))
         image_canvas = tk.Canvas(frame, bg="#0c1116", highlightthickness=0)
         image_canvas.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
@@ -457,7 +458,10 @@ class DashboardApp:
         min_render_interval = 0.0 if self.node.display_fps_limit <= 0 else 1.0 / self.node.display_fps_limit
         for camera in self.node.cameras:
             panel = self.image_panels[camera.name]
-            panel["stats"].configure(text=self.node.image_stats[camera.name])
+            if self.node.latest_images[camera.name] is None:
+                panel["stats"].configure(text="waiting")
+            else:
+                panel["stats"].configure(text=f"{self.image_display_fps[camera.name]:.1f} FPS")
             image = self.node.latest_images[camera.name]
             if image is None:
                 continue
@@ -478,6 +482,13 @@ class DashboardApp:
             self.photo_refs[camera.name] = photo
             canvas.delete("all")
             canvas.create_image(canvas_w / 2, canvas_h / 2, image=photo, anchor="center")
+            previous_render_time = self.last_image_render_time[camera.name]
+            if previous_render_time > 0:
+                inst_fps = 1.0 / max(now - previous_render_time, 1e-6)
+                self.image_display_fps[camera.name] = (
+                    inst_fps if self.image_display_fps[camera.name] <= 0
+                    else 0.7 * self.image_display_fps[camera.name] + 0.3 * inst_fps
+                )
             self.last_image_render_time[camera.name] = now
             self.last_image_versions[camera.name] = self.node.image_versions[camera.name]
             self.last_panel_sizes[camera.name] = panel_size

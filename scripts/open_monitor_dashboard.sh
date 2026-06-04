@@ -9,6 +9,16 @@ CONFIG_PATH="${ROOT_DIR}/config/cameras.json"
 DEFAULT_DOMAIN_ID="$(python3 "${SCRIPT_DIR}/camera_setup.py" --config "${CONFIG_PATH}" --ros-domain-id)"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-${DEFAULT_DOMAIN_ID}}"
 export DISPLAY="${DISPLAY:-:0}"
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
+
+PYQT_PLUGIN_PATH="$(python3 - <<'PY'
+from PyQt5.QtCore import QLibraryInfo
+print(QLibraryInfo.location(QLibraryInfo.PluginsPath))
+PY
+)"
+if [[ -n "${PYQT_PLUGIN_PATH}" ]]; then
+  export QT_QPA_PLATFORM_PLUGIN_PATH="${PYQT_PLUGIN_PATH}"
+fi
 
 set +u
 source /opt/ros/humble/setup.bash
@@ -19,4 +29,5 @@ mkdir -p "${ROS_LOG_DIR}"
 
 echo "ROS_DOMAIN_ID: ${ROS_DOMAIN_ID}"
 echo "DISPLAY: ${DISPLAY}"
-exec python3 "${SCRIPT_DIR}/multi_camera_dashboard.py" --config "${CONFIG_PATH}"
+echo "QT_QPA_PLATFORM_PLUGIN_PATH: ${QT_QPA_PLATFORM_PLUGIN_PATH:-unset}"
+exec python3 "${SCRIPT_DIR}/multi_camera_dashboard_qt.py" --config "${CONFIG_PATH}"
