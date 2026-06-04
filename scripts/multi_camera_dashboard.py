@@ -3,6 +3,7 @@
 import argparse
 import math
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -24,6 +25,15 @@ from camera_setup import build_dashboard_config, load_setup
 def make_qos(depth: int = 10) -> QoSProfile:
     return QoSProfile(
         reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.VOLATILE,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=depth,
+    )
+
+
+def make_image_qos(depth: int = 1) -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.BEST_EFFORT,
         durability=DurabilityPolicy.VOLATILE,
         history=HistoryPolicy.KEEP_LAST,
         depth=depth,
@@ -61,6 +71,8 @@ class DashboardNode(Node):
         self.view_yaw_deg = float(config.get("trajectory", {}).get("view_yaw_deg", -35))
         self.view_pitch_deg = float(config.get("trajectory", {}).get("view_pitch_deg", 28))
         self.ui_refresh_ms = int(config.get("trajectory", {}).get("ui_refresh_ms", 100))
+        self.image_decode_reduction = int(config.get("trajectory", {}).get("image_decode_reduction", 2))
+        self.display_fps_limit = float(config.get("trajectory", {}).get("display_fps_limit", 10))
         self.trajectory_title = config.get("trajectory", {}).get("title", "3D VIO Trajectory")
         self.trajectory_subtitle = config.get("trajectory", {}).get(
             "subtitle",
@@ -98,21 +110,22 @@ class DashboardNode(Node):
         self.pose_versions: Dict[str, int] = {pose.name: 0 for pose in self.poses}
         self.dashboard_subscriptions = []
 
-        qos = make_qos()
+        image_qos = make_image_qos()
+        pose_qos = make_qos()
         for camera in self.cameras:
             if camera.topic_type == "compressed":
                 sub = self.create_subscription(
                     CompressedImage,
                     camera.topic,
                     self._make_compressed_callback(camera.name),
-                    qos,
+                    image_qos,
                 )
             else:
                 sub = self.create_subscription(
                     RosImage,
                     camera.topic,
                     self._make_image_callback(camera.name),
-                    qos,
+                    image_qos,
                 )
             self.dashboard_subscriptions.append(sub)
             self.get_logger().info(f"Image: {camera.label} <- {camera.topic}")
@@ -122,7 +135,7 @@ class DashboardNode(Node):
                 PoseStamped,
                 pose.topic,
                 self._make_pose_callback(pose.name),
-                qos,
+                pose_qos,
             )
             self.dashboard_subscriptions.append(sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
@@ -140,7 +153,14 @@ class DashboardNode(Node):
     def _make_compressed_callback(self, camera_name: str):
         def callback(msg: CompressedImage) -> None:
             np_arr = np.frombuffer(msg.data, dtype=np.uint8)
-            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            decode_mode = cv2.IMREAD_COLOR
+            if self.image_decode_reduction >= 8:
+                decode_mode = cv2.IMREAD_REDUCED_COLOR_8
+            elif self.image_decode_reduction >= 4:
+                decode_mode = cv2.IMREAD_REDUCED_COLOR_4
+            elif self.image_decode_reduction >= 2:
+                decode_mode = cv2.IMREAD_REDUCED_COLOR_2
+            frame = cv2.imdecode(np_arr, decode_mode)
             if frame is not None:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 self.latest_images[camera_name] = frame
@@ -227,6 +247,7 @@ class DashboardApp:
         self.pose_visibility_vars: Dict[str, tk.BooleanVar] = {
             pose.name: tk.BooleanVar(value=True) for pose in self.node.poses
         }
+        self.last_image_render_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.last_image_versions: Dict[str, int] = {camera.name: -1 for camera in self.node.cameras}
         self.last_pose_versions: Dict[str, int] = {pose.name: -1 for pose in self.node.poses}
         self.last_panel_sizes: Dict[str, Tuple[int, int]] = {camera.name: (0, 0) for camera in self.node.cameras}
@@ -432,6 +453,8 @@ class DashboardApp:
         self.root.after(self.node.ui_refresh_ms, self._tick)
 
     def _refresh_images(self) -> None:
+        now = time.monotonic()
+        min_render_interval = 0.0 if self.node.display_fps_limit <= 0 else 1.0 / self.node.display_fps_limit
         for camera in self.node.cameras:
             panel = self.image_panels[camera.name]
             panel["stats"].configure(text=self.node.image_stats[camera.name])
@@ -447,12 +470,15 @@ class DashboardApp:
                 and self.last_panel_sizes[camera.name] == panel_size
             ):
                 continue
+            if min_render_interval > 0 and (now - self.last_image_render_time[camera.name]) < min_render_interval:
+                continue
 
             rendered = self._fit_image(image, canvas_w, canvas_h)
             photo = ImageTk.PhotoImage(Image.fromarray(rendered))
             self.photo_refs[camera.name] = photo
             canvas.delete("all")
             canvas.create_image(canvas_w / 2, canvas_h / 2, image=photo, anchor="center")
+            self.last_image_render_time[camera.name] = now
             self.last_image_versions[camera.name] = self.node.image_versions[camera.name]
             self.last_panel_sizes[camera.name] = panel_size
 
@@ -492,7 +518,7 @@ class DashboardApp:
             return
 
         projected, _bounds, scene = self._project_traces(all_points, width=width, height=height)
-        self._draw_view_hint(width)
+        self._draw_axes(width, height, scene)
 
         for pose in self.node.poses:
             trace = self.node.traces[pose.name]
@@ -513,8 +539,7 @@ class DashboardApp:
             return f"{name}: hidden"
         if pose is None:
             return f"{name}: waiting for VIO"
-        points = len(self.node.traces[name])
-        return f"{name}: receiving, {points} pts"
+        return f"{name}: x={pose[0]:.2f}, y={pose[1]:.2f}, z={pose[2]:.2f}"
 
     def _project_traces(self, points: List[Tuple[float, float, float]], scene=None, width: int = 0, height: int = 0):
         yaw = math.radians(self.view_yaw_deg)
@@ -568,7 +593,20 @@ class DashboardApp:
         bounds = (min(xs), max(xs), min(ys), max(ys))
         return projected, bounds, scene
 
-    def _draw_view_hint(self, width: int) -> None:
+    def _draw_axes(self, width: int, height: int, scene) -> None:
+        radius = max(scene["radius"], 0.5)
+        axes = [
+            ((0.0, 0.0, 0.0), (radius, 0.0, 0.0), "#ff6b6b", "x"),
+            ((0.0, 0.0, 0.0), (0.0, radius, 0.0), "#5dade2", "y"),
+            ((0.0, 0.0, 0.0), (0.0, 0.0, radius), "#58d68d", "z"),
+        ]
+        for start, end, color, label in axes:
+            projected, _bounds, _ = self._project_traces([start, end], scene=scene, width=width, height=height)
+            x1, y1 = projected[0]
+            x2, y2 = projected[1]
+            self.traj_canvas.create_line(x1, y1, x2, y2, fill=color, width=2)
+            self.traj_canvas.create_text(x2 + 8, y2, anchor="w", text=label, fill=color, font=("Helvetica", 10, "bold"))
+
         self.traj_canvas.create_text(28, 22, anchor="nw", text=f"yaw {self.view_yaw_deg:.0f}°, pitch {self.view_pitch_deg:.0f}°, zoom {self.view_zoom:.2f}x", fill=self.MUTED, font=("Helvetica", 10))
         self.traj_canvas.create_text(
             width - 28,
