@@ -4,6 +4,7 @@ import argparse
 import math
 import os
 import queue
+import statistics
 import threading
 import time
 from io import BytesIO
@@ -38,9 +39,14 @@ def make_qos(depth: int = 10) -> QoSProfile:
     )
 
 
-def make_image_qos(depth: int = 1) -> QoSProfile:
+def make_image_qos(depth: int = 1, reliability: str = "best_effort") -> QoSProfile:
+    reliability_policy = (
+        ReliabilityPolicy.RELIABLE
+        if str(reliability).lower() == "reliable"
+        else ReliabilityPolicy.BEST_EFFORT
+    )
     return QoSProfile(
-        reliability=ReliabilityPolicy.BEST_EFFORT,
+        reliability=reliability_policy,
         durability=DurabilityPolicy.VOLATILE,
         history=HistoryPolicy.KEEP_LAST,
         depth=depth,
@@ -79,6 +85,7 @@ class DashboardNode(Node):
         self.ui_refresh_ms = int(config.get("trajectory", {}).get("ui_refresh_ms", 100))
         self.image_decode_reduction = int(config.get("trajectory", {}).get("image_decode_reduction", 4))
         self.display_fps_limit = float(config.get("trajectory", {}).get("display_fps_limit", 6))
+        self.image_qos_reliability = str(config.get("trajectory", {}).get("image_qos_reliability", "best_effort"))
         self.trajectory_title = config.get("trajectory", {}).get("title", "3D VIO Trajectory")
         self.trajectory_subtitle = config.get("trajectory", {}).get(
             "subtitle", "Interactive 3D view of x/y/z using current VIO poses."
@@ -105,6 +112,14 @@ class DashboardNode(Node):
         self.latest_images: Dict[str, Optional[np.ndarray]] = {camera.name: None for camera in self.cameras}
         self.image_versions: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
         self.image_lock = threading.Lock()
+        self.last_frame_received_time: Dict[str, float] = {camera.name: 0.0 for camera in self.cameras}
+        self.last_frame_decoded_time: Dict[str, float] = {camera.name: 0.0 for camera in self.cameras}
+        self.frame_received_count: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
+        self.frame_decoded_count: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
+        self.decode_durations_ms: Dict[str, List[float]] = {camera.name: [] for camera in self.cameras}
+        self.debug_lock = threading.Lock()
+        self.probe_received_count: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
+        self.probe_last_time: Dict[str, float] = {camera.name: 0.0 for camera in self.cameras}
 
         self.pending_messages: Dict[str, Optional[object]] = {camera.name: None for camera in self.cameras}
         self.pending_lock = threading.Lock()
@@ -127,7 +142,7 @@ class DashboardNode(Node):
             worker.start()
             self.decoder_threads.append(worker)
 
-        image_qos = make_image_qos()
+        image_qos = make_image_qos(reliability=self.image_qos_reliability)
         pose_qos = make_qos()
 
         for camera in self.cameras:
@@ -146,7 +161,19 @@ class DashboardNode(Node):
                     image_qos,
                 )
             self.dashboard_subscriptions.append(sub)
-            self.get_logger().info(f"Image: {camera.label} <- {camera.topic}")
+            self.get_logger().info(
+                f"Image: {camera.label} <- {camera.topic} "
+                f"(qos={self.image_qos_reliability}, depth={image_qos.depth})"
+            )
+            if camera.name == "insight9_a":
+                probe_sub = self.create_subscription(
+                    CompressedImage if camera.topic_type == "compressed" else RosImage,
+                    camera.topic,
+                    self._make_probe_callback(camera.name),
+                    image_qos,
+                )
+                self.dashboard_subscriptions.append(probe_sub)
+                self.get_logger().info(f"Probe: {camera.name} <- {camera.topic}")
 
         for pose in self.poses:
             sub = self.create_subscription(
@@ -186,7 +213,18 @@ class DashboardNode(Node):
 
         return callback
 
+    def _make_probe_callback(self, camera_name: str):
+        def callback(_msg: object) -> None:
+            with self.debug_lock:
+                self.probe_received_count[camera_name] += 1
+                self.probe_last_time[camera_name] = time.monotonic()
+
+        return callback
+
     def _queue_frame(self, camera_name: str, msg: object) -> None:
+        with self.debug_lock:
+            self.last_frame_received_time[camera_name] = time.monotonic()
+            self.frame_received_count[camera_name] += 1
         with self.pending_lock:
             self.pending_messages[camera_name] = msg
         self.decoder_events[camera_name].set()
@@ -206,13 +244,26 @@ class DashboardNode(Node):
             if msg is None:
                 continue
 
-            image = self._decode_message(camera, msg)
+            try:
+                decode_start = time.monotonic()
+                image = self._decode_message(camera, msg)
+                decode_ms = (time.monotonic() - decode_start) * 1000.0
+            except Exception as exc:
+                self.get_logger().warning(f"Decoder worker failed for {camera.name}: {exc}")
+                continue
             if image is None:
                 continue
 
             with self.image_lock:
                 self.latest_images[camera.name] = image
                 self.image_versions[camera.name] += 1
+            with self.debug_lock:
+                self.last_frame_decoded_time[camera.name] = time.monotonic()
+                self.frame_decoded_count[camera.name] += 1
+                durations = self.decode_durations_ms[camera.name]
+                durations.append(decode_ms)
+                if len(durations) > 60:
+                    del durations[: len(durations) - 60]
 
     def _decode_message(self, camera: CameraSpec, msg: object) -> Optional[np.ndarray]:
         if camera.topic_type == "compressed":
@@ -233,7 +284,8 @@ class DashboardNode(Node):
                     new_w = max(1, img.width // reduction)
                     new_h = max(1, img.height // reduction)
                     img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
-                return np.array(img)
+                image = np.array(img, dtype=np.uint8)
+                return np.ascontiguousarray(image)
         except Exception:
             return None
 
@@ -242,21 +294,48 @@ class DashboardNode(Node):
             return None
         data = np.frombuffer(msg.data, dtype=np.uint8)
         encoding = msg.encoding.lower()
+        channels_by_encoding = {
+            "mono8": 1,
+            "8uc1": 1,
+            "rgb8": 3,
+            "bgr8": 3,
+            "rgba8": 4,
+            "bgra8": 4,
+        }
+        channels = channels_by_encoding.get(encoding)
+        if channels is None:
+            channels = max(msg.step // max(msg.width, 1), 1)
+        if msg.step <= 0 or data.size < msg.step * msg.height:
+            return None
+        row_bytes = msg.step
+        image = data[: row_bytes * msg.height].reshape((msg.height, row_bytes))
+
         if encoding in ("mono8", "8uc1"):
-            image = data.reshape((msg.height, msg.width))
-            return np.repeat(image[:, :, None], 3, axis=2)
+            gray = image[:, : msg.width]
+            rgb = np.repeat(gray[:, :, None], 3, axis=2).astype(np.uint8, copy=False)
+            return np.ascontiguousarray(rgb)
         if encoding == "rgb8":
-            return data.reshape((msg.height, msg.width, 3))
+            rgb = image[:, : msg.width * 3].reshape((msg.height, msg.width, 3))
+            return np.ascontiguousarray(rgb.astype(np.uint8, copy=False))
         if encoding == "bgr8":
-            image = data.reshape((msg.height, msg.width, 3))
-            return image[:, :, ::-1]
-        step_channels = max(msg.step // msg.width, 1)
-        image = data.reshape((msg.height, msg.width, step_channels))
+            bgr = image[:, : msg.width * 3].reshape((msg.height, msg.width, 3))
+            return np.ascontiguousarray(bgr[:, :, ::-1].astype(np.uint8, copy=False))
+        if encoding == "rgba8":
+            rgba = image[:, : msg.width * 4].reshape((msg.height, msg.width, 4))
+            return np.ascontiguousarray(rgba[:, :, :3].astype(np.uint8, copy=False))
+        if encoding == "bgra8":
+            bgra = image[:, : msg.width * 4].reshape((msg.height, msg.width, 4))
+            rgb = bgra[:, :, [2, 1, 0]]
+            return np.ascontiguousarray(rgb.astype(np.uint8, copy=False))
+        step_channels = max(msg.step // max(msg.width, 1), 1)
+        pixel_image = image[:, : msg.width * step_channels].reshape((msg.height, msg.width, step_channels))
         if step_channels >= 3:
-            return image[:, :, :3]
+            rgb = pixel_image[:, :, :3]
+            return np.ascontiguousarray(rgb.astype(np.uint8, copy=False))
         if step_channels == 1:
-            gray = image[:, :, 0]
-            return np.repeat(gray[:, :, None], 3, axis=2)
+            gray = pixel_image[:, :, 0]
+            rgb = np.repeat(gray[:, :, None], 3, axis=2).astype(np.uint8, copy=False)
+            return np.ascontiguousarray(rgb)
         return None
 
     def shutdown_workers(self) -> None:
@@ -351,13 +430,21 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.last_image_versions: Dict[str, int] = {camera.name: -1 for camera in self.node.cameras}
         self.last_image_render_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.image_display_fps: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
+        self.last_displayed_image_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
+        self.last_debug_counts: Dict[str, Tuple[int, int]] = {camera.name: (0, 0) for camera in self.node.cameras}
+        self.last_probe_counts: Dict[str, int] = {camera.name: 0 for camera in self.node.cameras}
+        self.ui_render_durations_ms: Dict[str, List[float]] = {camera.name: [] for camera in self.node.cameras}
+        self.last_ui_refresh_started: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
+        self.last_ui_refresh_completed: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
+        self.ui_skip_count: Dict[str, int] = {camera.name: 0 for camera in self.node.cameras}
+        self.last_trajectory_refresh_started: float = 0.0
+        self.last_trajectory_refresh_completed: float = 0.0
+        self.trajectory_render_durations_ms: List[float] = []
         self.pose_visibility: Dict[str, bool] = {pose.name: True for pose in self.node.poses}
+        self.image_timers: Dict[str, QtCore.QTimer] = {}
         self.spin_thread = threading.Thread(target=self.executor.spin, daemon=True)
         self._build_ui()
-
-        self.refresh_timer = QtCore.QTimer(self)
-        self.refresh_timer.timeout.connect(self.refresh_view)
-        self.refresh_timer.start(max(16, self.node.ui_refresh_ms))
+        self._setup_timers()
 
     def _build_ui(self) -> None:
         central = QtWidgets.QWidget()
@@ -458,6 +545,23 @@ class DashboardWindow(QtWidgets.QMainWindow):
             status_layout.addLayout(row)
             self.pose_labels[pose.name] = label
 
+    def _setup_timers(self) -> None:
+        fps = max(1.0, float(self.node.display_fps_limit))
+        interval_ms = max(16, int(1000.0 / fps))
+        for idx, camera in enumerate(self.node.cameras):
+            timer = QtCore.QTimer(self)
+            timer.timeout.connect(lambda cam_name=camera.name: self.refresh_image(cam_name))
+            timer.start(interval_ms + (idx * 5))
+            self.image_timers[camera.name] = timer
+
+        self.refresh_timer = QtCore.QTimer(self)
+        self.refresh_timer.timeout.connect(self.refresh_trajectory)
+        self.refresh_timer.start(max(50, self.node.ui_refresh_ms))
+
+        self.debug_timer = QtCore.QTimer(self)
+        self.debug_timer.timeout.connect(self.print_debug_status)
+        self.debug_timer.start(1000)
+
     def _make_pose_toggle(self, pose_name: str):
         def handler(checked: bool) -> None:
             self.pose_visibility[pose_name] = checked
@@ -473,7 +577,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
             self.show()
 
     def closeEvent(self, event) -> None:
+        for timer in self.image_timers.values():
+            timer.stop()
         self.refresh_timer.stop()
+        self.debug_timer.stop()
         self.node.shutdown_workers()
         self.executor.shutdown()
         self.node.destroy_node()
@@ -487,39 +594,51 @@ class DashboardWindow(QtWidgets.QMainWindow):
             return
         super().keyPressEvent(event)
 
-    def refresh_view(self) -> None:
+    def refresh_image(self, camera_name: str) -> None:
         try:
             now = time.monotonic()
-            min_render_interval = 0.0 if self.node.display_fps_limit <= 0 else 1.0 / self.node.display_fps_limit
+            self.last_ui_refresh_started[camera_name] = now
+            with self.node.image_lock:
+                image = self.node.latest_images[camera_name]
+                version = self.node.image_versions[camera_name]
+            panel = self.image_panels[camera_name]
+            if image is None:
+                panel.fps_label.setText("waiting")
+                self.last_ui_refresh_completed[camera_name] = time.monotonic()
+                return
+            if version == self.last_image_versions[camera_name] and panel.image_label.pixmap() is not None:
+                self.ui_skip_count[camera_name] += 1
+                panel.fps_label.setText(f"{self.image_display_fps[camera_name]:.1f} FPS")
+                self.last_ui_refresh_completed[camera_name] = time.monotonic()
+                return
 
-            for camera in self.node.cameras:
-                with self.node.image_lock:
-                    image = self.node.latest_images[camera.name]
-                    version = self.node.image_versions[camera.name]
-                panel = self.image_panels[camera.name]
-                if image is None:
-                    panel.fps_label.setText("waiting")
-                    continue
-                if version == self.last_image_versions[camera.name] and panel.image_label.pixmap() is not None:
-                    panel.fps_label.setText(f"{self.image_display_fps[camera.name]:.1f} FPS")
-                    continue
-                if min_render_interval > 0 and (now - self.last_image_render_time[camera.name]) < min_render_interval:
-                    panel.fps_label.setText(f"{self.image_display_fps[camera.name]:.1f} FPS")
-                    continue
+            pixmap = self._pixmap_from_image(image, panel.image_label.size())
+            panel.image_label.setPixmap(pixmap)
+            previous = self.last_image_render_time[camera_name]
+            if previous > 0:
+                inst_fps = 1.0 / max(now - previous, 1e-6)
+                self.image_display_fps[camera_name] = (
+                    inst_fps if self.image_display_fps[camera_name] <= 0
+                    else 0.7 * self.image_display_fps[camera_name] + 0.3 * inst_fps
+                )
+            self.last_image_render_time[camera_name] = now
+            self.last_displayed_image_time[camera_name] = now
+            self.last_image_versions[camera_name] = version
+            panel.fps_label.setText(f"{self.image_display_fps[camera_name]:.1f} FPS")
+            end = time.monotonic()
+            self.last_ui_refresh_completed[camera_name] = end
+            render_ms = (end - now) * 1000.0
+            samples = self.ui_render_durations_ms[camera_name]
+            samples.append(render_ms)
+            if len(samples) > 60:
+                del samples[: len(samples) - 60]
+        except KeyboardInterrupt:
+            self.close()
 
-                pixmap = self._pixmap_from_image(image, panel.image_label.size())
-                panel.image_label.setPixmap(pixmap)
-                previous = self.last_image_render_time[camera.name]
-                if previous > 0:
-                    inst_fps = 1.0 / max(now - previous, 1e-6)
-                    self.image_display_fps[camera.name] = (
-                        inst_fps if self.image_display_fps[camera.name] <= 0
-                        else 0.7 * self.image_display_fps[camera.name] + 0.3 * inst_fps
-                    )
-                self.last_image_render_time[camera.name] = now
-                self.last_image_versions[camera.name] = version
-                panel.fps_label.setText(f"{self.image_display_fps[camera.name]:.1f} FPS")
-
+    def refresh_trajectory(self) -> None:
+        try:
+            start = time.monotonic()
+            self.last_trajectory_refresh_started = start
             for pose in self.node.poses:
                 visible = self.pose_visibility[pose.name]
                 latest = self.node.latest_pose[pose.name]
@@ -532,10 +651,72 @@ class DashboardWindow(QtWidgets.QMainWindow):
                         f"{pose.name}: x={latest[0]:.2f}, y={latest[1]:.2f}, z={latest[2]:.2f}"
                     )
             self.traj_widget.update()
+            end = time.monotonic()
+            self.last_trajectory_refresh_completed = end
+            render_ms = (end - start) * 1000.0
+            self.trajectory_render_durations_ms.append(render_ms)
+            if len(self.trajectory_render_durations_ms) > 60:
+                del self.trajectory_render_durations_ms[: len(self.trajectory_render_durations_ms) - 60]
         except KeyboardInterrupt:
             self.close()
 
+    def print_debug_status(self) -> None:
+        try:
+            now = time.monotonic()
+            parts: List[str] = []
+            with self.node.debug_lock:
+                for camera in self.node.cameras:
+                    recv_count = self.node.frame_received_count[camera.name]
+                    dec_count = self.node.frame_decoded_count[camera.name]
+                    probe_count = self.node.probe_received_count[camera.name]
+                    prev_recv, prev_dec = self.last_debug_counts[camera.name]
+                    recv_delta = recv_count - prev_recv
+                    dec_delta = dec_count - prev_dec
+                    self.last_debug_counts[camera.name] = (recv_count, dec_count)
+                    probe_prev = self.last_probe_counts[camera.name]
+                    probe_delta = probe_count - probe_prev
+                    self.last_probe_counts[camera.name] = probe_count
+                    recv_age = now - self.node.last_frame_received_time[camera.name] if self.node.last_frame_received_time[camera.name] > 0 else -1.0
+                    dec_age = now - self.node.last_frame_decoded_time[camera.name] if self.node.last_frame_decoded_time[camera.name] > 0 else -1.0
+                    probe_age = now - self.node.probe_last_time[camera.name] if self.node.probe_last_time[camera.name] > 0 else -1.0
+                    disp_age = now - self.last_displayed_image_time[camera.name] if self.last_displayed_image_time[camera.name] > 0 else -1.0
+                    decode_samples = list(self.node.decode_durations_ms[camera.name])
+                    decode_avg = statistics.fmean(decode_samples) if decode_samples else 0.0
+                    decode_max = max(decode_samples) if decode_samples else 0.0
+                    ui_samples = list(self.ui_render_durations_ms[camera.name])
+                    ui_avg = statistics.fmean(ui_samples) if ui_samples else 0.0
+                    ui_max = max(ui_samples) if ui_samples else 0.0
+                    ui_busy_age = now - self.last_ui_refresh_started[camera.name] if self.last_ui_refresh_started[camera.name] > 0 else -1.0
+                    ui_done_age = now - self.last_ui_refresh_completed[camera.name] if self.last_ui_refresh_completed[camera.name] > 0 else -1.0
+                    skipped = self.ui_skip_count[camera.name]
+                    self.ui_skip_count[camera.name] = 0
+                    pending = 0
+                    with self.node.pending_lock:
+                        pending = 1 if self.node.pending_messages[camera.name] is not None else 0
+                    parts.append(
+                        f"{camera.name}: recv+{recv_delta}/s total={recv_count} age={recv_age:.2f}s | "
+                        f"probe+{probe_delta}/s total={probe_count} age={probe_age:.2f}s | "
+                        f"dec+{dec_delta}/s total={dec_count} age={dec_age:.2f}s avg={decode_avg:.1f}ms max={decode_max:.1f}ms | "
+                        f"ver={self.node.image_versions[camera.name]} disp_fps={self.image_display_fps[camera.name]:.1f} disp_age={disp_age:.2f}s pending={pending} | "
+                        f"ui_avg={ui_avg:.1f}ms ui_max={ui_max:.1f}ms ui_busy_age={ui_busy_age:.2f}s ui_done_age={ui_done_age:.2f}s skips={skipped}"
+                    )
+            traj_avg = statistics.fmean(self.trajectory_render_durations_ms) if self.trajectory_render_durations_ms else 0.0
+            traj_max = max(self.trajectory_render_durations_ms) if self.trajectory_render_durations_ms else 0.0
+            traj_busy_age = now - self.last_trajectory_refresh_started if self.last_trajectory_refresh_started > 0 else -1.0
+            traj_done_age = now - self.last_trajectory_refresh_completed if self.last_trajectory_refresh_completed > 0 else -1.0
+            if parts:
+                print(
+                    "[dashboard-debug] "
+                    + " || ".join(parts)
+                    + f" || traj_ui_avg={traj_avg:.1f}ms traj_ui_max={traj_max:.1f}ms "
+                      f"traj_busy_age={traj_busy_age:.2f}s traj_done_age={traj_done_age:.2f}s",
+                    flush=True,
+                )
+        except Exception as exc:
+            print(f"[dashboard-debug] failed to print status: {exc}", flush=True)
+
     def _pixmap_from_image(self, image: np.ndarray, target_size: QtCore.QSize) -> QtGui.QPixmap:
+        image = np.ascontiguousarray(image, dtype=np.uint8)
         h, w = image.shape[:2]
         bytes_per_line = w * 3
         qimage = QtGui.QImage(image.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888).copy()
@@ -544,7 +725,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
             max(target_size.width(), 10),
             max(target_size.height(), 10),
             QtCore.Qt.KeepAspectRatio,
-            QtCore.Qt.SmoothTransformation,
+            QtCore.Qt.FastTransformation,
         )
 
     def on_traj_press(self, x: int, y: int) -> None:
