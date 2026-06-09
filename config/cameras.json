@@ -1,24 +1,49 @@
 {
   "ros_domain_id": 20,
-  "fixed_frame": "world",
-  "max_path_length": 3000,
-  "recording": {
-    "include_tf_static": true
+  "session_alignment": {
+    "enabled": true,
+    "reference_camera": "insight9_a",
+    "calibration": {
+      "method": "board_relative",
+      "image_stream": "color_compressed",
+      "marker_length_m": 0.055,
+      "marker_separation_m": 0.0165,
+      "board_rows": 6,
+      "board_cols": 6,
+      "dictionary": "DICT_APRILTAG_36h11",
+      "required_samples": 12,
+      "stability_window": 20,
+      "max_translation_std_m": 0.25,
+      "max_rotation_std_deg": 6.0,
+      "min_detected_tags": 4,
+      "max_group_span_ms": 90.0,
+      "pending_image_limit": 3,
+      "pending_max_age_ms": 500.0,
+      "detection_buffer_limit": 20,
+      "detection_max_age_ms": 500.0,
+      "alignment_image_scale": 0.5,
+      "lock_on_first_solution": true,
+      "reset_traces_on_lock": true,
+      "anchor_rotation_mode": "yaw",
+      "dashboard_horizontal_yaw_mode": "manual",
+      "dashboard_horizontal_yaw_deg": 0.0,
+      "timeout_sec": 45.0
+    }
   },
   "dashboard": {
     "window_title": "Insight Monitoring Dashboard",
     "fullscreen": true,
     "trajectory": {
-      "max_points": 1500,
+      "max_points": 300,
       "view_yaw_deg": -35,
       "view_pitch_deg": 28,
       "ui_refresh_ms": 50,
-      "image_decode_reduction": 4,
-      "display_fps_limit": 10,
+      "image_decode_reduction": 0,
+      "display_fps_limit": 20,
       "image_qos_reliability": "reliable",
       "title": "3D VIO Trajectory",
-      "subtitle": "Interactive 3D view of x/y/z using current VIO poses.",
-      "axis_label": "y/z proj"
+      "subtitle": "Interactive 3D view of x/y with z as up using current VIO poses.",
+      "axis_label": "x/y plane, z up"
     }
   },
   "cameras": [
@@ -27,15 +52,6 @@
       "enabled": true,
       "namespace": "insight7_a",
       "label": "Insight7 A",
-      "record_streams": [
-        "color_compressed",
-        "imu",
-        "vio_100hz",
-        "vio_20hz",
-        "vio_status"
-      ],
-      "path_pose_stream": "vio_20hz",
-      "path_topic": "/viz/insight7_a/path",
       "dashboard_image_stream": "color_compressed",
       "dashboard_label": "Insight7 A Color",
       "dashboard_pose_stream": "vio_100hz",
@@ -50,15 +66,6 @@
       "enabled": true,
       "namespace": "insight7_b",
       "label": "Insight7 B",
-      "record_streams": [
-        "color_compressed",
-        "imu",
-        "vio_100hz",
-        "vio_20hz",
-        "vio_status"
-      ],
-      "path_pose_stream": "vio_20hz",
-      "path_topic": "/viz/insight7_b/path",
       "dashboard_image_stream": "color_compressed",
       "dashboard_label": "Insight7 B Color",
       "dashboard_pose_stream": "vio_100hz",
@@ -73,15 +80,6 @@
       "enabled": true,
       "namespace": "insight9_a",
       "label": "Insight9 A",
-      "record_streams": [
-        "color_compressed",
-        "imu",
-        "vio_100hz",
-        "vio_20hz",
-        "vio_status"
-      ],
-      "path_pose_stream": "vio_20hz",
-      "path_topic": "/viz/insight9_a/path",
       "dashboard_image_stream": "color_compressed",
       "dashboard_label": "Insight9 A Color",
       "dashboard_pose_stream": "vio_100hz",

@@ -1,84 +1,44 @@
-# Insight Camera Data Capture
+# Insight Live Dashboard
 
-这个目录现在只保留 3 条主链路：
-
-- 固定 topic 录包
-- `PoseStamped -> nav_msgs/Path`
-- dashboard 实时看三路图像和轨迹
+这个目录现在只保留 dashboard 主线：实时查看三路相机图像、显示三路 VIO 轨迹，并在 dashboard 内做内存态在线相对位姿对齐。
 
 默认使用 `ROS_DOMAIN_ID=20`。
 
 ## 单一配置入口
 
-以后优先只改：
+优先只改：
 
 - [config/cameras.json](/home/seeed/workspaces/insight_capture/config/cameras.json:1)
 
-这个文件现在同时控制：
+这个文件控制：
 
-- 录包 topic 清单
-- `PoseStamped -> Path` 的输入输出
 - dashboard 显示哪三路图像
 - dashboard 使用哪三路 VIO
+- 在线对齐使用的 AprilTag board 参数
 - 默认 `ROS_DOMAIN_ID`
 
-如果你要把 `insight3_b` 换成 `insight7_b`，通常只需要改这一项：
+如果要把相机换成新的命名空间，通常只需要改对应相机的：
 
 ```json
 "namespace": "insight7_b"
 ```
 
-如果这台新相机的显示流类型也不同，再顺手改：
+如果显示流或 VIO 流也变化，再改：
 
-- `record_streams`
 - `dashboard_image_stream`
+- `dashboard_pose_stream`
 - `dashboard_label`
 
-## 目录结构
+## 保留的脚本
 
-- `bags/`: rosbag 输出目录
-- `config/cameras.json`: 轨迹累计配置
-- `scripts/record_camera_topics.sh`: 固定录包脚本
-- `scripts/camera_setup.py`: 从统一配置生成录包/轨迹/dashboard 所需内容
-- `scripts/pose_to_path.py`: 将 `PoseStamped` 轨迹累计为 `nav_msgs/Path`
-- `scripts/run_path_visualizer.sh`: 启动轨迹累计节点
-- `scripts/multi_camera_dashboard.py`: 实时图像 + 轨迹 dashboard
-- `scripts/open_monitor_dashboard.sh`: 启动 dashboard
+- `scripts/open_monitor_dashboard.sh`: 当前 dashboard 启动入口
+- `scripts/multi_camera_dashboard_qt.py`: Qt dashboard 主入口，负责 ROS 订阅、图像解码和窗口组装
+- `scripts/live_alignment.py`: 在线 AprilTag 相对位姿对齐和诊断日志
+- `scripts/dashboard_widgets.py`: 图像面板、轨迹控件和轨迹绘制逻辑
+- `scripts/camera_setup.py`: 从 `config/cameras.json` 生成 dashboard 所需 topic
+- `scripts/session_alignment.py`: 在线对齐使用的位姿/矩阵数学工具
 
-## 1. 录包
-
-```bash
-cd /home/seeed/workspaces/insight_capture
-./scripts/record_camera_topics.sh
-```
-
-预览固定录制清单：
-
-```bash
-DRY_RUN=1 ./scripts/record_camera_topics.sh
-```
-
-指定输出目录：
-
-```bash
-./scripts/record_camera_topics.sh /home/seeed/workspaces/insight_capture/bags/test_run
-```
-
-当前脚本是固定 topic 清单，不再动态探测。  
-目前已知为了保证三相机图像帧率稳定，所有 `depth` topic 都保持注释状态。
-
-如果后续 topic 改名，直接修改 [record_camera_topics.sh](/home/seeed/workspaces/insight_capture/scripts/record_camera_topics.sh:1) 里的 `TOPICS` 数组。
-
-## 2. 轨迹累计
-
-```bash
-cd /home/seeed/workspaces/insight_capture
-./scripts/run_path_visualizer.sh
-```
-
-这个节点会把 [config/cameras.json](/home/seeed/workspaces/insight_capture/config/cameras.json:1) 里的 `pose_topic` 累积成 `path_topic`。
-
-## 3. Dashboard
+## 启动 Dashboard
 
 ```bash
 cd /home/seeed/workspaces/insight_capture
@@ -87,24 +47,60 @@ cd /home/seeed/workspaces/insight_capture
 
 当前 dashboard 默认显示：
 
-- `insight7_a` 的 `color`
-- `insight7_b` 的 `color`
-- `insight9_a` 的 `color`
+- `insight7_a` 的 `color_compressed`
+- `insight7_b` 的 `color_compressed`
+- `insight9_a` 的 `color_compressed`
 - 右侧可旋转缩放的 3D VIO 轨迹
 
-相关配置也来自 [config/cameras.json](/home/seeed/workspaces/insight_capture/config/cameras.json:1)。
+## 在线轨迹对齐
 
-## 4. 当前命名约定
+如果三台相机每次佩戴位置不同，直接在 dashboard 里点击 `Start Live Alignment`，或者按 `C`。
+
+当前默认 AprilTag board 参数：
+
+- `6 x 6` GridBoard
+- 单个 AprilTag 边长 `5.5 cm`
+- marker 间隔 `1.65 cm`
+- 字典 `DICT_APRILTAG_36h11`
+
+建议流程：
+
+1. 三台设备和 VIO 都先启动。
+2. 让三台相机同时稳定看到同一块 AprilTag board 几秒。
+3. 三台相机和标定板都可以运动，但需要三台在同一时段持续看到同一块板。
+4. dashboard 会自动丢掉离群样本，并在收够一致样本后开始稳定跟踪相对位姿。
+5. 停止在线对齐后，会保留最后一次内存中的对齐结果继续显示轨迹。
+
+状态含义：
+
+- `Alignment ON | board 2/3`: 还有相机没有形成有效板位姿
+- `Alignment ON | sync`: 三台都看到了，但时间戳跨度太大
+- `Alignment ON | samples 5/12`: 正在累计一致样本
+- `Alignment ON | tracking`: 已经在稳定跟踪相对位姿
+- `Alignment OFF | locked`: 在线对齐已关闭，保留最后一次结果
+
+在线对齐开启后，终端每秒输出一行简洁状态：
+
+```text
+[alignment] tags insight7_a=12 insight7_b=9 insight9_a=10 | seen=insight7_a,insight7_b,insight9_a | usable=insight7_a,insight7_b,insight9_a | Alignment ON | samples 5/12
+```
+
+详细诊断日志默认写到：
+
+```text
+/tmp/insight_live_alignment.log
+```
+
+可用环境变量改路径：
+
+```bash
+INSIGHT_ALIGNMENT_LOG=/tmp/my_alignment.log ./scripts/open_monitor_dashboard.sh
+```
+
+## 当前命名约定
 
 - `insight7_a`: `/insight7_a/camera/...`
 - `insight7_b`: `/insight7_b/camera/...`
 - `insight9_a`: `/insight9_a/camera/...`
 
-如果实际命名空间变化：
-
-- 录包改 [record_camera_topics.sh](/home/seeed/workspaces/insight_capture/scripts/record_camera_topics.sh:1)
-- 轨迹改 [config/cameras.json](/home/seeed/workspaces/insight_capture/config/cameras.json:1)
-- dashboard 改 [config/cameras.json](/home/seeed/workspaces/insight_capture/config/cameras.json:1)
-- 三台设备都会提供一个 `PoseStamped` VIO topic 用于轨迹显示
-
-如果你的 `insight9` 实际 topic 结构不同，我下一步可以直接继续帮你改成自动适配版本。
+如果实际命名空间变化，改 [config/cameras.json](/home/seeed/workspaces/insight_capture/config/cameras.json:1) 即可。

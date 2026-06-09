@@ -1,27 +1,31 @@
 #!/usr/bin/env python3
 
 import argparse
-import math
+from collections import deque
 import os
-import queue
-import statistics
 import threading
 import time
 from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 import rclpy
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QLibraryInfo
 from geometry_msgs.msg import PoseStamped
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import CameraInfo
 from sensor_msgs.msg import CompressedImage, Image as RosImage
+from tf2_msgs.msg import TFMessage
 
-from camera_setup import build_dashboard_config, load_setup
+from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
+from dashboard_widgets import DashboardTrajectoryMixin, ImagePanel, TrajectoryWidget
+from live_alignment import LiveAlignmentMixin
+from session_alignment import PoseSample, matrix_to_transform, quaternion_to_matrix
 
 os.environ["QT_QPA_PLATFORM"] = os.environ.get("QT_QPA_PLATFORM", "xcb")
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = QLibraryInfo.location(QLibraryInfo.PluginsPath)
@@ -53,11 +57,22 @@ def make_image_qos(depth: int = 1, reliability: str = "best_effort") -> QoSProfi
     )
 
 
+def make_static_tf_qos() -> QoSProfile:
+    return QoSProfile(
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        history=HistoryPolicy.KEEP_LAST,
+        depth=20,
+    )
+
+
 @dataclass
 class CameraSpec:
     name: str
     label: str
+    namespace: str
     topic: str
+    camera_info_topic: str
     topic_type: str
     row: int
     column: int
@@ -72,11 +87,13 @@ class PoseSpec:
     color: str
 
 
-class DashboardNode(Node):
+class DashboardNode(LiveAlignmentMixin, Node):
     def __init__(self, config_path: Path) -> None:
         super().__init__("insight_multi_camera_dashboard_qt")
 
-        config = build_dashboard_config(load_setup(config_path))
+        raw_config = load_setup(config_path)
+        config = build_dashboard_config(raw_config)
+        enabled_camera_map = {camera["name"]: camera for camera in raw_config.get("cameras", []) if camera.get("enabled", True)}
         self.window_title = config.get("window_title", "Insight Dashboard")
         self.fullscreen = bool(config.get("fullscreen", True))
         self.max_points = int(config.get("trajectory", {}).get("max_points", 1500))
@@ -90,12 +107,15 @@ class DashboardNode(Node):
         self.trajectory_subtitle = config.get("trajectory", {}).get(
             "subtitle", "Interactive 3D view of x/y/z using current VIO poses."
         )
+        self._configure_live_alignment(raw_config, config)
 
         self.cameras: List[CameraSpec] = [
             CameraSpec(
                 name=item["name"],
                 label=item["label"],
+                namespace=enabled_camera_map[item["name"]]["namespace"],
                 topic=item["topic"],
+                camera_info_topic=item["camera_info_topic"],
                 topic_type=item["type"],
                 row=int(item.get("row", 0)),
                 column=int(item.get("column", 0)),
@@ -108,8 +128,11 @@ class DashboardNode(Node):
             PoseSpec(name=item["name"], topic=item["topic"], color=item["color"])
             for item in config.get("poses", [])
         ]
+        if self.reference_camera is None and self.poses:
+            self.reference_camera = self.poses[0].name
 
         self.latest_images: Dict[str, Optional[np.ndarray]] = {camera.name: None for camera in self.cameras}
+        self.camera_info_seen: Dict[str, bool] = {camera.name: False for camera in self.cameras}
         self.image_versions: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
         self.image_lock = threading.Lock()
         self.last_frame_received_time: Dict[str, float] = {camera.name: 0.0 for camera in self.cameras}
@@ -118,19 +141,26 @@ class DashboardNode(Node):
         self.frame_decoded_count: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
         self.decode_durations_ms: Dict[str, List[float]] = {camera.name: [] for camera in self.cameras}
         self.debug_lock = threading.Lock()
-        self.probe_received_count: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
-        self.probe_last_time: Dict[str, float] = {camera.name: 0.0 for camera in self.cameras}
-
+        self.pose_history_lock = threading.Lock()
+        self.static_tf_lock = threading.Lock()
+        self.live_alignment_image_lock = threading.Lock()
+        self.live_alignment_solution_lock = threading.Lock()
+        self.static_transforms: Dict[Tuple[str, str], np.ndarray] = {}
+        self.static_transform_cache: Dict[Tuple[str, str], np.ndarray] = {}
+        self.ros_callback_group = ReentrantCallbackGroup()
         self.pending_messages: Dict[str, Optional[object]] = {camera.name: None for camera in self.cameras}
         self.pending_lock = threading.Lock()
         self.decoder_events: Dict[str, threading.Event] = {camera.name: threading.Event() for camera in self.cameras}
         self.decoder_stop_event = threading.Event()
         self.decoder_threads: List[threading.Thread] = []
 
-        self.traces: Dict[str, List[Tuple[float, float, float]]] = {pose.name: [] for pose in self.poses}
+        self.raw_traces: Dict[str, List[Tuple[float, float, float]]] = {pose.name: [] for pose in self.poses}
         self.latest_pose: Dict[str, Optional[Tuple[float, float, float]]] = {pose.name: None for pose in self.poses}
+        self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
         self.pose_versions: Dict[str, int] = {pose.name: 0 for pose in self.poses}
+        self.pose_history: Dict[str, Deque[PoseSample]] = {pose.name: deque(maxlen=160) for pose in self.poses}
         self.dashboard_subscriptions = []
+        self._initialize_live_alignment_state()
 
         for camera in self.cameras:
             worker = threading.Thread(
@@ -145,6 +175,17 @@ class DashboardNode(Node):
         image_qos = make_image_qos(reliability=self.image_qos_reliability)
         pose_qos = make_qos()
 
+        if self.live_alignment_available and self.live_alignment_method == "vio_world":
+            static_tf_sub = self.create_subscription(
+                TFMessage,
+                "/tf_static",
+                self._static_tf_callback,
+                make_static_tf_qos(),
+                callback_group=self.ros_callback_group,
+            )
+            self.dashboard_subscriptions.append(static_tf_sub)
+            self.get_logger().info("StaticTF: /tf_static")
+
         for camera in self.cameras:
             if camera.topic_type == "compressed":
                 sub = self.create_subscription(
@@ -152,6 +193,7 @@ class DashboardNode(Node):
                     camera.topic,
                     self._make_compressed_callback(camera.name),
                     image_qos,
+                    callback_group=self.ros_callback_group,
                 )
             else:
                 sub = self.create_subscription(
@@ -159,31 +201,64 @@ class DashboardNode(Node):
                     camera.topic,
                     self._make_image_callback(camera.name),
                     image_qos,
+                    callback_group=self.ros_callback_group,
                 )
             self.dashboard_subscriptions.append(sub)
             self.get_logger().info(
                 f"Image: {camera.label} <- {camera.topic} "
                 f"(qos={self.image_qos_reliability}, depth={image_qos.depth})"
             )
-            if camera.name == "insight9_a":
-                probe_sub = self.create_subscription(
-                    CompressedImage if camera.topic_type == "compressed" else RosImage,
-                    camera.topic,
-                    self._make_probe_callback(camera.name),
-                    image_qos,
+            info_sub = self.create_subscription(
+                CameraInfo,
+                camera.camera_info_topic,
+                self._make_camera_info_callback(camera.name),
+                make_qos(depth=2),
+                callback_group=self.ros_callback_group,
+            )
+            self.dashboard_subscriptions.append(info_sub)
+            self.get_logger().info(f"CameraInfo: {camera.label} <- {camera.camera_info_topic}")
+            if self.live_alignment_available:
+                calib_topic = image_topic(camera.namespace, self.live_alignment_image_stream)
+                calib_info_topic = camera_info_topic(camera.namespace, self.live_alignment_image_stream)
+                calib_type = IMAGE_STREAMS[self.live_alignment_image_stream]["type"]
+                self.live_alignment_topic_by_camera[camera.name] = calib_topic
+                calib_msg_type = CompressedImage if calib_type == "compressed" else RosImage
+                calib_sub = self.create_subscription(
+                    calib_msg_type,
+                    calib_topic,
+                    self._make_live_alignment_image_callback(camera.name, calib_type),
+                    make_image_qos(reliability=self.image_qos_reliability),
+                    callback_group=self.ros_callback_group,
                 )
-                self.dashboard_subscriptions.append(probe_sub)
-                self.get_logger().info(f"Probe: {camera.name} <- {camera.topic}")
-
+                self.dashboard_subscriptions.append(calib_sub)
+                self.get_logger().info(
+                    f"AlignmentImage: {camera.name} <- {calib_topic} "
+                    f"(stream={self.live_alignment_image_stream}, type={calib_type})"
+                )
+                if calib_info_topic != camera.camera_info_topic:
+                    calib_info_sub = self.create_subscription(
+                        CameraInfo,
+                        calib_info_topic,
+                        self._make_live_alignment_camera_info_callback(camera.name),
+                        make_qos(depth=2),
+                        callback_group=self.ros_callback_group,
+                    )
+                    self.dashboard_subscriptions.append(calib_info_sub)
         for pose in self.poses:
             sub = self.create_subscription(
                 PoseStamped,
                 pose.topic,
                 self._make_pose_callback(pose.name),
                 pose_qos,
+                callback_group=self.ros_callback_group,
             )
             self.dashboard_subscriptions.append(sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
+        self.live_alignment_timer = self.create_timer(
+            0.1,
+            self._process_live_alignment,
+            callback_group=self.ros_callback_group,
+        )
 
     def _make_image_callback(self, camera_name: str):
         def callback(msg: RosImage) -> None:
@@ -199,25 +274,105 @@ class DashboardNode(Node):
 
     def _make_pose_callback(self, pose_name: str):
         def callback(msg: PoseStamped) -> None:
-            point = (
+            raw_point = (
                 float(msg.pose.position.x),
                 float(msg.pose.position.y),
                 float(msg.pose.position.z),
             )
-            trace = self.traces[pose_name]
-            trace.append(point)
+            pose_sample = PoseSample(
+                stamp_ns=self._stamp_to_ns(msg.header.stamp),
+                position=raw_point,
+                orientation_xyzw=(
+                    float(msg.pose.orientation.x),
+                    float(msg.pose.orientation.y),
+                    float(msg.pose.orientation.z),
+                    float(msg.pose.orientation.w),
+                ),
+            )
+            with self.pose_history_lock:
+                self.pose_history[pose_name].append(pose_sample)
+                pose_history_len = len(self.pose_history[pose_name])
+            point = self._transform_pose_point(pose_name, raw_point)
+            trace = self.raw_traces[pose_name]
+            trace.append(raw_point)
             if len(trace) > self.max_points:
                 del trace[: len(trace) - self.max_points]
             self.latest_pose[pose_name] = point
+            self.last_pose_received_time[pose_name] = time.monotonic()
             self.pose_versions[pose_name] += 1
+            if self.live_alignment_active:
+                self._set_alignment_debug(pose_name, pose_history=pose_history_len)
 
         return callback
 
-    def _make_probe_callback(self, camera_name: str):
-        def callback(_msg: object) -> None:
-            with self.debug_lock:
-                self.probe_received_count[camera_name] += 1
-                self.probe_last_time[camera_name] = time.monotonic()
+    def _make_camera_info_callback(self, camera_name: str):
+        def callback(msg: CameraInfo) -> None:
+            self.camera_info_seen[camera_name] = True
+            self.live_alignment_camera_matrix[camera_name] = np.array(msg.k, dtype=np.float64).reshape((3, 3))
+            self.live_alignment_dist_coeffs[camera_name] = np.array(msg.d, dtype=np.float64).reshape((-1, 1))
+
+        return callback
+
+    def _make_live_alignment_camera_info_callback(self, camera_name: str):
+        def callback(msg: CameraInfo) -> None:
+            self.live_alignment_camera_matrix[camera_name] = np.array(msg.k, dtype=np.float64).reshape((3, 3))
+            self.live_alignment_dist_coeffs[camera_name] = np.array(msg.d, dtype=np.float64).reshape((-1, 1))
+
+        return callback
+
+    def _static_tf_callback(self, msg: TFMessage) -> None:
+        updates = {}
+        for item in msg.transforms:
+            parent = item.header.frame_id
+            child = item.child_frame_id
+            translation = np.array(
+                [
+                    float(item.transform.translation.x),
+                    float(item.transform.translation.y),
+                    float(item.transform.translation.z),
+                ],
+                dtype=np.float64,
+            )
+            rotation = quaternion_to_matrix(
+                float(item.transform.rotation.x),
+                float(item.transform.rotation.y),
+                float(item.transform.rotation.z),
+                float(item.transform.rotation.w),
+            )
+            updates[(parent, child)] = matrix_to_transform(rotation, translation)
+        with self.static_tf_lock:
+            self.static_transforms.update(updates)
+            self.static_transform_cache.clear()
+
+    def _make_live_alignment_image_callback(self, camera_name: str, topic_type: str):
+        def callback(msg) -> None:
+            if not self.live_alignment_active:
+                return
+            image = self._decode_calibration_message(topic_type, msg)
+            if image is None:
+                self.live_alignment_last_tag_count[camera_name] = 0
+                self._set_alignment_debug(camera_name, stage="decode_failed", tags=0, shape="-")
+                return
+            stamp_ns = self._stamp_to_ns(msg.header.stamp)
+            received_monotonic_ns = time.monotonic_ns()
+            with self.live_alignment_image_lock:
+                self.live_alignment_latest_image[camera_name] = image
+                self.live_alignment_latest_image_stamp_ns[camera_name] = stamp_ns
+                pending = self.live_alignment_pending_images[camera_name]
+                if not pending or pending[-1][0] != stamp_ns:
+                    pending.append((stamp_ns, received_monotonic_ns, image))
+                    min_received_ns = received_monotonic_ns - self.live_alignment_pending_max_age_ns
+                    pending[:] = [item for item in pending if item[1] >= min_received_ns]
+                    if len(pending) > self.live_alignment_pending_image_limit:
+                        del pending[: len(pending) - self.live_alignment_pending_image_limit]
+            self._set_alignment_debug(
+                camera_name,
+                stage="image_rx",
+                stamp_ns=stamp_ns,
+                shape=f"{image.shape[1]}x{image.shape[0]}",
+                topic=self.live_alignment_topic_by_camera.get(camera_name, "-"),
+                latency_ms=f"{0.0:.1f}",
+            )
 
         return callback
 
@@ -345,78 +500,17 @@ class DashboardNode(Node):
         for worker in self.decoder_threads:
             worker.join(timeout=0.5)
 
-
-class ImagePanel(QtWidgets.QFrame):
-    def __init__(self, title: str, parent=None) -> None:
-        super().__init__(parent)
-        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
-        self.setStyleSheet(
-            "QFrame { background: #16202a; border: 1px solid #233142; border-radius: 6px; }"
-            "QLabel { color: #e9eef4; }"
-        )
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(6)
-
-        self.title_label = QtWidgets.QLabel(title)
-        self.title_label.setStyleSheet("font-size: 16px; font-weight: 600; color: #e9eef4; border: none;")
-        layout.addWidget(self.title_label)
-
-        self.fps_label = QtWidgets.QLabel("waiting")
-        self.fps_label.setStyleSheet("font-size: 12px; color: #8fa3b8; border: none;")
-        layout.addWidget(self.fps_label)
-
-        self.image_label = QtWidgets.QLabel()
-        self.image_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.image_label.setMinimumSize(320, 220)
-        self.image_label.setStyleSheet("background: #0c1116; border: none;")
-        self.image_label.setText("Waiting for image...")
-        layout.addWidget(self.image_label, 1)
+    @staticmethod
+    def _stamp_to_ns(stamp) -> int:
+        return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
 
 
-class TrajectoryWidget(QtWidgets.QWidget):
-    def __init__(self, app_ref, parent=None) -> None:
-        super().__init__(parent)
-        self.app_ref = app_ref
-        self.setMinimumSize(420, 320)
-        self.setMouseTracking(True)
-
-    def paintEvent(self, _event) -> None:
-        painter = QtGui.QPainter(self)
-        try:
-            painter.fillRect(self.rect(), QtGui.QColor("#10161d"))
-            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
-            self.app_ref.paint_trajectory(painter, self.width(), self.height())
-        except KeyboardInterrupt:
-            return
-        except Exception as exc:
-            print(f"trajectory paint error: {exc}")
-        finally:
-            painter.end()
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == QtCore.Qt.LeftButton:
-            self.app_ref.on_traj_press(event.x(), event.y())
-
-    def mouseMoveEvent(self, event) -> None:
-        if event.buttons() & QtCore.Qt.LeftButton:
-            self.app_ref.on_traj_drag(event.x(), event.y())
-            self.update()
-
-    def mouseReleaseEvent(self, _event) -> None:
-        self.app_ref.on_traj_release()
-
-    def wheelEvent(self, event) -> None:
-        self.app_ref.on_traj_zoom(event.angleDelta().y())
-        self.update()
-
-
-class DashboardWindow(QtWidgets.QMainWindow):
+class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
     BG = "#0f1720"
     TEXT = "#e9eef4"
     MUTED = "#8fa3b8"
 
-    def __init__(self, node: DashboardNode, executor: SingleThreadedExecutor) -> None:
+    def __init__(self, node: DashboardNode, executor: MultiThreadedExecutor) -> None:
         super().__init__()
         self.node = node
         self.executor = executor
@@ -428,6 +522,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.view_zoom = 1.0
         self.drag_last_xy: Optional[Tuple[int, int]] = None
         self.last_image_versions: Dict[str, int] = {camera.name: -1 for camera in self.node.cameras}
+        self.last_image_target_sizes: Dict[str, Tuple[int, int]] = {camera.name: (0, 0) for camera in self.node.cameras}
         self.last_image_render_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.image_display_fps: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.last_displayed_image_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
@@ -470,27 +565,37 @@ class DashboardWindow(QtWidgets.QMainWindow):
         image_grid_widget = QtWidgets.QWidget()
         image_grid = QtWidgets.QGridLayout(image_grid_widget)
         image_grid.setContentsMargins(0, 0, 0, 0)
-        image_grid.setSpacing(12)
-        body.addWidget(image_grid_widget, 4)
+        image_grid.setHorizontalSpacing(10)
+        image_grid.setVerticalSpacing(10)
+        body.addWidget(image_grid_widget, 11)
 
         self.image_panels: Dict[str, ImagePanel] = {}
+        column_weights: Dict[int, int] = {}
+        row_weights: Dict[int, int] = {}
         for camera in self.node.cameras:
             panel = ImagePanel(camera.label)
             image_grid.addWidget(panel, camera.row, camera.column, camera.row_span, camera.column_span)
             self.image_panels[camera.name] = panel
+            column_weights[camera.column] = max(column_weights.get(camera.column, 1), camera.row_span)
+            for row in range(camera.row, camera.row + camera.row_span):
+                row_weights[row] = max(row_weights.get(row, 1), camera.column_span)
+        for column, weight in column_weights.items():
+            image_grid.setColumnStretch(column, max(weight, 1))
+        for row, weight in row_weights.items():
+            image_grid.setRowStretch(row, max(weight, 1))
 
         right = QtWidgets.QWidget()
         right_layout = QtWidgets.QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(12)
-        body.addWidget(right, 2)
+        body.addWidget(right, 13)
 
         traj_frame = QtWidgets.QFrame()
         traj_frame.setStyleSheet("QFrame { background: #16202a; border: 1px solid #233142; border-radius: 6px; }")
         traj_layout = QtWidgets.QVBoxLayout(traj_frame)
         traj_layout.setContentsMargins(14, 12, 14, 12)
         traj_layout.setSpacing(8)
-        right_layout.addWidget(traj_frame, 5)
+        right_layout.addWidget(traj_frame, 6)
 
         traj_title = QtWidgets.QLabel(self.node.trajectory_title)
         traj_title.setStyleSheet("font-size: 18px; font-weight: 700; color: #e9eef4;")
@@ -499,6 +604,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
         traj_subtitle = QtWidgets.QLabel(self.node.trajectory_subtitle)
         traj_subtitle.setStyleSheet("font-size: 11px; color: #8fa3b8;")
         traj_layout.addWidget(traj_subtitle)
+
+        self.alignment_status_label = QtWidgets.QLabel(self.node.alignment_status_text())
+        self.alignment_status_label.setStyleSheet("font-size: 11px; color: #8fa3b8;")
+        traj_layout.addWidget(self.alignment_status_label)
 
         controls = QtWidgets.QHBoxLayout()
         controls.addWidget(QtWidgets.QLabel("Show:"))
@@ -514,6 +623,15 @@ class DashboardWindow(QtWidgets.QMainWindow):
             self.pose_actions[pose.name] = action
         self.pose_menu_button.setMenu(self.pose_menu)
         controls.addWidget(self.pose_menu_button)
+        self.start_calibration_button = QtWidgets.QPushButton("Start Live Alignment")
+        self.start_calibration_button.clicked.connect(self.toggle_live_alignment)
+        self.start_calibration_button.setToolTip("Toggle in-memory online relative alignment (C)")
+        self.start_calibration_button.setStyleSheet(
+            "QPushButton { background: #223244; color: #e9eef4; border: 1px solid #31475d; padding: 6px 10px; border-radius: 4px; }"
+            "QPushButton:hover { background: #29405a; }"
+        )
+        self.start_calibration_button.setEnabled(self.node.live_alignment_available)
+        controls.addWidget(self.start_calibration_button)
         controls.addStretch(1)
         traj_layout.addLayout(controls)
 
@@ -525,7 +643,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         status_layout = QtWidgets.QVBoxLayout(status_frame)
         status_layout.setContentsMargins(14, 12, 14, 12)
         status_layout.setSpacing(8)
-        right_layout.addWidget(status_frame, 2)
+        right_layout.addWidget(status_frame, 1)
 
         status_title = QtWidgets.QLabel("Trajectory Status")
         status_title.setStyleSheet("font-size: 16px; font-weight: 700; color: #e9eef4;")
@@ -558,9 +676,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.refresh_timer.timeout.connect(self.refresh_trajectory)
         self.refresh_timer.start(max(50, self.node.ui_refresh_ms))
 
-        self.debug_timer = QtCore.QTimer(self)
-        self.debug_timer.timeout.connect(self.print_debug_status)
-        self.debug_timer.start(1000)
+        if os.environ.get("INSIGHT_DASHBOARD_DEBUG", "").lower() in ("1", "true", "yes"):
+            self.debug_timer = QtCore.QTimer(self)
+            self.debug_timer.timeout.connect(self.print_debug_status)
+            self.debug_timer.start(1000)
 
     def _make_pose_toggle(self, pose_name: str):
         def handler(checked: bool) -> None:
@@ -580,7 +699,8 @@ class DashboardWindow(QtWidgets.QMainWindow):
         for timer in self.image_timers.values():
             timer.stop()
         self.refresh_timer.stop()
-        self.debug_timer.stop()
+        if hasattr(self, "debug_timer"):
+            self.debug_timer.stop()
         self.node.shutdown_workers()
         self.executor.shutdown()
         self.node.destroy_node()
@@ -592,6 +712,9 @@ class DashboardWindow(QtWidgets.QMainWindow):
         if event.key() == QtCore.Qt.Key_Escape and self.isFullScreen():
             self.showNormal()
             return
+        if event.key() == QtCore.Qt.Key_C:
+            self.toggle_live_alignment()
+            return
         super().keyPressEvent(event)
 
     def refresh_image(self, camera_name: str) -> None:
@@ -602,17 +725,28 @@ class DashboardWindow(QtWidgets.QMainWindow):
                 image = self.node.latest_images[camera_name]
                 version = self.node.image_versions[camera_name]
             panel = self.image_panels[camera_name]
+            target_size = panel.image_label.size()
+            target_size_key = (max(target_size.width(), 10), max(target_size.height(), 10))
             if image is None:
                 panel.fps_label.setText("waiting")
                 self.last_ui_refresh_completed[camera_name] = time.monotonic()
                 return
-            if version == self.last_image_versions[camera_name] and panel.image_label.pixmap() is not None:
+            panel.set_image_shape(image.shape[1], image.shape[0])
+            receive_age = self._age_text(self.node.last_frame_received_time[camera_name], now)
+            decoded_age = self._age_text(self.node.last_frame_decoded_time[camera_name], now)
+            if (
+                version == self.last_image_versions[camera_name]
+                and self.last_image_target_sizes[camera_name] == target_size_key
+                and panel.image_label.pixmap() is not None
+            ):
                 self.ui_skip_count[camera_name] += 1
-                panel.fps_label.setText(f"{self.image_display_fps[camera_name]:.1f} FPS")
+                panel.fps_label.setText(
+                    f"{self.image_display_fps[camera_name]:.1f} FPS | rx age {receive_age} | dec age {decoded_age}"
+                )
                 self.last_ui_refresh_completed[camera_name] = time.monotonic()
                 return
 
-            pixmap = self._pixmap_from_image(image, panel.image_label.size())
+            pixmap = self._pixmap_from_image(image, target_size)
             panel.image_label.setPixmap(pixmap)
             previous = self.last_image_render_time[camera_name]
             if previous > 0:
@@ -624,7 +758,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
             self.last_image_render_time[camera_name] = now
             self.last_displayed_image_time[camera_name] = now
             self.last_image_versions[camera_name] = version
-            panel.fps_label.setText(f"{self.image_display_fps[camera_name]:.1f} FPS")
+            self.last_image_target_sizes[camera_name] = target_size_key
+            panel.fps_label.setText(
+                f"{self.image_display_fps[camera_name]:.1f} FPS | rx age {receive_age} | dec age {decoded_age}"
+            )
             end = time.monotonic()
             self.last_ui_refresh_completed[camera_name] = end
             render_ms = (end - now) * 1000.0
@@ -639,6 +776,11 @@ class DashboardWindow(QtWidgets.QMainWindow):
         try:
             start = time.monotonic()
             self.last_trajectory_refresh_started = start
+            self.alignment_status_label.setText(self.node.alignment_status_text())
+            if self.node.live_alignment_active:
+                self.start_calibration_button.setText("Stop Live Alignment")
+            else:
+                self.start_calibration_button.setText("Start Live Alignment")
             for pose in self.node.poses:
                 visible = self.pose_visibility[pose.name]
                 latest = self.node.latest_pose[pose.name]
@@ -647,8 +789,9 @@ class DashboardWindow(QtWidgets.QMainWindow):
                 elif latest is None:
                     self.pose_labels[pose.name].setText(f"{pose.name}: waiting for VIO")
                 else:
+                    pose_age = self._age_text(self.node.last_pose_received_time[pose.name], time.monotonic())
                     self.pose_labels[pose.name].setText(
-                        f"{pose.name}: x={latest[0]:.2f}, y={latest[1]:.2f}, z={latest[2]:.2f}"
+                        f"{pose.name}: x={latest[0]:.2f}, y={latest[1]:.2f}, z={latest[2]:.2f}, age={pose_age}"
                     )
             self.traj_widget.update()
             end = time.monotonic()
@@ -660,200 +803,37 @@ class DashboardWindow(QtWidgets.QMainWindow):
         except KeyboardInterrupt:
             self.close()
 
+    def toggle_live_alignment(self) -> None:
+        if self.node.live_alignment_active:
+            status = self.node.stop_live_alignment()
+            self.start_calibration_button.setText("Start Live Alignment")
+        else:
+            status = self.node.start_live_alignment()
+            if self.node.live_alignment_active:
+                self.start_calibration_button.setText("Stop Live Alignment")
+        self.alignment_status_label.setText(status)
+        self.traj_widget.update()
+
+    @staticmethod
+    def _age_text(last_time: float, now: float) -> str:
+        if last_time <= 0.0:
+            return "-"
+        return f"{now - last_time:.1f}s"
+
     def print_debug_status(self) -> None:
         try:
             now = time.monotonic()
             parts: List[str] = []
             with self.node.debug_lock:
                 for camera in self.node.cameras:
-                    recv_count = self.node.frame_received_count[camera.name]
-                    dec_count = self.node.frame_decoded_count[camera.name]
-                    probe_count = self.node.probe_received_count[camera.name]
-                    prev_recv, prev_dec = self.last_debug_counts[camera.name]
-                    recv_delta = recv_count - prev_recv
-                    dec_delta = dec_count - prev_dec
-                    self.last_debug_counts[camera.name] = (recv_count, dec_count)
-                    probe_prev = self.last_probe_counts[camera.name]
-                    probe_delta = probe_count - probe_prev
-                    self.last_probe_counts[camera.name] = probe_count
                     recv_age = now - self.node.last_frame_received_time[camera.name] if self.node.last_frame_received_time[camera.name] > 0 else -1.0
                     dec_age = now - self.node.last_frame_decoded_time[camera.name] if self.node.last_frame_decoded_time[camera.name] > 0 else -1.0
-                    probe_age = now - self.node.probe_last_time[camera.name] if self.node.probe_last_time[camera.name] > 0 else -1.0
-                    disp_age = now - self.last_displayed_image_time[camera.name] if self.last_displayed_image_time[camera.name] > 0 else -1.0
-                    decode_samples = list(self.node.decode_durations_ms[camera.name])
-                    decode_avg = statistics.fmean(decode_samples) if decode_samples else 0.0
-                    decode_max = max(decode_samples) if decode_samples else 0.0
-                    ui_samples = list(self.ui_render_durations_ms[camera.name])
-                    ui_avg = statistics.fmean(ui_samples) if ui_samples else 0.0
-                    ui_max = max(ui_samples) if ui_samples else 0.0
-                    ui_busy_age = now - self.last_ui_refresh_started[camera.name] if self.last_ui_refresh_started[camera.name] > 0 else -1.0
-                    ui_done_age = now - self.last_ui_refresh_completed[camera.name] if self.last_ui_refresh_completed[camera.name] > 0 else -1.0
-                    skipped = self.ui_skip_count[camera.name]
-                    self.ui_skip_count[camera.name] = 0
-                    pending = 0
-                    with self.node.pending_lock:
-                        pending = 1 if self.node.pending_messages[camera.name] is not None else 0
                     parts.append(
-                        f"{camera.name}: recv+{recv_delta}/s total={recv_count} age={recv_age:.2f}s | "
-                        f"probe+{probe_delta}/s total={probe_count} age={probe_age:.2f}s | "
-                        f"dec+{dec_delta}/s total={dec_count} age={dec_age:.2f}s avg={decode_avg:.1f}ms max={decode_max:.1f}ms | "
-                        f"ver={self.node.image_versions[camera.name]} disp_fps={self.image_display_fps[camera.name]:.1f} disp_age={disp_age:.2f}s pending={pending} | "
-                        f"ui_avg={ui_avg:.1f}ms ui_max={ui_max:.1f}ms ui_busy_age={ui_busy_age:.2f}s ui_done_age={ui_done_age:.2f}s skips={skipped}"
+                        f"{camera.name}: fps={self.image_display_fps[camera.name]:.1f} rx={recv_age:.1f}s dec={dec_age:.1f}s"
                     )
-            traj_avg = statistics.fmean(self.trajectory_render_durations_ms) if self.trajectory_render_durations_ms else 0.0
-            traj_max = max(self.trajectory_render_durations_ms) if self.trajectory_render_durations_ms else 0.0
-            traj_busy_age = now - self.last_trajectory_refresh_started if self.last_trajectory_refresh_started > 0 else -1.0
-            traj_done_age = now - self.last_trajectory_refresh_completed if self.last_trajectory_refresh_completed > 0 else -1.0
-            if parts:
-                print(
-                    "[dashboard-debug] "
-                    + " || ".join(parts)
-                    + f" || traj_ui_avg={traj_avg:.1f}ms traj_ui_max={traj_max:.1f}ms "
-                      f"traj_busy_age={traj_busy_age:.2f}s traj_done_age={traj_done_age:.2f}s",
-                    flush=True,
-                )
+            print("[dashboard] " + " | ".join(parts) + f" | {self.node.alignment_status_text()}", flush=True)
         except Exception as exc:
-            print(f"[dashboard-debug] failed to print status: {exc}", flush=True)
-
-    def _pixmap_from_image(self, image: np.ndarray, target_size: QtCore.QSize) -> QtGui.QPixmap:
-        image = np.ascontiguousarray(image, dtype=np.uint8)
-        h, w = image.shape[:2]
-        bytes_per_line = w * 3
-        qimage = QtGui.QImage(image.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888).copy()
-        pixmap = QtGui.QPixmap.fromImage(qimage)
-        return pixmap.scaled(
-            max(target_size.width(), 10),
-            max(target_size.height(), 10),
-            QtCore.Qt.KeepAspectRatio,
-            QtCore.Qt.FastTransformation,
-        )
-
-    def on_traj_press(self, x: int, y: int) -> None:
-        self.drag_last_xy = (x, y)
-
-    def on_traj_drag(self, x: int, y: int) -> None:
-        if self.drag_last_xy is None:
-            self.drag_last_xy = (x, y)
-            return
-        dx = x - self.drag_last_xy[0]
-        dy = y - self.drag_last_xy[1]
-        self.drag_last_xy = (x, y)
-        self.view_yaw_deg += dx * 0.5
-        self.view_pitch_deg = max(-85.0, min(85.0, self.view_pitch_deg - dy * 0.4))
-
-    def on_traj_release(self) -> None:
-        self.drag_last_xy = None
-
-    def on_traj_zoom(self, delta: int) -> None:
-        if delta > 0:
-            self.view_zoom *= 1.1
-        elif delta < 0:
-            self.view_zoom /= 1.1
-        self.view_zoom = max(0.35, min(3.5, self.view_zoom))
-
-    def paint_trajectory(self, painter: QtGui.QPainter, width: int, height: int) -> None:
-        visible_pose_names = [pose.name for pose in self.node.poses if self.pose_visibility[pose.name]]
-        all_points = [p for pose in self.node.poses if pose.name in visible_pose_names for p in self.node.traces[pose.name]]
-        if not all_points:
-            painter.setPen(QtGui.QColor(self.MUTED))
-            painter.drawText(self.rect_for(width, height), QtCore.Qt.AlignCenter, "Select one or more cameras to view trajectory.")
-            return
-
-        _, _, scene = self._project_traces(all_points, width, height)
-        self._draw_axes(painter, width, height, scene)
-        for pose in self.node.poses:
-            if pose.name not in visible_pose_names:
-                continue
-            trace = self.node.traces[pose.name]
-            if not trace:
-                continue
-            points_2d, _, _ = self._project_traces(trace, width, height, scene=scene)
-            pen = QtGui.QPen(QtGui.QColor(pose.color))
-            pen.setWidth(3)
-            painter.setPen(pen)
-            for idx in range(1, len(points_2d)):
-                painter.drawLine(
-                    QtCore.QPointF(points_2d[idx - 1][0], points_2d[idx - 1][1]),
-                    QtCore.QPointF(points_2d[idx][0], points_2d[idx][1]),
-                )
-            brush = QtGui.QBrush(QtGui.QColor(pose.color))
-            painter.setBrush(brush)
-            x, y = points_2d[-1]
-            painter.drawEllipse(QtCore.QPointF(x, y), 5, 5)
-
-    def _project_traces(self, points: List[Tuple[float, float, float]], width: int, height: int, scene=None):
-        yaw = math.radians(self.view_yaw_deg)
-        pitch = math.radians(self.view_pitch_deg)
-        cos_y, sin_y = math.cos(yaw), math.sin(yaw)
-        cos_p, sin_p = math.cos(pitch), math.sin(pitch)
-        pad = 32
-        usable_w = max(width - 2 * pad, 10)
-        usable_h = max(height - 2 * pad, 10)
-
-        if scene is None:
-            cx = sum(p[0] for p in points) / len(points)
-            cy = sum(p[1] for p in points) / len(points)
-            cz = sum(p[2] for p in points) / len(points)
-            centered = [(x - cx, y - cy, z - cz) for x, y, z in points]
-        else:
-            cx, cy, cz = scene["center"]
-            centered = [(x - cx, y - cy, z - cz) for x, y, z in points]
-
-        rotated = []
-        radius = 0.5
-        for x, y, z in centered:
-            x1 = cos_y * x - sin_y * y
-            y1 = sin_y * x + cos_y * y
-            z1 = z
-            y2 = cos_p * y1 - sin_p * z1
-            z2 = sin_p * y1 + cos_p * z1
-            rotated.append((x1, y2, z2))
-            radius = max(radius, abs(x1), abs(y2), abs(z2))
-
-        if scene is None:
-            scene = {"center": (cx, cy, cz), "radius": radius}
-        else:
-            radius = max(scene["radius"], 0.5)
-
-        center_x = width / 2
-        center_y = height / 2
-        focal = min(usable_w, usable_h) * 0.95 * self.view_zoom
-        camera_distance = radius * 4.0
-        projected = []
-        for x1, y2, z2 in rotated:
-            denom = max(camera_distance - z2, radius * 0.3)
-            scale = focal / denom
-            projected.append((center_x + x1 * scale, center_y - y2 * scale))
-
-        xs = [p[0] for p in projected]
-        ys = [p[1] for p in projected]
-        bounds = (min(xs), max(xs), min(ys), max(ys))
-        return projected, bounds, scene
-
-    def _draw_axes(self, painter: QtGui.QPainter, width: int, height: int, scene) -> None:
-        radius = max(scene["radius"], 0.5)
-        axes = [
-            ((0.0, 0.0, 0.0), (radius, 0.0, 0.0), "#ff6b6b", "x"),
-            ((0.0, 0.0, 0.0), (0.0, radius, 0.0), "#5dade2", "y"),
-            ((0.0, 0.0, 0.0), (0.0, 0.0, radius), "#58d68d", "z"),
-        ]
-        for start, end, color, label in axes:
-            projected, _, _ = self._project_traces([start, end], width, height, scene=scene)
-            pen = QtGui.QPen(QtGui.QColor(color))
-            pen.setWidth(2)
-            painter.setPen(pen)
-            painter.drawLine(
-                QtCore.QPointF(projected[0][0], projected[0][1]),
-                QtCore.QPointF(projected[1][0], projected[1][1]),
-            )
-            painter.drawText(int(round(projected[1][0] + 8)), int(round(projected[1][1])), label)
-        painter.setPen(QtGui.QColor(self.MUTED))
-        painter.drawText(28, 22, f"yaw {self.view_yaw_deg:.0f}°, pitch {self.view_pitch_deg:.0f}°, zoom {self.view_zoom:.2f}x")
-        painter.drawText(int(width - 170), 22, "drag rotate, wheel zoom")
-
-    @staticmethod
-    def rect_for(width: int, height: int) -> QtCore.QRect:
-        return QtCore.QRect(0, 0, width, height)
+            print(f"[dashboard] status error: {exc}", flush=True)
 
 
 def main() -> None:
@@ -866,7 +846,7 @@ def main() -> None:
 
     rclpy.init()
     node = DashboardNode(Path(args.config))
-    executor = SingleThreadedExecutor()
+    executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
 
     app = QtWidgets.QApplication([])

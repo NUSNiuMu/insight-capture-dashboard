@@ -7,11 +7,11 @@ from typing import Dict, List
 
 
 IMAGE_STREAMS = {
-    "infra1": {"topic": "infra1/image_rect_raw", "type": "image", "record": True, "camera_info": True},
-    "infra2": {"topic": "infra2/image_rect_raw", "type": "image", "record": True, "camera_info": True},
-    "depth": {"topic": "depth/image_rect_raw", "type": "image", "record": True, "camera_info": False},
-    "color": {"topic": "color/image_rect_raw", "type": "image", "record": True, "camera_info": True},
-    "color_compressed": {"topic": "color/image_rect_raw/compressed", "type": "compressed", "record": True, "camera_info": True},
+    "infra1": {"topic": "infra1/image_rect_raw", "type": "image"},
+    "infra2": {"topic": "infra2/image_rect_raw", "type": "image"},
+    "depth": {"topic": "depth/image_rect_raw", "type": "image"},
+    "color": {"topic": "color/image_rect_raw", "type": "image"},
+    "color_compressed": {"topic": "color/image_rect_raw/compressed", "type": "compressed"},
 }
 
 
@@ -37,63 +37,15 @@ def vio_topic(namespace: str, rate: str) -> str:
     return f"{camera_base(namespace)}/vio_{rate}"
 
 
-def simple_topic(namespace: str, suffix: str) -> str:
-    return f"{camera_base(namespace)}/{suffix}"
-
-
 def enabled_cameras(config: Dict) -> List[Dict]:
     return [camera for camera in config.get("cameras", []) if camera.get("enabled", True)]
-
-
-def build_record_topics(config: Dict) -> List[str]:
-    topics: List[str] = []
-    for camera in enabled_cameras(config):
-        namespace = camera["namespace"]
-        for stream in camera.get("record_streams", []):
-            if stream == "imu":
-                topics.append(simple_topic(namespace, "imu"))
-            elif stream == "vio_100hz":
-                topics.append(vio_topic(namespace, "100hz"))
-            elif stream == "vio_20hz":
-                topics.append(vio_topic(namespace, "20hz"))
-            elif stream == "vio_status":
-                topics.append(simple_topic(namespace, "vio_status"))
-            elif stream in IMAGE_STREAMS:
-                if IMAGE_STREAMS[stream]["camera_info"]:
-                    topics.append(camera_info_topic(namespace, stream))
-                topics.append(image_topic(namespace, stream))
-
-    if config.get("recording", {}).get("include_tf_static", True):
-        topics.append("/tf_static")
-
-    return topics
-
-
-def build_path_entries(config: Dict) -> List[Dict]:
-    entries: List[Dict] = []
-    for camera in enabled_cameras(config):
-        namespace = camera["namespace"]
-        pose_stream = camera.get("path_pose_stream", "vio_20hz")
-        if pose_stream.startswith("vio_"):
-            pose_rate = pose_stream.removeprefix("vio_")
-            pose_topic = vio_topic(namespace, pose_rate)
-        else:
-            pose_topic = pose_stream
-        entries.append(
-            {
-                "name": camera["name"],
-                "label": camera.get("label", camera["name"]),
-                "pose_topic": pose_topic,
-                "path_topic": camera.get("path_topic", f"/viz/{camera['name']}/path"),
-            }
-        )
-    return entries
 
 
 def build_dashboard_config(config: Dict) -> Dict:
     dashboard = config.get("dashboard", {})
     cameras = []
     poses = []
+    session_alignment = config.get("session_alignment", {})
 
     for camera in enabled_cameras(config):
         namespace = camera["namespace"]
@@ -103,6 +55,7 @@ def build_dashboard_config(config: Dict) -> Dict:
                 "name": camera["name"],
                 "label": camera.get("dashboard_label", camera.get("label", camera["name"])),
                 "topic": image_topic(namespace, image_stream),
+                "camera_info_topic": camera_info_topic(namespace, image_stream),
                 "type": IMAGE_STREAMS[image_stream]["type"],
                 "row": int(camera.get("dashboard_row", 0)),
                 "column": int(camera.get("dashboard_column", 0)),
@@ -129,6 +82,10 @@ def build_dashboard_config(config: Dict) -> Dict:
         "window_title": dashboard.get("window_title", "Insight Monitoring Dashboard"),
         "fullscreen": bool(dashboard.get("fullscreen", True)),
         "trajectory": dashboard.get("trajectory", {}),
+        "session_alignment": {
+            "enabled": bool(session_alignment.get("enabled", False)),
+            "reference_camera": session_alignment.get("reference_camera"),
+        },
         "cameras": cameras,
         "poses": poses,
     }
@@ -137,23 +94,18 @@ def build_dashboard_config(config: Dict) -> Dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--record-topics", action="store_true")
     parser.add_argument("--dashboard-json", action="store_true")
     parser.add_argument("--ros-domain-id", action="store_true")
     args = parser.parse_args()
 
     config = load_setup(Path(args.config))
-    if args.record_topics:
-        for topic in build_record_topics(config):
-            print(topic)
-        return
     if args.dashboard_json:
         print(json.dumps(build_dashboard_config(config), ensure_ascii=False, indent=2))
         return
     if args.ros_domain_id:
         print(config.get("ros_domain_id", 10))
         return
-    parser.error("Choose one of --record-topics, --dashboard-json or --ros-domain-id")
+    parser.error("Choose --dashboard-json or --ros-domain-id")
 
 
 if __name__ == "__main__":
