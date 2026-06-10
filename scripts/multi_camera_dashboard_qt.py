@@ -17,15 +17,14 @@ from geometry_msgs.msg import PoseStamped
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from sensor_msgs.msg import CameraInfo
 from sensor_msgs.msg import CompressedImage, Image as RosImage
-from tf2_msgs.msg import TFMessage
 
 from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
 from dashboard_widgets import DashboardTrajectoryMixin, ImagePanel, TrajectoryWidget
 from live_alignment import LiveAlignmentMixin
-from session_alignment import PoseSample, matrix_to_transform, quaternion_to_matrix
+from session_alignment import PoseSample
 
 os.environ["QT_QPA_PLATFORM"] = os.environ.get("QT_QPA_PLATFORM", "xcb")
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = QLibraryInfo.location(QLibraryInfo.PluginsPath)
@@ -57,15 +56,6 @@ def make_image_qos(depth: int = 1, reliability: str = "best_effort") -> QoSProfi
     )
 
 
-def make_static_tf_qos() -> QoSProfile:
-    return QoSProfile(
-        reliability=ReliabilityPolicy.RELIABLE,
-        durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        history=HistoryPolicy.KEEP_LAST,
-        depth=20,
-    )
-
-
 @dataclass
 class CameraSpec:
     name: str
@@ -85,6 +75,7 @@ class PoseSpec:
     name: str
     topic: str
     color: str
+    teleop_role: str
 
 
 class DashboardNode(LiveAlignmentMixin, Node):
@@ -125,28 +116,26 @@ class DashboardNode(LiveAlignmentMixin, Node):
             for item in config.get("cameras", [])
         ]
         self.poses: List[PoseSpec] = [
-            PoseSpec(name=item["name"], topic=item["topic"], color=item["color"])
+            PoseSpec(
+                name=item["name"],
+                topic=item["topic"],
+                color=item["color"],
+                teleop_role=str(item.get("teleop_role", item["name"])),
+            )
             for item in config.get("poses", [])
         ]
         if self.reference_camera is None and self.poses:
             self.reference_camera = self.poses[0].name
 
         self.latest_images: Dict[str, Optional[np.ndarray]] = {camera.name: None for camera in self.cameras}
-        self.camera_info_seen: Dict[str, bool] = {camera.name: False for camera in self.cameras}
         self.image_versions: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
         self.image_lock = threading.Lock()
         self.last_frame_received_time: Dict[str, float] = {camera.name: 0.0 for camera in self.cameras}
         self.last_frame_decoded_time: Dict[str, float] = {camera.name: 0.0 for camera in self.cameras}
-        self.frame_received_count: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
-        self.frame_decoded_count: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
-        self.decode_durations_ms: Dict[str, List[float]] = {camera.name: [] for camera in self.cameras}
         self.debug_lock = threading.Lock()
         self.pose_history_lock = threading.Lock()
-        self.static_tf_lock = threading.Lock()
         self.live_alignment_image_lock = threading.Lock()
         self.live_alignment_solution_lock = threading.Lock()
-        self.static_transforms: Dict[Tuple[str, str], np.ndarray] = {}
-        self.static_transform_cache: Dict[Tuple[str, str], np.ndarray] = {}
         self.ros_callback_group = ReentrantCallbackGroup()
         self.pending_messages: Dict[str, Optional[object]] = {camera.name: None for camera in self.cameras}
         self.pending_lock = threading.Lock()
@@ -174,17 +163,6 @@ class DashboardNode(LiveAlignmentMixin, Node):
 
         image_qos = make_image_qos(reliability=self.image_qos_reliability)
         pose_qos = make_qos()
-
-        if self.live_alignment_available and self.live_alignment_method == "vio_world":
-            static_tf_sub = self.create_subscription(
-                TFMessage,
-                "/tf_static",
-                self._static_tf_callback,
-                make_static_tf_qos(),
-                callback_group=self.ros_callback_group,
-            )
-            self.dashboard_subscriptions.append(static_tf_sub)
-            self.get_logger().info("StaticTF: /tf_static")
 
         for camera in self.cameras:
             if camera.topic_type == "compressed":
@@ -255,7 +233,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
             self.dashboard_subscriptions.append(sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
         self.live_alignment_timer = self.create_timer(
-            0.1,
+            1.0 / max(self.live_alignment_processing_hz, 0.5),
             self._process_live_alignment,
             callback_group=self.ros_callback_group,
         )
@@ -307,7 +285,6 @@ class DashboardNode(LiveAlignmentMixin, Node):
 
     def _make_camera_info_callback(self, camera_name: str):
         def callback(msg: CameraInfo) -> None:
-            self.camera_info_seen[camera_name] = True
             self.live_alignment_camera_matrix[camera_name] = np.array(msg.k, dtype=np.float64).reshape((3, 3))
             self.live_alignment_dist_coeffs[camera_name] = np.array(msg.d, dtype=np.float64).reshape((-1, 1))
 
@@ -319,30 +296,6 @@ class DashboardNode(LiveAlignmentMixin, Node):
             self.live_alignment_dist_coeffs[camera_name] = np.array(msg.d, dtype=np.float64).reshape((-1, 1))
 
         return callback
-
-    def _static_tf_callback(self, msg: TFMessage) -> None:
-        updates = {}
-        for item in msg.transforms:
-            parent = item.header.frame_id
-            child = item.child_frame_id
-            translation = np.array(
-                [
-                    float(item.transform.translation.x),
-                    float(item.transform.translation.y),
-                    float(item.transform.translation.z),
-                ],
-                dtype=np.float64,
-            )
-            rotation = quaternion_to_matrix(
-                float(item.transform.rotation.x),
-                float(item.transform.rotation.y),
-                float(item.transform.rotation.z),
-                float(item.transform.rotation.w),
-            )
-            updates[(parent, child)] = matrix_to_transform(rotation, translation)
-        with self.static_tf_lock:
-            self.static_transforms.update(updates)
-            self.static_transform_cache.clear()
 
     def _make_live_alignment_image_callback(self, camera_name: str, topic_type: str):
         def callback(msg) -> None:
@@ -379,7 +332,6 @@ class DashboardNode(LiveAlignmentMixin, Node):
     def _queue_frame(self, camera_name: str, msg: object) -> None:
         with self.debug_lock:
             self.last_frame_received_time[camera_name] = time.monotonic()
-            self.frame_received_count[camera_name] += 1
         with self.pending_lock:
             self.pending_messages[camera_name] = msg
         self.decoder_events[camera_name].set()
@@ -400,9 +352,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
                 continue
 
             try:
-                decode_start = time.monotonic()
                 image = self._decode_message(camera, msg)
-                decode_ms = (time.monotonic() - decode_start) * 1000.0
             except Exception as exc:
                 self.get_logger().warning(f"Decoder worker failed for {camera.name}: {exc}")
                 continue
@@ -414,11 +364,6 @@ class DashboardNode(LiveAlignmentMixin, Node):
                 self.image_versions[camera.name] += 1
             with self.debug_lock:
                 self.last_frame_decoded_time[camera.name] = time.monotonic()
-                self.frame_decoded_count[camera.name] += 1
-                durations = self.decode_durations_ms[camera.name]
-                durations.append(decode_ms)
-                if len(durations) > 60:
-                    del durations[: len(durations) - 60]
 
     def _decode_message(self, camera: CameraSpec, msg: object) -> Optional[np.ndarray]:
         if camera.topic_type == "compressed":
@@ -526,8 +471,6 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
         self.last_image_render_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.image_display_fps: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.last_displayed_image_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
-        self.last_debug_counts: Dict[str, Tuple[int, int]] = {camera.name: (0, 0) for camera in self.node.cameras}
-        self.last_probe_counts: Dict[str, int] = {camera.name: 0 for camera in self.node.cameras}
         self.ui_render_durations_ms: Dict[str, List[float]] = {camera.name: [] for camera in self.node.cameras}
         self.last_ui_refresh_started: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.last_ui_refresh_completed: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
@@ -676,11 +619,6 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
         self.refresh_timer.timeout.connect(self.refresh_trajectory)
         self.refresh_timer.start(max(50, self.node.ui_refresh_ms))
 
-        if os.environ.get("INSIGHT_DASHBOARD_DEBUG", "").lower() in ("1", "true", "yes"):
-            self.debug_timer = QtCore.QTimer(self)
-            self.debug_timer.timeout.connect(self.print_debug_status)
-            self.debug_timer.start(1000)
-
     def _make_pose_toggle(self, pose_name: str):
         def handler(checked: bool) -> None:
             self.pose_visibility[pose_name] = checked
@@ -699,8 +637,6 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
         for timer in self.image_timers.values():
             timer.stop()
         self.refresh_timer.stop()
-        if hasattr(self, "debug_timer"):
-            self.debug_timer.stop()
         self.node.shutdown_workers()
         self.executor.shutdown()
         self.node.destroy_node()
@@ -819,22 +755,6 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
         if last_time <= 0.0:
             return "-"
         return f"{now - last_time:.1f}s"
-
-    def print_debug_status(self) -> None:
-        try:
-            now = time.monotonic()
-            parts: List[str] = []
-            with self.node.debug_lock:
-                for camera in self.node.cameras:
-                    recv_age = now - self.node.last_frame_received_time[camera.name] if self.node.last_frame_received_time[camera.name] > 0 else -1.0
-                    dec_age = now - self.node.last_frame_decoded_time[camera.name] if self.node.last_frame_decoded_time[camera.name] > 0 else -1.0
-                    parts.append(
-                        f"{camera.name}: fps={self.image_display_fps[camera.name]:.1f} rx={recv_age:.1f}s dec={dec_age:.1f}s"
-                    )
-            print("[dashboard] " + " | ".join(parts) + f" | {self.node.alignment_status_text()}", flush=True)
-        except Exception as exc:
-            print(f"[dashboard] status error: {exc}", flush=True)
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()

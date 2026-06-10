@@ -28,7 +28,7 @@ class LiveAlignmentMixin:
         self.live_alignment_available = self.session_alignment_enabled and hasattr(cv2, "aruco")
         self.live_alignment_active = False
         self.live_alignment_image_stream = str(calibration_config.get("image_stream", "color") or "color")
-        self.live_alignment_method = str(calibration_config.get("method", "board_relative") or "board_relative")
+        self.live_alignment_method = "board_relative"
         self.live_alignment_required_samples = int(calibration_config.get("required_samples", 12))
         self.live_alignment_window = max(
             int(calibration_config.get("stability_window", 20)),
@@ -49,8 +49,12 @@ class LiveAlignmentMixin:
             0.1,
             min(1.0, float(calibration_config.get("alignment_image_scale", 1.0))),
         )
-        self.live_alignment_dashboard_use_optical_rotation = bool(
-            calibration_config.get("dashboard_use_optical_rotation", False)
+        self.live_alignment_processing_hz = max(
+            0.5,
+            min(30.0, float(calibration_config.get("processing_hz", 10.0))),
+        )
+        self.live_alignment_display_axis_alignment = bool(
+            calibration_config.get("display_axis_alignment", True)
         )
         self.live_alignment_dashboard_pose_max_age_ns = int(
             float(calibration_config.get("dashboard_pose_max_age_ms", 150.0)) * 1_000_000
@@ -67,13 +71,9 @@ class LiveAlignmentMixin:
         self.live_alignment_reset_traces_on_lock = bool(
             calibration_config.get("reset_traces_on_lock", True)
         )
-        anchor_rotation_mode = calibration_config.get("anchor_rotation_mode")
-        if anchor_rotation_mode is None:
-            if bool(calibration_config.get("translation_only_anchor", False)):
-                anchor_rotation_mode = "none"
-            else:
-                anchor_rotation_mode = "yaw"
-        self.live_alignment_anchor_rotation_mode = str(anchor_rotation_mode or "yaw").lower()
+        self.live_alignment_anchor_rotation_mode = str(
+            calibration_config.get("anchor_rotation_mode", "yaw") or "yaw"
+        ).lower()
         if self.live_alignment_anchor_rotation_mode not in {"none", "yaw", "full"}:
             self.live_alignment_anchor_rotation_mode = "yaw"
         self.live_alignment_max_translation_err_m = float(calibration_config.get("max_translation_std_m", 0.25))
@@ -93,9 +93,6 @@ class LiveAlignmentMixin:
             if camera.get("enabled", True)
         }
         self.live_alignment_last_summary_time: float = 0.0
-        self.live_alignment_debug_log_path = Path(
-            os.environ.get("INSIGHT_ALIGNMENT_LOG", "/tmp/insight_live_alignment.log")
-        )
         self.live_alignment_result_txt_path = Path(
             os.environ.get("INSIGHT_ALIGNMENT_RESULT", "/tmp/insight_live_alignment_result.txt")
         )
@@ -215,15 +212,15 @@ class LiveAlignmentMixin:
         self.live_alignment_last_tag_count = {camera.name: 0 for camera in self.cameras}
         self.live_alignment_last_summary_time = 0.0
         self._reset_live_alignment_debug_state()
-        self._reset_alignment_debug_log()
         self._reset_alignment_result_txt()
         self._log_live_alignment_status(force=True)
         self._emit_alignment_log(
             "config "
             f"method={self.live_alignment_method} stream={self.live_alignment_image_stream} "
             f"dict={self.live_alignment_dictionary_name} scale={self.live_alignment_image_scale:.2f} "
+            f"processing_hz={self.live_alignment_processing_hz:.1f} "
             f"min_tags={self.live_alignment_min_detected_tags} required={self.live_alignment_required_samples} "
-            f"dashboard_rotation={'on' if self.live_alignment_dashboard_use_optical_rotation else 'off'} "
+            f"display_axis_alignment={'on' if self.live_alignment_display_axis_alignment else 'off'} "
             f"lock_on_first_solution={'on' if self.live_alignment_lock_on_first_solution else 'off'} "
             f"reset_traces_on_lock={'on' if self.live_alignment_reset_traces_on_lock else 'off'} "
             f"anchor_rotation_mode={self.live_alignment_anchor_rotation_mode} "
@@ -314,7 +311,6 @@ class LiveAlignmentMixin:
                 camera_name,
                 stage="tags_low",
                 tags=self.live_alignment_last_tag_count[camera_name],
-                min_tags=self.live_alignment_min_detected_tags,
             )
             return True
         self.live_alignment_last_tag_count[camera_name] = int(len(ids))
@@ -354,7 +350,6 @@ class LiveAlignmentMixin:
                     camera_name,
                     stage="tags_low",
                     tags=self.live_alignment_last_tag_count[camera_name],
-                    min_tags=self.live_alignment_min_detected_tags,
                 )
                 return True
         try:
@@ -399,7 +394,7 @@ class LiveAlignmentMixin:
         num_markers = int(retval or 0)
         if retval is None or float(retval) <= 0.0 or rvec is None or tvec is None:
             self.live_alignment_latest_detection[camera_name] = None
-            self._set_alignment_debug(camera_name, stage="pose_board_failed", board_markers=num_markers)
+            self._set_alignment_debug(camera_name, stage="pose_board_failed")
             return True
         rotation, _ = cv2.Rodrigues(rvec)
         t_camera_board = matrix_to_transform(rotation, tvec.reshape(3))
@@ -411,10 +406,7 @@ class LiveAlignmentMixin:
         self._set_alignment_debug(
             camera_name,
             stage="detection_ok",
-            board_markers=num_markers,
-            imu_rgb="not_used",
-            alignment_frame="camera",
-            method=self.live_alignment_method,
+            tags=self.live_alignment_last_tag_count[camera_name],
         )
         self._update_live_alignment_solution()
         return True
@@ -433,11 +425,7 @@ class LiveAlignmentMixin:
     def _dashboard_transform_from_optical(self, optical_transform: np.ndarray) -> np.ndarray:
         rotation_map = self._optical_to_dashboard_rotation()
         translation = rotation_map @ optical_transform[:3, 3]
-        if self.live_alignment_dashboard_use_optical_rotation:
-            rotation = rotation_map @ optical_transform[:3, :3] @ rotation_map.T
-        else:
-            rotation = np.eye(3, dtype=np.float64)
-        return matrix_to_transform(rotation, translation)
+        return matrix_to_transform(np.eye(3, dtype=np.float64), translation)
 
     @staticmethod
     def _rotation_about_display_z(yaw_deg: float) -> np.ndarray:
@@ -484,12 +472,20 @@ class LiveAlignmentMixin:
         rotated = {}
         for camera_name, transform in transforms.items():
             translation = rotation @ transform[:3, 3]
-            if self.live_alignment_dashboard_use_optical_rotation:
-                mapped_rotation = rotation @ transform[:3, :3]
-            else:
-                mapped_rotation = transform[:3, :3]
-            rotated[camera_name] = matrix_to_transform(mapped_rotation, translation)
+            rotated[camera_name] = matrix_to_transform(transform[:3, :3], translation)
         return rotated
+
+    def _canonicalize_display_transforms(
+        self,
+        transforms: Dict[str, np.ndarray],
+    ) -> Dict[str, np.ndarray]:
+        if not self.live_alignment_display_axis_alignment:
+            return transforms
+        canonical = {}
+        identity = np.eye(3, dtype=np.float64)
+        for camera_name, transform in transforms.items():
+            canonical[camera_name] = matrix_to_transform(identity, transform[:3, 3])
+        return canonical
 
     def _find_dashboard_pose_sample(self, camera_name: str, stamp_ns: int):
         with self.pose_history_lock:
@@ -661,6 +657,7 @@ class LiveAlignmentMixin:
         }
         dashboard_yaw_deg = self._dashboard_horizontal_yaw_deg_from_transforms(base_transforms)
         display_camera_transforms = self._apply_dashboard_horizontal_yaw(base_transforms, dashboard_yaw_deg)
+        display_camera_transforms = self._canonicalize_display_transforms(display_camera_transforms)
         trajectory_anchor_transforms = self._build_dashboard_world_anchors(detections, display_camera_transforms)
         if trajectory_anchor_transforms is None:
             self.live_alignment_last_status = "waiting-sync"
@@ -703,6 +700,9 @@ class LiveAlignmentMixin:
         self._emit_alignment_log(f"reference_camera={self.reference_camera}")
         self._emit_alignment_log("axis_convention: reference optical frame (x right, y down, z forward)")
         self._emit_alignment_log("dashboard_frame: x=forward, y=right, z=up")
+        self._emit_alignment_log(
+            f"display_axes_canonical={'on' if self.live_alignment_display_axis_alignment else 'off'}"
+        )
         self._emit_alignment_log(f"dashboard_horizontal_yaw_deg={dashboard_yaw_deg:.1f}")
         self._emit_alignment_log("final camera transforms relative to reference:")
         for camera in self.cameras:
@@ -877,7 +877,6 @@ class LiveAlignmentMixin:
         self._emit_alignment_log(
             f"tags {' '.join(parts)} | seen={seen_text} | usable={usable_text}{missing_text}{stage_text} | {self.alignment_status_text()}"
         )
-        self._write_alignment_debug_summary()
 
     def _emit_alignment_log(self, message: str) -> None:
         text = f"[alignment] {message}"
@@ -887,16 +886,9 @@ class LiveAlignmentMixin:
         self.live_alignment_debug_state = {
             camera.name: {
                 "stage": "idle",
-                "method": self.live_alignment_method,
                 "tags": 0,
-                "shape": "-",
-                "topic": self.live_alignment_topic_by_camera.get(camera.name, "-"),
-                "stamp_ns": "-",
-                "min_tags": self.live_alignment_min_detected_tags,
                 "pending": 0,
-                "board_markers": "-",
                 "latency_ms": "-",
-                "alignment_frame": "camera",
             }
             for camera in self.cameras
         }
@@ -904,23 +896,6 @@ class LiveAlignmentMixin:
     def _set_alignment_debug(self, camera_name: str, **updates: object) -> None:
         state = self.live_alignment_debug_state.setdefault(camera_name, {})
         state.update(updates)
-
-    def _reset_alignment_debug_log(self) -> None:
-        try:
-            self.live_alignment_debug_log_path.parent.mkdir(parents=True, exist_ok=True)
-            header = (
-                "# Insight live alignment debug log\n"
-                f"# file={self.live_alignment_debug_log_path}\n"
-                f"# method={self.live_alignment_method} stream={self.live_alignment_image_stream} "
-                f"dictionary={self.live_alignment_dictionary_name} scale={self.live_alignment_image_scale:.2f} "
-                f"min_tags={self.live_alignment_min_detected_tags} required_samples={self.live_alignment_required_samples}\n"
-                "# stages: no_image, waiting_image, decode_failed, image_rx, tags_low, tags_ok, "
-                "missing_camera_info, pose_board_failed, detection_ok\n"
-            )
-            self.live_alignment_debug_log_path.write_text(header, encoding="utf-8")
-            self._emit_alignment_log(f"debug log: {self.live_alignment_debug_log_path}")
-        except Exception as exc:
-            self._emit_alignment_log(f"debug log unavailable: {exc}")
 
     def _reset_alignment_result_txt(self) -> None:
         try:
@@ -951,10 +926,6 @@ class LiveAlignmentMixin:
                 f"reference_camera={self.reference_camera}",
                 f"status={self.alignment_status_text()}",
                 f"sync_span_ms={self.live_alignment_last_sync_span_ms:.1f}",
-                "# axis_convention: reference camera optical frame",
-                "# x=right, y=down, z=forward",
-                "# dashboard_frame: x=forward, y=right, z=up",
-                f"dashboard_horizontal_yaw_mode={self.live_alignment_dashboard_horizontal_yaw_mode}",
                 "",
             ]
             for camera in self.cameras:
@@ -970,90 +941,21 @@ class LiveAlignmentMixin:
                     lines.append("")
                     continue
                 raw_translation = raw_transform[:3, 3]
-                raw_rotation = raw_transform[:3, :3]
                 display_translation = display_transform[:3, 3]
-                display_rotation = display_transform[:3, :3]
                 anchor_translation = anchor_transform[:3, 3]
-                anchor_rotation = anchor_transform[:3, :3]
                 lines.append(
                     f"optical_xyz_m=({raw_translation[0]:.6f}, {raw_translation[1]:.6f}, {raw_translation[2]:.6f})"
                 )
                 lines.append(
-                    f"optical_interpreted_m=(right={raw_translation[0]:.6f}, down={raw_translation[1]:.6f}, forward={raw_translation[2]:.6f})"
-                )
-                lines.append(f"optical_relative_height_up_m={-raw_translation[1]:.6f}")
-                lines.append(f"optical_summary={self._format_transform_summary(raw_transform)}")
-                lines.append(
                     f"display_xyz_m=({display_translation[0]:.6f}, {display_translation[1]:.6f}, {display_translation[2]:.6f})"
                 )
                 lines.append(
-                    f"display_interpreted_m=(forward={display_translation[0]:.6f}, right={display_translation[1]:.6f}, up={display_translation[2]:.6f})"
+                    f"anchor_xyz_m=({anchor_translation[0]:.6f}, {anchor_translation[1]:.6f}, {anchor_translation[2]:.6f})"
                 )
-                lines.append(f"display_relative_height_up_m={display_translation[2]:.6f}")
-                lines.append(f"display_summary={self._format_transform_summary(display_transform)}")
-                lines.append(
-                    f"trajectory_anchor_xyz_m=({anchor_translation[0]:.6f}, {anchor_translation[1]:.6f}, {anchor_translation[2]:.6f})"
-                )
-                lines.append(f"trajectory_anchor_summary={self._format_transform_summary(anchor_transform)}")
-                lines.append("optical_matrix=")
-                for row in range(3):
-                    lines.append(
-                        "  "
-                        + " ".join(f"{float(raw_rotation[row, col]): .6f}" for col in range(3))
-                        + f" {float(raw_translation[row]): .6f}"
-                    )
-                lines.append("   0.000000  0.000000  0.000000  1.000000")
-                lines.append("display_matrix=")
-                for row in range(3):
-                    lines.append(
-                        "  "
-                        + " ".join(f"{float(display_rotation[row, col]): .6f}" for col in range(3))
-                        + f" {float(display_translation[row]): .6f}"
-                    )
-                lines.append("   0.000000  0.000000  0.000000  1.000000")
-                lines.append("trajectory_anchor_matrix=")
-                for row in range(3):
-                    lines.append(
-                        "  "
-                        + " ".join(f"{float(anchor_rotation[row, col]): .6f}" for col in range(3))
-                        + f" {float(anchor_translation[row]): .6f}"
-                    )
-                lines.append("   0.000000  0.000000  0.000000  1.000000")
                 lines.append("")
             self.live_alignment_result_txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         except Exception as exc:
             self._emit_alignment_log(f"result txt write failed: {exc}")
-
-    def _write_alignment_debug_summary(self) -> None:
-        try:
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            lines = [f"{timestamp} | {self.alignment_status_text()} | sync_span={self.live_alignment_last_sync_span_ms:.1f}ms"]
-            for camera in self.cameras:
-                state = self.live_alignment_debug_state.get(camera.name, {})
-                with self.pose_history_lock:
-                    pose_history_len = len(self.pose_history.get(camera.name, []))
-                lines.append(
-                    "  "
-                    f"{camera.name}: "
-                    f"stage={state.get('stage', '-')} "
-                    f"method={state.get('method', self.live_alignment_method)} "
-                    f"tags={state.get('tags', 0)}/{state.get('min_tags', self.live_alignment_min_detected_tags)} "
-                    f"shape={state.get('shape', '-')} "
-                    f"topic={state.get('topic', self.live_alignment_topic_by_camera.get(camera.name, '-'))} "
-                    f"stamp_ns={state.get('stamp_ns', '-')} "
-                    f"camera_info={'Y' if self.live_alignment_camera_matrix.get(camera.name) is not None else 'N'} "
-                    f"pending={state.get('pending', 0)} "
-                    f"buffer={len(self.live_alignment_detection_buffer.get(camera.name, []))} "
-                    f"pose_history={pose_history_len} "
-                    f"latency_ms={state.get('latency_ms', '-')} "
-                    f"board_markers={state.get('board_markers', '-')} "
-                    f"alignment_frame={state.get('alignment_frame', '-')} "
-                    f"align={self.live_alignment_last_transform_summary.get(camera.name, '-')}"
-                )
-            with self.live_alignment_debug_log_path.open("a", encoding="utf-8") as log_file:
-                log_file.write("\n".join(lines) + "\n")
-        except Exception as exc:
-            self._emit_alignment_log(f"debug log write failed: {exc}")
 
     def _decode_calibration_message(self, topic_type: str, msg: object) -> Optional[np.ndarray]:
         if topic_type == "compressed":

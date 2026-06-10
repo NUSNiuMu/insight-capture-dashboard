@@ -100,6 +100,11 @@ class TrajectoryWidget(QtWidgets.QWidget):
 
 class DashboardTrajectoryMixin:
     MUTED = "#8fa3b8"
+    TELEOP_ROLE_STYLES = {
+        "head": {"label": "Head", "color": "#f6d365"},
+        "left_hand": {"label": "L", "color": "#ff7b7b"},
+        "right_hand": {"label": "R", "color": "#6fb7ff"},
+    }
 
     def _pixmap_from_image(self, image: np.ndarray, target_size: QtCore.QSize) -> QtGui.QPixmap:
         image = np.ascontiguousarray(image, dtype=np.uint8)
@@ -171,6 +176,7 @@ class DashboardTrajectoryMixin:
             painter.setBrush(brush)
             x, y = points_2d[-1]
             painter.drawEllipse(QtCore.QPointF(x, y), 5, 5)
+            self._draw_pose_label(painter, pose, x, y)
 
     def _project_traces(self, points: List[Tuple[float, float, float]], width: int, height: int, scene=None):
         yaw = math.radians(self.view_yaw_deg)
@@ -243,6 +249,18 @@ class DashboardTrajectoryMixin:
         painter.setPen(QtGui.QColor(self.MUTED))
         painter.drawText(28, 22, f"yaw {self.view_yaw_deg:.0f}°, pitch {self.view_pitch_deg:.0f}°, zoom {self.view_zoom:.2f}x")
         painter.drawText(int(width - 170), 22, "drag rotate, wheel zoom")
+
+    def _draw_pose_label(self, painter: QtGui.QPainter, pose, x: float, y: float) -> None:
+        role = getattr(pose, "teleop_role", pose.name)
+        style = self.TELEOP_ROLE_STYLES.get(role)
+        if style is None:
+            return
+        painter.setPen(QtGui.QColor(style["color"]))
+        painter.drawText(
+            int(round(x + 10)),
+            int(round(y - 8)),
+            str(style["label"]),
+        )
 
     @staticmethod
     def rect_for(width: int, height: int) -> QtCore.QRect:

@@ -75,6 +75,7 @@ def build_dashboard_config(config: Dict) -> Dict:
                 "name": camera["name"],
                 "topic": pose_topic,
                 "color": camera.get("dashboard_color", "#ffffff"),
+                "teleop_role": camera.get("teleop_role", camera["name"]),
             }
         )
 
