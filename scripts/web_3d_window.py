@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import signal
 import sys
 
 from PyQt5 import QtCore, QtWidgets
@@ -83,6 +84,13 @@ def main() -> None:
 
     app = QtWidgets.QApplication(sys.argv)
     window = Web3DWindow(args.url, args.x, args.y, args.width, args.height)
+
+    signal.signal(signal.SIGINT, lambda *_args: QtCore.QTimer.singleShot(0, app.quit))
+    signal.signal(signal.SIGTERM, lambda *_args: QtCore.QTimer.singleShot(0, app.quit))
+    signal_timer = QtCore.QTimer()
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start(200)
+
     window.show()
     sys.exit(app.exec_())
 

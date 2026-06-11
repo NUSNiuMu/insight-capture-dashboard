@@ -3,19 +3,16 @@
 import argparse
 import asyncio
 import contextlib
-import json
 import math
 import os
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from io import BytesIO
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote
 
-import cv2
 import numpy as np
 from aiohttp import web
 
@@ -84,16 +81,7 @@ class PoseSpec:
 @dataclass
 class CameraSpec:
     name: str
-    label: str
     namespace: str
-    topic: str
-    camera_info_topic: str
-    topic_type: str
-    rotation_deg: int
-    row: int
-    column: int
-    column_span: int
-    row_span: int
 
 
 class PoseBridgeNode(LiveAlignmentMixin, Node):
@@ -102,8 +90,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         config_path: Path,
         fake_pose: bool = False,
         pose_publish_hz: float = 30.0,
-        enable_pose_stream: bool = True,
-        enable_camera_stream: bool = True,
         enable_alignment_stream: bool = False,
     ) -> None:
         if rclpy is None:
@@ -112,14 +98,9 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.config_path = config_path
         self.fake_pose = bool(fake_pose)
         self.pose_publish_hz = max(1.0, float(pose_publish_hz))
-        self.enable_pose_stream = bool(enable_pose_stream)
-        self.enable_camera_stream = bool(enable_camera_stream)
         self.enable_alignment_stream = bool(enable_alignment_stream)
         self.max_points = 300
         self.pose_timeout_sec = 0.5
-        self.preview_jpeg_quality = 78
-        self.preview_max_width = 640
-        self.preview_passthrough_compressed = True
 
         raw_config = load_setup(config_path)
         config = build_dashboard_config(raw_config)
@@ -134,16 +115,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.cameras: List[CameraSpec] = [
             CameraSpec(
                 name=item["name"],
-                label=item["label"],
                 namespace=enabled_camera_map[item["name"]]["namespace"],
-                topic=item["topic"],
-                camera_info_topic=item["camera_info_topic"],
-                topic_type=item["type"],
-                rotation_deg=int(item.get("rotation_deg", 0)),
-                row=int(item.get("row", 0)),
-                column=int(item.get("column", 0)),
-                column_span=int(item.get("column_span", 1)),
-                row_span=int(item.get("row_span", 1)),
             )
             for item in config.get("cameras", [])
         ]
@@ -166,52 +138,22 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.latest_pose: Dict[str, Optional[Tuple[float, float, float]]] = {pose.name: None for pose in self.poses}
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
-        self.pose_versions: Dict[str, int] = {pose.name: 0 for pose in self.poses}
         self.pose_history: Dict[str, Deque[PoseSample]] = {pose.name: deque(maxlen=160) for pose in self.poses}
         self.pose_history_lock = threading.Lock()
         self.pose_lock = threading.Lock()
-        self.image_lock = threading.Lock()
-        self.pending_lock = threading.Lock()
         self.live_alignment_image_lock = threading.Lock()
         self.live_alignment_solution_lock = threading.Lock()
         self.ros_callback_group = ReentrantCallbackGroup()
         self.dashboard_subscriptions = []
-        self.pending_messages: Dict[str, Optional[object]] = {camera.name: None for camera in self.cameras}
-        self.decoder_events: Dict[str, threading.Event] = {camera.name: threading.Event() for camera in self.cameras}
-        self.decoder_stop_event = threading.Event()
-        self.decoder_threads: List[threading.Thread] = []
-        self.latest_images: Dict[str, Optional[np.ndarray]] = {camera.name: None for camera in self.cameras}
-        self.latest_preview_jpeg: Dict[str, Optional[bytes]] = {camera.name: None for camera in self.cameras}
-        self.latest_image_shapes: Dict[str, Optional[Tuple[int, int]]] = {camera.name: None for camera in self.cameras}
-        self.image_versions: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
-        self.last_frame_received_time: Dict[str, float] = {camera.name: 0.0 for camera in self.cameras}
-        self.last_frame_decoded_time: Dict[str, float] = {camera.name: 0.0 for camera in self.cameras}
-        self.frame_timestamps: Dict[str, Deque[float]] = {camera.name: deque(maxlen=60) for camera in self.cameras}
         self._initialize_live_alignment_state()
         if self.world_to_reference:
             self.get_logger().info("Loaded persisted live alignment state for web dashboard startup")
 
-        if self.enable_camera_stream:
-            for camera in self.cameras:
-                if camera.topic_type == "compressed" and self.preview_passthrough_compressed:
-                    continue
-                worker = threading.Thread(
-                    target=self._decoder_worker,
-                    args=(camera,),
-                    daemon=True,
-                    name=f"{camera.name}_decoder",
-                )
-                worker.start()
-                self.decoder_threads.append(worker)
-
-        if self.fake_pose and self.enable_pose_stream:
+        if self.fake_pose:
             self.create_timer(1.0 / self.pose_publish_hz, self._update_fake_pose, callback_group=self.ros_callback_group)
             self.get_logger().info("Running in fake-pose demo mode")
         else:
-            if self.enable_pose_stream:
-                self._create_pose_subscriptions()
-            if self.enable_camera_stream:
-                self._create_image_subscriptions()
+            self._create_pose_subscriptions()
             if self.enable_alignment_stream:
                 self._create_alignment_subscriptions()
 
@@ -234,31 +176,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             )
             self.dashboard_subscriptions.append(sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
-
-    def _create_image_subscriptions(self) -> None:
-        image_qos = make_image_qos(reliability=self.image_qos_reliability)
-        for camera in self.cameras:
-            if camera.topic_type == "compressed":
-                sub = self.create_subscription(
-                    CompressedImage,
-                    camera.topic,
-                    self._make_compressed_callback(camera.name),
-                    image_qos,
-                    callback_group=self.ros_callback_group,
-                )
-            else:
-                sub = self.create_subscription(
-                    RosImage,
-                    camera.topic,
-                    self._make_image_callback(camera.name),
-                    image_qos,
-                    callback_group=self.ros_callback_group,
-                )
-            self.dashboard_subscriptions.append(sub)
-            self.get_logger().info(
-                f"Image: {camera.label} <- {camera.topic} "
-                f"(qos={self.image_qos_reliability}, depth={image_qos.depth})"
-            )
 
     def _create_alignment_subscriptions(self) -> None:
         if not self.live_alignment_available:
@@ -294,21 +211,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                 f"Alignment: {camera_name} image={calib_topic} info={calib_info_topic} type={calib_type}"
             )
 
-    def _make_image_callback(self, camera_name: str):
-        def callback(msg: RosImage) -> None:
-            self._queue_frame(camera_name, msg)
-
-        return callback
-
-    def _make_compressed_callback(self, camera_name: str):
-        def callback(msg: CompressedImage) -> None:
-            if self.preview_passthrough_compressed:
-                self._store_passthrough_frame(camera_name, msg)
-                return
-            self._queue_frame(camera_name, msg)
-
-        return callback
-
     def _make_pose_callback(self, pose_name: str):
         def callback(msg: PoseStamped) -> None:
             pose_sample = PoseSample(
@@ -335,71 +237,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             self.live_alignment_dist_coeffs[camera_name] = np.array(msg.d, dtype=np.float64).reshape((-1, 1))
 
         return callback
-
-    def _queue_frame(self, camera_name: str, msg: object) -> None:
-        self.last_frame_received_time[camera_name] = time.monotonic()
-        with self.pending_lock:
-            self.pending_messages[camera_name] = msg
-        self.decoder_events[camera_name].set()
-
-    def _store_passthrough_frame(self, camera_name: str, msg: CompressedImage) -> None:
-        self.last_frame_received_time[camera_name] = time.monotonic()
-        preview = self._build_passthrough_preview(camera_name, msg)
-        if preview is None:
-            return
-        jpeg, shape = preview
-        now = time.monotonic()
-        with self.image_lock:
-            self.latest_images[camera_name] = None
-            self.latest_preview_jpeg[camera_name] = jpeg
-            self.latest_image_shapes[camera_name] = shape
-            self.image_versions[camera_name] += 1
-            self.frame_timestamps[camera_name].append(now)
-        self.last_frame_decoded_time[camera_name] = now
-
-    def _decoder_worker(self, camera: CameraSpec) -> None:
-        event = self.decoder_events[camera.name]
-        while not self.decoder_stop_event.is_set():
-            event.wait(0.2)
-            if self.decoder_stop_event.is_set():
-                break
-            if not event.is_set():
-                continue
-            event.clear()
-            with self.pending_lock:
-                msg = self.pending_messages[camera.name]
-                self.pending_messages[camera.name] = None
-            if msg is None:
-                continue
-
-            if camera.topic_type == "compressed" and self.preview_passthrough_compressed:
-                preview = self._build_passthrough_preview(camera.name, msg)
-                if preview is not None:
-                    jpeg, shape = preview
-                    with self.image_lock:
-                        self.latest_images[camera.name] = None
-                        self.latest_preview_jpeg[camera.name] = jpeg
-                        self.latest_image_shapes[camera.name] = shape
-                        self.image_versions[camera.name] += 1
-                        self.frame_timestamps[camera.name].append(time.monotonic())
-                    self.last_frame_decoded_time[camera.name] = time.monotonic()
-                    continue
-
-            try:
-                image = self._decode_message(camera, msg)
-            except Exception as exc:
-                self.get_logger().warning(f"Decoder worker failed for {camera.name}: {exc}")
-                continue
-            if image is None:
-                continue
-            jpeg = self._encode_preview_jpeg(image)
-            with self.image_lock:
-                self.latest_images[camera.name] = image
-                self.latest_preview_jpeg[camera.name] = jpeg
-                self.latest_image_shapes[camera.name] = (int(image.shape[1]), int(image.shape[0]))
-                self.image_versions[camera.name] += 1
-                self.frame_timestamps[camera.name].append(time.monotonic())
-            self.last_frame_decoded_time[camera.name] = time.monotonic()
 
     def _make_live_alignment_image_callback(self, camera_name: str, topic_type: str):
         def callback(msg) -> None:
@@ -433,204 +270,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
 
         return callback
 
-    def _decode_calibration_message(self, topic_type: str, msg) -> Optional[np.ndarray]:
-        if topic_type == "compressed":
-            return self._decode_compressed_image(msg)
-        return self._convert_ros_image(msg)
-
-    def _decode_message(self, camera: CameraSpec, msg: object) -> Optional[np.ndarray]:
-        if camera.topic_type == "compressed":
-            return self._decode_compressed_pil(msg)
-        return self._convert_ros_image(msg)
-
-    def _decode_compressed_pil(self, msg: CompressedImage) -> Optional[np.ndarray]:
-        try:
-            from PIL import Image
-        except Exception:
-            return self._decode_compressed_image(msg)
-        try:
-            with Image.open(BytesIO(msg.data)) as img:
-                img = img.convert("RGB")
-                image = np.array(img, dtype=np.uint8)
-                return np.ascontiguousarray(image)
-        except Exception:
-            return self._decode_compressed_image(msg)
-
-    def _decode_compressed_image(self, msg: CompressedImage) -> Optional[np.ndarray]:
-        buffer = np.frombuffer(msg.data, dtype=np.uint8)
-        image = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
-        if image is None:
-            return None
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        return np.ascontiguousarray(rgb)
-
-    def _convert_ros_image(self, msg: RosImage) -> Optional[np.ndarray]:
-        if msg.width == 0 or msg.height == 0:
-            return None
-        data = np.frombuffer(msg.data, dtype=np.uint8)
-        encoding = msg.encoding.lower()
-        channels_by_encoding = {
-            "mono8": 1,
-            "8uc1": 1,
-            "rgb8": 3,
-            "bgr8": 3,
-            "rgba8": 4,
-            "bgra8": 4,
-        }
-        channels = channels_by_encoding.get(encoding)
-        if channels is None:
-            channels = max(msg.step // max(msg.width, 1), 1)
-        if msg.step <= 0 or data.size < msg.step * msg.height:
-            return None
-        row_bytes = msg.step
-        image = data[: row_bytes * msg.height].reshape((msg.height, row_bytes))
-        if encoding in ("mono8", "8uc1"):
-            gray = image[:, : msg.width]
-            rgb = np.repeat(gray[:, :, None], 3, axis=2).astype(np.uint8, copy=False)
-            return np.ascontiguousarray(rgb)
-        if encoding == "rgb8":
-            rgb = image[:, : msg.width * 3].reshape((msg.height, msg.width, 3))
-            return np.ascontiguousarray(rgb.astype(np.uint8, copy=False))
-        if encoding == "bgr8":
-            bgr = image[:, : msg.width * 3].reshape((msg.height, msg.width, 3))
-            return np.ascontiguousarray(bgr[:, :, ::-1].astype(np.uint8, copy=False))
-        if encoding == "rgba8":
-            rgba = image[:, : msg.width * 4].reshape((msg.height, msg.width, 4))
-            return np.ascontiguousarray(rgba[:, :, :3].astype(np.uint8, copy=False))
-        if encoding == "bgra8":
-            bgra = image[:, : msg.width * 4].reshape((msg.height, msg.width, 4))
-            rgb = bgra[:, :, [2, 1, 0]]
-            return np.ascontiguousarray(rgb.astype(np.uint8, copy=False))
-        pixel_image = image[:, : msg.width * channels].reshape((msg.height, msg.width, channels))
-        if channels >= 3:
-            return np.ascontiguousarray(pixel_image[:, :, :3].astype(np.uint8, copy=False))
-        if channels == 1:
-            gray = pixel_image[:, :, 0]
-            rgb = np.repeat(gray[:, :, None], 3, axis=2).astype(np.uint8, copy=False)
-            return np.ascontiguousarray(rgb)
-        return None
-
-    def _build_passthrough_preview(
-        self,
-        camera_name: str,
-        msg: CompressedImage,
-    ) -> Optional[Tuple[bytes, Tuple[int, int]]]:
-        jpeg = bytes(msg.data)
-        if not jpeg:
-            return None
-        shape = self.latest_image_shapes.get(camera_name)
-        if shape is None:
-            shape = self._jpeg_size(jpeg)
-        if shape is None:
-            return None
-        width, height = int(shape[0]), int(shape[1])
-        return jpeg, (width, height)
-
-    @staticmethod
-    def _jpeg_size(jpeg: bytes) -> Optional[Tuple[int, int]]:
-        if len(jpeg) < 4 or jpeg[0] != 0xFF or jpeg[1] != 0xD8:
-            return None
-        offset = 2
-        sof_markers = {
-            0xC0, 0xC1, 0xC2, 0xC3,
-            0xC5, 0xC6, 0xC7,
-            0xC9, 0xCA, 0xCB,
-            0xCD, 0xCE, 0xCF,
-        }
-        length = len(jpeg)
-        while offset + 9 < length:
-            if jpeg[offset] != 0xFF:
-                offset += 1
-                continue
-            marker = jpeg[offset + 1]
-            offset += 2
-            while marker == 0xFF and offset < length:
-                marker = jpeg[offset]
-                offset += 1
-            if marker in (0xD8, 0xD9):
-                continue
-            if offset + 2 > length:
-                return None
-            segment_length = (jpeg[offset] << 8) | jpeg[offset + 1]
-            if segment_length < 2 or offset + segment_length > length:
-                return None
-            if marker in sof_markers:
-                if offset + 7 > length:
-                    return None
-                height = (jpeg[offset + 3] << 8) | jpeg[offset + 4]
-                width = (jpeg[offset + 5] << 8) | jpeg[offset + 6]
-                return (int(width), int(height))
-            offset += segment_length
-        return None
-
-    def _encode_preview_jpeg(self, image: np.ndarray) -> bytes:
-        rgb = image
-        height, width = rgb.shape[:2]
-        if width > self.preview_max_width:
-            scale = self.preview_max_width / float(width)
-            new_size = (self.preview_max_width, max(1, int(round(height * scale))))
-            rgb = cv2.resize(rgb, new_size, interpolation=cv2.INTER_AREA)
-        bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-        ok, encoded = cv2.imencode(
-            ".jpg",
-            bgr,
-            [int(cv2.IMWRITE_JPEG_QUALITY), int(self.preview_jpeg_quality)],
-        )
-        if not ok:
-            raise RuntimeError("failed to encode jpeg preview")
-        return encoded.tobytes()
-
-    def build_camera_payload(self) -> Dict[str, object]:
-        now = time.monotonic()
-        cameras = []
-        with self.image_lock:
-            for camera in self.cameras:
-                cameras.append(
-                    {
-                        "name": camera.name,
-                        "label": camera.label,
-                        "visible": self.latest_preview_jpeg[camera.name] is not None,
-                        "frame_url": f"/frame/{camera.name}.jpg",
-                        "version": self.image_versions[camera.name],
-                        "width": self.latest_image_shapes[camera.name][0] if self.latest_image_shapes[camera.name] else None,
-                        "height": self.latest_image_shapes[camera.name][1] if self.latest_image_shapes[camera.name] else None,
-                        "fps": self._camera_fps(camera.name, now),
-                        "rotation_deg": camera.rotation_deg,
-                        "row": camera.row,
-                        "column": camera.column,
-                        "row_span": camera.row_span,
-                        "column_span": camera.column_span,
-                        "stale": (now - self.last_frame_decoded_time[camera.name]) > 1.0 if self.last_frame_decoded_time[camera.name] else True,
-                    }
-                )
-        return {"type": "camera_update", "cameras": cameras}
-
-    def get_camera_frame(self, camera_name: str) -> Optional[bytes]:
-        with self.image_lock:
-            data = self.latest_preview_jpeg.get(camera_name)
-        if data is not None:
-            return data
-        return self._placeholder_frame(camera_name)
-
-    def _camera_fps(self, camera_name: str, now: float) -> float:
-        samples = self.frame_timestamps.get(camera_name)
-        if not samples:
-            return 0.0
-        min_time = now - 1.5
-        while samples and samples[0] < min_time:
-            samples.popleft()
-        if len(samples) < 2:
-            return 0.0
-        duration = max(samples[-1] - samples[0], 1e-3)
-        return float((len(samples) - 1) / duration)
-
-    def _placeholder_frame(self, camera_name: str) -> bytes:
-        canvas = np.full((270, 480, 3), 18, dtype=np.uint8)
-        cv2.putText(canvas, "No image", (140, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (220, 220, 220), 2, cv2.LINE_AA)
-        cv2.putText(canvas, camera_name, (140, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (140, 180, 220), 2, cv2.LINE_AA)
-        ok, encoded = cv2.imencode(".jpg", canvas, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-        return encoded.tobytes() if ok else b""
-
     def _record_pose_sample(self, pose_name: str, pose_sample: PoseSample) -> None:
         with self.pose_history_lock:
             self.pose_history[pose_name].append(pose_sample)
@@ -638,7 +277,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             self.latest_pose_sample[pose_name] = pose_sample
             self.latest_pose[pose_name] = self._transform_pose_point(pose_name, pose_sample.position)
             self.last_pose_received_time[pose_name] = time.monotonic()
-            self.pose_versions[pose_name] += 1
             raw_trace = self.raw_traces[pose_name]
             raw_trace.append(pose_sample.position)
             if len(raw_trace) > self.max_points:
@@ -709,13 +347,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             return None
         return f"/asset?path={quote(avatar_model, safe='')}"
 
-    def shutdown_workers(self) -> None:
-        self.decoder_stop_event.set()
-        for event in self.decoder_events.values():
-            event.set()
-        for worker in self.decoder_threads:
-            worker.join(timeout=0.5)
-
     @staticmethod
     def _stamp_to_ns(stamp) -> int:
         return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
@@ -738,14 +369,12 @@ class WebDashboardServer:
         port: int,
         web_root: Optional[Path],
         project_root: Path,
-        view_mode: str = "full",
     ) -> None:
         self.node = node
         self.host = host
         self.port = int(port)
         self.web_root = web_root.resolve() if web_root else None
         self.project_root = project_root.resolve()
-        self.view_mode = str(view_mode or "full")
         self._clients: Set[web.WebSocketResponse] = set()
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
@@ -767,14 +396,9 @@ class WebDashboardServer:
         app.router.add_get("/ws", self._handle_ws)
         app.router.add_get("/healthz", self._handle_healthz)
         app.router.add_get("/api/poses", self._handle_pose_snapshot)
-        app.router.add_get("/api/cameras", self._handle_camera_snapshot)
-        app.router.add_get(r"/frame/{camera_name}.jpg", self._handle_camera_frame)
-        app.router.add_get(r"/stream/{camera_name}.mjpg", self._handle_camera_stream)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
-            app.router.add_get("/3d", self._handle_3d)
-            app.router.add_get("/cameras", self._handle_cameras)
             static_root = self.web_root / "static"
             if static_root.exists():
                 app.router.add_static("/static/", str(static_root), show_index=False)
@@ -805,8 +429,6 @@ class WebDashboardServer:
     async def _broadcast_loop(self) -> None:
         while True:
             await asyncio.sleep(1.0 / self.node.pose_publish_hz)
-            if not self.node.enable_pose_stream:
-                continue
             if not self._clients:
                 continue
             payload = self.node.build_pose_payload()
@@ -824,10 +446,6 @@ class WebDashboardServer:
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=20.0)
         await ws.prepare(request)
-        if not self.node.enable_pose_stream:
-            await ws.send_json({"type": "pose_update", "timestamp_ms": int(time.time() * 1000), "poses": []})
-            await ws.close()
-            return ws
         self._clients.add(ws)
         snapshot = self.node.build_pose_payload()
         for pose in snapshot["poses"]:
@@ -842,83 +460,13 @@ class WebDashboardServer:
         return web.json_response({"ok": True, "fake_pose": self.node.fake_pose})
 
     async def _handle_pose_snapshot(self, _request: web.Request) -> web.Response:
-        if not self.node.enable_pose_stream:
-            return web.json_response({"type": "pose_update", "timestamp_ms": int(time.time() * 1000), "poses": []})
         payload = self.node.build_pose_payload()
         for pose in payload["poses"]:
             pose["asset_url"] = self.node.model_asset_url(pose.get("avatar_model"))
         return web.json_response(payload)
 
-    async def _handle_camera_snapshot(self, _request: web.Request) -> web.Response:
-        if not self.node.enable_camera_stream:
-            return web.json_response({"type": "camera_update", "cameras": []})
-        return web.json_response(self.node.build_camera_payload())
-
-    async def _handle_camera_frame(self, request: web.Request) -> web.StreamResponse:
-        if not self.node.enable_camera_stream:
-            raise web.HTTPNotFound(text="camera stream disabled")
-        camera_name = request.match_info["camera_name"]
-        data = self.node.get_camera_frame(camera_name)
-        if data is None:
-            raise web.HTTPNotFound(text="camera not found")
-        return web.Response(
-            body=data,
-            content_type="image/jpeg",
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
-        )
-
-    async def _handle_camera_stream(self, request: web.Request) -> web.StreamResponse:
-        if not self.node.enable_camera_stream:
-            raise web.HTTPNotFound(text="camera stream disabled")
-        camera_name = request.match_info["camera_name"]
-        response = web.StreamResponse(
-            status=200,
-            headers={
-                "Content-Type": "multipart/x-mixed-replace; boundary=frame",
-                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-                "Pragma": "no-cache",
-                "Connection": "close",
-            },
-        )
-        await response.prepare(request)
-        last_version = -1
-        try:
-            while True:
-                with self.node.image_lock:
-                    version = self.node.image_versions.get(camera_name, -1)
-                    frame = self.node.latest_preview_jpeg.get(camera_name)
-                if frame is None:
-                    frame = self.node._placeholder_frame(camera_name)
-                if version != last_version:
-                    payload = (
-                        b"--frame\r\n"
-                        b"Content-Type: image/jpeg\r\n"
-                        + f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii")
-                        + frame
-                        + b"\r\n"
-                    )
-                    await response.write(payload)
-                    last_version = version
-                await asyncio.sleep(0.01)
-        except (asyncio.CancelledError, ConnectionResetError, RuntimeError):
-            pass
-        finally:
-            with contextlib.suppress(Exception):
-                await response.write_eof()
-        return response
-
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
-        if self.view_mode == "3d":
-            return web.FileResponse(self.web_root / "3d.html")
-        if self.view_mode == "cameras":
-            return web.FileResponse(self.web_root / "cameras.html")
-        return web.FileResponse(self.web_root / "index.html")
-
-    async def _handle_3d(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "3d.html")
-
-    async def _handle_cameras(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.web_root / "cameras.html")
 
     async def _handle_asset(self, request: web.Request) -> web.StreamResponse:
         raw_path = request.query.get("path", "").strip()
@@ -949,7 +497,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--web-root", default=str(Path(__file__).resolve().parents[1] / "web_dashboard" / "dist"))
-    parser.add_argument("--view-mode", choices=("full", "3d", "cameras"), default="full")
+    parser.add_argument("--view-mode", choices=("3d",), default="3d")
     parser.add_argument("--fake-pose", action="store_true")
     parser.add_argument("--pose-publish-hz", type=float, default=30.0)
     parser.add_argument("--start-alignment", action="store_true")
@@ -966,22 +514,15 @@ def main() -> None:
 
     os.environ.setdefault("ROS_DOMAIN_ID", str(ros_domain_id))
     rclpy.init(args=None)
-    enable_pose_stream = args.view_mode in ("full", "3d")
-    enable_camera_stream = args.view_mode in ("full", "cameras")
-    enable_alignment_stream = bool(args.start_alignment and enable_pose_stream)
+    enable_alignment_stream = bool(args.start_alignment)
     node = PoseBridgeNode(
         config_path,
         fake_pose=args.fake_pose,
         pose_publish_hz=args.pose_publish_hz,
-        enable_pose_stream=enable_pose_stream,
-        enable_camera_stream=enable_camera_stream,
         enable_alignment_stream=enable_alignment_stream,
     )
-    node.get_logger().info(
-        f"View mode={args.view_mode} pose_stream={enable_pose_stream} "
-        f"camera_stream={enable_camera_stream} alignment_stream={enable_alignment_stream}"
-    )
-    if args.start_alignment and node.live_alignment_available and not args.fake_pose and enable_pose_stream:
+    node.get_logger().info(f"View mode={args.view_mode} alignment_stream={enable_alignment_stream}")
+    if args.start_alignment and node.live_alignment_available and not args.fake_pose:
         node.start_live_alignment()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
@@ -989,7 +530,7 @@ def main() -> None:
     spin_thread.start()
 
     web_root = Path(args.web_root) if args.web_root else None
-    server = WebDashboardServer(node, args.host, args.port, web_root, node.project_root, view_mode=args.view_mode)
+    server = WebDashboardServer(node, args.host, args.port, web_root, node.project_root)
     server.start()
 
     try:
@@ -1000,7 +541,6 @@ def main() -> None:
     finally:
         server.stop()
         executor.shutdown()
-        node.shutdown_workers()
         node.destroy_node()
         with contextlib.suppress(Exception):
             rclpy.shutdown()

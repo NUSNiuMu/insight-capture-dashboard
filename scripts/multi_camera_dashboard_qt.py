@@ -3,6 +3,7 @@
 import argparse
 from collections import deque
 import os
+import signal
 import threading
 import time
 from io import BytesIO
@@ -453,6 +454,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.node = node
         self.executor = executor
+        self._shutdown_done = False
         self.setWindowTitle(node.window_title)
         self.resize(980, 920)
         self.setMinimumSize(860, 820)
@@ -542,6 +544,13 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.show()
 
     def closeEvent(self, event) -> None:
+        self._shutdown()
+        event.accept()
+
+    def _shutdown(self) -> None:
+        if self._shutdown_done:
+            return
+        self._shutdown_done = True
         for timer in self.image_timers.values():
             timer.stop()
         self.node.shutdown_workers()
@@ -549,7 +558,6 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
-        event.accept()
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
         if event.key() == QtCore.Qt.Key_Escape and self.isFullScreen():
@@ -692,6 +700,12 @@ def main() -> None:
 
     app = QtWidgets.QApplication([])
     window = DashboardWindow(node, executor)
+    app.aboutToQuit.connect(window._shutdown)
+    signal.signal(signal.SIGINT, lambda *_args: QtCore.QTimer.singleShot(0, app.quit))
+    signal.signal(signal.SIGTERM, lambda *_args: QtCore.QTimer.singleShot(0, app.quit))
+    signal_timer = QtCore.QTimer()
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start(200)
     window.start()
     app.exec_()
 

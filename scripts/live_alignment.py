@@ -202,22 +202,6 @@ class LiveAlignmentMixin:
             return list(raw_trace)
         return [transform_point(transform, point) for point in raw_trace]
 
-    def transformed_pose_transform(self, pose_name: str) -> Optional[np.ndarray]:
-        latest_pose_sample = getattr(self, "latest_pose_sample", {}).get(pose_name)
-        if latest_pose_sample is None:
-            return None
-        if not self.session_alignment_enabled:
-            return latest_pose_sample.as_transform()
-        lock = getattr(self, "live_alignment_solution_lock", None)
-        if lock is None:
-            transform = self.world_to_reference.get(pose_name)
-        else:
-            with lock:
-                transform = self.world_to_reference.get(pose_name)
-        if transform is None:
-            return latest_pose_sample.as_transform()
-        return transform @ latest_pose_sample.as_transform()
-
     def transformed_pose_sample(self, pose_name: str):
         latest_pose_sample = getattr(self, "latest_pose_sample", {}).get(pose_name)
         if latest_pose_sample is None:
