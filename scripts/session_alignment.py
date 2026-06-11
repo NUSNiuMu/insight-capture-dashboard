@@ -35,6 +35,35 @@ def matrix_to_transform(rotation: np.ndarray, translation: np.ndarray) -> np.nda
     return transform
 
 
+def matrix_to_quaternion(rotation: np.ndarray) -> Tuple[float, float, float, float]:
+    trace = float(rotation[0, 0] + rotation[1, 1] + rotation[2, 2])
+    if trace > 0.0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        w = 0.25 * s
+        x = (rotation[2, 1] - rotation[1, 2]) / s
+        y = (rotation[0, 2] - rotation[2, 0]) / s
+        z = (rotation[1, 0] - rotation[0, 1]) / s
+    elif rotation[0, 0] > rotation[1, 1] and rotation[0, 0] > rotation[2, 2]:
+        s = math.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]) * 2.0
+        w = (rotation[2, 1] - rotation[1, 2]) / s
+        x = 0.25 * s
+        y = (rotation[0, 1] + rotation[1, 0]) / s
+        z = (rotation[0, 2] + rotation[2, 0]) / s
+    elif rotation[1, 1] > rotation[2, 2]:
+        s = math.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]) * 2.0
+        w = (rotation[0, 2] - rotation[2, 0]) / s
+        x = (rotation[0, 1] + rotation[1, 0]) / s
+        y = 0.25 * s
+        z = (rotation[1, 2] + rotation[2, 1]) / s
+    else:
+        s = math.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]) * 2.0
+        w = (rotation[1, 0] - rotation[0, 1]) / s
+        x = (rotation[0, 2] + rotation[2, 0]) / s
+        y = (rotation[1, 2] + rotation[2, 1]) / s
+        z = 0.25 * s
+    return normalize_quaternion((x, y, z, w))
+
+
 def invert_transform(transform: np.ndarray) -> np.ndarray:
     rotation = transform[:3, :3]
     translation = transform[:3, 3]
@@ -93,6 +122,16 @@ class PoseSample:
         translation = np.array(self.position, dtype=np.float64)
         return matrix_to_transform(rotation, translation)
 
+    @classmethod
+    def from_transform(cls, stamp_ns: int, transform: np.ndarray) -> "PoseSample":
+        translation = transform[:3, 3]
+        quaternion = matrix_to_quaternion(transform[:3, :3])
+        return cls(
+            stamp_ns=stamp_ns,
+            position=(float(translation[0]), float(translation[1]), float(translation[2])),
+            orientation_xyzw=quaternion,
+        )
+
 
 def interpolate_pose_sample(before: PoseSample, after: PoseSample, stamp_ns: int) -> PoseSample:
     if after.stamp_ns == before.stamp_ns:
@@ -125,3 +164,8 @@ def average_transforms(transforms: Iterable[np.ndarray]) -> Optional[np.ndarray]
         u[:, -1] *= -1.0
         orthogonal_rotation = u @ vh
     return matrix_to_transform(orthogonal_rotation, mean_translation)
+
+
+def transform_pose_sample(transform: np.ndarray, pose_sample: PoseSample) -> PoseSample:
+    mapped = transform @ pose_sample.as_transform()
+    return PoseSample.from_transform(pose_sample.stamp_ns, mapped)

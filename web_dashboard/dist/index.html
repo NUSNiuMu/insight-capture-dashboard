@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight Web VIO Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="hud">
+        <div class="legend" id="pose-legend"></div>
+      </div>
+      <div class="camera-dock" id="camera-dock"></div>
+      <canvas id="render-canvas"></canvas>
+      <div class="footer">
+        <span>Babylon.js GPU scene</span>
+        <span id="model-status">Models: waiting</span>
+      </div>
+    </div>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+  </html>
