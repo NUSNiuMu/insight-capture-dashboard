@@ -22,7 +22,7 @@ from sensor_msgs.msg import CameraInfo
 from sensor_msgs.msg import CompressedImage, Image as RosImage
 
 from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
-from dashboard_widgets import DashboardTrajectoryMixin, ImagePanel, TrajectoryWidget
+from dashboard_widgets import ImagePanel
 from live_alignment import LiveAlignmentMixin
 from session_alignment import PoseSample
 
@@ -86,18 +86,10 @@ class DashboardNode(LiveAlignmentMixin, Node):
         config = build_dashboard_config(raw_config)
         enabled_camera_map = {camera["name"]: camera for camera in raw_config.get("cameras", []) if camera.get("enabled", True)}
         self.window_title = config.get("window_title", "Insight Dashboard")
-        self.fullscreen = bool(config.get("fullscreen", True))
         self.max_points = int(config.get("trajectory", {}).get("max_points", 1500))
-        self.view_yaw_deg = float(config.get("trajectory", {}).get("view_yaw_deg", -35))
-        self.view_pitch_deg = float(config.get("trajectory", {}).get("view_pitch_deg", 28))
-        self.ui_refresh_ms = int(config.get("trajectory", {}).get("ui_refresh_ms", 100))
         self.image_decode_reduction = int(config.get("trajectory", {}).get("image_decode_reduction", 4))
         self.display_fps_limit = float(config.get("trajectory", {}).get("display_fps_limit", 6))
         self.image_qos_reliability = str(config.get("trajectory", {}).get("image_qos_reliability", "best_effort"))
-        self.trajectory_title = config.get("trajectory", {}).get("title", "3D VIO Trajectory")
-        self.trajectory_subtitle = config.get("trajectory", {}).get(
-            "subtitle", "Interactive 3D view of x/y/z using current VIO poses."
-        )
         self._configure_live_alignment(raw_config, config)
 
         self.cameras: List[CameraSpec] = [
@@ -150,6 +142,8 @@ class DashboardNode(LiveAlignmentMixin, Node):
         self.pose_history: Dict[str, Deque[PoseSample]] = {pose.name: deque(maxlen=160) for pose in self.poses}
         self.dashboard_subscriptions = []
         self._initialize_live_alignment_state()
+        if self.world_to_reference:
+            self.get_logger().info("Loaded persisted live alignment state for dashboard startup")
 
         for camera in self.cameras:
             worker = threading.Thread(
@@ -450,7 +444,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
         return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
 
 
-class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
+class DashboardWindow(QtWidgets.QMainWindow):
     BG = "#0f1720"
     TEXT = "#e9eef4"
     MUTED = "#8fa3b8"
@@ -460,25 +454,15 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
         self.node = node
         self.executor = executor
         self.setWindowTitle(node.window_title)
-        self.resize(1580, 920)
-        self.setMinimumSize(1320, 820)
-        self.view_yaw_deg = node.view_yaw_deg
-        self.view_pitch_deg = node.view_pitch_deg
-        self.view_zoom = 1.0
-        self.drag_last_xy: Optional[Tuple[int, int]] = None
+        self.resize(980, 920)
+        self.setMinimumSize(860, 820)
+        self.setWindowFlag(QtCore.Qt.FramelessWindowHint, True)
+        self.window_drag_active = False
+        self.window_drag_offset = QtCore.QPoint()
         self.last_image_versions: Dict[str, int] = {camera.name: -1 for camera in self.node.cameras}
         self.last_image_target_sizes: Dict[str, Tuple[int, int]] = {camera.name: (0, 0) for camera in self.node.cameras}
         self.last_image_render_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.image_display_fps: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
-        self.last_displayed_image_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
-        self.ui_render_durations_ms: Dict[str, List[float]] = {camera.name: [] for camera in self.node.cameras}
-        self.last_ui_refresh_started: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
-        self.last_ui_refresh_completed: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
-        self.ui_skip_count: Dict[str, int] = {camera.name: 0 for camera in self.node.cameras}
-        self.last_trajectory_refresh_started: float = 0.0
-        self.last_trajectory_refresh_completed: float = 0.0
-        self.trajectory_render_durations_ms: List[float] = []
-        self.pose_visibility: Dict[str, bool] = {pose.name: True for pose in self.node.poses}
         self.image_timers: Dict[str, QtCore.QTimer] = {}
         self.spin_thread = threading.Thread(target=self.executor.spin, daemon=True)
         self._build_ui()
@@ -493,24 +477,38 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
         root.setContentsMargins(18, 14, 18, 18)
         root.setSpacing(10)
 
+        self.title_bar_widget = QtWidgets.QWidget()
+        title_row = QtWidgets.QHBoxLayout(self.title_bar_widget)
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(12)
+        root.addWidget(self.title_bar_widget)
+
         title = QtWidgets.QLabel("Insight Monitoring Dashboard")
         title.setStyleSheet("font-size: 26px; font-weight: 700; color: #e9eef4;")
-        root.addWidget(title)
+        title_row.addWidget(title)
 
-        subtitle = QtWidgets.QLabel("Left: all image feeds. Right: GPU-friendlier Qt view for live VIO trajectories.")
+        title_row.addStretch(1)
+
+        self.start_calibration_button = QtWidgets.QPushButton("Start Live Alignment")
+        self.start_calibration_button.clicked.connect(self.toggle_live_alignment)
+        self.start_calibration_button.setToolTip("Toggle in-memory online relative alignment (C)")
+        self.start_calibration_button.setStyleSheet(
+            "QPushButton { background: #223244; color: #e9eef4; border: 1px solid #31475d; padding: 6px 10px; border-radius: 4px; }"
+            "QPushButton:hover { background: #29405a; }"
+        )
+        self.start_calibration_button.setEnabled(self.node.live_alignment_available)
+        title_row.addWidget(self.start_calibration_button)
+
+        subtitle = QtWidgets.QLabel("RGB dashboard for monitoring and live alignment calibration.")
         subtitle.setStyleSheet("font-size: 12px; color: #8fa3b8;")
         root.addWidget(subtitle)
-
-        body = QtWidgets.QHBoxLayout()
-        body.setSpacing(12)
-        root.addLayout(body, 1)
 
         image_grid_widget = QtWidgets.QWidget()
         image_grid = QtWidgets.QGridLayout(image_grid_widget)
         image_grid.setContentsMargins(0, 0, 0, 0)
         image_grid.setHorizontalSpacing(10)
         image_grid.setVerticalSpacing(10)
-        body.addWidget(image_grid_widget, 11)
+        root.addWidget(image_grid_widget, 1)
 
         self.image_panels: Dict[str, ImagePanel] = {}
         column_weights: Dict[int, int] = {}
@@ -527,85 +525,6 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
         for row, weight in row_weights.items():
             image_grid.setRowStretch(row, max(weight, 1))
 
-        right = QtWidgets.QWidget()
-        right_layout = QtWidgets.QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(12)
-        body.addWidget(right, 13)
-
-        traj_frame = QtWidgets.QFrame()
-        traj_frame.setStyleSheet("QFrame { background: #16202a; border: 1px solid #233142; border-radius: 6px; }")
-        traj_layout = QtWidgets.QVBoxLayout(traj_frame)
-        traj_layout.setContentsMargins(14, 12, 14, 12)
-        traj_layout.setSpacing(8)
-        right_layout.addWidget(traj_frame, 6)
-
-        traj_title = QtWidgets.QLabel(self.node.trajectory_title)
-        traj_title.setStyleSheet("font-size: 18px; font-weight: 700; color: #e9eef4;")
-        traj_layout.addWidget(traj_title)
-
-        traj_subtitle = QtWidgets.QLabel(self.node.trajectory_subtitle)
-        traj_subtitle.setStyleSheet("font-size: 11px; color: #8fa3b8;")
-        traj_layout.addWidget(traj_subtitle)
-
-        self.alignment_status_label = QtWidgets.QLabel(self.node.alignment_status_text())
-        self.alignment_status_label.setStyleSheet("font-size: 11px; color: #8fa3b8;")
-        traj_layout.addWidget(self.alignment_status_label)
-
-        controls = QtWidgets.QHBoxLayout()
-        controls.addWidget(QtWidgets.QLabel("Show:"))
-        self.pose_menu_button = QtWidgets.QToolButton()
-        self.pose_menu_button.setText("Select cameras")
-        self.pose_menu_button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
-        self.pose_menu = QtWidgets.QMenu(self)
-        self.pose_actions: Dict[str, QtWidgets.QAction] = {}
-        for pose in self.node.poses:
-            action = QtWidgets.QAction(pose.name, self, checkable=True, checked=True)
-            action.toggled.connect(self._make_pose_toggle(pose.name))
-            self.pose_menu.addAction(action)
-            self.pose_actions[pose.name] = action
-        self.pose_menu_button.setMenu(self.pose_menu)
-        controls.addWidget(self.pose_menu_button)
-        self.start_calibration_button = QtWidgets.QPushButton("Start Live Alignment")
-        self.start_calibration_button.clicked.connect(self.toggle_live_alignment)
-        self.start_calibration_button.setToolTip("Toggle in-memory online relative alignment (C)")
-        self.start_calibration_button.setStyleSheet(
-            "QPushButton { background: #223244; color: #e9eef4; border: 1px solid #31475d; padding: 6px 10px; border-radius: 4px; }"
-            "QPushButton:hover { background: #29405a; }"
-        )
-        self.start_calibration_button.setEnabled(self.node.live_alignment_available)
-        controls.addWidget(self.start_calibration_button)
-        controls.addStretch(1)
-        traj_layout.addLayout(controls)
-
-        self.traj_widget = TrajectoryWidget(self)
-        traj_layout.addWidget(self.traj_widget, 1)
-
-        status_frame = QtWidgets.QFrame()
-        status_frame.setStyleSheet("QFrame { background: #16202a; border: 1px solid #233142; border-radius: 6px; }")
-        status_layout = QtWidgets.QVBoxLayout(status_frame)
-        status_layout.setContentsMargins(14, 12, 14, 12)
-        status_layout.setSpacing(8)
-        right_layout.addWidget(status_frame, 1)
-
-        status_title = QtWidgets.QLabel("Trajectory Status")
-        status_title.setStyleSheet("font-size: 16px; font-weight: 700; color: #e9eef4;")
-        status_layout.addWidget(status_title)
-
-        self.pose_labels: Dict[str, QtWidgets.QLabel] = {}
-        for pose in self.node.poses:
-            row = QtWidgets.QHBoxLayout()
-            dot = QtWidgets.QLabel()
-            dot.setFixedSize(12, 12)
-            dot.setStyleSheet(f"background: {pose.color}; border-radius: 6px;")
-            row.addWidget(dot)
-            label = QtWidgets.QLabel(f"{pose.name}: waiting")
-            label.setStyleSheet("font-size: 12px; color: #e9eef4;")
-            row.addWidget(label)
-            row.addStretch(1)
-            status_layout.addLayout(row)
-            self.pose_labels[pose.name] = label
-
     def _setup_timers(self) -> None:
         fps = max(1.0, float(self.node.display_fps_limit))
         interval_ms = max(16, int(1000.0 / fps))
@@ -615,28 +534,16 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
             timer.start(interval_ms + (idx * 5))
             self.image_timers[camera.name] = timer
 
-        self.refresh_timer = QtCore.QTimer(self)
-        self.refresh_timer.timeout.connect(self.refresh_trajectory)
-        self.refresh_timer.start(max(50, self.node.ui_refresh_ms))
-
-    def _make_pose_toggle(self, pose_name: str):
-        def handler(checked: bool) -> None:
-            self.pose_visibility[pose_name] = checked
-            self.traj_widget.update()
-
-        return handler
-
     def start(self) -> None:
         self.spin_thread.start()
-        if self.node.fullscreen:
-            self.showFullScreen()
-        else:
-            self.show()
+        screen = QtWidgets.QApplication.primaryScreen()
+        if screen is not None:
+            self._snap_to_left_half(screen)
+        self.show()
 
     def closeEvent(self, event) -> None:
         for timer in self.image_timers.values():
             timer.stop()
-        self.refresh_timer.stop()
         self.node.shutdown_workers()
         self.executor.shutdown()
         self.node.destroy_node()
@@ -653,10 +560,54 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
             return
         super().keyPressEvent(event)
 
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.LeftButton and self._is_drag_region(event.pos()):
+            self.window_drag_active = True
+            self.window_drag_offset = event.globalPos() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self.window_drag_active and (event.buttons() & QtCore.Qt.LeftButton):
+            self.move(event.globalPos() - self.window_drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.LeftButton and self.window_drag_active:
+            self.window_drag_active = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.LeftButton and self._is_drag_region(event.pos()):
+            screen = self.screen() or QtWidgets.QApplication.primaryScreen()
+            if screen is not None:
+                self._snap_to_left_half(screen)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _is_drag_region(self, pos: QtCore.QPoint) -> bool:
+        if not self.title_bar_widget.geometry().contains(pos):
+            return False
+        child = self.childAt(pos)
+        if isinstance(child, (QtWidgets.QPushButton, QtWidgets.QToolButton, QtWidgets.QAbstractButton)):
+            return False
+        return True
+
+    def _snap_to_left_half(self, screen: QtGui.QScreen) -> None:
+        geometry = screen.geometry()
+        target_width = min(960, geometry.width())
+        target_height = min(1080, geometry.height())
+        self.setGeometry(geometry.x(), geometry.y(), target_width, target_height)
+
     def refresh_image(self, camera_name: str) -> None:
         try:
             now = time.monotonic()
-            self.last_ui_refresh_started[camera_name] = now
             with self.node.image_lock:
                 image = self.node.latest_images[camera_name]
                 version = self.node.image_versions[camera_name]
@@ -665,7 +616,6 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
             target_size_key = (max(target_size.width(), 10), max(target_size.height(), 10))
             if image is None:
                 panel.fps_label.setText("waiting")
-                self.last_ui_refresh_completed[camera_name] = time.monotonic()
                 return
             panel.set_image_shape(image.shape[1], image.shape[0])
             receive_age = self._age_text(self.node.last_frame_received_time[camera_name], now)
@@ -675,11 +625,9 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
                 and self.last_image_target_sizes[camera_name] == target_size_key
                 and panel.image_label.pixmap() is not None
             ):
-                self.ui_skip_count[camera_name] += 1
                 panel.fps_label.setText(
                     f"{self.image_display_fps[camera_name]:.1f} FPS | rx age {receive_age} | dec age {decoded_age}"
                 )
-                self.last_ui_refresh_completed[camera_name] = time.monotonic()
                 return
 
             pixmap = self._pixmap_from_image(image, target_size)
@@ -692,69 +640,42 @@ class DashboardWindow(DashboardTrajectoryMixin, QtWidgets.QMainWindow):
                     else 0.7 * self.image_display_fps[camera_name] + 0.3 * inst_fps
                 )
             self.last_image_render_time[camera_name] = now
-            self.last_displayed_image_time[camera_name] = now
             self.last_image_versions[camera_name] = version
             self.last_image_target_sizes[camera_name] = target_size_key
             panel.fps_label.setText(
                 f"{self.image_display_fps[camera_name]:.1f} FPS | rx age {receive_age} | dec age {decoded_age}"
             )
-            end = time.monotonic()
-            self.last_ui_refresh_completed[camera_name] = end
-            render_ms = (end - now) * 1000.0
-            samples = self.ui_render_durations_ms[camera_name]
-            samples.append(render_ms)
-            if len(samples) > 60:
-                del samples[: len(samples) - 60]
-        except KeyboardInterrupt:
-            self.close()
-
-    def refresh_trajectory(self) -> None:
-        try:
-            start = time.monotonic()
-            self.last_trajectory_refresh_started = start
-            self.alignment_status_label.setText(self.node.alignment_status_text())
-            if self.node.live_alignment_active:
-                self.start_calibration_button.setText("Stop Live Alignment")
-            else:
-                self.start_calibration_button.setText("Start Live Alignment")
-            for pose in self.node.poses:
-                visible = self.pose_visibility[pose.name]
-                latest = self.node.latest_pose[pose.name]
-                if not visible:
-                    self.pose_labels[pose.name].setText(f"{pose.name}: hidden")
-                elif latest is None:
-                    self.pose_labels[pose.name].setText(f"{pose.name}: waiting for VIO")
-                else:
-                    pose_age = self._age_text(self.node.last_pose_received_time[pose.name], time.monotonic())
-                    self.pose_labels[pose.name].setText(
-                        f"{pose.name}: x={latest[0]:.2f}, y={latest[1]:.2f}, z={latest[2]:.2f}, age={pose_age}"
-                    )
-            self.traj_widget.update()
-            end = time.monotonic()
-            self.last_trajectory_refresh_completed = end
-            render_ms = (end - start) * 1000.0
-            self.trajectory_render_durations_ms.append(render_ms)
-            if len(self.trajectory_render_durations_ms) > 60:
-                del self.trajectory_render_durations_ms[: len(self.trajectory_render_durations_ms) - 60]
         except KeyboardInterrupt:
             self.close()
 
     def toggle_live_alignment(self) -> None:
         if self.node.live_alignment_active:
-            status = self.node.stop_live_alignment()
+            self.node.stop_live_alignment()
             self.start_calibration_button.setText("Start Live Alignment")
         else:
-            status = self.node.start_live_alignment()
+            self.node.start_live_alignment()
             if self.node.live_alignment_active:
                 self.start_calibration_button.setText("Stop Live Alignment")
-        self.alignment_status_label.setText(status)
-        self.traj_widget.update()
 
     @staticmethod
     def _age_text(last_time: float, now: float) -> str:
         if last_time <= 0.0:
             return "-"
         return f"{now - last_time:.1f}s"
+
+    @staticmethod
+    def _pixmap_from_image(image: np.ndarray, target_size: QtCore.QSize) -> QtGui.QPixmap:
+        image = np.ascontiguousarray(image, dtype=np.uint8)
+        height, width = image.shape[:2]
+        bytes_per_line = width * 3
+        qimage = QtGui.QImage(image.data, width, height, bytes_per_line, QtGui.QImage.Format_RGB888)
+        pixmap = QtGui.QPixmap.fromImage(qimage)
+        return pixmap.scaled(
+            max(target_size.width(), 10),
+            max(target_size.height(), 10),
+            QtCore.Qt.KeepAspectRatio,
+            QtCore.Qt.FastTransformation,
+        )
 
 def main() -> None:
     parser = argparse.ArgumentParser()

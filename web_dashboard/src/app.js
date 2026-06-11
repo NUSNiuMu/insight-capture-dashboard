@@ -1,17 +1,27 @@
+const dashboardView = document.body.dataset.dashboardView || "full";
+const enable3d = dashboardView === "full" || dashboardView === "3d";
+const enableCameras = dashboardView === "full" || dashboardView === "cameras";
+
 const canvas = document.getElementById("render-canvas");
 const modelStatus = document.getElementById("model-status");
 const legend = document.getElementById("pose-legend");
 const cameraDock = document.getElementById("camera-dock");
+const cameraPageMeta = document.getElementById("camera-page-meta");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#57d67c", primitive: "sphere", modelColor: "#d6a07d" },
   left_hand: { label: "Left Hand", color: "#4aa8ff", primitive: "box", modelColor: "#c98d6b" },
   right_hand: { label: "Right Hand", color: "#ff6f61", primitive: "box", modelColor: "#c98d6b" }
 };
+const TRAIL_RADIUS_BY_ROLE = {
+  head: 0.01,
+  left_hand: 0.008,
+  right_hand: 0.008
+};
 
 const wsUrl = resolveWebSocketUrl();
-const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
-const scene = createScene(engine, canvas);
+const engine = enable3d && canvas ? new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true }) : null;
+const scene = engine && canvas ? createScene(engine, canvas) : null;
 const poseNodes = new Map();
 const modelPromises = new Map();
 const modelWarnings = new Set();
@@ -19,11 +29,7 @@ const trailStates = new Map();
 const cameraPanels = new Map();
 const cameraPollState = new Map();
 let maximizedCameraName = null;
-const RENDER_INTERVAL_MS = 50;
-let lastRenderAt = 0;
 
-const TRAIL_TTL_MS = 6000;
-const TRAIL_MIN_DISTANCE = 0.02;
 const CAMERA_FPS_WINDOW_MS = 1500;
 const DEFAULT_TRAIL_ENABLED = {
   head: true,
@@ -31,19 +37,21 @@ const DEFAULT_TRAIL_ENABLED = {
   right_hand: true
 };
 
-engine.runRenderLoop(() => {
-  const now = performance.now();
-  if ((now - lastRenderAt) < RENDER_INTERVAL_MS) {
-    return;
-  }
-  lastRenderAt = now;
-  updateTrails();
-  scene.render();
-});
+if (engine && scene) {
+  engine.runRenderLoop(() => {
+    updateTrails();
+    scene.render();
+  });
 
-window.addEventListener("resize", () => engine.resize());
-connect();
-startCameraPolling();
+  window.addEventListener("resize", () => engine.resize());
+}
+
+if (enable3d) {
+  connect();
+}
+if (enableCameras) {
+  startCameraPolling();
+}
 
 function resolveWebSocketUrl() {
   const query = new URLSearchParams(window.location.search);
@@ -98,11 +106,18 @@ function createAxes(sceneRef, size) {
 }
 
 function connect() {
-  modelStatus.textContent = "Connecting pose stream...";
+  if (!enable3d || !scene) {
+    return;
+  }
+  if (modelStatus) {
+    modelStatus.textContent = "Connecting pose stream...";
+  }
   const ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
-    modelStatus.textContent = "Pose stream connected";
+    if (modelStatus) {
+      modelStatus.textContent = "Pose stream connected";
+    }
   };
 
   ws.onmessage = (event) => {
@@ -114,16 +129,23 @@ function connect() {
   };
 
   ws.onerror = () => {
-    modelStatus.textContent = "Pose stream error";
+    if (modelStatus) {
+      modelStatus.textContent = "Pose stream error";
+    }
   };
 
   ws.onclose = () => {
-    modelStatus.textContent = "Pose stream disconnected, retrying...";
+    if (modelStatus) {
+      modelStatus.textContent = "Pose stream disconnected, retrying...";
+    }
     window.setTimeout(connect, 1000);
   };
 }
 
 function startCameraPolling() {
+  if (!enableCameras || !cameraDock) {
+    return;
+  }
   pollCameraMetadata();
   window.setInterval(pollCameraMetadata, 100);
 }
@@ -139,12 +161,19 @@ async function pollCameraMetadata() {
       return;
     }
     renderCameraPanels(payload.cameras || []);
+    if (cameraPageMeta) {
+      const liveCount = (payload.cameras || []).filter((camera) => !camera.stale && camera.visible).length;
+      cameraPageMeta.textContent = `${liveCount}/${(payload.cameras || []).length} streams live`;
+    }
   } catch (_error) {
     // The pose WebSocket remains the primary status signal; image polling can retry quietly.
   }
 }
 
 async function applyPoseUpdate(payload) {
+  if (!enable3d || !scene) {
+    return;
+  }
   const legendRows = [];
   for (const pose of payload.poses || []) {
     const node = ensurePoseNode(pose);
@@ -160,7 +189,7 @@ async function applyPoseUpdate(payload) {
       pose.quaternion_xyzw[3]
     );
     await ensurePoseVisual(pose, node);
-    recordTrailPoint(pose);
+    updateTrailFromPose(pose);
 
     const style = ROLE_STYLE[pose.role] || { label: pose.role, color: "#cccccc" };
     legendRows.push(
@@ -176,8 +205,10 @@ async function applyPoseUpdate(payload) {
       </div>`
     );
   }
-  legend.innerHTML = legendRows.join("");
-  bindTrailToggles();
+  if (legend) {
+    legend.innerHTML = legendRows.join("");
+    bindTrailToggles();
+  }
 }
 
 function ensurePoseNode(pose) {
@@ -191,6 +222,9 @@ function ensurePoseNode(pose) {
 }
 
 function renderCameraPanels(cameras) {
+  if (!cameraDock) {
+    return;
+  }
   const seen = new Set();
   cameras
     .slice()
@@ -396,6 +430,9 @@ function setCameraMaximized(cameraName, maximized) {
 }
 
 async function ensurePoseVisual(pose, node) {
+  if (!scene) {
+    return;
+  }
   if (node.metadata && node.metadata.assetKey === buildAssetKey(pose)) {
     return;
   }
@@ -437,7 +474,15 @@ async function ensurePoseVisual(pose, node) {
     const instantiated = container.instantiateModelsToScene(() => `${pose.name}-instance`);
     const rootNode = new BABYLON.TransformNode(`${pose.name}-visual`, scene);
     rootNode.parent = node;
-    rootNode.scaling = new BABYLON.Vector3(pose.avatar_scale, pose.avatar_scale, pose.avatar_scale);
+    const scaleMultiplier = (pose.role === "head" || pose.role === "left_hand" || pose.role === "right_hand") ? 0.2 : 1.0;
+    const scaledSize = pose.avatar_scale * scaleMultiplier;
+    rootNode.scaling = new BABYLON.Vector3(scaledSize, scaledSize, scaledSize);
+    const rotationDeg = Array.isArray(pose.avatar_rotation_deg_xyz) ? pose.avatar_rotation_deg_xyz : [0, 0, 0];
+    rootNode.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(
+      BABYLON.Angle.FromDegrees(Number(rotationDeg[0] || 0)).radians(),
+      BABYLON.Angle.FromDegrees(Number(rotationDeg[1] || 0)).radians(),
+      BABYLON.Angle.FromDegrees(Number(rotationDeg[2] || 0)).radians()
+    );
     instantiated.rootNodes.forEach((child) => {
       child.parent = rootNode;
     });
@@ -446,7 +491,9 @@ async function ensurePoseVisual(pose, node) {
       mesh.visibility = 1.0;
       mesh.isPickable = false;
     });
-    modelStatus.textContent = `Models: loaded ${modelPath}`;
+    if (modelStatus) {
+      modelStatus.textContent = `Models: loaded ${modelPath}`;
+    }
   } catch (error) {
     warnOnce(`load:${modelPath}`, `Failed to load model ${modelPath}: ${String(error)}. Using primitive fallback.`);
     attachPrimitive(pose, node, "Model load failed, using primitive fallback");
@@ -468,7 +515,9 @@ function attachPrimitive(pose, node, reason) {
   }
   mesh.material = material;
   mesh.parent = node;
-  modelStatus.textContent = `Models: ${reason}`;
+  if (modelStatus) {
+    modelStatus.textContent = `Models: ${reason}`;
+  }
 }
 
 function createReadableModelMaterial(pose, originalMaterial) {
@@ -526,6 +575,9 @@ function warnOnce(key, message) {
 }
 
 function bindTrailToggles() {
+  if (!legend) {
+    return;
+  }
   const inputs = legend.querySelectorAll('input[data-role]');
   inputs.forEach((input) => {
     input.addEventListener("change", (event) => {
@@ -535,67 +587,11 @@ function bindTrailToggles() {
   });
 }
 
-function recordTrailPoint(pose) {
-  const trail = ensureTrailState(pose.role);
-  if (!pose.visible || !trail.enabled) {
-    return;
-  }
-  const point = new BABYLON.Vector3(pose.position[0], pose.position[1], pose.position[2]);
-  const now = Date.now();
-  const lastSample = trail.samples[trail.samples.length - 1];
-  if (lastSample && BABYLON.Vector3.Distance(lastSample.point, point) < TRAIL_MIN_DISTANCE) {
-    lastSample.point.copyFrom(point);
-    lastSample.timestamp = now;
-    if (trail.segments.length > 0) {
-      const lastSegment = trail.segments[trail.segments.length - 1];
-      lastSegment.end.copyFrom(point);
-      updateSegmentPoints(lastSegment.mesh, lastSegment.start, lastSegment.end);
-    }
-    return;
-  }
-
-  trail.samples.push({ point, timestamp: now });
-  if (trail.samples.length >= 2) {
-    const start = trail.samples[trail.samples.length - 2].point.clone();
-    const end = trail.samples[trail.samples.length - 1].point.clone();
-    const mesh = BABYLON.MeshBuilder.CreateLines(`trail-${pose.role}-${now}`, { points: [start, end] }, scene);
-    mesh.color = BABYLON.Color3.FromHexString((ROLE_STYLE[pose.role] || ROLE_STYLE.head).color);
-    mesh.alpha = 0.9;
-    trail.segments.push({
-      mesh,
-      start,
-      end,
-      timestamp: now
-    });
-  }
-}
-
 function updateTrails() {
-  const now = Date.now();
   for (const trail of trailStates.values()) {
     if (!trail.enabled) {
       clearTrail(trail);
-      continue;
     }
-
-    while (trail.samples.length > 0 && (now - trail.samples[0].timestamp) > TRAIL_TTL_MS) {
-      trail.samples.shift();
-    }
-
-    while (trail.segments.length > 0) {
-      const age = now - trail.segments[0].timestamp;
-      if (age <= TRAIL_TTL_MS) {
-        break;
-      }
-      const expired = trail.segments.shift();
-      expired.mesh.dispose(false, true);
-    }
-
-    trail.segments.forEach((segment) => {
-      const age = now - segment.timestamp;
-      const fade = Math.max(0.0, 1.0 - age / TRAIL_TTL_MS);
-      segment.mesh.alpha = 0.85 * fade;
-    });
   }
 }
 
@@ -606,8 +602,8 @@ function ensureTrailState(role) {
   const state = {
     role,
     enabled: DEFAULT_TRAIL_ENABLED[role] !== false,
-    samples: [],
-    segments: []
+    points: [],
+    mesh: null
   };
   trailStates.set(role, state);
   return state;
@@ -626,13 +622,74 @@ function isTrailEnabled(role) {
 }
 
 function clearTrail(trail) {
-  trail.samples = [];
-  trail.segments.forEach((segment) => segment.mesh.dispose(false, true));
-  trail.segments = [];
+  trail.points = [];
+  if (trail.mesh) {
+    trail.mesh.dispose(false, true);
+    trail.mesh = null;
+  }
 }
 
-function updateSegmentPoints(mesh, start, end) {
-  BABYLON.MeshBuilder.CreateLines(null, { points: [start, end], instance: mesh });
+function updateTrailFromPose(pose) {
+  const trail = ensureTrailState(pose.role);
+  if (!trail.enabled || !pose.visible) {
+    clearTrail(trail);
+    return;
+  }
+  const sourcePoints = (pose.trace || []).map((sample) => new BABYLON.Vector3(sample[0], sample[1], sample[2]));
+  if (sourcePoints.length < 2) {
+    clearTrail(trail);
+    return;
+  }
+  const firstPoint = sourcePoints[0];
+  const hasMotion = sourcePoints.some((point) => BABYLON.Vector3.Distance(point, firstPoint) > 0.02);
+  if (!hasMotion) {
+    clearTrail(trail);
+    return;
+  }
+  trail.points = sourcePoints;
+  refreshTrailMesh(trail);
+}
+
+function refreshTrailMesh(trail) {
+  if (!scene) {
+    return;
+  }
+  if (trail.points.length < 2) {
+    if (trail.mesh) {
+      trail.mesh.dispose(false, true);
+      trail.mesh = null;
+    }
+    return;
+  }
+
+  const roleColor = BABYLON.Color3.FromHexString((ROLE_STYLE[trail.role] || ROLE_STYLE.head).color);
+  const points = trail.points.map((point) => point.clone());
+  const radius = TRAIL_RADIUS_BY_ROLE[trail.role] || 0.016;
+  if (trail.mesh) {
+    BABYLON.MeshBuilder.CreateTube(
+      null,
+      { path: points, radius, tessellation: 10, instance: trail.mesh, updatable: true },
+      scene
+    );
+  } else {
+    trail.mesh = BABYLON.MeshBuilder.CreateTube(
+      `trail-${trail.role}`,
+      { path: points, radius, tessellation: 10, updatable: true },
+      scene
+    );
+    trail.mesh.isPickable = false;
+    trail.mesh.alwaysSelectAsActiveMesh = true;
+    trail.mesh.renderingGroupId = 1;
+  }
+  if (!trail.mesh.material) {
+    const material = new BABYLON.StandardMaterial(`trail-mat-${trail.role}`, scene);
+    material.disableLighting = true;
+    material.emissiveColor = roleColor;
+    material.diffuseColor = roleColor;
+    material.specularColor = BABYLON.Color3.Black();
+    trail.mesh.material = material;
+  }
+  trail.mesh.material.alpha = 0.96;
 }
 
 function escapeHtml(value) {

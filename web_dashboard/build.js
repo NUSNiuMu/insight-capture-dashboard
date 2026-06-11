@@ -22,6 +22,8 @@ resetDir(distDir);
 resetDir(staticDir);
 
 copyFile(path.join(srcDir, "index.html"), path.join(distDir, "index.html"));
+copyFile(path.join(srcDir, "3d.html"), path.join(distDir, "3d.html"));
+copyFile(path.join(srcDir, "cameras.html"), path.join(distDir, "cameras.html"));
 copyFile(path.join(srcDir, "app.js"), path.join(staticDir, "app.js"));
 copyFile(path.join(srcDir, "styles.css"), path.join(staticDir, "styles.css"));
 

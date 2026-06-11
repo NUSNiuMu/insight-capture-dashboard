@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight Camera Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body data-dashboard-view="cameras">
+    <div class="shell shell-cameras-only">
+      <div class="camera-page-header">
+        <div>
+          <div class="camera-page-eyebrow">INSIGHT</div>
+          <h1>Camera Dashboard</h1>
+        </div>
+        <div class="camera-page-meta" id="camera-page-meta">Waiting for camera streams...</div>
+      </div>
+      <div class="camera-dock camera-dock-page" id="camera-dock"></div>
+    </div>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

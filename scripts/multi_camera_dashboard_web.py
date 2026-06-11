@@ -78,6 +78,7 @@ class PoseSpec:
     teleop_role: str
     avatar_model: Optional[str]
     avatar_scale: float
+    avatar_rotation_deg_xyz: Tuple[float, float, float]
 
 
 @dataclass
@@ -96,13 +97,24 @@ class CameraSpec:
 
 
 class PoseBridgeNode(LiveAlignmentMixin, Node):
-    def __init__(self, config_path: Path, fake_pose: bool = False, pose_publish_hz: float = 30.0) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        fake_pose: bool = False,
+        pose_publish_hz: float = 30.0,
+        enable_pose_stream: bool = True,
+        enable_camera_stream: bool = True,
+        enable_alignment_stream: bool = False,
+    ) -> None:
         if rclpy is None:
             raise RuntimeError("rclpy is required to run the web dashboard backend")
         super().__init__("insight_multi_camera_dashboard_web")
         self.config_path = config_path
         self.fake_pose = bool(fake_pose)
         self.pose_publish_hz = max(1.0, float(pose_publish_hz))
+        self.enable_pose_stream = bool(enable_pose_stream)
+        self.enable_camera_stream = bool(enable_camera_stream)
+        self.enable_alignment_stream = bool(enable_alignment_stream)
         self.max_points = 300
         self.pose_timeout_sec = 0.5
         self.preview_jpeg_quality = 78
@@ -143,6 +155,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                 teleop_role=str(item.get("teleop_role", item["name"])),
                 avatar_model=item.get("avatar_model"),
                 avatar_scale=float(item.get("avatar_scale", 1.0)),
+                avatar_rotation_deg_xyz=tuple(float(value) for value in item.get("avatar_rotation_deg_xyz", [0.0, 0.0, 0.0])),
             )
             for item in config.get("poses", [])
         ]
@@ -175,28 +188,34 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.last_frame_decoded_time: Dict[str, float] = {camera.name: 0.0 for camera in self.cameras}
         self.frame_timestamps: Dict[str, Deque[float]] = {camera.name: deque(maxlen=60) for camera in self.cameras}
         self._initialize_live_alignment_state()
+        if self.world_to_reference:
+            self.get_logger().info("Loaded persisted live alignment state for web dashboard startup")
 
-        for camera in self.cameras:
-            if camera.topic_type == "compressed" and self.preview_passthrough_compressed:
-                continue
-            worker = threading.Thread(
-                target=self._decoder_worker,
-                args=(camera,),
-                daemon=True,
-                name=f"{camera.name}_decoder",
-            )
-            worker.start()
-            self.decoder_threads.append(worker)
+        if self.enable_camera_stream:
+            for camera in self.cameras:
+                if camera.topic_type == "compressed" and self.preview_passthrough_compressed:
+                    continue
+                worker = threading.Thread(
+                    target=self._decoder_worker,
+                    args=(camera,),
+                    daemon=True,
+                    name=f"{camera.name}_decoder",
+                )
+                worker.start()
+                self.decoder_threads.append(worker)
 
-        if self.fake_pose:
+        if self.fake_pose and self.enable_pose_stream:
             self.create_timer(1.0 / self.pose_publish_hz, self._update_fake_pose, callback_group=self.ros_callback_group)
             self.get_logger().info("Running in fake-pose demo mode")
         else:
-            self._create_pose_subscriptions()
-            self._create_image_subscriptions()
-            self._create_alignment_subscriptions()
+            if self.enable_pose_stream:
+                self._create_pose_subscriptions()
+            if self.enable_camera_stream:
+                self._create_image_subscriptions()
+            if self.enable_alignment_stream:
+                self._create_alignment_subscriptions()
 
-        if self.live_alignment_available:
+        if self.enable_alignment_stream and self.live_alignment_available:
             self.live_alignment_timer = self.create_timer(
                 1.0 / max(self.live_alignment_processing_hz, 0.5),
                 self._process_live_alignment,
@@ -669,8 +688,13 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                         "visible": visible,
                         "position": position,
                         "quaternion_xyzw": quaternion,
+                        "trace": [
+                            [float(sample[0]), float(sample[1]), float(sample[2])]
+                            for sample in self.transformed_trace(pose.name)
+                        ],
                         "avatar_model": pose.avatar_model,
                         "avatar_scale": pose.avatar_scale,
+                        "avatar_rotation_deg_xyz": [float(value) for value in pose.avatar_rotation_deg_xyz],
                     }
                 )
         return {
@@ -714,12 +738,14 @@ class WebDashboardServer:
         port: int,
         web_root: Optional[Path],
         project_root: Path,
+        view_mode: str = "full",
     ) -> None:
         self.node = node
         self.host = host
         self.port = int(port)
         self.web_root = web_root.resolve() if web_root else None
         self.project_root = project_root.resolve()
+        self.view_mode = str(view_mode or "full")
         self._clients: Set[web.WebSocketResponse] = set()
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
@@ -747,6 +773,8 @@ class WebDashboardServer:
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
+            app.router.add_get("/3d", self._handle_3d)
+            app.router.add_get("/cameras", self._handle_cameras)
             static_root = self.web_root / "static"
             if static_root.exists():
                 app.router.add_static("/static/", str(static_root), show_index=False)
@@ -777,6 +805,8 @@ class WebDashboardServer:
     async def _broadcast_loop(self) -> None:
         while True:
             await asyncio.sleep(1.0 / self.node.pose_publish_hz)
+            if not self.node.enable_pose_stream:
+                continue
             if not self._clients:
                 continue
             payload = self.node.build_pose_payload()
@@ -794,6 +824,10 @@ class WebDashboardServer:
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=20.0)
         await ws.prepare(request)
+        if not self.node.enable_pose_stream:
+            await ws.send_json({"type": "pose_update", "timestamp_ms": int(time.time() * 1000), "poses": []})
+            await ws.close()
+            return ws
         self._clients.add(ws)
         snapshot = self.node.build_pose_payload()
         for pose in snapshot["poses"]:
@@ -808,15 +842,21 @@ class WebDashboardServer:
         return web.json_response({"ok": True, "fake_pose": self.node.fake_pose})
 
     async def _handle_pose_snapshot(self, _request: web.Request) -> web.Response:
+        if not self.node.enable_pose_stream:
+            return web.json_response({"type": "pose_update", "timestamp_ms": int(time.time() * 1000), "poses": []})
         payload = self.node.build_pose_payload()
         for pose in payload["poses"]:
             pose["asset_url"] = self.node.model_asset_url(pose.get("avatar_model"))
         return web.json_response(payload)
 
     async def _handle_camera_snapshot(self, _request: web.Request) -> web.Response:
+        if not self.node.enable_camera_stream:
+            return web.json_response({"type": "camera_update", "cameras": []})
         return web.json_response(self.node.build_camera_payload())
 
     async def _handle_camera_frame(self, request: web.Request) -> web.StreamResponse:
+        if not self.node.enable_camera_stream:
+            raise web.HTTPNotFound(text="camera stream disabled")
         camera_name = request.match_info["camera_name"]
         data = self.node.get_camera_frame(camera_name)
         if data is None:
@@ -828,6 +868,8 @@ class WebDashboardServer:
         )
 
     async def _handle_camera_stream(self, request: web.Request) -> web.StreamResponse:
+        if not self.node.enable_camera_stream:
+            raise web.HTTPNotFound(text="camera stream disabled")
         camera_name = request.match_info["camera_name"]
         response = web.StreamResponse(
             status=200,
@@ -866,7 +908,17 @@ class WebDashboardServer:
         return response
 
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
+        if self.view_mode == "3d":
+            return web.FileResponse(self.web_root / "3d.html")
+        if self.view_mode == "cameras":
+            return web.FileResponse(self.web_root / "cameras.html")
         return web.FileResponse(self.web_root / "index.html")
+
+    async def _handle_3d(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.web_root / "3d.html")
+
+    async def _handle_cameras(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.web_root / "cameras.html")
 
     async def _handle_asset(self, request: web.Request) -> web.StreamResponse:
         raw_path = request.query.get("path", "").strip()
@@ -897,6 +949,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--web-root", default=str(Path(__file__).resolve().parents[1] / "web_dashboard" / "dist"))
+    parser.add_argument("--view-mode", choices=("full", "3d", "cameras"), default="full")
     parser.add_argument("--fake-pose", action="store_true")
     parser.add_argument("--pose-publish-hz", type=float, default=30.0)
     parser.add_argument("--start-alignment", action="store_true")
@@ -913,8 +966,22 @@ def main() -> None:
 
     os.environ.setdefault("ROS_DOMAIN_ID", str(ros_domain_id))
     rclpy.init(args=None)
-    node = PoseBridgeNode(config_path, fake_pose=args.fake_pose, pose_publish_hz=args.pose_publish_hz)
-    if args.start_alignment and node.live_alignment_available and not args.fake_pose:
+    enable_pose_stream = args.view_mode in ("full", "3d")
+    enable_camera_stream = args.view_mode in ("full", "cameras")
+    enable_alignment_stream = bool(args.start_alignment and enable_pose_stream)
+    node = PoseBridgeNode(
+        config_path,
+        fake_pose=args.fake_pose,
+        pose_publish_hz=args.pose_publish_hz,
+        enable_pose_stream=enable_pose_stream,
+        enable_camera_stream=enable_camera_stream,
+        enable_alignment_stream=enable_alignment_stream,
+    )
+    node.get_logger().info(
+        f"View mode={args.view_mode} pose_stream={enable_pose_stream} "
+        f"camera_stream={enable_camera_stream} alignment_stream={enable_alignment_stream}"
+    )
+    if args.start_alignment and node.live_alignment_available and not args.fake_pose and enable_pose_stream:
         node.start_live_alignment()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
@@ -922,7 +989,7 @@ def main() -> None:
     spin_thread.start()
 
     web_root = Path(args.web_root) if args.web_root else None
-    server = WebDashboardServer(node, args.host, args.port, web_root, node.project_root)
+    server = WebDashboardServer(node, args.host, args.port, web_root, node.project_root, view_mode=args.view_mode)
     server.start()
 
     try:

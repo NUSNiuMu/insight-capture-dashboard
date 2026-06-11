@@ -27,6 +27,44 @@ html, body {
   height: 100%;
 }
 
+.shell-cameras-only {
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 18px 20px 24px;
+}
+
+.shell-3d-only #render-canvas {
+  height: 100vh;
+}
+
+.camera-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.camera-page-eyebrow {
+  color: var(--accent);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+
+.camera-page-header h1 {
+  margin: 0;
+  font-size: 28px;
+}
+
+.camera-page-meta {
+  color: var(--muted);
+  font-size: 14px;
+  padding-top: 6px;
+  text-align: right;
+}
+
 .camera-dock {
   position: absolute;
   top: 18px;
@@ -41,6 +79,15 @@ html, body {
   height: calc((100vh - 190px) / 2);
   max-height: calc((100vh - 190px) / 2);
   pointer-events: none;
+}
+
+.camera-dock-page {
+  position: static;
+  width: min(100%, 960px);
+  max-width: none;
+  height: auto;
+  max-height: none;
+  pointer-events: auto;
 }
 
 #render-canvas {

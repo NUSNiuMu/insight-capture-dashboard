@@ -79,12 +79,12 @@ def build_dashboard_config(config: Dict) -> Dict:
                 "teleop_role": camera.get("teleop_role", camera["name"]),
                 "avatar_model": camera.get("avatar_model"),
                 "avatar_scale": float(camera.get("avatar_scale", 1.0)),
+                "avatar_rotation_deg_xyz": camera.get("avatar_rotation_deg_xyz", [0.0, 0.0, 0.0]),
             }
         )
 
     return {
         "window_title": dashboard.get("window_title", "Insight Monitoring Dashboard"),
-        "fullscreen": bool(dashboard.get("fullscreen", True)),
         "trajectory": dashboard.get("trajectory", {}),
         "session_alignment": {
             "enabled": bool(session_alignment.get("enabled", False)),

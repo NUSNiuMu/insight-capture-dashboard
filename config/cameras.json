@@ -97,6 +97,7 @@
       "teleop_role": "head",
       "avatar_model": "assets/models/MaleBaseModel_BravFG.glb",
       "avatar_scale": 0.024,
+      "avatar_rotation_deg_xyz": [90.0, 0.0, 0.0],
       "dashboard_color": "#57d67c",
       "dashboard_row": 0,
       "dashboard_column": 1,
