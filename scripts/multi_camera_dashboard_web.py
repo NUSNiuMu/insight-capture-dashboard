@@ -399,6 +399,7 @@ class WebDashboardServer:
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
+            app.router.add_get("/3d", self._handle_index)
             static_root = self.web_root / "static"
             if static_root.exists():
                 app.router.add_static("/static/", str(static_root), show_index=False)

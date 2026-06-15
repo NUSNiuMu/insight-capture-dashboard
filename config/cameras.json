@@ -50,12 +50,12 @@
   },
   "cameras": [
     {
-      "name": "insight7_a",
+      "name": "insight3_a",
       "enabled": true,
-      "namespace": "insight7_a",
-      "label": "Insight7 A",
-      "dashboard_image_stream": "color_compressed",
-      "dashboard_label": "Insight7 A Color",
+      "namespace": "insight3_a",
+      "label": "Insight3 A",
+      "dashboard_image_stream": "infra1",
+      "dashboard_label": "Insight3 A Infra1",
       "dashboard_pose_stream": "vio_100hz",
       "dashboard_rotation_deg": 0,
       "teleop_role": "right_hand",

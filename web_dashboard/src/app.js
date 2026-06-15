@@ -177,16 +177,28 @@ async function applyPoseUpdate(payload) {
   const legendRows = [];
   for (const pose of payload.poses || []) {
     const node = ensurePoseNode(pose);
-    node.setEnabled(Boolean(pose.visible));
-    node.position.copyFromFloats(pose.position[0], pose.position[1], pose.position[2]);
-    if (!node.rotationQuaternion) {
-      node.rotationQuaternion = new BABYLON.Quaternion();
+    if (!node) {
+      continue;
     }
+    if (!node.position) {
+      node.position = new BABYLON.Vector3(0, 0, 0);
+    }
+    if (!node.rotationQuaternion) {
+      node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
+    }
+    const position = Array.isArray(pose.position) ? pose.position : [0, 0, 0];
+    const quaternion = Array.isArray(pose.quaternion_xyzw) ? pose.quaternion_xyzw : [0, 0, 0, 1];
+    node.setEnabled(Boolean(pose.visible));
+    node.position.copyFromFloats(
+      Number(position[0] || 0),
+      Number(position[1] || 0),
+      Number(position[2] || 0)
+    );
     node.rotationQuaternion.copyFromFloats(
-      pose.quaternion_xyzw[0],
-      pose.quaternion_xyzw[1],
-      pose.quaternion_xyzw[2],
-      pose.quaternion_xyzw[3]
+      Number(quaternion[0] || 0),
+      Number(quaternion[1] || 0),
+      Number(quaternion[2] || 0),
+      Number(quaternion[3] || 1)
     );
     await ensurePoseVisual(pose, node);
     updateTrailFromPose(pose);
@@ -216,6 +228,7 @@ function ensurePoseNode(pose) {
     return poseNodes.get(pose.name);
   }
   const node = new BABYLON.TransformNode(`pose-${pose.name}`, scene);
+  node.position = new BABYLON.Vector3(0, 0, 0);
   node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
   poseNodes.set(pose.name, node);
   return node;
