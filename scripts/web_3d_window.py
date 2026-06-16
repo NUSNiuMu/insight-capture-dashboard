@@ -6,7 +6,7 @@ import signal
 import sys
 
 from PyQt5 import QtCore, QtWidgets
-from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5.QtWebEngineWidgets import QWebEngineProfile, QWebEngineView
 
 
 class Web3DWindow(QtWidgets.QMainWindow):
@@ -20,6 +20,9 @@ class Web3DWindow(QtWidgets.QMainWindow):
         self.setGeometry(x, y, width, height)
 
         view = QWebEngineView(self)
+        profile = view.page().profile()
+        profile.setHttpCacheType(QWebEngineProfile.NoCache)
+        profile.clearHttpCache()
         view.setUrl(QtCore.QUrl(url))
         self.setCentralWidget(view)
 

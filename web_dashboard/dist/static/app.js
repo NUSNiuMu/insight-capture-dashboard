@@ -188,17 +188,19 @@ async function applyPoseUpdate(payload) {
     }
     const position = Array.isArray(pose.position) ? pose.position : [0, 0, 0];
     const quaternion = Array.isArray(pose.quaternion_xyzw) ? pose.quaternion_xyzw : [0, 0, 0, 1];
+    const scenePosition = mapDashboardPositionToScene(position);
+    const sceneQuaternion = mapDashboardQuaternionToScene(quaternion);
     node.setEnabled(Boolean(pose.visible));
     node.position.copyFromFloats(
-      Number(position[0] || 0),
-      Number(position[1] || 0),
-      Number(position[2] || 0)
+      scenePosition.x,
+      scenePosition.y,
+      scenePosition.z
     );
     node.rotationQuaternion.copyFromFloats(
-      Number(quaternion[0] || 0),
-      Number(quaternion[1] || 0),
-      Number(quaternion[2] || 0),
-      Number(quaternion[3] || 1)
+      sceneQuaternion.x,
+      sceneQuaternion.y,
+      sceneQuaternion.z,
+      sceneQuaternion.w
     );
     await ensurePoseVisual(pose, node);
     updateTrailFromPose(pose);
@@ -232,6 +234,34 @@ function ensurePoseNode(pose) {
   node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
   poseNodes.set(pose.name, node);
   return node;
+}
+
+function mapDashboardPositionToScene(sample) {
+  const forward = Number(sample[0] || 0);
+  const right = Number(sample[1] || 0);
+  const up = Number(sample[2] || 0);
+  return new BABYLON.Vector3(-right, up, forward);
+}
+
+function mapDashboardQuaternionToScene(quaternion) {
+  const q = new BABYLON.Quaternion(
+    Number(quaternion[0] || 0),
+    Number(quaternion[1] || 0),
+    Number(quaternion[2] || 0),
+    Number(quaternion[3] || 1)
+  );
+  const dashboardToSceneBasis = BABYLON.Matrix.FromValues(
+    0, -1, 0, 0,
+    0, 0, 1, 0,
+    1, 0, 0, 0,
+    0, 0, 0, 1
+  );
+  const dashboardRotation = new BABYLON.Matrix();
+  BABYLON.Matrix.FromQuaternionToRef(q, dashboardRotation);
+  const sceneRotation = dashboardToSceneBasis.multiply(dashboardRotation).multiply(dashboardToSceneBasis.transpose());
+  const sceneQuaternion = new BABYLON.Quaternion();
+  BABYLON.Quaternion.FromRotationMatrixToRef(sceneRotation, sceneQuaternion);
+  return sceneQuaternion;
 }
 
 function renderCameraPanels(cameras) {
@@ -648,7 +678,7 @@ function updateTrailFromPose(pose) {
     clearTrail(trail);
     return;
   }
-  const sourcePoints = (pose.trace || []).map((sample) => new BABYLON.Vector3(sample[0], sample[1], sample[2]));
+  const sourcePoints = (pose.trace || []).map((sample) => mapDashboardPositionToScene(sample));
   if (sourcePoints.length < 2) {
     clearTrail(trail);
     return;

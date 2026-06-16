@@ -466,6 +466,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.last_image_render_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.image_display_fps: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.image_timers: Dict[str, QtCore.QTimer] = {}
+        self.alignment_state_timer: Optional[QtCore.QTimer] = None
         self.spin_thread = threading.Thread(target=self.executor.spin, daemon=True)
         self._build_ui()
         self._setup_timers()
@@ -535,6 +536,10 @@ class DashboardWindow(QtWidgets.QMainWindow):
             timer.timeout.connect(lambda cam_name=camera.name: self.refresh_image(cam_name))
             timer.start(interval_ms + (idx * 5))
             self.image_timers[camera.name] = timer
+        self.alignment_state_timer = QtCore.QTimer(self)
+        self.alignment_state_timer.timeout.connect(self._sync_alignment_controls)
+        self.alignment_state_timer.start(250)
+        self._sync_alignment_controls()
 
     def start(self) -> None:
         self.spin_thread.start()
@@ -553,6 +558,8 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self._shutdown_done = True
         for timer in self.image_timers.values():
             timer.stop()
+        if self.alignment_state_timer is not None:
+            self.alignment_state_timer.stop()
         self.node.shutdown_workers()
         self.executor.shutdown()
         self.node.destroy_node()
@@ -659,11 +666,16 @@ class DashboardWindow(QtWidgets.QMainWindow):
     def toggle_live_alignment(self) -> None:
         if self.node.live_alignment_active:
             self.node.stop_live_alignment()
-            self.start_calibration_button.setText("Start Live Alignment")
         else:
             self.node.start_live_alignment()
-            if self.node.live_alignment_active:
-                self.start_calibration_button.setText("Stop Live Alignment")
+        self._sync_alignment_controls()
+
+    def _sync_alignment_controls(self) -> None:
+        if self.node.live_alignment_active:
+            self.start_calibration_button.setText("Stop Live Alignment")
+        else:
+            self.start_calibration_button.setText("Start Live Alignment")
+        self.start_calibration_button.setToolTip(self.node.alignment_status_text())
 
     @staticmethod
     def _age_text(last_time: float, now: float) -> str:

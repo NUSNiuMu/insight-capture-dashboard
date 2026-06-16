@@ -222,6 +222,7 @@ class LiveAlignmentMixin:
         if not self.live_alignment_available:
             self.live_alignment_last_status = "live alignment unavailable: OpenCV aruco or session alignment config missing"
             return self.live_alignment_last_status
+        self._set_live_alignment_timer_enabled(True)
         self.live_alignment_active = True
         self.world_to_reference = {}
         self.live_alignment_last_status = "alignment on"
@@ -264,12 +265,14 @@ class LiveAlignmentMixin:
         return self.alignment_status_text()
 
     def stop_live_alignment(self) -> str:
+        self._set_live_alignment_timer_enabled(False)
         self.live_alignment_active = False
         self.live_alignment_last_status = "alignment paused"
         self._log_live_alignment_status(force=True)
         return self.alignment_status_text()
 
     def _lock_live_alignment_solution(self) -> None:
+        self._set_live_alignment_timer_enabled(False)
         self.live_alignment_active = False
         self.live_alignment_last_status = "locked"
         self.live_alignment_last_signature = None
@@ -287,6 +290,18 @@ class LiveAlignmentMixin:
                 self.latest_pose[pose.name] = self._transform_pose_point(pose.name, raw_trace[-1])
         self._persist_alignment_state()
         self._log_live_alignment_status(force=True)
+
+    def _set_live_alignment_timer_enabled(self, enabled: bool) -> None:
+        timer = getattr(self, "live_alignment_timer", None)
+        if timer is None:
+            return
+        try:
+            if enabled:
+                timer.reset()
+            else:
+                timer.cancel()
+        except Exception:
+            pass
 
     def _process_live_alignment(self) -> None:
         if not self.live_alignment_active:
