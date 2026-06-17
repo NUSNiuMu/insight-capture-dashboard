@@ -44,14 +44,9 @@ from live_alignment import LiveAlignmentMixin
 from session_alignment import PoseSample
 
 
-def make_qos(depth: int = 10, reliability: str = "reliable") -> QoSProfile:
-    reliability_policy = (
-        ReliabilityPolicy.RELIABLE
-        if str(reliability).lower() == "reliable"
-        else ReliabilityPolicy.BEST_EFFORT
-    )
+def make_qos(depth: int = 10) -> QoSProfile:
     return QoSProfile(
-        reliability=reliability_policy,
+        reliability=ReliabilityPolicy.RELIABLE,
         durability=DurabilityPolicy.VOLATILE,
         history=HistoryPolicy.KEEP_LAST,
         depth=depth,
@@ -115,7 +110,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.project_root = config_path.resolve().parents[1]
         self.window_title = config.get("window_title", "Insight Web Dashboard")
         self.image_qos_reliability = str(config.get("trajectory", {}).get("image_qos_reliability", "best_effort"))
-        self.pose_qos_reliability = str(config.get("trajectory", {}).get("pose_qos_reliability", "best_effort"))
         self._configure_live_alignment(raw_config, config)
 
         self.cameras: List[CameraSpec] = [
@@ -144,7 +138,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.latest_pose: Dict[str, Optional[Tuple[float, float, float]]] = {pose.name: None for pose in self.poses}
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
-        self.pose_sample_counts: Dict[str, int] = {pose.name: 0 for pose in self.poses}
         self.pose_history: Dict[str, Deque[PoseSample]] = {pose.name: deque(maxlen=160) for pose in self.poses}
         self.pose_history_lock = threading.Lock()
         self.pose_lock = threading.Lock()
@@ -152,7 +145,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.live_alignment_solution_lock = threading.Lock()
         self.ros_callback_group = ReentrantCallbackGroup()
         self.dashboard_subscriptions = []
-        self.last_pose_status_log_time = 0.0
         self._initialize_live_alignment_state()
         if self.world_to_reference:
             self.get_logger().info("Loaded persisted live alignment state for web dashboard startup")
@@ -173,7 +165,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             )
 
     def _create_pose_subscriptions(self) -> None:
-        pose_qos = make_qos(reliability=self.pose_qos_reliability)
+        pose_qos = make_qos()
         for pose in self.poses:
             sub = self.create_subscription(
                 PoseStamped,
@@ -183,10 +175,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                 callback_group=self.ros_callback_group,
             )
             self.dashboard_subscriptions.append(sub)
-            self.get_logger().info(
-                f"Trajectory: {pose.name} <- {pose.topic} "
-                f"(qos={self.pose_qos_reliability}, depth={pose_qos.depth})"
-            )
+            self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
 
     def _create_alignment_subscriptions(self) -> None:
         if not self.live_alignment_available:
@@ -288,27 +277,10 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             self.latest_pose_sample[pose_name] = pose_sample
             self.latest_pose[pose_name] = self._transform_pose_point(pose_name, pose_sample.position)
             self.last_pose_received_time[pose_name] = time.monotonic()
-            self.pose_sample_counts[pose_name] += 1
             raw_trace = self.raw_traces[pose_name]
             raw_trace.append(pose_sample.position)
             if len(raw_trace) > self.max_points:
                 del raw_trace[: len(raw_trace) - self.max_points]
-        self._log_pose_status_throttled()
-
-    def _log_pose_status_throttled(self) -> None:
-        now = time.monotonic()
-        if (now - self.last_pose_status_log_time) < 2.0:
-            return
-        self.last_pose_status_log_time = now
-        parts = []
-        with self.pose_lock:
-            for pose in self.poses:
-                count = self.pose_sample_counts.get(pose.name, 0)
-                last_time = self.last_pose_received_time.get(pose.name, 0.0)
-                age = None if last_time <= 0.0 else now - last_time
-                age_text = "never" if age is None else f"{age:.2f}s"
-                parts.append(f"{pose.name}=count:{count} age:{age_text}")
-        self.get_logger().info("Pose RX: " + " | ".join(parts))
 
     def _update_fake_pose(self) -> None:
         now = time.monotonic()
@@ -371,35 +343,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             "poses": poses,
         }
 
-    def build_health_payload(self) -> Dict[str, object]:
-        now = time.monotonic()
-        pose_status = []
-        with self.pose_lock:
-            for pose in self.poses:
-                last_time = self.last_pose_received_time.get(pose.name, 0.0)
-                age_sec = None if last_time <= 0.0 else now - last_time
-                pose_status.append(
-                    {
-                        "name": pose.name,
-                        "topic": pose.topic,
-                        "qos": self.pose_qos_reliability,
-                        "sample_count": self.pose_sample_counts.get(pose.name, 0),
-                        "last_age_sec": age_sec,
-                        "visible": age_sec is not None and (self.fake_pose or age_sec <= self.pose_timeout_sec),
-                        "trace_len": len(self.raw_traces.get(pose.name, [])),
-                        "avatar_model": pose.avatar_model,
-                        "asset_url": self.model_asset_url(pose.avatar_model),
-                    }
-                )
-        return {
-            "ok": True,
-            "fake_pose": self.fake_pose,
-            "ros_domain_id": os.environ.get("ROS_DOMAIN_ID", ""),
-            "pose_qos_reliability": self.pose_qos_reliability,
-            "pose_timeout_sec": self.pose_timeout_sec,
-            "poses": pose_status,
-        }
-
     def model_asset_url(self, avatar_model: Optional[str]) -> Optional[str]:
         if not avatar_model:
             return None
@@ -444,10 +387,15 @@ class WebDashboardServer:
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
         self._started = threading.Event()
+        self._startup_error: Optional[BaseException] = None
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="web_dashboard_server")
         self._thread.start()
         self._started.wait(timeout=5.0)
+        if self._startup_error is not None:
+            raise RuntimeError("failed to start web dashboard backend") from self._startup_error
+        if not self._started.is_set():
+            raise RuntimeError("timed out while starting web dashboard backend")
 
     def stop(self) -> None:
         if self._loop.is_running():
@@ -457,29 +405,35 @@ class WebDashboardServer:
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
-        app = web.Application()
-        app.router.add_get("/ws", self._handle_ws)
-        app.router.add_get("/healthz", self._handle_healthz)
-        app.router.add_get("/api/poses", self._handle_pose_snapshot)
-        app.router.add_get("/asset", self._handle_asset)
-        if self.web_root and self.web_root.exists():
-            app.router.add_get("/", self._handle_index)
-            app.router.add_get("/3d", self._handle_index)
-            static_root = self.web_root / "static"
-            if static_root.exists():
-                app.router.add_static("/static/", str(static_root), show_index=False)
-        app.on_startup.append(self._on_startup)
-        app.on_shutdown.append(self._on_shutdown)
-        runner = web.AppRunner(app)
-        self._loop.run_until_complete(runner.setup())
-        site = web.TCPSite(runner, self.host, self.port)
-        self._loop.run_until_complete(site.start())
-        self._started.set()
-        self.node.get_logger().info(f"Web dashboard backend listening on http://{self.host}:{self.port}")
         try:
+            app = web.Application()
+            app.router.add_get("/ws", self._handle_ws)
+            app.router.add_get("/healthz", self._handle_healthz)
+            app.router.add_get("/api/poses", self._handle_pose_snapshot)
+            app.router.add_get("/asset", self._handle_asset)
+            if self.web_root and self.web_root.exists():
+                app.router.add_get("/", self._handle_index)
+                app.router.add_get("/3d", self._handle_index)
+                static_root = self.web_root / "static"
+                if static_root.exists():
+                    app.router.add_static("/static/", str(static_root), show_index=False)
+            app.on_startup.append(self._on_startup)
+            app.on_shutdown.append(self._on_shutdown)
+            runner = web.AppRunner(app)
+            self._loop.run_until_complete(runner.setup())
+            site = web.TCPSite(runner, self.host, self.port)
+            self._loop.run_until_complete(site.start())
+            self._started.set()
+            self.node.get_logger().info(f"Web dashboard backend listening on http://{self.host}:{self.port}")
             self._loop.run_forever()
+        except BaseException as exc:
+            self._startup_error = exc
+            self._started.set()
+            raise
         finally:
-            self._loop.run_until_complete(runner.cleanup())
+            runner = locals().get("runner")
+            if runner is not None:
+                self._loop.run_until_complete(runner.cleanup())
             self._loop.close()
 
     async def _on_startup(self, app: web.Application) -> None:
@@ -523,7 +477,13 @@ class WebDashboardServer:
         return ws
 
     async def _handle_healthz(self, _request: web.Request) -> web.Response:
-        return web.json_response(self.node.build_health_payload())
+        return web.json_response(
+            {
+                "ok": True,
+                "fake_pose": self.node.fake_pose,
+                "ros_domain_id": str(os.environ.get("ROS_DOMAIN_ID", "")),
+            }
+        )
 
     async def _handle_pose_snapshot(self, _request: web.Request) -> web.Response:
         payload = self.node.build_pose_payload()

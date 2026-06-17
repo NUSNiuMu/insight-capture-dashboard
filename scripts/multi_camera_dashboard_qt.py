@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Tuple
 
+import cv2
 import rclpy
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QLibraryInfo
@@ -432,6 +433,23 @@ class DashboardNode(LiveAlignmentMixin, Node):
         if encoding == "bgra8":
             bgra = image[:, : msg.width * 4].reshape((msg.height, msg.width, 4))
             rgb = bgra[:, :, [2, 1, 0]]
+            return np.ascontiguousarray(rgb.astype(np.uint8, copy=False))
+        if encoding == "nv12":
+            if msg.step <= 0:
+                return None
+            total_rows = data.size // msg.step
+            visible_height = msg.height
+            expected_total_rows = visible_height + (visible_height // 2)
+            if total_rows < expected_total_rows and total_rows % 3 == 0:
+                visible_height = (total_rows * 2) // 3
+                expected_total_rows = total_rows
+            if visible_height <= 0 or visible_height % 2 != 0 or total_rows < expected_total_rows:
+                return None
+            nv12 = data[: msg.step * expected_total_rows].reshape((expected_total_rows, msg.step))[:, : msg.width]
+            try:
+                rgb = cv2.cvtColor(nv12, cv2.COLOR_YUV2RGB_NV12)
+            except cv2.error:
+                return None
             return np.ascontiguousarray(rgb.astype(np.uint8, copy=False))
         step_channels = max(msg.step // max(msg.width, 1), 1)
         pixel_image = image[:, : msg.width * step_channels].reshape((msg.height, msg.width, step_channels))

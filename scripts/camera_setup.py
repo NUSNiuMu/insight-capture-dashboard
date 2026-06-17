@@ -50,12 +50,14 @@ def build_dashboard_config(config: Dict) -> Dict:
     for camera in enabled_cameras(config):
         namespace = camera["namespace"]
         image_stream = camera["dashboard_image_stream"]
+        image_topic_value = camera.get("dashboard_image_topic") or image_topic(namespace, image_stream)
+        camera_info_topic_value = camera.get("dashboard_camera_info_topic") or camera_info_topic(namespace, image_stream)
         cameras.append(
             {
                 "name": camera["name"],
                 "label": camera.get("dashboard_label", camera.get("label", camera["name"])),
-                "topic": image_topic(namespace, image_stream),
-                "camera_info_topic": camera_info_topic(namespace, image_stream),
+                "topic": image_topic_value,
+                "camera_info_topic": camera_info_topic_value,
                 "type": IMAGE_STREAMS[image_stream]["type"],
                 "rotation_deg": int(camera.get("dashboard_rotation_deg", 0)),
                 "row": int(camera.get("dashboard_row", 0)),

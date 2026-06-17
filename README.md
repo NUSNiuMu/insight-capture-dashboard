@@ -190,3 +190,9 @@ INSIGHT_ALIGNMENT_LOG=/tmp/my_alignment.log ./scripts/open_monitor_dashboard.sh
 - `insight9_a`: `/insight9_a/camera/...`
 
 如果实际命名空间变化，改 [config/cameras.json](/home/seeed/workspaces/insight_capture/config/cameras.json:1) 即可。
+
+
+
+
+./scripts/open_monitor_dashboard.sh
+./scripts/open_web_3d_right.sh
