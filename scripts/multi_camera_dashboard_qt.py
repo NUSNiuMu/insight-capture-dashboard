@@ -34,9 +34,14 @@ os.environ.pop("QT_PLUGIN_PATH", None)
 import numpy as np
 
 
-def make_qos(depth: int = 10) -> QoSProfile:
+def make_qos(depth: int = 10, reliability: str = "reliable") -> QoSProfile:
+    reliability_policy = (
+        ReliabilityPolicy.RELIABLE
+        if str(reliability).lower() == "reliable"
+        else ReliabilityPolicy.BEST_EFFORT
+    )
     return QoSProfile(
-        reliability=ReliabilityPolicy.RELIABLE,
+        reliability=reliability_policy,
         durability=DurabilityPolicy.VOLATILE,
         history=HistoryPolicy.KEEP_LAST,
         depth=depth,
@@ -65,6 +70,7 @@ class CameraSpec:
     topic: str
     camera_info_topic: str
     topic_type: str
+    rotation_deg: int
     row: int
     column: int
     column_span: int
@@ -91,6 +97,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
         self.image_decode_reduction = int(config.get("trajectory", {}).get("image_decode_reduction", 4))
         self.display_fps_limit = float(config.get("trajectory", {}).get("display_fps_limit", 6))
         self.image_qos_reliability = str(config.get("trajectory", {}).get("image_qos_reliability", "best_effort"))
+        self.pose_qos_reliability = str(config.get("trajectory", {}).get("pose_qos_reliability", "best_effort"))
         self._configure_live_alignment(raw_config, config)
 
         self.cameras: List[CameraSpec] = [
@@ -101,6 +108,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
                 topic=item["topic"],
                 camera_info_topic=item["camera_info_topic"],
                 topic_type=item["type"],
+                rotation_deg=int(item.get("rotation_deg", 0)),
                 row=int(item.get("row", 0)),
                 column=int(item.get("column", 0)),
                 column_span=int(item.get("column_span", 1)),
@@ -157,7 +165,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
             self.decoder_threads.append(worker)
 
         image_qos = make_image_qos(reliability=self.image_qos_reliability)
-        pose_qos = make_qos()
+        pose_qos = make_qos(reliability=self.pose_qos_reliability)
 
         for camera in self.cameras:
             if camera.topic_type == "compressed":
@@ -226,7 +234,10 @@ class DashboardNode(LiveAlignmentMixin, Node):
                 callback_group=self.ros_callback_group,
             )
             self.dashboard_subscriptions.append(sub)
-            self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
+            self.get_logger().info(
+                f"Trajectory: {pose.name} <- {pose.topic} "
+                f"(qos={self.pose_qos_reliability}, depth={pose_qos.depth})"
+            )
         self.live_alignment_timer = self.create_timer(
             1.0 / max(self.live_alignment_processing_hz, 0.5),
             self._process_live_alignment,
@@ -645,7 +656,8 @@ class DashboardWindow(QtWidgets.QMainWindow):
                 )
                 return
 
-            pixmap = self._pixmap_from_image(image, target_size)
+            camera_spec = next(camera for camera in self.node.cameras if camera.name == camera_name)
+            pixmap = self._pixmap_from_image(image, target_size, camera_spec.rotation_deg)
             panel.image_label.setPixmap(pixmap)
             previous = self.last_image_render_time[camera_name]
             if previous > 0:
@@ -684,12 +696,14 @@ class DashboardWindow(QtWidgets.QMainWindow):
         return f"{now - last_time:.1f}s"
 
     @staticmethod
-    def _pixmap_from_image(image: np.ndarray, target_size: QtCore.QSize) -> QtGui.QPixmap:
+    def _pixmap_from_image(image: np.ndarray, target_size: QtCore.QSize, rotation_deg: int = 0) -> QtGui.QPixmap:
         image = np.ascontiguousarray(image, dtype=np.uint8)
         height, width = image.shape[:2]
         bytes_per_line = width * 3
         qimage = QtGui.QImage(image.data, width, height, bytes_per_line, QtGui.QImage.Format_RGB888)
         pixmap = QtGui.QPixmap.fromImage(qimage)
+        if rotation_deg % 360:
+            pixmap = pixmap.transformed(QtGui.QTransform().rotate(rotation_deg), QtCore.Qt.FastTransformation)
         return pixmap.scaled(
             max(target_size.width(), 10),
             max(target_size.height(), 10),

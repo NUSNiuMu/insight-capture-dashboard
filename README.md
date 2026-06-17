@@ -31,6 +31,7 @@
 - `dashboard_image_stream`
 - `dashboard_pose_stream`
 - `dashboard_label`
+- `dashboard.trajectory.pose_qos_reliability`
 
 ## 保留的脚本
 
@@ -73,6 +74,20 @@ cd /home/seeed/workspaces/insight_capture
 python3 scripts/multi_camera_dashboard_web.py
 ```
 
+如果默认 `0.0.0.0:8765` 被占用，或者你想只绑定到某个本地网卡/IP，可以改成：
+
+```bash
+python3 scripts/multi_camera_dashboard_web.py --host 127.0.0.1 --port 8766
+python3 scripts/multi_camera_dashboard_web.py --host 192.168.1.20 --port 8765
+python3 scripts/multi_camera_dashboard_web.py --host 127.0.0.1 --port 0
+```
+
+也支持环境变量：
+
+```bash
+INSIGHT_DASHBOARD_HOST=192.168.1.20 INSIGHT_DASHBOARD_PORT=8766 python3 scripts/multi_camera_dashboard_web.py
+```
+
 默认会同时提供：
 
 - WebSocket: `ws://localhost:8765/ws`
@@ -94,6 +109,18 @@ python3 scripts/multi_camera_dashboard_web.py --fake-pose
 
 - `avatar_model`: 推荐填相对项目根目录的 `.glb` 或 `.gltf` 路径
 - `avatar_scale`: 模型缩放，默认 `1.0`
+
+轨迹订阅 QoS 也支持单独配置：
+
+```json
+"dashboard": {
+  "trajectory": {
+    "pose_qos_reliability": "best_effort"
+  }
+}
+```
+
+当 VIO 发布端是 `BEST_EFFORT` 时，这个字段需要和发布端匹配，否则 topic 虽然存在，dashboard 也可能收不到 pose。
 
 示例：
 

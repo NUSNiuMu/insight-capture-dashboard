@@ -5,17 +5,26 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Insight 3D Dashboard</title>
     <link rel="stylesheet" href="/static/styles.css">
-    <script src="https://cdn.babylonjs.com/babylon.js"></script>
-    <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+    <script src="/static/vendor/babylon.js"></script>
+    <script src="/static/vendor/babylonjs.loaders.min.js"></script>
   </head>
   <body data-dashboard-view="3d">
     <div class="shell shell-3d-only">
       <div class="hud">
+        <div class="trail-controls" id="trail-controls">
+          <div class="trail-controls-title">Trail Width</div>
+          <label class="trail-width-control" for="trail-width-slider">
+            <input id="trail-width-slider" type="range" min="0.1" max="1.5" step="0.1" value="1.0">
+            <span id="trail-width-value">1.0x</span>
+          </label>
+        </div>
         <div class="legend" id="pose-legend"></div>
       </div>
       <canvas id="render-canvas"></canvas>
       <div class="footer">
         <span>Babylon.js GPU scene</span>
+        <span>Gripper: N close / M open / B auto</span>
+        <span id="mapping-version">Mapping: pending</span>
         <span id="model-status">Models: waiting</span>
       </div>
     </div>

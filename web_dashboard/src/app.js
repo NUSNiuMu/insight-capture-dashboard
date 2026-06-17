@@ -4,7 +4,10 @@ const enableCameras = dashboardView === "full" || dashboardView === "cameras";
 
 const canvas = document.getElementById("render-canvas");
 const modelStatus = document.getElementById("model-status");
+const mappingVersion = document.getElementById("mapping-version");
 const legend = document.getElementById("pose-legend");
+const trailWidthSlider = document.getElementById("trail-width-slider");
+const trailWidthValue = document.getElementById("trail-width-value");
 const cameraDock = document.getElementById("camera-dock");
 const cameraPageMeta = document.getElementById("camera-page-meta");
 
@@ -18,6 +21,8 @@ const TRAIL_RADIUS_BY_ROLE = {
   left_hand: 0.008,
   right_hand: 0.008
 };
+const TRAIL_RENDER_POINTS = 160;
+const GRIPPER_SLIDER_TRAVEL_METERS = 0.05;
 
 const wsUrl = resolveWebSocketUrl();
 const engine = enable3d && canvas ? new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true }) : null;
@@ -36,9 +41,16 @@ const DEFAULT_TRAIL_ENABLED = {
   left_hand: true,
   right_hand: true
 };
+const TRAIL_WIDTH_STORAGE_KEY = "insight-trail-width-multiplier";
+let trailWidthMultiplier = loadTrailWidthMultiplier();
+const SCENE_MAPPING_VERSION = "RUF-v3";
+let manualGripperOpenRatio = null;
 
 if (engine && scene) {
   engine.runRenderLoop(() => {
+    if (manualGripperOpenRatio !== null) {
+      refreshAllArticulations();
+    }
     updateTrails();
     scene.render();
   });
@@ -47,6 +59,11 @@ if (engine && scene) {
 }
 
 if (enable3d) {
+  if (mappingVersion) {
+    mappingVersion.textContent = `Mapping: ${SCENE_MAPPING_VERSION} [x=right y=up z=-forward]`;
+  }
+  initializeTrailWidthControls();
+  initializeGripperKeyboardControls();
   connect();
 }
 if (enableCameras) {
@@ -175,11 +192,13 @@ async function applyPoseUpdate(payload) {
     return;
   }
   const legendRows = [];
+  let visibleCount = 0;
   for (const pose of payload.poses || []) {
     const node = ensurePoseNode(pose);
     if (!node) {
       continue;
     }
+    node.metadata = { ...(node.metadata || {}), poseRole: pose.role };
     if (!node.position) {
       node.position = new BABYLON.Vector3(0, 0, 0);
     }
@@ -190,6 +209,9 @@ async function applyPoseUpdate(payload) {
     const quaternion = Array.isArray(pose.quaternion_xyzw) ? pose.quaternion_xyzw : [0, 0, 0, 1];
     const scenePosition = mapDashboardPositionToScene(position);
     const sceneQuaternion = mapDashboardQuaternionToScene(quaternion);
+    if (pose.visible) {
+      visibleCount += 1;
+    }
     node.setEnabled(Boolean(pose.visible));
     node.position.copyFromFloats(
       scenePosition.x,
@@ -203,6 +225,7 @@ async function applyPoseUpdate(payload) {
       sceneQuaternion.w
     );
     await ensurePoseVisual(pose, node);
+    applyPoseArticulation(pose, node);
     updateTrailFromPose(pose);
 
     const style = ROLE_STYLE[pose.role] || { label: pose.role, color: "#cccccc" };
@@ -223,6 +246,10 @@ async function applyPoseUpdate(payload) {
     legend.innerHTML = legendRows.join("");
     bindTrailToggles();
   }
+  if (modelStatus && visibleCount === 0) {
+    const total = (payload.poses || []).length;
+    modelStatus.textContent = `Models: waiting for live VIO pose (0/${total})`;
+  }
 }
 
 function ensurePoseNode(pose) {
@@ -240,7 +267,7 @@ function mapDashboardPositionToScene(sample) {
   const forward = Number(sample[0] || 0);
   const right = Number(sample[1] || 0);
   const up = Number(sample[2] || 0);
-  return new BABYLON.Vector3(-right, up, forward);
+  return new BABYLON.Vector3(right, up, -forward);
 }
 
 function mapDashboardQuaternionToScene(quaternion) {
@@ -251,9 +278,9 @@ function mapDashboardQuaternionToScene(quaternion) {
     Number(quaternion[3] || 1)
   );
   const dashboardToSceneBasis = BABYLON.Matrix.FromValues(
-    0, -1, 0, 0,
+    0, 1, 0, 0,
     0, 0, 1, 0,
-    1, 0, 0, 0,
+    -1, 0, 0, 0,
     0, 0, 0, 1
   );
   const dashboardRotation = new BABYLON.Matrix();
@@ -481,7 +508,7 @@ async function ensurePoseVisual(pose, node) {
   }
 
   disposeNodeChildren(node);
-  node.metadata = { assetKey: buildAssetKey(pose) };
+  node.metadata = { assetKey: buildAssetKey(pose), articulation: null, poseRole: pose.role };
 
   const modelPath = pose.avatar_model || "";
   const lower = modelPath.toLowerCase();
@@ -529,18 +556,147 @@ async function ensurePoseVisual(pose, node) {
     instantiated.rootNodes.forEach((child) => {
       child.parent = rootNode;
     });
+    node.metadata.articulation = extractArticulationHandles(rootNode);
     collectInstantiatedMeshes(instantiated.rootNodes).forEach((mesh) => {
       mesh.material = createReadableModelMaterial(pose, mesh.material);
       mesh.visibility = 1.0;
       mesh.isPickable = false;
     });
     if (modelStatus) {
-      modelStatus.textContent = `Models: loaded ${modelPath}`;
+      const leftCount = node.metadata.articulation?.leftFingerNodes?.length || 0;
+      const rightCount = node.metadata.articulation?.rightFingerNodes?.length || 0;
+      modelStatus.textContent = `Models: loaded ${modelPath} [articulation L${leftCount}/R${rightCount}]`;
     }
   } catch (error) {
     warnOnce(`load:${modelPath}`, `Failed to load model ${modelPath}: ${String(error)}. Using primitive fallback.`);
     attachPrimitive(pose, node, "Model load failed, using primitive fallback");
   }
+}
+
+function applyPoseArticulation(pose, node) {
+  const articulation = node?.metadata?.articulation;
+  if (!articulation) {
+    return;
+  }
+  const openRatio = resolveGripperOpenRatio(pose);
+  applyFingerMotion(articulation.leftFingerNodes || [], articulation.leftBasePositions || [], openRatio, +1);
+  applyFingerMotion(articulation.rightFingerNodes || [], articulation.rightBasePositions || [], openRatio, -1);
+}
+
+function resolveGripperOpenRatio(pose) {
+  if (manualGripperOpenRatio !== null) {
+    return manualGripperOpenRatio;
+  }
+  const candidate = Number(pose.gripper_open_ratio);
+  if (!Number.isFinite(candidate)) {
+    return 0.0;
+  }
+  return BABYLON.Scalar.Clamp(candidate, 0.0, 1.0);
+}
+
+function initializeGripperKeyboardControls() {
+  if (canvas) {
+    canvas.tabIndex = 0;
+    canvas.style.outline = "none";
+    window.setTimeout(() => canvas.focus(), 50);
+    canvas.addEventListener("pointerdown", () => canvas.focus());
+  }
+
+  const handleKeyDown = (event) => {
+    if (event.repeat) {
+      return;
+    }
+    const key = String(event.key || "").toLowerCase();
+    if (key === "n") {
+      manualGripperOpenRatio = 0.0;
+      refreshAllArticulations();
+      updateGripperDebugStatus("close");
+    } else if (key === "m") {
+      manualGripperOpenRatio = 1.0;
+      refreshAllArticulations();
+      updateGripperDebugStatus("open");
+    } else if (key === "b") {
+      manualGripperOpenRatio = null;
+      if (modelStatus) {
+        modelStatus.textContent = "Models: gripper override cleared [B]";
+      }
+      refreshAllArticulations();
+    } else {
+      return;
+    }
+    event.preventDefault();
+  };
+
+  window.addEventListener("keydown", handleKeyDown, true);
+  document.addEventListener("keydown", handleKeyDown, true);
+}
+
+function refreshAllArticulations() {
+  for (const node of poseNodes.values()) {
+    const role = node?.metadata?.poseRole;
+    if (role !== "left_hand" && role !== "right_hand") {
+      continue;
+    }
+    applyPoseArticulation({ role, gripper_open_ratio: 0.0 }, node);
+  }
+}
+
+function applyFingerMotion(nodes, basePositions, openRatio, direction) {
+  nodes.forEach((fingerNode, index) => {
+    const base = basePositions[index];
+    if (!fingerNode || !base) {
+      return;
+    }
+    fingerNode.position.copyFrom(base);
+    fingerNode.position.x += GRIPPER_SLIDER_TRAVEL_METERS * openRatio * direction;
+    fingerNode.computeWorldMatrix(true);
+  });
+}
+
+function updateGripperDebugStatus(modeLabel) {
+  if (!modelStatus) {
+    return;
+  }
+  const segments = [];
+  for (const [poseName, node] of poseNodes.entries()) {
+    const role = node?.metadata?.poseRole;
+    if (role !== "left_hand" && role !== "right_hand") {
+      continue;
+    }
+    const articulation = node?.metadata?.articulation;
+    const leftNode = articulation?.leftFingerNodes?.[0];
+    const rightNode = articulation?.rightFingerNodes?.[0];
+    const leftX = leftNode ? Number(leftNode.position.x).toFixed(3) : "-";
+    const rightX = rightNode ? Number(rightNode.position.x).toFixed(3) : "-";
+    const leftCount = articulation?.leftFingerNodes?.length || 0;
+    const rightCount = articulation?.rightFingerNodes?.length || 0;
+    segments.push(`${poseName} L${leftCount}:${leftX} R${rightCount}:${rightX}`);
+  }
+  modelStatus.textContent = `Models: gripper ${modeLabel} [${segments.join(" | ")}]`;
+}
+
+function extractArticulationHandles(rootNode) {
+  const nodes = [rootNode, ...rootNode.getDescendants(false)];
+  const leftFingerNodes = [];
+  const rightFingerNodes = [];
+  nodes.forEach((child) => {
+    const childName = String(child?.name || "").toLowerCase();
+    if (childName.includes("left_finger_slider_left_finger")) {
+      leftFingerNodes.push(child);
+    }
+    if (childName.includes("right_finger_slider_right_finger")) {
+      rightFingerNodes.push(child);
+    }
+  });
+  if (!leftFingerNodes.length && !rightFingerNodes.length) {
+    return null;
+  }
+  return {
+    leftFingerNodes,
+    rightFingerNodes,
+    leftBasePositions: leftFingerNodes.map((node) => node.position.clone()),
+    rightBasePositions: rightFingerNodes.map((node) => node.position.clone())
+  };
 }
 
 function attachPrimitive(pose, node, reason) {
@@ -618,15 +774,17 @@ function warnOnce(key, message) {
 }
 
 function bindTrailToggles() {
-  if (!legend) {
+  if (!legend || legend.dataset.trailToggleBound === "true") {
     return;
   }
-  const inputs = legend.querySelectorAll('input[data-role]');
-  inputs.forEach((input) => {
-    input.addEventListener("change", (event) => {
-      const role = event.currentTarget.getAttribute("data-role");
-      setTrailEnabled(role, event.currentTarget.checked);
-    });
+  legend.dataset.trailToggleBound = "true";
+  legend.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || !target.matches("input[data-role]")) {
+      return;
+    }
+    const role = target.getAttribute("data-role");
+    setTrailEnabled(role, target.checked);
   });
 }
 
@@ -657,7 +815,9 @@ function setTrailEnabled(role, enabled) {
   trail.enabled = Boolean(enabled);
   if (!trail.enabled) {
     clearTrail(trail);
+    return;
   }
+  refreshAllTrails();
 }
 
 function isTrailEnabled(role) {
@@ -672,20 +832,51 @@ function clearTrail(trail) {
   }
 }
 
+function loadTrailWidthMultiplier() {
+  const stored = Number(window.localStorage.getItem(TRAIL_WIDTH_STORAGE_KEY) || "1");
+  if (Number.isFinite(stored) && stored >= 0.1 && stored <= 1.5) {
+    return stored;
+  }
+  return 1.0;
+}
+
+function initializeTrailWidthControls() {
+  if (!trailWidthSlider || !trailWidthValue) {
+    return;
+  }
+  trailWidthSlider.value = String(trailWidthMultiplier);
+  updateTrailWidthLabel();
+  trailWidthSlider.addEventListener("input", (event) => {
+    const next = Number(event.currentTarget.value || 1);
+    trailWidthMultiplier = Number.isFinite(next) ? next : 1.0;
+    window.localStorage.setItem(TRAIL_WIDTH_STORAGE_KEY, String(trailWidthMultiplier));
+    updateTrailWidthLabel();
+    refreshAllTrails();
+  });
+}
+
+function updateTrailWidthLabel() {
+  if (trailWidthValue) {
+    trailWidthValue.textContent = `${trailWidthMultiplier.toFixed(1)}x`;
+  }
+}
+
+function refreshAllTrails() {
+  for (const trail of trailStates.values()) {
+    if (trail.points.length >= 2) {
+      refreshTrailMesh(trail);
+    }
+  }
+}
+
 function updateTrailFromPose(pose) {
   const trail = ensureTrailState(pose.role);
   if (!trail.enabled || !pose.visible) {
     clearTrail(trail);
     return;
   }
-  const sourcePoints = (pose.trace || []).map((sample) => mapDashboardPositionToScene(sample));
+  const sourcePoints = normalizeTrailPoints((pose.trace || []).map((sample) => mapDashboardPositionToScene(sample)));
   if (sourcePoints.length < 2) {
-    clearTrail(trail);
-    return;
-  }
-  const firstPoint = sourcePoints[0];
-  const hasMotion = sourcePoints.some((point) => BABYLON.Vector3.Distance(point, firstPoint) > 0.02);
-  if (!hasMotion) {
     clearTrail(trail);
     return;
   }
@@ -707,32 +898,56 @@ function refreshTrailMesh(trail) {
 
   const roleColor = BABYLON.Color3.FromHexString((ROLE_STYLE[trail.role] || ROLE_STYLE.head).color);
   const points = trail.points.map((point) => point.clone());
-  const radius = TRAIL_RADIUS_BY_ROLE[trail.role] || 0.016;
+  const radius = (TRAIL_RADIUS_BY_ROLE[trail.role] || 0.016) * trailWidthMultiplier;
   if (trail.mesh) {
     BABYLON.MeshBuilder.CreateTube(
       null,
       { path: points, radius, tessellation: 10, instance: trail.mesh, updatable: true },
       scene
     );
-  } else {
-    trail.mesh = BABYLON.MeshBuilder.CreateTube(
-      `trail-${trail.role}`,
-      { path: points, radius, tessellation: 10, updatable: true },
-      scene
-    );
-    trail.mesh.isPickable = false;
-    trail.mesh.alwaysSelectAsActiveMesh = true;
-    trail.mesh.renderingGroupId = 1;
+    return;
   }
-  if (!trail.mesh.material) {
-    const material = new BABYLON.StandardMaterial(`trail-mat-${trail.role}`, scene);
-    material.disableLighting = true;
-    material.emissiveColor = roleColor;
-    material.diffuseColor = roleColor;
-    material.specularColor = BABYLON.Color3.Black();
-    trail.mesh.material = material;
-  }
+
+  trail.mesh = BABYLON.MeshBuilder.CreateTube(
+    `trail-${trail.role}`,
+    { path: points, radius, tessellation: 10, updatable: true },
+    scene
+  );
+  trail.mesh.isPickable = false;
+  trail.mesh.alwaysSelectAsActiveMesh = true;
+  trail.mesh.renderingGroupId = 1;
+
+  const material = new BABYLON.StandardMaterial(`trail-mat-${trail.role}`, scene);
+  material.disableLighting = true;
+  material.emissiveColor = roleColor;
+  material.diffuseColor = roleColor;
+  material.specularColor = BABYLON.Color3.Black();
+  trail.mesh.material = material;
   trail.mesh.material.alpha = 0.96;
+}
+
+function normalizeTrailPoints(points) {
+  if (points.length <= 1) {
+    return points;
+  }
+  const sampled = sampleTrailPoints(points, TRAIL_RENDER_POINTS);
+  while (sampled.length < TRAIL_RENDER_POINTS) {
+    sampled.unshift(sampled[0].clone());
+  }
+  return sampled;
+}
+
+function sampleTrailPoints(points, targetCount) {
+  if (points.length <= targetCount) {
+    return points.map((point) => point.clone());
+  }
+  const sampled = [];
+  const maxIndex = points.length - 1;
+  for (let index = 0; index < targetCount; index += 1) {
+    const sourceIndex = Math.round((index * maxIndex) / (targetCount - 1));
+    sampled.push(points[sourceIndex].clone());
+  }
+  return sampled;
 }
 
 function escapeHtml(value) {

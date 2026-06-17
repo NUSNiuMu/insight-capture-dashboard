@@ -5,6 +5,8 @@ const root = __dirname;
 const srcDir = path.join(root, "src");
 const distDir = path.join(root, "dist");
 const staticDir = path.join(distDir, "static");
+const vendorSrcDir = path.join(srcDir, "vendor");
+const vendorDistDir = path.join(staticDir, "vendor");
 
 function resetDir(target) {
   if (fs.existsSync(target)) {
@@ -26,5 +28,11 @@ copyFile(path.join(srcDir, "3d.html"), path.join(distDir, "3d.html"));
 copyFile(path.join(srcDir, "cameras.html"), path.join(distDir, "cameras.html"));
 copyFile(path.join(srcDir, "app.js"), path.join(staticDir, "app.js"));
 copyFile(path.join(srcDir, "styles.css"), path.join(staticDir, "styles.css"));
+if (fs.existsSync(vendorSrcDir)) {
+  fs.mkdirSync(vendorDistDir, { recursive: true });
+  for (const file of fs.readdirSync(vendorSrcDir)) {
+    copyFile(path.join(vendorSrcDir, file), path.join(vendorDistDir, file));
+  }
+}
 
 console.log("Built web dashboard into " + distDir);

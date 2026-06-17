@@ -149,6 +149,36 @@ h1 {
   min-width: 280px;
 }
 
+.trail-controls {
+  pointer-events: auto;
+  min-width: 200px;
+  color: var(--muted);
+}
+
+.trail-controls-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.trail-width-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.trail-width-control input {
+  flex: 1;
+  accent-color: var(--accent);
+}
+
+.trail-width-control span {
+  min-width: 38px;
+  text-align: right;
+}
+
 .legend-row {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) auto;

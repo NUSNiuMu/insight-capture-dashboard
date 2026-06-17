@@ -7,7 +7,14 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_PATH="${ROOT_DIR}/config/cameras.json"
 
 DEFAULT_DOMAIN_ID="$(python3 "${SCRIPT_DIR}/camera_setup.py" --config "${CONFIG_PATH}" --ros-domain-id)"
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-${DEFAULT_DOMAIN_ID}}"
+if [[ -n "${INSIGHT_ROS_DOMAIN_ID+x}" ]]; then
+  export ROS_DOMAIN_ID="${INSIGHT_ROS_DOMAIN_ID}"
+else
+  if [[ -n "${ROS_DOMAIN_ID+x}" && "${ROS_DOMAIN_ID}" != "${DEFAULT_DOMAIN_ID}" ]]; then
+    echo "Ignoring inherited ROS_DOMAIN_ID=${ROS_DOMAIN_ID}; using config ros_domain_id=${DEFAULT_DOMAIN_ID}. Set INSIGHT_ROS_DOMAIN_ID to override." >&2
+  fi
+  export ROS_DOMAIN_ID="${DEFAULT_DOMAIN_ID}"
+fi
 export DISPLAY="${DISPLAY:-:0}"
 export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
 
