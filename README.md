@@ -104,6 +104,14 @@ python3 scripts/multi_camera_dashboard_web.py --fake-pose
 
 This project can also run in Docker using the same host-network, mounted-workspace style used by the local `tinynav` workflow.
 
+VS Code / Cursor Dev Containers can build the image directly from the repository:
+
+```text
+Dev Containers: Reopen in Container
+```
+
+Manual build is still available:
+
 Build the image:
 
 ```bash

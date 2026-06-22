@@ -1,7 +1,9 @@
 {
   "name": "insight-capture-dashboard-dev",
-  "image": "insight-capture-dashboard:latest",
-  "context": "..",
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
 
   "containerEnv": {
     "DISPLAY": "${localEnv:DISPLAY}",
