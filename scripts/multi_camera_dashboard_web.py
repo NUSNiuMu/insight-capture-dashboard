@@ -44,9 +44,14 @@ from live_alignment import LiveAlignmentMixin
 from session_alignment import PoseSample
 
 
-def make_qos(depth: int = 10) -> QoSProfile:
+def make_qos(depth: int = 10, reliability: str = "reliable") -> QoSProfile:
+    reliability_policy = (
+        ReliabilityPolicy.RELIABLE
+        if str(reliability).lower() == "reliable"
+        else ReliabilityPolicy.BEST_EFFORT
+    )
     return QoSProfile(
-        reliability=ReliabilityPolicy.RELIABLE,
+        reliability=reliability_policy,
         durability=DurabilityPolicy.VOLATILE,
         history=HistoryPolicy.KEEP_LAST,
         depth=depth,
@@ -109,7 +114,11 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         }
         self.project_root = config_path.resolve().parents[1]
         self.window_title = config.get("window_title", "Insight Web Dashboard")
+        trajectory_config = config.get("trajectory", {})
         self.image_qos_reliability = str(config.get("trajectory", {}).get("image_qos_reliability", "best_effort"))
+        self.pose_qos_reliability = str(trajectory_config.get("pose_qos_reliability", "best_effort"))
+        self.pose_jump_warn_m = float(trajectory_config.get("pose_jump_warn_m", 0.75))
+        self.pose_jump_warn_mps = float(trajectory_config.get("pose_jump_warn_mps", 4.0))
         self._configure_live_alignment(raw_config, config)
 
         self.cameras: List[CameraSpec] = [
@@ -137,6 +146,8 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.raw_traces: Dict[str, List[Tuple[float, float, float]]] = {pose.name: [] for pose in self.poses}
         self.latest_pose: Dict[str, Optional[Tuple[float, float, float]]] = {pose.name: None for pose in self.poses}
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
+        self.previous_raw_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
+        self.last_pose_jump_log_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
         self.pose_history: Dict[str, Deque[PoseSample]] = {pose.name: deque(maxlen=160) for pose in self.poses}
         self.pose_history_lock = threading.Lock()
@@ -165,7 +176,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             )
 
     def _create_pose_subscriptions(self) -> None:
-        pose_qos = make_qos()
+        pose_qos = make_qos(reliability=self.pose_qos_reliability)
         for pose in self.poses:
             sub = self.create_subscription(
                 PoseStamped,
@@ -175,7 +186,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                 callback_group=self.ros_callback_group,
             )
             self.dashboard_subscriptions.append(sub)
-            self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
+            self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic} (qos={self.pose_qos_reliability})")
 
     def _create_alignment_subscriptions(self) -> None:
         if not self.live_alignment_available:
@@ -227,9 +238,36 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                     float(msg.pose.orientation.w),
                 ),
             )
+            self._log_raw_pose_jump_if_needed(pose_name, pose_sample)
             self._record_pose_sample(pose_name, pose_sample)
 
         return callback
+
+    def _log_raw_pose_jump_if_needed(self, pose_name: str, pose_sample: PoseSample) -> None:
+        previous = self.previous_raw_pose_sample.get(pose_name)
+        self.previous_raw_pose_sample[pose_name] = pose_sample
+        if previous is None:
+            return
+
+        dx = pose_sample.position[0] - previous.position[0]
+        dy = pose_sample.position[1] - previous.position[1]
+        dz = pose_sample.position[2] - previous.position[2]
+        distance_m = math.sqrt(dx * dx + dy * dy + dz * dz)
+        dt_sec = (pose_sample.stamp_ns - previous.stamp_ns) / 1_000_000_000.0
+        speed_mps = distance_m / dt_sec if dt_sec > 1e-6 else float("inf")
+        if distance_m < self.pose_jump_warn_m and speed_mps < self.pose_jump_warn_mps:
+            return
+
+        now = time.monotonic()
+        if now - self.last_pose_jump_log_time.get(pose_name, 0.0) < 1.0:
+            return
+        self.last_pose_jump_log_time[pose_name] = now
+        self.get_logger().warning(
+            "raw pose jump "
+            f"{pose_name}: distance={distance_m:.3f}m dt={dt_sec:.4f}s speed={speed_mps:.2f}m/s "
+            f"from=({previous.position[0]:.3f}, {previous.position[1]:.3f}, {previous.position[2]:.3f}) "
+            f"to=({pose_sample.position[0]:.3f}, {pose_sample.position[1]:.3f}, {pose_sample.position[2]:.3f})"
+        )
 
     def _make_camera_info_callback(self, camera_name: str):
         def callback(msg: CameraInfo) -> None:
