@@ -35,6 +35,24 @@
   "dashboard": {
     "window_title": "Insight Monitoring Dashboard",
     "fullscreen": true,
+    "windows": {
+      "dashboard": {
+        "mode": "manual",
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 1600,
+        "frameless": true
+      },
+      "web_3d": {
+        "mode": "manual",
+        "x": 1280,
+        "y": 0,
+        "width": 1280,
+        "height": 1600,
+        "frameless": true
+      }
+    },
     "trajectory": {
       "max_points": 300,
       "view_yaw_deg": -35,

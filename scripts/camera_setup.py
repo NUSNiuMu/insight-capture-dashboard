@@ -14,6 +14,12 @@ IMAGE_STREAMS = {
     "color_compressed": {"topic": "color/image_rect_raw/compressed", "type": "compressed"},
 }
 
+WINDOW_DEFAULTS = {
+    "dashboard": {"mode": "manual", "x": 0, "y": 0, "width": 960, "height": 1080, "frameless": True},
+    "web_3d": {"mode": "manual", "x": 960, "y": 0, "width": 960, "height": 1080, "frameless": True},
+}
+WINDOW_MODES = {"manual", "left_half", "right_half", "fullscreen"}
+
 
 def load_setup(config_path: Path) -> Dict:
     with config_path.open("r", encoding="utf-8") as f:
@@ -39,6 +45,52 @@ def vio_topic(namespace: str, rate: str) -> str:
 
 def enabled_cameras(config: Dict) -> List[Dict]:
     return [camera for camera in config.get("cameras", []) if camera.get("enabled", True)]
+
+
+def _as_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _as_bool(value, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    if value is None:
+        return bool(default)
+    return bool(value)
+
+
+def build_window_layout(config: Dict) -> Dict[str, Dict]:
+    dashboard = config.get("dashboard", {})
+    raw_windows = dashboard.get("windows", {})
+    if not isinstance(raw_windows, dict):
+        raw_windows = {}
+
+    window_layout = {}
+    for key, defaults in WINDOW_DEFAULTS.items():
+        raw_settings = raw_windows.get(key, {})
+        if not isinstance(raw_settings, dict):
+            raw_settings = {}
+        mode = str(raw_settings.get("mode", defaults["mode"])).strip().lower()
+        if mode not in WINDOW_MODES:
+            mode = defaults["mode"]
+        window_layout[key] = {
+            "mode": mode,
+            "x": _as_int(raw_settings.get("x", defaults["x"]), defaults["x"]),
+            "y": _as_int(raw_settings.get("y", defaults["y"]), defaults["y"]),
+            "width": max(1, _as_int(raw_settings.get("width", defaults["width"]), defaults["width"])),
+            "height": max(1, _as_int(raw_settings.get("height", defaults["height"]), defaults["height"])),
+            "frameless": _as_bool(raw_settings.get("frameless", defaults["frameless"]), defaults["frameless"]),
+        }
+    return window_layout
 
 
 def build_dashboard_config(config: Dict) -> Dict:
@@ -88,6 +140,7 @@ def build_dashboard_config(config: Dict) -> Dict:
     return {
         "window_title": dashboard.get("window_title", "Insight Monitoring Dashboard"),
         "trajectory": dashboard.get("trajectory", {}),
+        "windows": build_window_layout(config),
         "session_alignment": {
             "enabled": bool(session_alignment.get("enabled", False)),
             "reference_camera": session_alignment.get("reference_camera"),

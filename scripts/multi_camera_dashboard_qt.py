@@ -26,6 +26,7 @@ from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topi
 from dashboard_widgets import ImagePanel
 from live_alignment import LiveAlignmentMixin
 from session_alignment import PoseSample
+from window_helpers import AdjustableFramelessWindowMixin, resolve_window_bounds
 
 os.environ["QT_QPA_PLATFORM"] = os.environ.get("QT_QPA_PLATFORM", "xcb")
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = QLibraryInfo.location(QLibraryInfo.PluginsPath)
@@ -88,6 +89,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
         config = build_dashboard_config(raw_config)
         enabled_camera_map = {camera["name"]: camera for camera in raw_config.get("cameras", []) if camera.get("enabled", True)}
         self.window_title = config.get("window_title", "Insight Dashboard")
+        self.window_settings = dict(config.get("windows", {}).get("dashboard", {}))
         self.max_points = int(config.get("trajectory", {}).get("max_points", 1500))
         self.image_decode_reduction = int(config.get("trajectory", {}).get("image_decode_reduction", 4))
         self.display_fps_limit = float(config.get("trajectory", {}).get("display_fps_limit", 6))
@@ -447,7 +449,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
         return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
 
 
-class DashboardWindow(QtWidgets.QMainWindow):
+class DashboardWindow(AdjustableFramelessWindowMixin, QtWidgets.QMainWindow):
     BG = "#0f1720"
     TEXT = "#e9eef4"
     MUTED = "#8fa3b8"
@@ -457,12 +459,11 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.node = node
         self.executor = executor
         self._shutdown_done = False
+        self.window_settings = dict(node.window_settings)
         self.setWindowTitle(node.window_title)
-        self.resize(980, 920)
         self.setMinimumSize(860, 820)
-        self.setWindowFlag(QtCore.Qt.FramelessWindowHint, True)
-        self.window_drag_active = False
-        self.window_drag_offset = QtCore.QPoint()
+        self._init_adjustable_window(frameless=bool(self.window_settings.get("frameless", True)))
+        self.resize(980, 920)
         self.last_image_versions: Dict[str, int] = {camera.name: -1 for camera in self.node.cameras}
         self.last_image_target_sizes: Dict[str, Tuple[int, int]] = {camera.name: (0, 0) for camera in self.node.cameras}
         self.last_image_render_time: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
@@ -545,9 +546,7 @@ class DashboardWindow(QtWidgets.QMainWindow):
 
     def start(self) -> None:
         self.spin_thread.start()
-        screen = QtWidgets.QApplication.primaryScreen()
-        if screen is not None:
-            self._snap_to_left_half(screen)
+        self._restore_window_geometry()
         self.show()
 
     def closeEvent(self, event) -> None:
@@ -578,35 +577,30 @@ class DashboardWindow(QtWidgets.QMainWindow):
         super().keyPressEvent(event)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() == QtCore.Qt.LeftButton and self._is_drag_region(event.pos()):
-            self.window_drag_active = True
-            self.window_drag_offset = event.globalPos() - self.frameGeometry().topLeft()
-            event.accept()
+        if self._start_window_adjustment(event, allow_drag=self._is_drag_region(event.pos())):
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
-        if self.window_drag_active and (event.buttons() & QtCore.Qt.LeftButton):
-            self.move(event.globalPos() - self.window_drag_offset)
-            event.accept()
+        if self._handle_window_adjustment_move(event):
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() == QtCore.Qt.LeftButton and self.window_drag_active:
-            self.window_drag_active = False
-            event.accept()
+        if self._finish_window_adjustment(event):
             return
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
         if event.button() == QtCore.Qt.LeftButton and self._is_drag_region(event.pos()):
-            screen = self.screen() or QtWidgets.QApplication.primaryScreen()
-            if screen is not None:
-                self._snap_to_left_half(screen)
+            self._restore_window_geometry()
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:
+        self._clear_resize_cursor()
+        super().leaveEvent(event)
 
     def _is_drag_region(self, pos: QtCore.QPoint) -> bool:
         if not self.title_bar_widget.geometry().contains(pos):
@@ -616,11 +610,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
             return False
         return True
 
-    def _snap_to_left_half(self, screen: QtGui.QScreen) -> None:
-        geometry = screen.geometry()
-        target_width = min(960, geometry.width())
-        target_height = min(1080, geometry.height())
-        self.setGeometry(geometry.x(), geometry.y(), target_width, target_height)
+    def _restore_window_geometry(self) -> None:
+        screen = self.screen() or QtWidgets.QApplication.primaryScreen()
+        screen_geometry = screen.geometry() if screen is not None else None
+        fallback = (0, 0, max(self.width(), 960), max(self.height(), 920))
+        x, y, width, height = resolve_window_bounds(self.window_settings, screen_geometry, fallback)
+        self.setGeometry(x, y, width, height)
 
     def refresh_image(self, camera_name: str) -> None:
         try:
