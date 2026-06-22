@@ -88,6 +88,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
     def __init__(
         self,
         config_path: Path,
+        ros_domain_id: int,
         fake_pose: bool = False,
         pose_publish_hz: float = 30.0,
         enable_alignment_stream: bool = False,
@@ -96,6 +97,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             raise RuntimeError("rclpy is required to run the web dashboard backend")
         super().__init__("insight_multi_camera_dashboard_web")
         self.config_path = config_path
+        self.ros_domain_id = int(ros_domain_id)
         self.fake_pose = bool(fake_pose)
         self.pose_publish_hz = max(1.0, float(pose_publish_hz))
         self.enable_alignment_stream = bool(enable_alignment_stream)
@@ -466,7 +468,13 @@ class WebDashboardServer:
         return ws
 
     async def _handle_healthz(self, _request: web.Request) -> web.Response:
-        return web.json_response({"ok": True, "fake_pose": self.node.fake_pose})
+        return web.json_response(
+            {
+                "ok": True,
+                "fake_pose": self.node.fake_pose,
+                "ros_domain_id": self.node.ros_domain_id,
+            }
+        )
 
     async def _handle_pose_snapshot(self, _request: web.Request) -> web.Response:
         payload = self.node.build_pose_payload()
@@ -526,6 +534,7 @@ def main() -> None:
     enable_alignment_stream = bool(args.start_alignment)
     node = PoseBridgeNode(
         config_path,
+        ros_domain_id=ros_domain_id,
         fake_pose=args.fake_pose,
         pose_publish_hz=args.pose_publish_hz,
         enable_alignment_stream=enable_alignment_stream,
