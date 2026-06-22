@@ -1,0 +1,7 @@
+.git
+.venv
+__pycache__
+*.pyc
+rosbags
+rosbag2_*
+web_dashboard/node_modules

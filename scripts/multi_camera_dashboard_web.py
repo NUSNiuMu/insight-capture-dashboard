@@ -41,6 +41,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
 
 from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
 from live_alignment import LiveAlignmentMixin
+from post_processing import PostProcessor, RecordingManager, RosbagStore, build_default_topics, load_json_config
 from session_alignment import PoseSample
 
 
@@ -379,12 +380,18 @@ class WebDashboardServer:
         port: int,
         web_root: Optional[Path],
         project_root: Path,
+        rosbag_store: RosbagStore,
+        recording_manager: RecordingManager,
+        post_processor: PostProcessor,
     ) -> None:
         self.node = node
         self.host = host
         self.port = int(port)
         self.web_root = web_root.resolve() if web_root else None
         self.project_root = project_root.resolve()
+        self.rosbag_store = rosbag_store
+        self.recording_manager = recording_manager
+        self.post_processor = post_processor
         self._clients: Set[web.WebSocketResponse] = set()
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
@@ -406,6 +413,11 @@ class WebDashboardServer:
         app.router.add_get("/ws", self._handle_ws)
         app.router.add_get("/healthz", self._handle_healthz)
         app.router.add_get("/api/poses", self._handle_pose_snapshot)
+        app.router.add_get("/api/rosbags", self._handle_rosbags)
+        app.router.add_get("/api/recording/status", self._handle_recording_status)
+        app.router.add_post("/api/recording/start", self._handle_recording_start)
+        app.router.add_post("/api/recording/stop", self._handle_recording_stop)
+        app.router.add_post("/api/postprocess/{action}", self._handle_postprocess)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
@@ -482,6 +494,55 @@ class WebDashboardServer:
             pose["asset_url"] = self.node.model_asset_url(pose.get("avatar_model"))
         return web.json_response(payload)
 
+    async def _handle_rosbags(self, _request: web.Request) -> web.Response:
+        bags = [entry.to_dict() for entry in self.rosbag_store.list_bags()]
+        return web.json_response({"rosbag_root": str(self.rosbag_store.root), "bags": bags})
+
+    async def _handle_recording_status(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.recording_manager.status())
+
+    async def _handle_recording_start(self, request: web.Request) -> web.Response:
+        try:
+            payload = await self._json_or_empty(request)
+            topics = payload.get("topics")
+            if topics is not None and not isinstance(topics, list):
+                raise ValueError("topics must be a list")
+            status = self.recording_manager.start(topics=topics)
+            return web.json_response(status)
+        except Exception as exc:
+            return self._json_error(exc)
+
+    async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
+        try:
+            return web.json_response(self.recording_manager.stop())
+        except Exception as exc:
+            return self._json_error(exc)
+
+    async def _handle_postprocess(self, request: web.Request) -> web.Response:
+        try:
+            action = request.match_info["action"]
+            payload = await self._json_or_empty(request)
+            bag_name = str(payload.get("bag", "")).strip()
+            if not bag_name:
+                raise ValueError("bag is required")
+            result = self.post_processor.run(action, bag_name)
+            return web.json_response(result)
+        except Exception as exc:
+            return self._json_error(exc)
+
+    async def _json_or_empty(self, request: web.Request) -> Dict[str, object]:
+        if not request.can_read_body:
+            return {}
+        try:
+            payload = await request.json()
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _json_error(exc: Exception, status: int = 400) -> web.Response:
+        return web.json_response({"error": str(exc)}, status=status)
+
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "3d.html")
 
@@ -518,6 +579,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fake-pose", action="store_true")
     parser.add_argument("--pose-publish-hz", type=float, default=30.0)
     parser.add_argument("--start-alignment", action="store_true")
+    parser.add_argument(
+        "--post-config",
+        default=str(Path(__file__).resolve().parents[1] / "config" / "post_processing.json"),
+    )
+    parser.add_argument("--rosbag-dir", default=os.environ.get("INSIGHT_ROSBAG_DIR", ""))
     return parser.parse_args()
 
 
@@ -525,6 +591,12 @@ def main() -> None:
     args = parse_args()
     config_path = Path(args.config).resolve()
     raw_config = load_setup(config_path)
+    post_config = load_json_config(Path(args.post_config).resolve())
+    rosbag_dir = args.rosbag_dir or os.environ.get("INSIGHT_ROSBAG_DIR") or str(post_config.get("rosbag_dir", "rosbags"))
+    rosbag_path = Path(rosbag_dir).expanduser()
+    if not rosbag_path.is_absolute():
+        rosbag_path = (config_path.parents[1] / rosbag_path).resolve()
+    rosbag_topics = post_config.get("record_topics") or build_default_topics(raw_config)
     ros_domain_id = int(raw_config.get("ros_domain_id", 10))
     if rclpy is None:
         raise RuntimeError("rclpy is not available in this environment")
@@ -548,7 +620,23 @@ def main() -> None:
     spin_thread.start()
 
     web_root = Path(args.web_root) if args.web_root else None
-    server = WebDashboardServer(node, args.host, args.port, web_root, node.project_root)
+    rosbag_store = RosbagStore(rosbag_path)
+    recording_manager = RecordingManager(
+        rosbag_store,
+        topics=[str(topic) for topic in rosbag_topics],
+        max_cache_size=int(post_config.get("max_cache_size", 2147483648)),
+    )
+    post_processor = PostProcessor(rosbag_store)
+    server = WebDashboardServer(
+        node,
+        args.host,
+        args.port,
+        web_root,
+        node.project_root,
+        rosbag_store,
+        recording_manager,
+        post_processor,
+    )
     server.start()
 
     try:
@@ -557,6 +645,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        with contextlib.suppress(Exception):
+            recording_manager.stop()
         server.stop()
         executor.shutdown()
         node.destroy_node()

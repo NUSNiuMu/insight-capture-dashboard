@@ -10,6 +10,13 @@ const trailWidthSlider = document.getElementById("trail-width-slider");
 const trailWidthValue = document.getElementById("trail-width-value");
 const cameraDock = document.getElementById("camera-dock");
 const cameraPageMeta = document.getElementById("camera-page-meta");
+const postprocessPanel = document.getElementById("postprocess-panel");
+const refreshBagsButton = document.getElementById("refresh-bags-button");
+const rosbagSelect = document.getElementById("rosbag-select");
+const recordingStatus = document.getElementById("recording-status");
+const startRecordingButton = document.getElementById("start-recording-button");
+const stopRecordingButton = document.getElementById("stop-recording-button");
+const postprocessOutput = document.getElementById("postprocess-output");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#57d67c", primitive: "sphere", modelColor: "#d6a07d" },
@@ -50,6 +57,7 @@ const TRAIL_WIDTH_STORAGE_KEY = "insight-trail-width-multiplier";
 let trailWidthMultiplier = loadTrailWidthMultiplier();
 const SCENE_MAPPING_VERSION = "RUF-v3";
 let manualGripperOpenRatio = null;
+let selectedBagName = "";
 
 if (engine && scene) {
   engine.runRenderLoop(() => {
@@ -74,6 +82,7 @@ if (enable3d) {
 if (enableCameras) {
   startCameraPolling();
 }
+initializePostProcessingPanel();
 
 function resolveWebSocketUrl() {
   const query = new URLSearchParams(window.location.search);
@@ -1030,4 +1039,155 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function initializePostProcessingPanel() {
+  if (!postprocessPanel) {
+    return;
+  }
+  refreshBagsButton?.addEventListener("click", refreshRosbags);
+  rosbagSelect?.addEventListener("change", () => {
+    selectedBagName = rosbagSelect.value;
+    setPostprocessOutput(selectedBagName ? `Selected ${selectedBagName}` : "No rosbag selected.");
+  });
+  startRecordingButton?.addEventListener("click", startRecording);
+  stopRecordingButton?.addEventListener("click", stopRecording);
+  for (const button of postprocessPanel.querySelectorAll("[data-post-action]")) {
+    button.addEventListener("click", () => runPostprocessAction(button.dataset.postAction));
+  }
+  refreshRosbags();
+  refreshRecordingStatus();
+  window.setInterval(refreshRecordingStatus, 1500);
+}
+
+async function refreshRosbags() {
+  if (!rosbagSelect) {
+    return;
+  }
+  try {
+    const payload = await fetchJson("/api/rosbags");
+    const previous = selectedBagName || rosbagSelect.value;
+    const bags = payload.bags || [];
+    rosbagSelect.innerHTML = "";
+    if (!bags.length) {
+      rosbagSelect.append(new Option("No rosbags found", ""));
+      selectedBagName = "";
+      return;
+    }
+    for (const bag of bags) {
+      const label = `${bag.name} (${formatBytes(bag.size_bytes)})`;
+      rosbagSelect.append(new Option(label, bag.name));
+    }
+    selectedBagName = bags.some((bag) => bag.name === previous) ? previous : bags[0].name;
+    rosbagSelect.value = selectedBagName;
+  } catch (error) {
+    setPostprocessOutput(`Bag refresh failed: ${error.message}`);
+  }
+}
+
+async function refreshRecordingStatus() {
+  if (!recordingStatus) {
+    return;
+  }
+  try {
+    const status = await fetchJson("/api/recording/status");
+    renderRecordingStatus(status);
+  } catch (error) {
+    recordingStatus.textContent = `Recording status unavailable: ${error.message}`;
+  }
+}
+
+async function startRecording() {
+  setRecordingBusy(true);
+  try {
+    const status = await fetchJson("/api/recording/start", { method: "POST", body: "{}" });
+    renderRecordingStatus(status);
+    setPostprocessOutput(`Recording started: ${status.output_path || "pending output path"}`);
+  } catch (error) {
+    setPostprocessOutput(`Start recording failed: ${error.message}`);
+  } finally {
+    setRecordingBusy(false);
+  }
+}
+
+async function stopRecording() {
+  setRecordingBusy(true);
+  try {
+    const status = await fetchJson("/api/recording/stop", { method: "POST", body: "{}" });
+    renderRecordingStatus(status);
+    await refreshRosbags();
+    setPostprocessOutput("Recording stopped.");
+  } catch (error) {
+    setPostprocessOutput(`Stop recording failed: ${error.message}`);
+  } finally {
+    setRecordingBusy(false);
+  }
+}
+
+async function runPostprocessAction(action) {
+  if (!selectedBagName) {
+    setPostprocessOutput("Select a rosbag before running post processing.");
+    return;
+  }
+  setPostprocessOutput(`Running ${action} on ${selectedBagName}...`);
+  try {
+    const result = await fetchJson(`/api/postprocess/${encodeURIComponent(action)}`, {
+      method: "POST",
+      body: JSON.stringify({ bag: selectedBagName })
+    });
+    setPostprocessOutput(JSON.stringify(result, null, 2));
+  } catch (error) {
+    setPostprocessOutput(`Post processing failed: ${error.message}`);
+  }
+}
+
+function renderRecordingStatus(status) {
+  const active = Boolean(status.recording);
+  recordingStatus.textContent = active
+    ? `Recording to ${status.output_path || "pending path"}`
+    : "Recording idle";
+  if (startRecordingButton) {
+    startRecordingButton.disabled = active;
+  }
+  if (stopRecordingButton) {
+    stopRecordingButton.disabled = !active;
+  }
+}
+
+function setRecordingBusy(isBusy) {
+  if (startRecordingButton) {
+    startRecordingButton.classList.toggle("is-busy", isBusy);
+  }
+  if (stopRecordingButton) {
+    stopRecordingButton.classList.toggle("is-busy", isBusy);
+  }
+}
+
+function setPostprocessOutput(message) {
+  if (postprocessOutput) {
+    postprocessOutput.textContent = message;
+  }
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, {
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    ...options
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `${response.status} ${response.statusText}`);
+  }
+  return payload;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) {
+    return `${value} B`;
+  }
+  if (value < 1024 * 1024) {
+    return `${(value / 1024).toFixed(1)} KB`;
+  }
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }

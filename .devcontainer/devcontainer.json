@@ -1,0 +1,44 @@
+{
+  "name": "insight-capture-dashboard-dev",
+  "image": "insight-capture-dashboard:latest",
+  "context": "..",
+
+  "containerEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}",
+    "ROS_DOMAIN_ID": "20",
+    "INSIGHT_ROSBAG_DIR": "/workspace/rosbags",
+    "QT_X11_NO_MITSHM": "1",
+    "QTWEBENGINE_DISABLE_SANDBOX": "1"
+  },
+
+  "runArgs": [
+    "--privileged",
+    "--network", "host",
+    "--ipc", "host",
+    "--pid", "host",
+    "-v", "/tmp/.X11-unix:/tmp/.X11-unix",
+    "-v", "/dev:/dev",
+    "-v", "/run/udev:/run/udev:ro",
+    "-v", "/etc/localtime:/etc/localtime:ro",
+    "--device-cgroup-rule=c 81:* rwm",
+    "--device-cgroup-rule=c 234:* rwm",
+    "--shm-size=16gb",
+    "-v", "${localWorkspaceFolder}/rosbags:/workspace/rosbags"
+  ],
+
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/insight_capture,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace/insight_capture",
+  "remoteUser": "root",
+  "features": {},
+  "mounts": [],
+  "postCreateCommand": "echo 'Insight capture devcontainer ready.'",
+  "postStartCommand": "mkdir -p /workspace/rosbags",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "remote.autoForwardPortsFallback": 0
+      }
+    }
+  }
+}

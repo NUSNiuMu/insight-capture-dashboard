@@ -11,6 +11,30 @@
   <body data-dashboard-view="3d">
     <div class="shell shell-3d-only">
       <div class="hud">
+        <section class="postprocess-panel" id="postprocess-panel">
+          <div class="panel-header">
+            <div>
+              <div class="panel-eyebrow">Rosbag Workflow</div>
+              <h2>Post Processing</h2>
+            </div>
+            <button class="icon-button" id="refresh-bags-button" type="button" title="Refresh bags">Refresh</button>
+          </div>
+          <div class="recording-row">
+            <button class="primary-button" id="start-recording-button" type="button">Start Recording</button>
+            <button class="secondary-button" id="stop-recording-button" type="button">Stop Recording</button>
+          </div>
+          <div class="recording-status" id="recording-status">Recording status pending</div>
+          <label class="bag-picker" for="rosbag-select">
+            <span>Selected Rosbag</span>
+            <select id="rosbag-select"></select>
+          </label>
+          <div class="postprocess-actions">
+            <button type="button" data-post-action="coordinate-alignment">Coordinate Alignment</button>
+            <button type="button" data-post-action="trajectory-scoring">Trajectory Scoring</button>
+            <button type="button" data-post-action="trajectory-optimization">Trajectory Optimization</button>
+          </div>
+          <pre class="postprocess-output" id="postprocess-output">No rosbag selected.</pre>
+        </section>
         <div class="trail-controls" id="trail-controls">
           <div class="trail-controls-title">Trail Width</div>
           <label class="trail-width-control" for="trail-width-slider">

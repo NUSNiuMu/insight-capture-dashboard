@@ -1,0 +1,27 @@
+services:
+  insight_capture:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: insight-capture-dashboard:latest
+    container_name: insight_capture_dashboard
+    network_mode: host
+    privileged: true
+    ipc: host
+    pid: host
+    working_dir: /workspace/insight_capture
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-20}
+      INSIGHT_ROSBAG_DIR: ${INSIGHT_ROSBAG_DIR:-/workspace/rosbags}
+      BACKEND_HOST: ${BACKEND_HOST:-0.0.0.0}
+      BACKEND_PORT: ${BACKEND_PORT:-8765}
+      DISPLAY: ${DISPLAY:-:0}
+      QT_X11_NO_MITSHM: "1"
+      QTWEBENGINE_DISABLE_SANDBOX: "1"
+    volumes:
+      - .:/workspace/insight_capture
+      - ./rosbags:/workspace/rosbags
+      - /dev:/dev
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /run/udev:/run/udev:ro
+    command: bash /workspace/insight_capture/scripts/docker_start_app.sh

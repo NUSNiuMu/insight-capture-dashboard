@@ -1,0 +1,16 @@
+{
+  "rosbag_dir": "rosbags",
+  "max_cache_size": 2147483648,
+  "record_topics": [
+    "/insight7_a/camera/vio_100hz",
+    "/insight7_a/camera/infra1/camera_info",
+    "/insight7_a/camera/infra1/image_rect_raw",
+    "/insight7_b/camera/vio_100hz",
+    "/insight7_b/camera/infra1/camera_info",
+    "/insight7_b/camera/infra1/image_rect_raw",
+    "/insight3_a/camera/vio_100hz",
+    "/insight3_a/camera/infra1/camera_info",
+    "/insight3_a/camera/infra1/image_rect_raw",
+    "/tf_static"
+  ]
+}

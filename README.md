@@ -11,7 +11,7 @@
 
 优先只改：
 
-- [config/cameras.json](/home/seeed/workspaces/insight_capture/config/cameras.json:1)
+- `config/cameras.json`
 
 这个文件控制：
 
@@ -47,7 +47,6 @@
 ## 启动 Dashboard
 
 ```bash
-cd /home/seeed/workspaces/insight_capture
 ./scripts/open_monitor_dashboard.sh
 ```
 
@@ -63,14 +62,13 @@ cd /home/seeed/workspaces/insight_capture
 先构建前端：
 
 ```bash
-cd /home/seeed/workspaces/insight_capture/web_dashboard
+cd web_dashboard
 npm run build
 ```
 
 启动 Web 后端：
 
 ```bash
-cd /home/seeed/workspaces/insight_capture
 python3 scripts/multi_camera_dashboard_web.py
 ```
 
@@ -97,11 +95,81 @@ INSIGHT_DASHBOARD_HOST=192.168.1.20 INSIGHT_DASHBOARD_PORT=8766 python3 scripts/
 没 ROS2 硬件时可直接跑 demo：
 
 ```bash
-cd /home/seeed/workspaces/insight_capture
 python3 scripts/multi_camera_dashboard_web.py --fake-pose
 ```
 
 此时浏览器打开 `http://localhost:8765/`，能看到 `head / left_hand / right_hand` 三个节点随 fake pose 运动。
+
+## Docker Startup
+
+This project can also run in Docker using the same host-network, mounted-workspace style used by the local `tinynav` workflow.
+
+Build the image:
+
+```bash
+./scripts/docker_build.sh
+```
+
+Start the dashboard:
+
+```bash
+./scripts/docker_run.sh
+```
+
+Enter the running container:
+
+```bash
+./scripts/docker_enter.sh
+```
+
+Open a fresh interactive Docker shell without auto-starting the dashboard:
+
+```bash
+./scripts/docker_run.sh shell
+```
+
+Inside the container, the working directory is `/workspace/insight_capture`. This is only the container mount point; the repository can live anywhere on the host. ROS Humble is already sourced, so you can run:
+
+```bash
+python3 scripts/multi_camera_dashboard_web.py
+```
+
+The compose service:
+
+- mounts this repository at `/workspace/insight_capture`
+- mounts local `./rosbags` at `/workspace/rosbags`
+- uses host networking so ROS2 discovery and `http://localhost:8765` work naturally
+- runs privileged with `/dev` mounted for camera/device access
+- defaults to `ROS_DOMAIN_ID=20`
+
+Useful overrides:
+
+```bash
+ROS_DOMAIN_ID=20 INSIGHT_ROSBAG_DIR=/workspace/rosbags ./scripts/docker_run.sh
+BACKEND_PORT=8766 ./scripts/docker_run.sh
+```
+
+## Rosbag Recording And Post Processing
+
+The Web dashboard now includes a compact rosbag workflow panel on `/` and `/3d`.
+
+Backend APIs:
+
+- `GET /api/rosbags`: list rosbag directories/files from the configured rosbag directory
+- `GET /api/recording/status`: return active recording state
+- `POST /api/recording/start`: start one `ros2 bag record` process
+- `POST /api/recording/stop`: stop the active recorder
+- `POST /api/postprocess/coordinate-alignment`: run placeholder coordinate alignment on the selected bag
+- `POST /api/postprocess/trajectory-scoring`: run placeholder trajectory scoring on the selected bag
+- `POST /api/postprocess/trajectory-optimization`: run placeholder trajectory optimization on the selected bag
+
+Recording defaults are configured in:
+
+```text
+config/post_processing.json
+```
+
+The backend prevents multiple simultaneous recording processes and names each recording with a timestamp under `INSIGHT_ROSBAG_DIR` or the configured `rosbag_dir`.
 
 ### Web avatar 模型配置
 
@@ -189,7 +257,7 @@ INSIGHT_ALIGNMENT_LOG=/tmp/my_alignment.log ./scripts/open_monitor_dashboard.sh
 - `insight7_b`: `/insight7_b/camera/...`
 - `insight9_a`: `/insight9_a/camera/...`
 
-如果实际命名空间变化，改 [config/cameras.json](/home/seeed/workspaces/insight_capture/config/cameras.json:1) 即可。
+如果实际命名空间变化，改 `config/cameras.json` 即可。
 
 
 
