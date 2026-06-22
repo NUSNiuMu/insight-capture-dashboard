@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Tuple
 
-import cv2
 import rclpy
 from PyQt5 import QtCore, QtGui, QtWidgets
 from PyQt5.QtCore import QLibraryInfo
@@ -35,14 +34,9 @@ os.environ.pop("QT_PLUGIN_PATH", None)
 import numpy as np
 
 
-def make_qos(depth: int = 10, reliability: str = "reliable") -> QoSProfile:
-    reliability_policy = (
-        ReliabilityPolicy.RELIABLE
-        if str(reliability).lower() == "reliable"
-        else ReliabilityPolicy.BEST_EFFORT
-    )
+def make_qos(depth: int = 10) -> QoSProfile:
     return QoSProfile(
-        reliability=reliability_policy,
+        reliability=ReliabilityPolicy.RELIABLE,
         durability=DurabilityPolicy.VOLATILE,
         history=HistoryPolicy.KEEP_LAST,
         depth=depth,
@@ -98,7 +92,6 @@ class DashboardNode(LiveAlignmentMixin, Node):
         self.image_decode_reduction = int(config.get("trajectory", {}).get("image_decode_reduction", 4))
         self.display_fps_limit = float(config.get("trajectory", {}).get("display_fps_limit", 6))
         self.image_qos_reliability = str(config.get("trajectory", {}).get("image_qos_reliability", "best_effort"))
-        self.pose_qos_reliability = str(config.get("trajectory", {}).get("pose_qos_reliability", "best_effort"))
         self._configure_live_alignment(raw_config, config)
 
         self.cameras: List[CameraSpec] = [
@@ -166,7 +159,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
             self.decoder_threads.append(worker)
 
         image_qos = make_image_qos(reliability=self.image_qos_reliability)
-        pose_qos = make_qos(reliability=self.pose_qos_reliability)
+        pose_qos = make_qos()
 
         for camera in self.cameras:
             if camera.topic_type == "compressed":
@@ -235,10 +228,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
                 callback_group=self.ros_callback_group,
             )
             self.dashboard_subscriptions.append(sub)
-            self.get_logger().info(
-                f"Trajectory: {pose.name} <- {pose.topic} "
-                f"(qos={self.pose_qos_reliability}, depth={pose_qos.depth})"
-            )
+            self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
         self.live_alignment_timer = self.create_timer(
             1.0 / max(self.live_alignment_processing_hz, 0.5),
             self._process_live_alignment,
@@ -433,23 +423,6 @@ class DashboardNode(LiveAlignmentMixin, Node):
         if encoding == "bgra8":
             bgra = image[:, : msg.width * 4].reshape((msg.height, msg.width, 4))
             rgb = bgra[:, :, [2, 1, 0]]
-            return np.ascontiguousarray(rgb.astype(np.uint8, copy=False))
-        if encoding == "nv12":
-            if msg.step <= 0:
-                return None
-            total_rows = data.size // msg.step
-            visible_height = msg.height
-            expected_total_rows = visible_height + (visible_height // 2)
-            if total_rows < expected_total_rows and total_rows % 3 == 0:
-                visible_height = (total_rows * 2) // 3
-                expected_total_rows = total_rows
-            if visible_height <= 0 or visible_height % 2 != 0 or total_rows < expected_total_rows:
-                return None
-            nv12 = data[: msg.step * expected_total_rows].reshape((expected_total_rows, msg.step))[:, : msg.width]
-            try:
-                rgb = cv2.cvtColor(nv12, cv2.COLOR_YUV2RGB_NV12)
-            except cv2.error:
-                return None
             return np.ascontiguousarray(rgb.astype(np.uint8, copy=False))
         step_channels = max(msg.step // max(msg.width, 1), 1)
         pixel_image = image[:, : msg.width * step_channels].reshape((msg.height, msg.width, step_channels))

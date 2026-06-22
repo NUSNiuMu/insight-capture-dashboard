@@ -21,8 +21,6 @@ const TRAIL_RADIUS_BY_ROLE = {
   left_hand: 0.008,
   right_hand: 0.008
 };
-const TRAIL_SMOOTHING_ALPHA = 0.28;
-const TRAIL_TESSELLATION = 20;
 const GRIPPER_SLIDER_TRAVEL_METERS = 0.12;
 const UMI_ARTICULATED_MODEL_PATH = "assets/models/UMI_Gripper_articulated.glb";
 const UMI_SPLIT_ASSETS = {
@@ -34,9 +32,6 @@ const UMI_SPLIT_ASSETS = {
 const wsUrl = resolveWebSocketUrl();
 const engine = enable3d && canvas ? new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true }) : null;
 const scene = engine && canvas ? createScene(engine, canvas) : null;
-if (engine) {
-  engine.setHardwareScalingLevel(Math.min(window.devicePixelRatio || 1, 1.5) > 1 ? 1 / Math.min(window.devicePixelRatio || 1, 1.5) : 1);
-}
 const poseNodes = new Map();
 const modelPromises = new Map();
 const modelWarnings = new Set();
@@ -44,7 +39,6 @@ const trailStates = new Map();
 const cameraPanels = new Map();
 const cameraPollState = new Map();
 let maximizedCameraName = null;
-let legendMarkupCache = "";
 
 const CAMERA_FPS_WINDOW_MS = 1500;
 const DEFAULT_TRAIL_ENABLED = {
@@ -95,7 +89,6 @@ function resolveWebSocketUrl() {
 function createScene(engineRef, canvasRef) {
   const sceneRef = new BABYLON.Scene(engineRef);
   sceneRef.clearColor = new BABYLON.Color4(0.03, 0.08, 0.11, 1.0);
-  sceneRef.getEngine().setHardwareScalingLevel(Math.min(window.devicePixelRatio || 1, 1.5) > 1 ? 1 / Math.min(window.devicePixelRatio || 1, 1.5) : 1);
 
   const camera = new BABYLON.ArcRotateCamera("camera", -1.2, 1.1, 5.8, new BABYLON.Vector3(0, 0.9, 0), sceneRef);
   camera.attachControl(canvasRef, true);
@@ -154,9 +147,7 @@ function connect() {
     if (payload.type !== "pose_update") {
       return;
     }
-    applyPoseUpdate(payload).catch((error) => {
-      warnOnce("pose-update-error", `Pose update failed: ${error?.stack || error}`);
-    });
+    applyPoseUpdate(payload);
   };
 
   ws.onerror = () => {
@@ -212,7 +203,12 @@ async function applyPoseUpdate(payload) {
       continue;
     }
     node.metadata = { ...(node.metadata || {}), poseRole: pose.role };
-    ensureNodeTransformFields(node);
+    if (!node.position) {
+      node.position = new BABYLON.Vector3(0, 0, 0);
+    }
+    if (!node.rotationQuaternion) {
+      node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
+    }
     const position = Array.isArray(pose.position) ? pose.position : [0, 0, 0];
     const quaternion = Array.isArray(pose.quaternion_xyzw) ? pose.quaternion_xyzw : [0, 0, 0, 1];
     const scenePosition = mapDashboardPositionToScene(position);
@@ -247,7 +243,10 @@ async function applyPoseUpdate(payload) {
       </div>`
     );
   }
-  renderPoseLegend(legendRows);
+  if (legend) {
+    legend.innerHTML = legendRows.join("");
+    bindTrailToggles();
+  }
 }
 
 function ensurePoseNode(pose) {
@@ -259,15 +258,6 @@ function ensurePoseNode(pose) {
   node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
   poseNodes.set(pose.name, node);
   return node;
-}
-
-function ensureNodeTransformFields(node) {
-  if (!node.position || typeof node.position.copyFromFloats !== "function") {
-    node.position = new BABYLON.Vector3(0, 0, 0);
-  }
-  if (!node.rotationQuaternion || typeof node.rotationQuaternion.copyFromFloats !== "function") {
-    node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
-  }
 }
 
 function mapDashboardPositionToScene(sample) {
@@ -729,7 +719,7 @@ function refreshAllArticulations() {
 function applyFingerMotion(nodes, basePositions, openRatio, direction) {
   nodes.forEach((fingerNode, index) => {
     const base = basePositions[index];
-    if (!fingerNode || !fingerNode.position || typeof fingerNode.position.copyFrom !== "function" || !base) {
+    if (!fingerNode || !base) {
       return;
     }
     fingerNode.position.copyFrom(base);
@@ -795,8 +785,8 @@ function extractArticulationHandles(instantiatedRootNodes, rootNode) {
   return {
     leftFingerNodes,
     rightFingerNodes,
-    leftBasePositions: leftFingerNodes.map((node) => (node.position ? node.position.clone() : null)),
-    rightBasePositions: rightFingerNodes.map((node) => (node.position ? node.position.clone() : null)),
+    leftBasePositions: leftFingerNodes.map((node) => node.position.clone()),
+    rightBasePositions: rightFingerNodes.map((node) => node.position.clone()),
     debugFingerNames
   };
 }
@@ -880,31 +870,14 @@ function bindTrailToggles() {
     return;
   }
   legend.dataset.trailToggleBound = "true";
-  const handleTrailToggle = (event) => {
+  legend.addEventListener("change", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLInputElement) || !target.matches("input[data-role]")) {
       return;
     }
     const role = target.getAttribute("data-role");
     setTrailEnabled(role, target.checked);
-    target.checked = isTrailEnabled(role);
-    legendMarkupCache = "";
-  };
-  legend.addEventListener("click", handleTrailToggle);
-  legend.addEventListener("change", handleTrailToggle);
-  legend.addEventListener("input", handleTrailToggle);
-}
-
-function renderPoseLegend(legendRows) {
-  if (!legend) {
-    return;
-  }
-  const nextMarkup = legendRows.join("");
-  if (nextMarkup !== legendMarkupCache) {
-    legend.innerHTML = nextMarkup;
-    legendMarkupCache = nextMarkup;
-  }
-  bindTrailToggles();
+  });
 }
 
 function updateTrails() {
@@ -990,17 +963,19 @@ function refreshAllTrails() {
 
 function updateTrailFromPose(pose) {
   const trail = ensureTrailState(pose.role);
-  if (!trail.enabled) {
+  if (!trail.enabled || !pose.visible) {
     clearTrail(trail);
     return;
   }
-  const sourcePoints = smoothTrailPoints((pose.trace || []).map((sample) => mapDashboardPositionToScene(sample)));
+  const sourcePoints = (pose.trace || []).map((sample) => mapDashboardPositionToScene(sample));
   if (sourcePoints.length < 2) {
+    clearTrail(trail);
     return;
   }
   const firstPoint = sourcePoints[0];
   const hasMotion = sourcePoints.some((point) => BABYLON.Vector3.Distance(point, firstPoint) > 0.02);
   if (!hasMotion) {
+    clearTrail(trail);
     return;
   }
   trail.points = sourcePoints;
@@ -1022,20 +997,21 @@ function refreshTrailMesh(trail) {
   const roleColor = BABYLON.Color3.FromHexString((ROLE_STYLE[trail.role] || ROLE_STYLE.head).color);
   const points = trail.points.map((point) => point.clone());
   const radius = (TRAIL_RADIUS_BY_ROLE[trail.role] || 0.016) * trailWidthMultiplier;
-  const previousMaterial = trail.mesh ? trail.mesh.material : null;
   if (trail.mesh) {
-    trail.mesh.dispose(false, false);
-  }
-  trail.mesh = BABYLON.MeshBuilder.CreateTube(
-    `trail-${trail.role}`,
-    { path: points, radius, tessellation: TRAIL_TESSELLATION, updatable: false },
-    scene
-  );
-  trail.mesh.isPickable = false;
-  trail.mesh.alwaysSelectAsActiveMesh = true;
-  trail.mesh.renderingGroupId = 1;
-  if (previousMaterial) {
-    trail.mesh.material = previousMaterial;
+    BABYLON.MeshBuilder.CreateTube(
+      null,
+      { path: points, radius, tessellation: 10, instance: trail.mesh, updatable: true },
+      scene
+    );
+  } else {
+    trail.mesh = BABYLON.MeshBuilder.CreateTube(
+      `trail-${trail.role}`,
+      { path: points, radius, tessellation: 10, updatable: true },
+      scene
+    );
+    trail.mesh.isPickable = false;
+    trail.mesh.alwaysSelectAsActiveMesh = true;
+    trail.mesh.renderingGroupId = 1;
   }
   if (!trail.mesh.material) {
     const material = new BABYLON.StandardMaterial(`trail-mat-${trail.role}`, scene);
@@ -1046,24 +1022,6 @@ function refreshTrailMesh(trail) {
     trail.mesh.material = material;
   }
   trail.mesh.material.alpha = 0.96;
-}
-
-function smoothTrailPoints(points) {
-  if (points.length <= 2) {
-    return points;
-  }
-  const smoothed = [points[0].clone()];
-  for (let index = 1; index < points.length - 1; index += 1) {
-    const previous = smoothed[smoothed.length - 1];
-    const current = points[index];
-    smoothed.push(new BABYLON.Vector3(
-      previous.x + (current.x - previous.x) * TRAIL_SMOOTHING_ALPHA,
-      previous.y + (current.y - previous.y) * TRAIL_SMOOTHING_ALPHA,
-      previous.z + (current.z - previous.z) * TRAIL_SMOOTHING_ALPHA
-    ));
-  }
-  smoothed.push(points[points.length - 1].clone());
-  return smoothed;
 }
 
 function escapeHtml(value) {

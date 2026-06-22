@@ -387,15 +387,10 @@ class WebDashboardServer:
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
         self._started = threading.Event()
-        self._startup_error: Optional[BaseException] = None
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run_loop, daemon=True, name="web_dashboard_server")
         self._thread.start()
         self._started.wait(timeout=5.0)
-        if self._startup_error is not None:
-            raise RuntimeError("failed to start web dashboard backend") from self._startup_error
-        if not self._started.is_set():
-            raise RuntimeError("timed out while starting web dashboard backend")
 
     def stop(self) -> None:
         if self._loop.is_running():
@@ -405,35 +400,29 @@ class WebDashboardServer:
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
+        app = web.Application()
+        app.router.add_get("/ws", self._handle_ws)
+        app.router.add_get("/healthz", self._handle_healthz)
+        app.router.add_get("/api/poses", self._handle_pose_snapshot)
+        app.router.add_get("/asset", self._handle_asset)
+        if self.web_root and self.web_root.exists():
+            app.router.add_get("/", self._handle_index)
+            app.router.add_get("/3d", self._handle_index)
+            static_root = self.web_root / "static"
+            if static_root.exists():
+                app.router.add_static("/static/", str(static_root), show_index=False)
+        app.on_startup.append(self._on_startup)
+        app.on_shutdown.append(self._on_shutdown)
+        runner = web.AppRunner(app)
+        self._loop.run_until_complete(runner.setup())
+        site = web.TCPSite(runner, self.host, self.port)
+        self._loop.run_until_complete(site.start())
+        self._started.set()
+        self.node.get_logger().info(f"Web dashboard backend listening on http://{self.host}:{self.port}")
         try:
-            app = web.Application()
-            app.router.add_get("/ws", self._handle_ws)
-            app.router.add_get("/healthz", self._handle_healthz)
-            app.router.add_get("/api/poses", self._handle_pose_snapshot)
-            app.router.add_get("/asset", self._handle_asset)
-            if self.web_root and self.web_root.exists():
-                app.router.add_get("/", self._handle_index)
-                app.router.add_get("/3d", self._handle_index)
-                static_root = self.web_root / "static"
-                if static_root.exists():
-                    app.router.add_static("/static/", str(static_root), show_index=False)
-            app.on_startup.append(self._on_startup)
-            app.on_shutdown.append(self._on_shutdown)
-            runner = web.AppRunner(app)
-            self._loop.run_until_complete(runner.setup())
-            site = web.TCPSite(runner, self.host, self.port)
-            self._loop.run_until_complete(site.start())
-            self._started.set()
-            self.node.get_logger().info(f"Web dashboard backend listening on http://{self.host}:{self.port}")
             self._loop.run_forever()
-        except BaseException as exc:
-            self._startup_error = exc
-            self._started.set()
-            raise
         finally:
-            runner = locals().get("runner")
-            if runner is not None:
-                self._loop.run_until_complete(runner.cleanup())
+            self._loop.run_until_complete(runner.cleanup())
             self._loop.close()
 
     async def _on_startup(self, app: web.Application) -> None:
@@ -477,13 +466,7 @@ class WebDashboardServer:
         return ws
 
     async def _handle_healthz(self, _request: web.Request) -> web.Response:
-        return web.json_response(
-            {
-                "ok": True,
-                "fake_pose": self.node.fake_pose,
-                "ros_domain_id": str(os.environ.get("ROS_DOMAIN_ID", "")),
-            }
-        )
+        return web.json_response({"ok": True, "fake_pose": self.node.fake_pose})
 
     async def _handle_pose_snapshot(self, _request: web.Request) -> web.Response:
         payload = self.node.build_pose_payload()
