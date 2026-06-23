@@ -1,5 +1,6 @@
 {
   "rosbag_dir": "rosbags",
+  "results_dir": "outputs/results",
   "max_cache_size": 2147483648,
   "record_topics": [
     "/insight7_a/camera/vio_100hz",

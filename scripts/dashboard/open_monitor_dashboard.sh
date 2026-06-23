@@ -3,10 +3,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+CORE_SCRIPTS_DIR="${ROOT_DIR}/scripts"
 CONFIG_PATH="${ROOT_DIR}/config/cameras.json"
 
-DEFAULT_DOMAIN_ID="$(python3 "${SCRIPT_DIR}/camera_setup.py" --config "${CONFIG_PATH}" --ros-domain-id)"
+DEFAULT_DOMAIN_ID="$(python3 "${CORE_SCRIPTS_DIR}/camera_setup.py" --config "${CONFIG_PATH}" --ros-domain-id)"
 if [[ -n "${INSIGHT_ROS_DOMAIN_ID+x}" ]]; then
   export ROS_DOMAIN_ID="${INSIGHT_ROS_DOMAIN_ID}"
 else
@@ -37,4 +38,4 @@ mkdir -p "${ROS_LOG_DIR}"
 echo "ROS_DOMAIN_ID: ${ROS_DOMAIN_ID}"
 echo "DISPLAY: ${DISPLAY}"
 echo "QT_QPA_PLATFORM_PLUGIN_PATH: ${QT_QPA_PLATFORM_PLUGIN_PATH:-unset}"
-exec python3 "${SCRIPT_DIR}/multi_camera_dashboard_qt.py" --config "${CONFIG_PATH}"
+exec python3 "${CORE_SCRIPTS_DIR}/multi_camera_dashboard_qt.py" --config "${CONFIG_PATH}"

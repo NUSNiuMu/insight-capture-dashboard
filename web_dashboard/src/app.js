@@ -1,18 +1,26 @@
 const dashboardView = document.body.dataset.dashboardView || "full";
-const enable3d = dashboardView === "full" || dashboardView === "3d";
-const enableCameras = dashboardView === "full" || dashboardView === "cameras";
 
 const canvas = document.getElementById("render-canvas");
+const enable3d = Boolean(canvas);
 const modelStatus = document.getElementById("model-status");
 const mappingVersion = document.getElementById("mapping-version");
 const legend = document.getElementById("pose-legend");
 const trailWidthSlider = document.getElementById("trail-width-slider");
 const trailWidthValue = document.getElementById("trail-width-value");
 const cameraDock = document.getElementById("camera-dock");
+const enableCameras = Boolean(cameraDock);
 const cameraPageMeta = document.getElementById("camera-page-meta");
 const postprocessPanel = document.getElementById("postprocess-panel");
 const refreshBagsButton = document.getElementById("refresh-bags-button");
 const rosbagSelect = document.getElementById("rosbag-select");
+const imageSourceSelect = document.getElementById("image-source-select");
+const bagList = document.getElementById("bag-list");
+const bagRoot = document.getElementById("bag-root");
+const dashboardStatus = document.getElementById("dashboard-status");
+const poseSummary = document.getElementById("pose-summary");
+const imageSummary = document.getElementById("image-summary");
+const bagSummary = document.getElementById("bag-summary");
+const jobSummary = document.getElementById("job-summary");
 const recordingStatus = document.getElementById("recording-status");
 const startRecordingButton = document.getElementById("start-recording-button");
 const stopRecordingButton = document.getElementById("stop-recording-button");
@@ -58,7 +66,9 @@ let trailWidthMultiplier = loadTrailWidthMultiplier();
 const SCENE_MAPPING_VERSION = "RUF-v3";
 let manualGripperOpenRatio = null;
 let selectedBagName = "";
+let knownBags = [];
 
+initializeNavigation();
 if (engine && scene) {
   engine.runRenderLoop(() => {
     if (manualGripperOpenRatio !== null) {
@@ -93,6 +103,27 @@ function resolveWebSocketUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = window.location.host || "localhost:8765";
   return `${protocol}//${host}/ws`;
+}
+
+function initializeNavigation() {
+  const buttons = Array.from(document.querySelectorAll("[data-view-link]"));
+  const views = Array.from(document.querySelectorAll("[data-view]"));
+  if (!buttons.length || !views.length) {
+    return;
+  }
+  const showView = (viewName) => {
+    views.forEach((view) => view.classList.toggle("active", view.dataset.view === viewName));
+    buttons.forEach((button) => button.classList.toggle("active", button.dataset.viewLink === viewName));
+    if (window.location.hash !== `#${viewName}`) {
+      window.location.hash = viewName;
+    }
+    if (engine) {
+      window.setTimeout(() => engine.resize(), 50);
+    }
+  };
+  buttons.forEach((button) => button.addEventListener("click", () => showView(button.dataset.viewLink)));
+  const initial = window.location.hash.replace("#", "") || "main";
+  showView(views.some((view) => view.dataset.view === initial) ? initial : "main");
 }
 
 function createScene(engineRef, canvasRef) {
@@ -149,12 +180,19 @@ function connect() {
     if (modelStatus) {
       modelStatus.textContent = "Pose stream connected";
     }
+    if (dashboardStatus) {
+      dashboardStatus.textContent = "Pose stream connected";
+    }
   };
 
   ws.onmessage = (event) => {
     const payload = JSON.parse(event.data);
     if (payload.type !== "pose_update") {
       return;
+    }
+    if (poseSummary) {
+      const visible = (payload.poses || []).filter((pose) => pose.visible).length;
+      poseSummary.textContent = `${visible}/${(payload.poses || []).length} poses visible`;
     }
     applyPoseUpdate(payload);
   };
@@ -195,6 +233,10 @@ async function pollCameraMetadata() {
     if (cameraPageMeta) {
       const liveCount = (payload.cameras || []).filter((camera) => !camera.stale && camera.visible).length;
       cameraPageMeta.textContent = `${liveCount}/${(payload.cameras || []).length} streams live`;
+    }
+    if (imageSummary) {
+      const liveCount = (payload.cameras || []).filter((camera) => !camera.stale && camera.visible).length;
+      imageSummary.textContent = `${liveCount}/${(payload.cameras || []).length} streams live`;
     }
   } catch (_error) {
     // The pose WebSocket remains the primary status signal; image polling can retry quietly.
@@ -317,6 +359,11 @@ function renderCameraPanels(cameras) {
     updateCameraPanelLayout(panel, index);
     const status = panel.querySelector("[data-camera-status]");
     status.textContent = camera.stale ? "stale" : camera.visible ? "live" : "waiting";
+    const frame = panel.querySelector("[data-camera-frame]");
+    if (frame) {
+      frame.textContent = `frame ${camera.frame_id || 0}`;
+      frame.title = camera.stamp_ns ? `stamp ${camera.stamp_ns}` : "stamp unavailable";
+    }
     updateCameraStream(panel, camera);
     updateCameraFps(camera.name, Number(camera.fps || 0));
     });
@@ -351,6 +398,7 @@ function ensureCameraPanel(camera) {
       <img class="camera-frame" alt="${escapeHtml(camera.label || camera.name)}">
       <div class="camera-overlay">
         <span class="camera-fps" data-camera-fps>-- fps</span>
+        <span data-camera-frame>frame --</span>
         <span data-camera-status>waiting</span>
       </div>
     </div>
@@ -1048,7 +1096,18 @@ function initializePostProcessingPanel() {
   refreshBagsButton?.addEventListener("click", refreshRosbags);
   rosbagSelect?.addEventListener("change", () => {
     selectedBagName = rosbagSelect.value;
+    if (imageSourceSelect) {
+      imageSourceSelect.value = selectedBagName;
+    }
+    renderBagList(knownBags);
     setPostprocessOutput(selectedBagName ? `Selected ${selectedBagName}` : "No rosbag selected.");
+  });
+  imageSourceSelect?.addEventListener("change", () => {
+    selectedBagName = imageSourceSelect.value;
+    if (rosbagSelect) {
+      rosbagSelect.value = selectedBagName;
+    }
+    renderBagList(knownBags);
   });
   startRecordingButton?.addEventListener("click", startRecording);
   stopRecordingButton?.addEventListener("click", stopRecording);
@@ -1065,24 +1124,82 @@ async function refreshRosbags() {
     return;
   }
   try {
-    const payload = await fetchJson("/api/rosbags");
+    const payload = await fetchJson("/api/bags");
     const previous = selectedBagName || rosbagSelect.value;
     const bags = payload.bags || [];
+    knownBags = bags;
+    if (bagRoot) {
+      bagRoot.textContent = `Root: ${payload.rosbag_root || "unknown"}`;
+    }
     rosbagSelect.innerHTML = "";
+    if (imageSourceSelect) {
+      imageSourceSelect.innerHTML = "";
+    }
     if (!bags.length) {
       rosbagSelect.append(new Option("No rosbags found", ""));
+      imageSourceSelect?.append(new Option("Live stream", ""));
       selectedBagName = "";
+      renderBagList([]);
+      if (bagSummary) {
+        bagSummary.textContent = "0 bags found";
+      }
       return;
     }
     for (const bag of bags) {
       const label = `${bag.name} (${formatBytes(bag.size_bytes)})`;
       rosbagSelect.append(new Option(label, bag.name));
+      imageSourceSelect?.append(new Option(label, bag.name));
     }
     selectedBagName = bags.some((bag) => bag.name === previous) ? previous : bags[0].name;
     rosbagSelect.value = selectedBagName;
+    if (imageSourceSelect) {
+      imageSourceSelect.value = selectedBagName;
+    }
+    renderBagList(bags);
+    if (bagSummary) {
+      bagSummary.textContent = `${bags.length} bag${bags.length === 1 ? "" : "s"} found`;
+    }
+    setPostprocessOutput(`Selected ${selectedBagName}`);
   } catch (error) {
     setPostprocessOutput(`Bag refresh failed: ${error.message}`);
   }
+}
+
+function renderBagList(bags) {
+  if (!bagList) {
+    return;
+  }
+  if (!bags.length) {
+    bagList.innerHTML = `<div class="empty-state">No rosbags found.</div>`;
+    return;
+  }
+  bagList.innerHTML = bags.map((bag) => {
+    const topics = (bag.topics || []).slice(0, 4).map((topic) => escapeHtml(topic.name)).join(", ");
+    return `
+      <button class="bag-row ${bag.name === selectedBagName ? "selected" : ""}" type="button" data-bag-name="${escapeHtml(bag.name)}">
+        <div>
+          <strong>${escapeHtml(bag.name)}</strong>
+          <span>${escapeHtml(bag.path)}</span>
+        </div>
+        <div>${formatBytes(bag.size_bytes)}</div>
+        <div>${formatDuration(bag.duration_sec)}</div>
+        <div>${topics || "topics pending"}</div>
+        <div>${bag.has_results ? "results ready" : "no results"}</div>
+      </button>`;
+  }).join("");
+  bagList.querySelectorAll("[data-bag-name]").forEach((row) => {
+    row.addEventListener("click", () => {
+      selectedBagName = row.dataset.bagName;
+      if (rosbagSelect) {
+        rosbagSelect.value = selectedBagName;
+      }
+      if (imageSourceSelect) {
+        imageSourceSelect.value = selectedBagName;
+      }
+      renderBagList(knownBags);
+      setPostprocessOutput(`Selected ${selectedBagName}`);
+    });
+  });
 }
 
 async function refreshRecordingStatus() {
@@ -1131,11 +1248,15 @@ async function runPostprocessAction(action) {
   }
   setPostprocessOutput(`Running ${action} on ${selectedBagName}...`);
   try {
-    const result = await fetchJson(`/api/postprocess/${encodeURIComponent(action)}`, {
+    const result = await fetchJson(`/api/process/${encodeURIComponent(action)}`, {
       method: "POST",
-      body: JSON.stringify({ bag: selectedBagName })
+      body: JSON.stringify({ bag_id: selectedBagName, options: {} })
     });
     setPostprocessOutput(JSON.stringify(result, null, 2));
+    if (jobSummary) {
+      jobSummary.textContent = `${result.action}: ${result.status}`;
+    }
+    await refreshRosbags();
   } catch (error) {
     setPostprocessOutput(`Post processing failed: ${error.message}`);
   }
@@ -1190,4 +1311,15 @@ function formatBytes(bytes) {
     return `${(value / 1024).toFixed(1)} KB`;
   }
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDuration(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value)) {
+    return "duration pending";
+  }
+  if (value < 60) {
+    return `${value.toFixed(1)}s`;
+  }
+  return `${Math.floor(value / 60)}m ${(value % 60).toFixed(0)}s`;
 }

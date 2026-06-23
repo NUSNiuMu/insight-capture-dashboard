@@ -31,14 +31,17 @@
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace/insight_capture,type=bind,consistency=cached",
   "workspaceFolder": "/workspace/insight_capture",
   "remoteUser": "root",
+  "overrideCommand": true,
   "features": {},
   "mounts": [],
   "postCreateCommand": "echo 'Insight capture devcontainer ready.'",
-  "postStartCommand": "mkdir -p /workspace/rosbags",
+  "postStartCommand": "bash /workspace/insight_capture/scripts/dev/check_env.sh --fix",
   "customizations": {
     "vscode": {
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash",
+        "remote.autoForwardPorts": false,
+        "remote.restoreForwardedPorts": false,
         "remote.autoForwardPortsFallback": 0
       }
     }

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Deque, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote
 
+import cv2
 import numpy as np
 from aiohttp import web
 
@@ -82,7 +83,13 @@ class PoseSpec:
 @dataclass
 class CameraSpec:
     name: str
+    label: str
     namespace: str
+    topic: str
+    topic_type: str
+    rotation_deg: int
+    row: int
+    column: int
 
 
 class PoseBridgeNode(LiveAlignmentMixin, Node):
@@ -118,7 +125,13 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.cameras: List[CameraSpec] = [
             CameraSpec(
                 name=item["name"],
+                label=item.get("label", item["name"]),
                 namespace=enabled_camera_map[item["name"]]["namespace"],
+                topic=item["topic"],
+                topic_type=item.get("type", "raw"),
+                rotation_deg=int(item.get("rotation_deg", 0)),
+                row=int(item.get("row", 0)),
+                column=int(item.get("column", 0)),
             )
             for item in config.get("cameras", [])
         ]
@@ -144,6 +157,20 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.pose_history: Dict[str, Deque[PoseSample]] = {pose.name: deque(maxlen=160) for pose in self.poses}
         self.pose_history_lock = threading.Lock()
         self.pose_lock = threading.Lock()
+        self.image_lock = threading.Lock()
+        self.latest_camera_frames: Dict[str, Optional[bytes]] = {camera.name: None for camera in self.cameras}
+        self.latest_camera_meta: Dict[str, Dict[str, object]] = {
+            camera.name: {
+                "version": 0,
+                "stamp_ns": 0,
+                "width": 0,
+                "height": 0,
+                "last_received_time": 0.0,
+                "fps": 0.0,
+                "frame_times": deque(maxlen=60),
+            }
+            for camera in self.cameras
+        }
         self.live_alignment_image_lock = threading.Lock()
         self.live_alignment_solution_lock = threading.Lock()
         self.ros_callback_group = ReentrantCallbackGroup()
@@ -157,6 +184,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             self.get_logger().info("Running in fake-pose demo mode")
         else:
             self._create_pose_subscriptions()
+            self._create_image_subscriptions()
             if self.enable_alignment_stream:
                 self._create_alignment_subscriptions()
 
@@ -179,6 +207,51 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             )
             self.dashboard_subscriptions.append(sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
+
+    def _create_image_subscriptions(self) -> None:
+        image_qos = make_image_qos(reliability=self.image_qos_reliability)
+        for camera in self.cameras:
+            msg_type = CompressedImage if camera.topic_type == "compressed" else RosImage
+            sub = self.create_subscription(
+                msg_type,
+                camera.topic,
+                self._make_dashboard_image_callback(camera),
+                image_qos,
+                callback_group=self.ros_callback_group,
+            )
+            self.dashboard_subscriptions.append(sub)
+            self.get_logger().info(f"Image: {camera.name} <- {camera.topic}")
+
+    def _make_dashboard_image_callback(self, camera: CameraSpec):
+        def callback(msg) -> None:
+            image = self._decode_calibration_message(camera.topic_type, msg)
+            if image is None:
+                return
+            ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+            if not ok:
+                return
+            now = time.monotonic()
+            stamp_ns = self._stamp_to_ns(msg.header.stamp)
+            with self.image_lock:
+                meta = self.latest_camera_meta[camera.name]
+                times = meta["frame_times"]
+                times.append(now)
+                while times and times[0] < now - 2.0:
+                    times.popleft()
+                fps = (len(times) - 1) / max(times[-1] - times[0], 0.001) if len(times) > 1 else 0.0
+                self.latest_camera_frames[camera.name] = encoded.tobytes()
+                meta.update(
+                    {
+                        "version": int(meta["version"]) + 1,
+                        "stamp_ns": stamp_ns,
+                        "width": int(image.shape[1]),
+                        "height": int(image.shape[0]),
+                        "last_received_time": now,
+                        "fps": float(fps),
+                    }
+                )
+
+        return callback
 
     def _create_alignment_subscriptions(self) -> None:
         if not self.live_alignment_available:
@@ -346,6 +419,40 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             "poses": poses,
         }
 
+    def build_camera_payload(self) -> Dict[str, object]:
+        now = time.monotonic()
+        cameras = []
+        with self.image_lock:
+            for camera in self.cameras:
+                meta = self.latest_camera_meta[camera.name]
+                has_frame = self.latest_camera_frames[camera.name] is not None
+                stale = (now - float(meta["last_received_time"] or 0.0)) > 1.5
+                cameras.append(
+                    {
+                        "name": camera.name,
+                        "label": camera.label,
+                        "topic": camera.topic,
+                        "type": camera.topic_type,
+                        "rotation_deg": camera.rotation_deg,
+                        "row": camera.row,
+                        "column": camera.column,
+                        "visible": has_frame,
+                        "stale": stale,
+                        "version": meta["version"],
+                        "stamp_ns": meta["stamp_ns"],
+                        "frame_id": meta["version"],
+                        "width": meta["width"],
+                        "height": meta["height"],
+                        "fps": meta["fps"],
+                        "frame_url": f"/api/cameras/{quote(camera.name, safe='')}/frame",
+                    }
+                )
+        return {"type": "camera_update", "timestamp_ms": int(time.time() * 1000), "cameras": cameras}
+
+    def latest_camera_frame(self, camera_name: str) -> Optional[bytes]:
+        with self.image_lock:
+            return self.latest_camera_frames.get(camera_name)
+
     def model_asset_url(self, avatar_model: Optional[str]) -> Optional[str]:
         if not avatar_model:
             return None
@@ -413,15 +520,24 @@ class WebDashboardServer:
         app.router.add_get("/ws", self._handle_ws)
         app.router.add_get("/healthz", self._handle_healthz)
         app.router.add_get("/api/poses", self._handle_pose_snapshot)
+        app.router.add_get("/api/cameras", self._handle_cameras)
+        app.router.add_get("/api/cameras/{camera_name}/frame", self._handle_camera_frame)
+        app.router.add_get("/api/bags", self._handle_bags)
+        app.router.add_get("/api/bags/{bag_name}/info", self._handle_bag_info)
         app.router.add_get("/api/rosbags", self._handle_rosbags)
         app.router.add_get("/api/recording/status", self._handle_recording_status)
         app.router.add_post("/api/recording/start", self._handle_recording_start)
         app.router.add_post("/api/recording/stop", self._handle_recording_stop)
         app.router.add_post("/api/postprocess/{action}", self._handle_postprocess)
+        app.router.add_post("/api/process/{action}", self._handle_process)
+        app.router.add_get("/api/results/{job_id}", self._handle_result)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
             app.router.add_get("/3d", self._handle_index)
+            app.router.add_get("/cameras", self._handle_index)
+            app.router.add_get("/bags", self._handle_index)
+            app.router.add_get("/postprocess", self._handle_index)
             static_root = self.web_root / "static"
             if static_root.exists():
                 app.router.add_static("/static/", str(static_root), show_index=False)
@@ -494,6 +610,25 @@ class WebDashboardServer:
             pose["asset_url"] = self.node.model_asset_url(pose.get("avatar_model"))
         return web.json_response(payload)
 
+    async def _handle_cameras(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.node.build_camera_payload())
+
+    async def _handle_camera_frame(self, request: web.Request) -> web.StreamResponse:
+        frame = self.node.latest_camera_frame(request.match_info["camera_name"])
+        if not frame:
+            raise web.HTTPNotFound(text="camera frame not available")
+        return web.Response(body=frame, content_type="image/jpeg")
+
+    async def _handle_bags(self, _request: web.Request) -> web.Response:
+        return await self._handle_rosbags(_request)
+
+    async def _handle_bag_info(self, request: web.Request) -> web.Response:
+        try:
+            bag = self.rosbag_store.resolve_bag(request.match_info["bag_name"])
+            return web.json_response(bag.to_dict())
+        except Exception as exc:
+            return self._json_error(exc, status=404)
+
     async def _handle_rosbags(self, _request: web.Request) -> web.Response:
         bags = [entry.to_dict() for entry in self.rosbag_store.list_bags()]
         return web.json_response({"rosbag_root": str(self.rosbag_store.root), "bags": bags})
@@ -522,13 +657,22 @@ class WebDashboardServer:
         try:
             action = request.match_info["action"]
             payload = await self._json_or_empty(request)
-            bag_name = str(payload.get("bag", "")).strip()
+            bag_name = str(payload.get("bag") or payload.get("bag_id") or "").strip()
             if not bag_name:
-                raise ValueError("bag is required")
-            result = self.post_processor.run(action, bag_name)
+                raise ValueError("bag_id is required")
+            result = self.post_processor.run(action, bag_name, payload.get("options") if isinstance(payload.get("options"), dict) else {})
             return web.json_response(result)
         except Exception as exc:
             return self._json_error(exc)
+
+    async def _handle_process(self, request: web.Request) -> web.Response:
+        return await self._handle_postprocess(request)
+
+    async def _handle_result(self, request: web.Request) -> web.Response:
+        try:
+            return web.json_response(self.post_processor.get_job(request.match_info["job_id"]))
+        except Exception as exc:
+            return self._json_error(exc, status=404)
 
     async def _json_or_empty(self, request: web.Request) -> Dict[str, object]:
         if not request.can_read_body:
@@ -544,7 +688,7 @@ class WebDashboardServer:
         return web.json_response({"error": str(exc)}, status=status)
 
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.web_root / "3d.html")
+        return web.FileResponse(self.web_root / "index.html")
 
     async def _handle_asset(self, request: web.Request) -> web.StreamResponse:
         raw_path = request.query.get("path", "").strip()
@@ -620,7 +764,10 @@ def main() -> None:
     spin_thread.start()
 
     web_root = Path(args.web_root) if args.web_root else None
-    rosbag_store = RosbagStore(rosbag_path)
+    results_dir = Path(str(post_config.get("results_dir", "outputs/results"))).expanduser()
+    if not results_dir.is_absolute():
+        results_dir = (config_path.parents[1] / results_dir).resolve()
+    rosbag_store = RosbagStore(rosbag_path, results_root=results_dir)
     recording_manager = RecordingManager(
         rosbag_store,
         topics=[str(topic) for topic in rosbag_topics],

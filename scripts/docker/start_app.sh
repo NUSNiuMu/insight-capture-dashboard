@@ -11,7 +11,7 @@ set -u
 
 cd /workspace/insight_capture
 mkdir -p "${INSIGHT_ROSBAG_DIR}"
-npm --prefix web_dashboard run build
+bash scripts/dev/check_env.sh --fix
 
 exec python3 scripts/multi_camera_dashboard_web.py \
   --host "${BACKEND_HOST}" \

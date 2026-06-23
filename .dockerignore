@@ -1,7 +1,14 @@
 .git
+.agents
+.codex
+.devcontainer
+.vscode
 .venv
 __pycache__
 *.pyc
+.pytest_cache
+.mypy_cache
 rosbags
 rosbag2_*
+web_dashboard/dist
 web_dashboard/node_modules

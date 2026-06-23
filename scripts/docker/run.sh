@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 mkdir -p "${ROOT_DIR}/rosbags"
 cd "${ROOT_DIR}"
@@ -10,9 +10,9 @@ cd "${ROOT_DIR}"
 MODE="${1:-app}"
 if [[ "${MODE}" == "shell" || "${MODE}" == "bash" ]]; then
   shift
-  COMMAND=(bash /workspace/insight_capture/scripts/docker_shell.sh)
+  COMMAND=(bash /workspace/insight_capture/scripts/docker/shell.sh)
 else
-  COMMAND=(bash /workspace/insight_capture/scripts/docker_start_app.sh)
+  COMMAND=(bash /workspace/insight_capture/scripts/docker/start_app.sh)
 fi
 
 if docker compose version >/dev/null 2>&1; then

@@ -1,3 +1,5 @@
 {
+  "remote.autoForwardPorts": false,
+  "remote.restoreForwardedPorts": false,
   "remote.autoForwardPortsFallback": 0
 }

@@ -3,46 +3,135 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Insight Web VIO Dashboard</title>
+    <title>Insight Dashboard</title>
     <link rel="stylesheet" href="/static/styles.css">
     <script src="/static/vendor/babylon.js"></script>
     <script src="/static/vendor/babylonjs.loaders.min.js"></script>
   </head>
-  <body data-dashboard-view="full">
-    <div class="shell">
-      <div class="hud">
-        <section class="postprocess-panel" id="postprocess-panel">
-          <div class="panel-header">
+  <body data-dashboard-view="dashboard">
+    <div class="app-shell">
+      <aside class="side-nav">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <div>
+            <strong>Insight</strong>
+            <span>Monitor + Postprocess</span>
+          </div>
+        </div>
+        <nav>
+          <button type="button" data-view-link="main">Main</button>
+          <button type="button" data-view-link="trajectory">3D Trajectory</button>
+          <button type="button" data-view-link="images">Images</button>
+          <button type="button" data-view-link="bags">Rosbags</button>
+          <button type="button" data-view-link="postprocess">Post Process</button>
+        </nav>
+      </aside>
+
+      <main class="dashboard-main">
+        <section class="page-view main-view" data-view="main">
+          <div class="page-header">
             <div>
-              <div class="panel-eyebrow">Rosbag Workflow</div>
-              <h2>Post Processing</h2>
+              <div class="panel-eyebrow">Dashboard</div>
+              <h1>Insight Capture Control Room</h1>
             </div>
-            <button class="icon-button" id="refresh-bags-button" type="button" title="Refresh bags">Refresh</button>
+            <div class="page-meta" id="dashboard-status">Starting</div>
+          </div>
+          <div class="summary-grid">
+            <button class="summary-tile" type="button" data-view-link="trajectory">
+              <span>3D Trajectory</span>
+              <strong id="pose-summary">Pose stream pending</strong>
+            </button>
+            <button class="summary-tile" type="button" data-view-link="images">
+              <span>Images</span>
+              <strong id="image-summary">Image streams pending</strong>
+            </button>
+            <button class="summary-tile" type="button" data-view-link="bags">
+              <span>Rosbags</span>
+              <strong id="bag-summary">Bags pending</strong>
+            </button>
+            <button class="summary-tile" type="button" data-view-link="postprocess">
+              <span>Post Process</span>
+              <strong id="job-summary">No job yet</strong>
+            </button>
+          </div>
+          <section class="dashboard-panel">
+            <h2>Selected Rosbag</h2>
+            <label class="bag-picker" for="rosbag-select">
+              <span>Data source</span>
+              <select id="rosbag-select"></select>
+            </label>
+            <pre class="postprocess-output" id="postprocess-output">No rosbag selected.</pre>
+          </section>
+        </section>
+
+        <section class="page-view trajectory-view" data-view="trajectory">
+          <div class="viewer-toolbar">
+            <div>
+              <div class="panel-eyebrow">3D Viewer</div>
+              <h1>Trajectory</h1>
+            </div>
+            <div class="trail-controls" id="trail-controls">
+              <span>Trail width</span>
+              <input id="trail-width-slider" type="range" min="0.1" max="1.5" step="0.1" value="1.0">
+              <strong id="trail-width-value">1.0x</strong>
+            </div>
+          </div>
+          <div class="viewer-stage">
+            <canvas id="render-canvas"></canvas>
+            <div class="legend" id="pose-legend"></div>
+          </div>
+          <div class="viewer-footer">
+            <span id="mapping-version">Mapping: pending</span>
+            <span id="model-status">Models: waiting</span>
+          </div>
+        </section>
+
+        <section class="page-view images-view" data-view="images">
+          <div class="page-header">
+            <div>
+              <div class="panel-eyebrow">Image Viewer</div>
+              <h1>Camera Frames</h1>
+            </div>
+            <div class="page-meta" id="camera-page-meta">Waiting for streams</div>
+          </div>
+          <div class="image-source-row">
+            <span>Rosbag / source</span>
+            <select id="image-source-select"></select>
+          </div>
+          <div class="camera-dock camera-dock-page" id="camera-dock"></div>
+        </section>
+
+        <section class="page-view bags-view" data-view="bags">
+          <div class="page-header">
+            <div>
+              <div class="panel-eyebrow">Rosbag Manager</div>
+              <h1>Saved Bags</h1>
+            </div>
+            <button class="icon-button" id="refresh-bags-button" type="button">Refresh</button>
+          </div>
+          <div class="bag-root" id="bag-root">Root pending</div>
+          <div class="bag-list" id="bag-list"></div>
+        </section>
+
+        <section class="page-view postprocess-view" data-view="postprocess">
+          <div class="page-header">
+            <div>
+              <div class="panel-eyebrow">Workflow</div>
+              <h1>Post Processing</h1>
+            </div>
+            <div class="recording-status" id="recording-status">Recording status pending</div>
           </div>
           <div class="recording-row">
             <button class="primary-button" id="start-recording-button" type="button">Start Recording</button>
             <button class="secondary-button" id="stop-recording-button" type="button">Stop Recording</button>
           </div>
-          <div class="recording-status" id="recording-status">Recording status pending</div>
-          <label class="bag-picker" for="rosbag-select">
-            <span>Selected Rosbag</span>
-            <select id="rosbag-select"></select>
-          </label>
-          <div class="postprocess-actions">
-            <button type="button" data-post-action="coordinate-alignment">Coordinate Alignment</button>
-            <button type="button" data-post-action="trajectory-scoring">Trajectory Scoring</button>
-            <button type="button" data-post-action="trajectory-optimization">Trajectory Optimization</button>
+          <div class="postprocess-actions" id="postprocess-panel">
+            <button type="button" data-post-action="align">Coordinate Alignment</button>
+            <button type="button" data-post-action="score">Trajectory Scoring</button>
+            <button type="button" data-post-action="optimize">Trajectory Optimization</button>
           </div>
-          <pre class="postprocess-output" id="postprocess-output">No rosbag selected.</pre>
         </section>
-        <div class="legend" id="pose-legend"></div>
-      </div>
-      <div class="camera-dock" id="camera-dock"></div>
-      <canvas id="render-canvas"></canvas>
-      <div class="footer">
-        <span>Babylon.js GPU scene</span>
-        <span id="model-status">Models: waiting</span>
-      </div>
+      </main>
     </div>
     <script type="module" src="/static/app.js"></script>
   </body>

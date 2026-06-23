@@ -24,4 +24,4 @@ services:
       - /dev:/dev
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - /run/udev:/run/udev:ro
-    command: bash /workspace/insight_capture/scripts/docker_start_app.sh
+    command: bash /workspace/insight_capture/scripts/docker/start_app.sh

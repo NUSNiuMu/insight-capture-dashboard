@@ -2,9 +2,11 @@
 
 import json
 import os
+import re
 import signal
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -49,6 +51,10 @@ class RosbagEntry:
     size_bytes: int
     modified_time: float
     metadata_path: Optional[Path]
+    result_path: Optional[Path] = None
+    duration_sec: Optional[float] = None
+    message_count: Optional[int] = None
+    topics: Optional[List[Dict[str, object]]] = None
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -57,13 +63,20 @@ class RosbagEntry:
             "size_bytes": self.size_bytes,
             "modified_time": self.modified_time,
             "metadata_path": str(self.metadata_path) if self.metadata_path else None,
+            "duration_sec": self.duration_sec,
+            "message_count": self.message_count,
+            "topics": self.topics or [],
+            "has_results": bool(self.result_path and self.result_path.exists()),
+            "result_path": str(self.result_path) if self.result_path else None,
         }
 
 
 class RosbagStore:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, results_root: Optional[Path] = None) -> None:
         self.root = root
+        self.results_root = results_root or (root.parent / "outputs" / "results")
         self.root.mkdir(parents=True, exist_ok=True)
+        self.results_root.mkdir(parents=True, exist_ok=True)
 
     def list_bags(self) -> List[RosbagEntry]:
         entries: List[RosbagEntry] = []
@@ -75,6 +88,7 @@ class RosbagStore:
                 db_files = list(child.glob("*.db3")) + list(child.glob("*.mcap"))
                 if not metadata.exists() and not db_files:
                     continue
+                info = self._metadata_info(metadata)
                 entries.append(
                     RosbagEntry(
                         name=child.name,
@@ -82,6 +96,10 @@ class RosbagStore:
                         size_bytes=self._path_size(child),
                         modified_time=child.stat().st_mtime,
                         metadata_path=metadata if metadata.exists() else None,
+                        result_path=self.results_root / child.name,
+                        duration_sec=info.get("duration_sec"),
+                        message_count=info.get("message_count"),
+                        topics=info.get("topics"),
                     )
                 )
             elif child.suffix in {".db3", ".mcap"}:
@@ -92,6 +110,7 @@ class RosbagStore:
                         size_bytes=child.stat().st_size,
                         modified_time=child.stat().st_mtime,
                         metadata_path=None,
+                        result_path=self.results_root / child.stem,
                     )
                 )
         return entries
@@ -119,6 +138,34 @@ class RosbagStore:
         if path.is_file():
             return path.stat().st_size
         return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+    @staticmethod
+    def _metadata_info(metadata_path: Path) -> Dict[str, object]:
+        if not metadata_path.exists():
+            return {"topics": []}
+        text = metadata_path.read_text(encoding="utf-8", errors="replace")
+        duration_sec = None
+        duration_match = re.search(r"duration:\s*\n\s*nanoseconds:\s*(\d+)", text)
+        if duration_match:
+            duration_sec = int(duration_match.group(1)) / 1_000_000_000.0
+        message_count = None
+        count_match = re.search(r"message_count:\s*(\d+)", text)
+        if count_match:
+            message_count = int(count_match.group(1))
+        topics = []
+        for block in text.split("topic_metadata:")[1:]:
+            name_match = re.search(r"name:\s*([^\n]+)", block)
+            type_match = re.search(r"type:\s*([^\n]+)", block)
+            count_match = re.search(r"message_count:\s*(\d+)", block)
+            if name_match:
+                topics.append(
+                    {
+                        "name": name_match.group(1).strip().strip("'\""),
+                        "type": type_match.group(1).strip().strip("'\"") if type_match else "",
+                        "message_count": int(count_match.group(1)) if count_match else None,
+                    }
+                )
+        return {"duration_sec": duration_sec, "message_count": message_count, "topics": topics}
 
 
 class RecordingManager:
@@ -188,28 +235,80 @@ class RecordingManager:
 class PostProcessor:
     def __init__(self, store: RosbagStore) -> None:
         self.store = store
+        self.jobs: Dict[str, Dict[str, object]] = {}
 
-    def run(self, action: str, bag_name: str) -> Dict[str, object]:
+    def run(self, action: str, bag_name: str, options: Optional[Dict[str, object]] = None) -> Dict[str, object]:
         bag = self.store.resolve_bag(bag_name)
         readers = {
             "coordinate-alignment": self.coordinate_alignment,
             "trajectory-scoring": self.trajectory_scoring,
             "trajectory-optimization": self.trajectory_optimization,
+            "align": self.coordinate_alignment,
+            "score": self.trajectory_scoring,
+            "optimize": self.trajectory_optimization,
         }
         if action not in readers:
             raise ValueError(f"unsupported post-processing action: {action}")
-        return readers[action](bag)
+        job_id = f"{action}-{uuid.uuid4().hex[:10]}"
+        job = {
+            "job_id": job_id,
+            "action": action,
+            "status": "running",
+            "bag": bag.to_dict(),
+            "started_at": time.time(),
+            "finished_at": None,
+            "logs": [f"started {action} for {bag.name}"],
+            "result": None,
+        }
+        self.jobs[job_id] = job
+        try:
+            result = readers[action](bag, options or {})
+            job["status"] = "success"
+            job["result"] = result
+            job["logs"].append(f"wrote {result.get('result_file')}")
+        except Exception as exc:
+            job["status"] = "failed"
+            job["error"] = str(exc)
+            job["logs"].append(str(exc))
+        finally:
+            job["finished_at"] = time.time()
+        return job
 
-    def coordinate_alignment(self, bag: RosbagEntry) -> Dict[str, object]:
-        return self._base_result("coordinate-alignment", bag, "ready_for_alignment")
+    def get_job(self, job_id: str) -> Dict[str, object]:
+        if job_id not in self.jobs:
+            raise KeyError(f"job not found: {job_id}")
+        return self.jobs[job_id]
 
-    def trajectory_scoring(self, bag: RosbagEntry) -> Dict[str, object]:
-        result = self._base_result("trajectory-scoring", bag, "placeholder_score")
-        result["score"] = 1.0 if bag.size_bytes > 0 else 0.0
-        return result
+    def coordinate_alignment(self, bag: RosbagEntry, options: Dict[str, object]) -> Dict[str, object]:
+        result = self._base_result("coordinate-alignment", bag, "placeholder")
+        result["outputs"] = {
+            "aligned_trajectory": str(self._result_dir(bag) / "aligned_trajectory.json"),
+            "parameters": str(self._result_dir(bag) / "alignment_parameters.json"),
+            "preview": str(self._result_dir(bag) / "alignment_preview.json"),
+        }
+        return self._write_result(bag, "coordinate-alignment", result)
 
-    def trajectory_optimization(self, bag: RosbagEntry) -> Dict[str, object]:
-        return self._base_result("trajectory-optimization", bag, "optimization_pending")
+    def trajectory_scoring(self, bag: RosbagEntry, options: Dict[str, object]) -> Dict[str, object]:
+        result = self._base_result("trajectory-scoring", bag, "placeholder")
+        result.update(
+            {
+                "total_score": 1.0 if bag.size_bytes > 0 else 0.0,
+                "ate": None,
+                "rpe": None,
+                "frame_count": bag.message_count,
+                "time_range": {"start": None, "end": None, "duration_sec": bag.duration_sec},
+                "warnings": ["placeholder scoring runner; replace with real evaluator"],
+            }
+        )
+        return self._write_result(bag, "trajectory-scoring", result)
+
+    def trajectory_optimization(self, bag: RosbagEntry, options: Dict[str, object]) -> Dict[str, object]:
+        result = self._base_result("trajectory-optimization", bag, "placeholder")
+        result["outputs"] = {
+            "optimized_trajectory": str(self._result_dir(bag) / "optimized_trajectory.json"),
+            "comparison": str(self._result_dir(bag) / "optimization_comparison.json"),
+        }
+        return self._write_result(bag, "trajectory-optimization", result)
 
     def _base_result(self, action: str, bag: RosbagEntry, status: str) -> Dict[str, object]:
         files = []
@@ -225,3 +324,14 @@ class PostProcessor:
             "sample_files": files[:8],
             "message": "Placeholder result generated from the selected rosbag metadata.",
         }
+
+    def _result_dir(self, bag: RosbagEntry) -> Path:
+        target = self.store.results_root / bag.name
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def _write_result(self, bag: RosbagEntry, action: str, result: Dict[str, object]) -> Dict[str, object]:
+        target = self._result_dir(bag) / f"{action}.json"
+        result["result_file"] = str(target)
+        target.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        return result

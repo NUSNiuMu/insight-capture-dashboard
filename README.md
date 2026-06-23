@@ -33,21 +33,20 @@
 - `dashboard_label`
 - `dashboard.trajectory.pose_qos_reliability`
 
-## 保留的脚本
+## 脚本目录
 
-- `scripts/open_monitor_dashboard.sh`: 当前 dashboard 启动入口
-- `scripts/multi_camera_dashboard_qt.py`: Qt dashboard 主入口，负责 ROS 订阅、图像解码和窗口组装
-- `scripts/multi_camera_dashboard_web.py`: Web dashboard 后端，负责 ROS2 pose 订阅、fake-pose demo 和 WebSocket 推流
-- `scripts/live_alignment.py`: 在线 AprilTag 相对位姿对齐和诊断日志
-- `scripts/dashboard_widgets.py`: 图像面板、轨迹控件和轨迹绘制逻辑
-- `scripts/camera_setup.py`: 从 `config/cameras.json` 生成 dashboard 所需 topic
-- `scripts/session_alignment.py`: 在线对齐使用的位姿/矩阵数学工具
+- `scripts/dashboard/`: dashboard 启动入口
+- `scripts/docker/`: Docker 启动、进入容器和容器内启动脚本
+- `scripts/dev/`: 环境检查和开发辅助脚本
+- `scripts/*.py`: dashboard、对齐、后处理等核心 Python 逻辑
 - `web_dashboard/`: Babylon.js Web 前端，`npm run build` 后生成静态页面
+
+目录总览见 [scripts/README.md](/workspace/insight_capture/scripts/README.md:1)。
 
 ## 启动 Dashboard
 
 ```bash
-./scripts/open_monitor_dashboard.sh
+./scripts/dashboard/open_monitor_dashboard.sh
 ```
 
 当前 dashboard 默认显示：
@@ -59,31 +58,43 @@
 
 ## Web Dashboard
 
-先构建前端：
+直接启动：
 
 ```bash
-cd web_dashboard
-npm run build
+./scripts/dashboard/open_web_dashboard.sh
 ```
 
-启动 Web 后端：
+这个脚本会自动：
 
-```bash
-python3 scripts/multi_camera_dashboard_web.py
+- 重建 `web_dashboard/dist`
+- 加载 `/opt/ros/humble/setup.bash`
+- 启动 `python3 scripts/multi_camera_dashboard_web.py`
+
+然后浏览器打开：
+
+```text
+http://127.0.0.1:8765/
 ```
+
+The dashboard includes Main, 3D Trajectory, Images, Rosbags, and Post Process
+views. Rosbag discovery is configured in `config/post_processing.json` with
+`rosbag_dir`; post-processing JSON outputs are written under `results_dir`.
+The current align / score / optimize runners are placeholders in
+`scripts/post_processing.py` and are structured so real algorithms can replace
+`coordinate_alignment`, `trajectory_scoring`, and `trajectory_optimization`.
 
 如果默认 `0.0.0.0:8765` 被占用，或者你想只绑定到某个本地网卡/IP，可以改成：
 
 ```bash
-python3 scripts/multi_camera_dashboard_web.py --host 127.0.0.1 --port 8766
-python3 scripts/multi_camera_dashboard_web.py --host 192.168.1.20 --port 8765
-python3 scripts/multi_camera_dashboard_web.py --host 127.0.0.1 --port 0
+./scripts/dashboard/open_web_dashboard.sh --host 127.0.0.1 --port 8766
+./scripts/dashboard/open_web_dashboard.sh --host 192.168.1.20 --port 8765
+./scripts/dashboard/open_web_dashboard.sh --host 127.0.0.1 --port 0
 ```
 
 也支持环境变量：
 
 ```bash
-INSIGHT_DASHBOARD_HOST=192.168.1.20 INSIGHT_DASHBOARD_PORT=8766 python3 scripts/multi_camera_dashboard_web.py
+INSIGHT_DASHBOARD_HOST=192.168.1.20 INSIGHT_DASHBOARD_PORT=8766 ./scripts/dashboard/open_web_dashboard.sh
 ```
 
 默认会同时提供：
@@ -110,30 +121,40 @@ VS Code / Cursor Dev Containers can build the image directly from the repository
 Dev Containers: Reopen in Container
 ```
 
+Before reopening, you can check the required host/container setup:
+
+```bash
+./scripts/dev/check_env.sh
+```
+
+The dev container runs `scripts/dev/check_env.sh --fix` on start. It only verifies
+the preinstalled ROS/Python/Node environment and rebuilds `web_dashboard/dist`
+when the checked-in frontend sources are newer than the generated files.
+
 Manual build is still available:
 
 Build the image:
 
 ```bash
-./scripts/docker_build.sh
+./scripts/docker/build.sh
 ```
 
 Start the dashboard:
 
 ```bash
-./scripts/docker_run.sh
+./scripts/docker/run.sh
 ```
 
 Enter the running container:
 
 ```bash
-./scripts/docker_enter.sh
+./scripts/docker/enter.sh
 ```
 
 Open a fresh interactive Docker shell without auto-starting the dashboard:
 
 ```bash
-./scripts/docker_run.sh shell
+./scripts/docker/run.sh shell
 ```
 
 Inside the container, the working directory is `/workspace/insight_capture`. This is only the container mount point; the repository can live anywhere on the host. ROS Humble is already sourced, so you can run:
@@ -153,23 +174,26 @@ The compose service:
 Useful overrides:
 
 ```bash
-ROS_DOMAIN_ID=20 INSIGHT_ROSBAG_DIR=/workspace/rosbags ./scripts/docker_run.sh
-BACKEND_PORT=8766 ./scripts/docker_run.sh
+ROS_DOMAIN_ID=20 INSIGHT_ROSBAG_DIR=/workspace/rosbags ./scripts/docker/run.sh
+BACKEND_PORT=8766 ./scripts/docker/run.sh
 ```
 
 ## Rosbag Recording And Post Processing
 
-The Web dashboard now includes a compact rosbag workflow panel on `/` and `/3d`.
+The Web dashboard includes Main, 3D Trajectory, Images, Rosbags, and Post
+Process views on `/`.
 
 Backend APIs:
 
-- `GET /api/rosbags`: list rosbag directories/files from the configured rosbag directory
+- `GET /api/bags`: list rosbag directories/files from the configured rosbag directory
+- `GET /api/bags/{bag_id}/info`: return metadata for one bag
 - `GET /api/recording/status`: return active recording state
 - `POST /api/recording/start`: start one `ros2 bag record` process
 - `POST /api/recording/stop`: stop the active recorder
-- `POST /api/postprocess/coordinate-alignment`: run placeholder coordinate alignment on the selected bag
-- `POST /api/postprocess/trajectory-scoring`: run placeholder trajectory scoring on the selected bag
-- `POST /api/postprocess/trajectory-optimization`: run placeholder trajectory optimization on the selected bag
+- `POST /api/process/align`: run placeholder coordinate alignment on the selected bag
+- `POST /api/process/score`: run placeholder trajectory scoring on the selected bag
+- `POST /api/process/optimize`: run placeholder trajectory optimization on the selected bag
+- `GET /api/results/{job_id}`: return the latest in-memory job status/result
 
 Recording defaults are configured in:
 
@@ -256,7 +280,7 @@ The backend prevents multiple simultaneous recording processes and names each re
 可用环境变量改路径：
 
 ```bash
-INSIGHT_ALIGNMENT_LOG=/tmp/my_alignment.log ./scripts/open_monitor_dashboard.sh
+INSIGHT_ALIGNMENT_LOG=/tmp/my_alignment.log ./scripts/dashboard/open_monitor_dashboard.sh
 ```
 
 ## 当前命名约定
@@ -266,9 +290,7 @@ INSIGHT_ALIGNMENT_LOG=/tmp/my_alignment.log ./scripts/open_monitor_dashboard.sh
 - `insight9_a`: `/insight9_a/camera/...`
 
 如果实际命名空间变化，改 `config/cameras.json` 即可。
-
-
-
-
-./scripts/open_monitor_dashboard.sh
-./scripts/open_web_3d_right.sh
+```bash
+./scripts/dashboard/open_monitor_dashboard.sh
+./scripts/dashboard/open_web_3d_right.sh
+```

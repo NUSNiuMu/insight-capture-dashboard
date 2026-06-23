@@ -3,7 +3,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+CORE_SCRIPTS_DIR="${ROOT_DIR}/scripts"
 CONFIG_PATH="${ROOT_DIR}/config/cameras.json"
 if [[ -n "${WEB_PORT+x}" ]]; then
   WEB_PORT_EXPLICIT=1
@@ -15,7 +16,7 @@ WEB_HOST="${WEB_HOST:-127.0.0.1}"
 ROS_LOG_DIR="${ROS_LOG_DIR:-/tmp/ros_logs}"
 export ROS_LOG_DIR
 mkdir -p "${ROS_LOG_DIR}"
-DEFAULT_DOMAIN_ID="$(python3 "${SCRIPT_DIR}/camera_setup.py" --config "${CONFIG_PATH}" --ros-domain-id)"
+DEFAULT_DOMAIN_ID="$(python3 "${CORE_SCRIPTS_DIR}/camera_setup.py" --config "${CONFIG_PATH}" --ros-domain-id)"
 USER_URL="${1:-}"
 
 export DISPLAY="${DISPLAY:-:0}"
@@ -98,7 +99,7 @@ PY
 
   local backend_log="${ROS_LOG_DIR}/web_dashboard_backend.log"
   echo "Starting web dashboard backend on ${WEB_HOST}:${WEB_PORT} (ROS_DOMAIN_ID=${ROS_DOMAIN_ID})"
-  nohup python3 "${SCRIPT_DIR}/multi_camera_dashboard_web.py" \
+  nohup python3 "${CORE_SCRIPTS_DIR}/multi_camera_dashboard_web.py" \
     --config "${CONFIG_PATH}" \
     --host "${WEB_HOST}" \
     --port "${WEB_PORT}" \
@@ -146,6 +147,6 @@ else
   URL="http://${WEB_HOST}:${WEB_PORT}/3d?v=$(date +%s)"
 fi
 
-exec python3 "${SCRIPT_DIR}/web_3d_window.py" \
+exec python3 "${CORE_SCRIPTS_DIR}/web_3d_window.py" \
   --url "${URL}" \
   --config "${CONFIG_PATH}"
