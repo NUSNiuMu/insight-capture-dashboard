@@ -71,9 +71,17 @@
               <h1>Trajectory</h1>
             </div>
             <div class="trail-controls" id="trail-controls">
-              <span>Trail width</span>
-              <input id="trail-width-slider" type="range" min="0.1" max="1.5" step="0.1" value="1.0">
-              <strong id="trail-width-value">1.0x</strong>
+              <label class="trail-persist-control">
+                <input id="trail-keep-all-toggle" type="checkbox">
+                <span>Keep all points</span>
+              </label>
+              <label class="trail-width-control">
+                <span>Trail width</span>
+                <input id="trail-width-slider" type="range" min="0.1" max="1.5" step="0.1" value="1.0">
+                <strong id="trail-width-value">1.0x</strong>
+              </label>
+              <button class="secondary-button" id="trail-clear-button" type="button">Clear trail</button>
+              <span class="trail-status" id="trail-status">Trail limit pending</span>
             </div>
           </div>
           <div class="viewer-stage">
@@ -133,6 +141,10 @@
             <button class="primary-button" id="start-recording-button" type="button">Start Recording</button>
             <button class="secondary-button" id="stop-recording-button" type="button">Stop Recording</button>
           </div>
+          <div class="topic-toolbar">
+            <button class="secondary-button" id="refresh-record-topics-button" type="button">Refresh Topics</button>
+            <span id="record-topic-status">Topic list pending</span>
+          </div>
           <div class="topic-groups" id="record-topic-groups"></div>
           <pre class="postprocess-output" data-workflow-output>No recording action yet.</pre>
         </section>
@@ -150,6 +162,7 @@
             <button class="secondary-button" id="alignment-start-button" type="button">Start Alignment</button>
             <button class="secondary-button" id="alignment-stop-button" type="button">Stop Alignment</button>
           </div>
+          <div class="alignment-start-hint" id="alignment-start-hint">请先打开本地 Monitor Dashboard，再开始校准。</div>
           <pre class="postprocess-output alignment-log-output" id="alignment-log-output">Alignment log pending.</pre>
           <pre class="postprocess-output" data-workflow-output>校准应在录制 rosbag 之前完成。</pre>
         </section>

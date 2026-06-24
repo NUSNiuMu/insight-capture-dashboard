@@ -113,15 +113,21 @@ def build_recording_topic_catalog(cameras_config: Dict[str, object], topics: Lis
 
 def discover_live_topics(
     cameras_config: Dict[str, object],
+    ros_domain_id: Optional[int] = None,
+    publisher_checker: Optional[Callable[[str], int]] = None,
     timeout_sec: float = 2.0,
 ) -> Dict[str, object]:
     try:
+        env = os.environ.copy()
+        if ros_domain_id is not None:
+            env["ROS_DOMAIN_ID"] = str(int(ros_domain_id))
         completed = subprocess.run(
-            ["ros2", "topic", "list", "-t"],
+            ["ros2", "topic", "list", "--no-daemon", "-t"],
             check=True,
             capture_output=True,
             text=True,
             timeout=timeout_sec,
+            env=env,
         )
     except Exception:
         return build_recording_topic_catalog(cameras_config, [])
@@ -134,7 +140,29 @@ def discover_live_topics(
         name = raw.split(" ", 1)[0].strip()
         if name.startswith("/"):
             topics.append(name)
-    return build_recording_topic_catalog(cameras_config, sorted(set(topics)))
+    filtered_topics = filter_recordable_live_topics(cameras_config, sorted(set(topics)))
+    if publisher_checker:
+        filtered_topics = [
+            topic for topic in filtered_topics
+            if topic == "/tf_static" or publisher_checker(topic) > 0
+        ]
+    return build_recording_topic_catalog(cameras_config, filtered_topics)
+
+
+def filter_recordable_live_topics(cameras_config: Dict[str, object], topics: List[str]) -> List[str]:
+    namespaces = {
+        str(camera.get("namespace") or camera.get("name") or "").strip("/")
+        for camera in cameras_config.get("cameras", [])
+        if camera.get("enabled", True)
+    }
+    namespaces.discard("")
+    allowed_roots = {f"/{namespace}/camera/" for namespace in namespaces}
+    filtered = []
+    for topic in topics:
+        topic_name = str(topic)
+        if topic_name == "/tf_static" or any(topic_name.startswith(root) for root in allowed_roots):
+            filtered.append(topic_name)
+    return filtered
 
 
 @dataclass
@@ -472,26 +500,38 @@ class RosbagPlaybackManager:
         self.topic_remaps = topic_remaps or {}
         self.process: Optional[subprocess.Popen] = None
         self.bag_name: Optional[str] = None
+        self.play_path: Optional[Path] = None
+        self.command: List[str] = []
+        self.output_lines: List[str] = []
         self.started_at: Optional[float] = None
 
     def status(self) -> Dict[str, object]:
         if self.process and self.process.poll() is not None:
             self.process = None
             self.bag_name = None
+            self.play_path = None
+            self.command = []
+            self.output_lines = self._drain_output()
             self.started_at = None
         return {
             "playing": self.process is not None,
             "pid": self.process.pid if self.process else None,
             "bag": self.bag_name,
+            "play_path": str(self.play_path) if self.play_path else None,
+            "command": self.command,
+            "logs": self.output_lines[-40:],
             "started_at": self.started_at,
         }
 
     def play(self, bag_name: str) -> Dict[str, object]:
         self.stop()
         bag = self.store.resolve_bag(bag_name)
-        command = ["ros2", "bag", "play", str(bag.path), "--loop"]
+        play_path = self._playback_path(bag)
+        command = ["ros2", "bag", "play", str(play_path)]
         if self.topic_remaps:
             command.extend(["--remap", *[f"{source}:={target}" for source, target in self.topic_remaps.items()]])
+        self.command = command
+        self.output_lines = []
         self.process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
@@ -501,13 +541,47 @@ class RosbagPlaybackManager:
             env=os.environ.copy(),
         )
         self.bag_name = bag.name
+        self.play_path = play_path
         self.started_at = time.time()
         return self.status()
+
+    def _drain_output(self) -> List[str]:
+        if not self.process or not self.process.stdout:
+            return self.output_lines
+        with contextlib.suppress(Exception):
+            output = self.process.stdout.read()
+            if output:
+                self.output_lines.extend(line for line in output.splitlines() if line.strip())
+        return self.output_lines
+
+    @staticmethod
+    def _playback_path(bag: RosbagEntry) -> Path:
+        if bag.path.is_file():
+            return bag.path
+        metadata = bag.path / "metadata.yaml"
+        if metadata.exists():
+            text = metadata.read_text(encoding="utf-8", errors="replace")
+            referenced_files = []
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("- ") and any(stripped.endswith(suffix) for suffix in (".db3", ".mcap")):
+                    referenced_files.append(stripped[2:].strip().strip("'\""))
+                elif stripped.startswith("path:") and any(stripped.endswith(suffix) for suffix in (".db3", ".mcap")):
+                    referenced_files.append(stripped.split(":", 1)[1].strip().strip("'\""))
+            if referenced_files and all((bag.path / file_name).exists() for file_name in referenced_files):
+                return bag.path
+        files = sorted(list(bag.path.glob("*.db3")) + list(bag.path.glob("*.mcap")))
+        if len(files) == 1:
+            return files[0]
+        return bag.path
 
     def stop(self, timeout_sec: float = 3.0) -> Dict[str, object]:
         if not self.process or self.process.poll() is not None:
             self.process = None
             self.bag_name = None
+            self.play_path = None
+            self.command = []
+            self.output_lines = []
             self.started_at = None
             return self.status()
         with contextlib.suppress(ProcessLookupError):
@@ -520,5 +594,7 @@ class RosbagPlaybackManager:
             self.process.wait(timeout=2.0)
         self.process = None
         self.bag_name = None
+        self.play_path = None
+        self.command = []
         self.started_at = None
         return self.status()

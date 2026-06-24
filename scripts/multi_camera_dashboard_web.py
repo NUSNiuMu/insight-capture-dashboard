@@ -57,6 +57,7 @@ from post_processing import (
 from session_alignment import PoseSample
 
 PLAYBACK_TOPIC_PREFIX = "/insight_playback"
+WEB_DASHBOARD_VERSION = "trail-source-key-playback-cachefix-20260624"
 
 
 def playback_topic(topic: str) -> str:
@@ -127,6 +128,8 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.pose_publish_hz = max(1.0, float(pose_publish_hz))
         self.enable_alignment_stream = bool(enable_alignment_stream)
         self.max_points = 300
+        self.keep_all_trace_points = False
+        self.trace_generation = 0
         self.pose_timeout_sec = 0.5
 
         raw_config = load_setup(config_path)
@@ -338,6 +341,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             self.latest_playback_pose = {pose.name: None for pose in self.poses}
             self.latest_playback_pose_sample = {pose.name: None for pose in self.poses}
             self.last_playback_pose_received_time = {pose.name: 0.0 for pose in self.poses}
+            self.trace_generation += 1
 
     def _create_alignment_subscriptions(self) -> None:
         if not self.live_alignment_available:
@@ -446,8 +450,35 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             last_received[pose_name] = time.monotonic()
             raw_trace = raw_traces[pose_name]
             raw_trace.append(pose_sample.position)
-            if len(raw_trace) > self.max_points:
+            if not self.keep_all_trace_points and len(raw_trace) > self.max_points:
                 del raw_trace[: len(raw_trace) - self.max_points]
+
+    def trail_settings_payload(self) -> Dict[str, object]:
+        return {
+            "keep_all_points": bool(self.keep_all_trace_points),
+            "max_points": int(self.max_points),
+        }
+
+    def set_keep_all_trace_points(self, enabled: bool) -> Dict[str, object]:
+        self.keep_all_trace_points = bool(enabled)
+        if not self.keep_all_trace_points:
+            self._trim_pose_traces()
+        return self.trail_settings_payload()
+
+    def _trim_pose_traces(self) -> None:
+        with self.pose_lock:
+            for traces in (self.raw_traces, self.playback_raw_traces):
+                for raw_trace in traces.values():
+                    if len(raw_trace) > self.max_points:
+                        del raw_trace[: len(raw_trace) - self.max_points]
+
+    def clear_pose_traces(self) -> Dict[str, object]:
+        with self.pose_lock:
+            for traces in (self.raw_traces, self.playback_raw_traces):
+                for raw_trace in traces.values():
+                    raw_trace.clear()
+            self.trace_generation += 1
+        return self.trail_settings_payload()
 
     def _update_fake_pose(self) -> None:
         now = time.monotonic()
@@ -520,6 +551,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             "timestamp_ms": int(time.time() * 1000),
             "fake_pose": self.fake_pose,
             "source": source,
+            "trace_generation": self.trace_generation,
             "poses": poses,
         }
 
@@ -701,7 +733,11 @@ class WebDashboardServer:
         app = web.Application()
         app.router.add_get("/ws", self._handle_ws)
         app.router.add_get("/healthz", self._handle_healthz)
+        app.router.add_get("/api/version", self._handle_version)
         app.router.add_get("/api/poses", self._handle_pose_snapshot)
+        app.router.add_get("/api/trails/settings", self._handle_trail_settings)
+        app.router.add_post("/api/trails/settings", self._handle_trail_settings_update)
+        app.router.add_post("/api/trails/clear", self._handle_trail_clear)
         app.router.add_get("/api/cameras", self._handle_cameras)
         app.router.add_get("/api/cameras/{camera_name}/frame", self._handle_camera_frame)
         app.router.add_get("/api/cameras/{camera_name}/stream", self._handle_camera_stream)
@@ -732,7 +768,7 @@ class WebDashboardServer:
             app.router.add_get("/bags", self._handle_index)
             static_root = self.web_root / "static"
             if static_root.exists():
-                app.router.add_static("/static/", str(static_root), show_index=False)
+                app.router.add_get("/static/{asset_path:.*}", self._handle_static)
         app.on_startup.append(self._on_startup)
         app.on_shutdown.append(self._on_shutdown)
         runner = web.AppRunner(app)
@@ -793,7 +829,18 @@ class WebDashboardServer:
                 "ok": True,
                 "fake_pose": self.node.fake_pose,
                 "ros_domain_id": self.node.ros_domain_id,
+                "version": WEB_DASHBOARD_VERSION,
             }
+        )
+
+    async def _handle_version(self, _request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "version": WEB_DASHBOARD_VERSION,
+                "trace_generation": self.node.trace_generation,
+                "trail_settings": self.node.trail_settings_payload(),
+            },
+            headers=self._no_store_headers(),
         )
 
     async def _handle_pose_snapshot(self, _request: web.Request) -> web.Response:
@@ -801,6 +848,23 @@ class WebDashboardServer:
         for pose in payload["poses"]:
             pose["asset_url"] = self.node.model_asset_url(pose.get("avatar_model"))
         return web.json_response(payload)
+
+    async def _handle_trail_settings(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.node.trail_settings_payload())
+
+    async def _handle_trail_settings_update(self, request: web.Request) -> web.Response:
+        try:
+            payload = await self._json_or_empty(request)
+            keep_all = bool(payload.get("keep_all_points"))
+            return web.json_response(self.node.set_keep_all_trace_points(keep_all))
+        except Exception as exc:
+            return self._json_error(exc)
+
+    async def _handle_trail_clear(self, _request: web.Request) -> web.Response:
+        try:
+            return web.json_response(self.node.clear_pose_traces())
+        except Exception as exc:
+            return self._json_error(exc)
 
     async def _handle_cameras(self, _request: web.Request) -> web.Response:
         return web.json_response(self.node.build_camera_payload(self._camera_source()))
@@ -990,7 +1054,27 @@ class WebDashboardServer:
         return web.json_response({"error": str(exc)}, status=status)
 
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.web_root / "index.html")
+        return web.FileResponse(self.web_root / "index.html", headers=self._no_store_headers())
+
+    async def _handle_static(self, request: web.Request) -> web.FileResponse:
+        raw_path = request.match_info.get("asset_path", "")
+        candidate = (self.web_root / "static" / raw_path).resolve()
+        static_root = (self.web_root / "static").resolve()
+        try:
+            candidate.relative_to(static_root)
+        except ValueError:
+            raise web.HTTPForbidden(text="path outside static root")
+        if not candidate.is_file():
+            raise web.HTTPNotFound(text="asset not found")
+        return web.FileResponse(candidate, headers=self._no_store_headers())
+
+    @staticmethod
+    def _no_store_headers() -> Dict[str, str]:
+        return {
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
 
     async def _handle_asset(self, request: web.Request) -> web.StreamResponse:
         raw_path = request.query.get("path", "").strip()
@@ -1070,19 +1154,21 @@ def main() -> None:
     if not results_dir.is_absolute():
         results_dir = (config_path.parents[1] / results_dir).resolve()
     rosbag_store = RosbagStore(rosbag_path, results_root=results_dir)
-    recording_manager = RecordingManager(
-        rosbag_store,
-        topics=[str(topic) for topic in rosbag_topics],
-        max_cache_size=int(post_config.get("max_cache_size", 2147483648)),
-        topic_catalog=build_recording_topic_catalog(raw_config, [str(topic) for topic in rosbag_topics]),
-        topic_catalog_provider=lambda: discover_live_topics(raw_config),
-    )
     playback_manager = RosbagPlaybackManager(
         rosbag_store,
         topic_remaps={
             **{camera.topic: playback_topic(camera.topic) for camera in node.cameras},
             **{pose.topic: playback_topic(pose.topic) for pose in node.poses},
         },
+    )
+    recording_manager = RecordingManager(
+        rosbag_store,
+        topics=[str(topic) for topic in rosbag_topics],
+        max_cache_size=int(post_config.get("max_cache_size", 2147483648)),
+        topic_catalog=build_recording_topic_catalog(raw_config, [str(topic) for topic in rosbag_topics]),
+        topic_catalog_provider=lambda: build_recording_topic_catalog(raw_config, [])
+        if playback_manager.status().get("playing")
+        else discover_live_topics(raw_config, ros_domain_id=ros_domain_id, publisher_checker=node.count_publishers),
     )
     post_processor = PostProcessor(rosbag_store)
     server = WebDashboardServer(

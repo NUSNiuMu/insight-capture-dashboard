@@ -7,6 +7,9 @@ const mappingVersion = document.getElementById("mapping-version");
 const legend = document.getElementById("pose-legend");
 const trailWidthSlider = document.getElementById("trail-width-slider");
 const trailWidthValue = document.getElementById("trail-width-value");
+const trailKeepAllToggle = document.getElementById("trail-keep-all-toggle");
+const trailClearButton = document.getElementById("trail-clear-button");
+const trailStatus = document.getElementById("trail-status");
 const cameraDock = document.getElementById("camera-dock");
 const enableCameras = Boolean(cameraDock);
 const cameraPageMeta = document.getElementById("camera-page-meta");
@@ -35,6 +38,9 @@ const monitorDashboardButtons = Array.from(document.querySelectorAll("[data-moni
 const monitorDashboardStatuses = Array.from(document.querySelectorAll("[data-monitor-dashboard-status]"));
 const actionBagSelects = Array.from(document.querySelectorAll("[data-action-bag]"));
 const recordTopicGroups = document.getElementById("record-topic-groups");
+const refreshRecordTopicsButton = document.getElementById("refresh-record-topics-button");
+const recordTopicStatus = document.getElementById("record-topic-status");
+const alignmentStartHint = document.getElementById("alignment-start-hint");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#57d67c", primitive: "sphere", modelColor: "#d6a07d" },
@@ -84,6 +90,13 @@ let recordTopicsInitialized = false;
 let latestLegendPoses = [];
 let currentLegendSignature = "";
 let currentView = "main";
+let monitorDashboardRunning = false;
+let latestAlignmentStatus = null;
+let keepAllTrailPoints = false;
+let trailMaxPoints = 300;
+let ignoreTrailUpdatesUntilMs = 0;
+let currentTraceGeneration = null;
+let currentPoseSource = null;
 
 initializeNavigation();
 if (engine && scene) {
@@ -103,6 +116,7 @@ if (enable3d) {
     mappingVersion.textContent = `Mapping: ${SCENE_MAPPING_VERSION} [x=right y=up z=-forward]`;
   }
   initializeTrailWidthControls();
+  initializeTrailRetentionControls();
   initializeGripperKeyboardControls();
   connect();
 }
@@ -279,6 +293,8 @@ async function applyPoseUpdate(payload) {
   if (!enable3d || !scene) {
     return;
   }
+  applyPoseSource(payload.source || "live");
+  applyTraceGeneration(payload.trace_generation);
   const poses = payload.poses || [];
   latestLegendPoses = poses;
   renderPoseLegend(poses);
@@ -322,7 +338,7 @@ function renderPoseLegend(poses) {
     return;
   }
   const signature = (poses || [])
-    .map((pose) => `${pose.role}:${pose.name}:${pose.visible ? 1 : 0}:${isTrailEnabled(pose.role) ? 1 : 0}`)
+    .map((pose) => `${pose.role}:${pose.name}:${pose.visible ? 1 : 0}:${isTrailEnabled(trailKeyForPose(pose), pose.role) ? 1 : 0}`)
     .join("|");
   if (signature === currentLegendSignature) {
     return;
@@ -330,6 +346,7 @@ function renderPoseLegend(poses) {
   currentLegendSignature = signature;
   legend.innerHTML = (poses || []).map((pose) => {
     const style = ROLE_STYLE[pose.role] || { label: pose.role, color: "#cccccc" };
+    const trailKey = trailKeyForPose(pose);
     return `
       <div class="legend-row">
         <div class="legend-main">
@@ -338,11 +355,15 @@ function renderPoseLegend(poses) {
         </div>
         <label class="trail-toggle">
           <span>Trail</span>
-          <input type="checkbox" data-role="${escapeHtml(pose.role)}" ${isTrailEnabled(pose.role) ? "checked" : ""}>
+          <input type="checkbox" data-trail-key="${escapeHtml(trailKey)}" data-role="${escapeHtml(pose.role)}" ${isTrailEnabled(trailKey, pose.role) ? "checked" : ""}>
         </label>
       </div>`;
   }).join("");
   bindTrailToggles();
+}
+
+function trailKeyForPose(pose) {
+  return pose.name || pose.role;
 }
 
 function ensurePoseNode(pose) {
@@ -988,11 +1009,12 @@ function bindTrailToggles() {
   legend.dataset.trailToggleBound = "true";
   legend.addEventListener("change", (event) => {
     const target = event.target;
-    if (!target || target.tagName !== "INPUT" || !target.matches("input[data-role]")) {
+    if (!target || target.tagName !== "INPUT" || !target.matches("input[data-trail-key]")) {
       return;
     }
     const role = target.getAttribute("data-role");
-    setTrailEnabled(role, target.checked);
+    const trailKey = target.getAttribute("data-trail-key");
+    setTrailEnabled(trailKey, target.checked, role);
   });
 }
 
@@ -1004,22 +1026,25 @@ function updateTrails() {
   }
 }
 
-function ensureTrailState(role) {
-  if (trailStates.has(role)) {
-    return trailStates.get(role);
+function ensureTrailState(key, role = key) {
+  if (trailStates.has(key)) {
+    return trailStates.get(key);
   }
   const state = {
+    key,
     role,
     enabled: DEFAULT_TRAIL_ENABLED[role] !== false,
     points: [],
-    mesh: null
+    mesh: null,
+    segmentMeshes: [],
+    nextSegmentId: 0
   };
-  trailStates.set(role, state);
+  trailStates.set(key, state);
   return state;
 }
 
-function setTrailEnabled(role, enabled) {
-  const trail = ensureTrailState(role);
+function setTrailEnabled(key, enabled, role = key) {
+  const trail = ensureTrailState(key, role);
   trail.enabled = Boolean(enabled);
   currentLegendSignature = "";
   renderPoseLegend(latestLegendPoses);
@@ -1030,8 +1055,8 @@ function setTrailEnabled(role, enabled) {
   refreshAllTrails();
 }
 
-function isTrailEnabled(role) {
-  return ensureTrailState(role).enabled;
+function isTrailEnabled(key, role = key) {
+  return ensureTrailState(key, role).enabled;
 }
 
 function clearTrail(trail) {
@@ -1041,9 +1066,22 @@ function clearTrail(trail) {
 
 function disposeTrailMesh(trail) {
   if (trail.mesh) {
-    trail.mesh.dispose(false, true);
+    trail.mesh.dispose(false, false);
     trail.mesh = null;
   }
+  if (trail.segmentMeshes) {
+    trail.segmentMeshes.forEach(disposeTrailSegment);
+    trail.segmentMeshes = [];
+  }
+  trail.nextSegmentId = 0;
+}
+
+function disposeTrailSegment(mesh) {
+  if (!mesh) {
+    return;
+  }
+  mesh.material = null;
+  mesh.dispose(false, false);
 }
 
 function loadTrailWidthMultiplier() {
@@ -1069,85 +1107,229 @@ function initializeTrailWidthControls() {
   });
 }
 
+function initializeTrailRetentionControls() {
+  if (!trailKeepAllToggle && !trailClearButton) {
+    return;
+  }
+  refreshTrailSettings();
+  trailKeepAllToggle?.addEventListener("change", updateTrailRetention);
+  trailClearButton?.addEventListener("click", clearStoredTrails);
+}
+
+async function refreshTrailSettings() {
+  try {
+    renderTrailSettings(await fetchJson("/api/trails/settings"));
+  } catch (error) {
+    setTrailStatus(`Trail setting unavailable: ${error.message}`);
+  }
+}
+
+async function updateTrailRetention() {
+  if (!trailKeepAllToggle) {
+    return;
+  }
+  setTrailControlsBusy(true);
+  try {
+    const settings = await fetchJson("/api/trails/settings", {
+      method: "POST",
+      body: JSON.stringify({ keep_all_points: trailKeepAllToggle.checked })
+    });
+    renderTrailSettings(settings);
+  } catch (error) {
+    trailKeepAllToggle.checked = !trailKeepAllToggle.checked;
+    setTrailStatus(`Trail setting failed: ${error.message}`);
+  } finally {
+    setTrailControlsBusy(false);
+  }
+}
+
+async function clearStoredTrails() {
+  setTrailControlsBusy(true);
+  try {
+    const settings = await fetchJson("/api/trails/clear", { method: "POST", body: "{}" });
+    ignoreTrailUpdatesUntilMs = Date.now() + 400;
+    clearAllTrailMeshes();
+    renderTrailSettings(settings);
+    setTrailStatus("Trail cleared; collecting new points");
+  } catch (error) {
+    setTrailStatus(`Clear trail failed: ${error.message}`);
+  } finally {
+    setTrailControlsBusy(false);
+  }
+}
+
+function renderTrailSettings(settings) {
+  const keepAll = Boolean(settings.keep_all_points);
+  keepAllTrailPoints = keepAll;
+  trailMaxPoints = Number(settings.max_points || 300);
+  if (trailKeepAllToggle) {
+    trailKeepAllToggle.checked = keepAll;
+  }
+  setTrailStatus(keepAll ? "Keeping all points" : `Keeping latest ${settings.max_points || 300} points`);
+}
+
+function setTrailStatus(message) {
+  if (trailStatus) {
+    trailStatus.textContent = message;
+  }
+}
+
+function setTrailControlsBusy(isBusy) {
+  [trailKeepAllToggle, trailClearButton].forEach((control) => {
+    if (control) {
+      control.disabled = isBusy;
+      control.classList.toggle("is-busy", isBusy);
+    }
+  });
+}
+
 function updateTrailWidthLabel() {
   if (trailWidthValue) {
     trailWidthValue.textContent = `${trailWidthMultiplier.toFixed(1)}x`;
   }
 }
 
+function clearAllTrailMeshes() {
+  for (const trail of trailStates.values()) {
+    clearTrail(trail);
+  }
+}
+
+function applyTraceGeneration(generation) {
+  if (generation === undefined || generation === null) {
+    return;
+  }
+  if (currentTraceGeneration === null) {
+    currentTraceGeneration = generation;
+    return;
+  }
+  if (generation !== currentTraceGeneration) {
+    currentTraceGeneration = generation;
+    clearAllTrailMeshes();
+  }
+}
+
+function applyPoseSource(source) {
+  if (!source) {
+    return;
+  }
+  if (currentPoseSource === null) {
+    currentPoseSource = source;
+    return;
+  }
+  if (source !== currentPoseSource) {
+    currentPoseSource = source;
+    currentTraceGeneration = null;
+    clearAllTrailMeshes();
+  }
+}
+
 function refreshAllTrails() {
   for (const trail of trailStates.values()) {
-    if (trail.points.length >= 2) {
-      refreshTrailMesh(trail);
+    disposeTrailMesh(trail);
+    if (trail.enabled && trail.points.length >= 2) {
+      rebuildTrailSegments(trail);
     }
   }
 }
 
 function updateTrailFromPose(pose) {
-  const trail = ensureTrailState(pose.role);
+  if (Date.now() < ignoreTrailUpdatesUntilMs) {
+    return;
+  }
+  const trail = ensureTrailState(trailKeyForPose(pose), pose.role);
   if (!pose.visible) {
-    clearTrail(trail);
     return;
   }
-  const sourcePoints = (pose.trace || []).map((sample) => mapDashboardPositionToScene(sample));
-  if (sourcePoints.length < 2) {
-    clearTrail(trail);
+  const point = mapDashboardPositionToScene(pose.position || [0, 0, 0]);
+  const changed = appendTrailPoint(trail, point);
+  trimTrailPoints(trail);
+  if (trail.points.length < 2) {
     return;
   }
-  const firstPoint = sourcePoints[0];
-  const hasMotion = sourcePoints.some((point) => BABYLON.Vector3.Distance(point, firstPoint) > 0.02);
-  if (!hasMotion) {
-    clearTrail(trail);
-    return;
-  }
-  trail.points = sourcePoints;
   if (!trail.enabled) {
     disposeTrailMesh(trail);
     return;
   }
-  refreshTrailMesh(trail);
+  if (changed) {
+    appendTrailSegment(trail);
+  }
 }
 
-function refreshTrailMesh(trail) {
+function appendTrailPoint(trail, point) {
+  if (!trail.points.length) {
+    trail.points.push(point);
+    return false;
+  }
+  const lastPoint = trail.points[trail.points.length - 1];
+  if (BABYLON.Vector3.Distance(lastPoint, point) <= 0.002) {
+    return false;
+  }
+  trail.points.push(point);
+  return true;
+}
+
+function trimTrailPoints(trail) {
+  if (keepAllTrailPoints) {
+    return;
+  }
+  const maxPoints = Number.isFinite(trailMaxPoints) ? trailMaxPoints : 300;
+  if (trail.points.length > maxPoints) {
+    const removeCount = trail.points.length - maxPoints;
+    trail.points.splice(0, removeCount);
+    const removedSegments = (trail.segmentMeshes || []).splice(0, removeCount);
+    removedSegments.forEach(disposeTrailSegment);
+  }
+}
+
+function rebuildTrailSegments(trail) {
+  for (let index = 1; index < trail.points.length; index += 1) {
+    createTrailSegment(trail, trail.points[index - 1], trail.points[index]);
+  }
+}
+
+function appendTrailSegment(trail) {
+  if (!trail.enabled || trail.points.length < 2) {
+    return;
+  }
+  const lastIndex = trail.points.length - 1;
+  createTrailSegment(trail, trail.points[lastIndex - 1], trail.points[lastIndex]);
+}
+
+function createTrailSegment(trail, startPoint, endPoint) {
   if (!scene) {
     return;
   }
-  if (trail.points.length < 2) {
-    if (trail.mesh) {
-      trail.mesh.dispose(false, true);
-      trail.mesh = null;
-    }
+  if (BABYLON.Vector3.Distance(startPoint, endPoint) <= 0.002) {
     return;
   }
-
   const roleColor = BABYLON.Color3.FromHexString((ROLE_STYLE[trail.role] || ROLE_STYLE.head).color);
-  const points = trail.points.map((point) => point.clone());
   const radius = (TRAIL_RADIUS_BY_ROLE[trail.role] || 0.016) * trailWidthMultiplier;
-  if (trail.mesh) {
-    BABYLON.MeshBuilder.CreateTube(
-      null,
-      { path: points, radius, tessellation: 10, instance: trail.mesh, updatable: true },
-      scene
-    );
-  } else {
-    trail.mesh = BABYLON.MeshBuilder.CreateTube(
-      `trail-${trail.role}`,
-      { path: points, radius, tessellation: 10, updatable: true },
-      scene
-    );
-    trail.mesh.isPickable = false;
-    trail.mesh.alwaysSelectAsActiveMesh = true;
-    trail.mesh.renderingGroupId = 1;
-  }
-  if (!trail.mesh.material) {
-    const material = new BABYLON.StandardMaterial(`trail-mat-${trail.role}`, scene);
+  const meshKey = String(trail.key || trail.role).replace(/[^a-zA-Z0-9_-]/g, "-");
+  const noCap = BABYLON.Mesh?.NO_CAP ?? 0;
+  const segment = BABYLON.MeshBuilder.CreateTube(
+    `trail-${meshKey}-segment-${trail.nextSegmentId}`,
+    { path: [startPoint.clone(), endPoint.clone()], radius, tessellation: 8, cap: noCap, updatable: false },
+    scene
+  );
+  trail.nextSegmentId += 1;
+  segment.isPickable = false;
+  segment.alwaysSelectAsActiveMesh = true;
+  segment.renderingGroupId = 1;
+  if (!trail.material) {
+    const material = new BABYLON.StandardMaterial(`trail-mat-${meshKey}`, scene);
     material.disableLighting = true;
     material.emissiveColor = roleColor;
     material.diffuseColor = roleColor;
     material.specularColor = BABYLON.Color3.Black();
-    trail.mesh.material = material;
+    material.ambientColor = roleColor;
+    material.alpha = 0.96;
+    trail.material = material;
   }
-  trail.mesh.material.alpha = 0.96;
+  trail.material.emissiveColor = roleColor;
+  trail.material.diffuseColor = roleColor;
+  segment.material = trail.material;
+  trail.segmentMeshes.push(segment);
 }
 
 function escapeHtml(value) {
@@ -1186,6 +1368,7 @@ function initializePostProcessingPanel() {
   });
   startRecordingButton?.addEventListener("click", startRecording);
   stopRecordingButton?.addEventListener("click", stopRecording);
+  refreshRecordTopicsButton?.addEventListener("click", refreshRecordTopics);
   alignmentStartButton?.addEventListener("click", startAlignment);
   alignmentStopButton?.addEventListener("click", stopAlignment);
   for (const button of document.querySelectorAll("[data-post-action]")) {
@@ -1218,6 +1401,8 @@ async function refreshMonitorDashboardStatus() {
     const status = await fetchJson("/api/monitor-dashboard/status");
     renderMonitorDashboardStatus(status);
   } catch (error) {
+    monitorDashboardRunning = false;
+    updateAlignmentStartAvailability();
     setMonitorDashboardStatus(`本地监控窗口状态不可用：${error.message}`);
   }
 }
@@ -1244,15 +1429,19 @@ function renderMonitorDashboardStatus(status) {
     return;
   }
   if (status.running) {
+    monitorDashboardRunning = true;
     const pid = Number(status.pid || 0);
     setMonitorDashboardStatus(pid > 0
       ? `本地监控窗口已启动 (PID ${pid})`
       : "本地监控窗口已启动");
     setMonitorDashboardButtonText("关闭本地 Monitor Dashboard");
+    updateAlignmentStartAvailability();
     return;
   }
+  monitorDashboardRunning = false;
   setMonitorDashboardButtonText("打开本地 Monitor Dashboard");
   setMonitorDashboardStatus("本地监控窗口未启动");
+  updateAlignmentStartAvailability();
 }
 
 function setMonitorDashboardBusy(isBusy) {
@@ -1367,7 +1556,8 @@ async function refreshImagePlaybackStatus() {
 
 function renderImagePlaybackStatus(status) {
   if (status.playing) {
-    setImagePlaybackStatus(`Playing ${status.bag || "selected bag"}`);
+    const source = status.play_path || status.bag || "selected bag";
+    setImagePlaybackStatus(`Playing ${source}`);
     if (imagePlayButton) {
       imagePlayButton.disabled = true;
     }
@@ -1444,12 +1634,47 @@ async function refreshRecordingStatus(options = {}) {
     if (options.refreshTopics) {
       const catalog = await fetchJson("/api/recording/topics");
       renderTopicCatalog(catalog);
+      setRecordTopicStatus(catalog);
     } else {
       renderTopicCatalog(status.topic_catalog);
+      setRecordTopicStatus(status.topic_catalog);
     }
   } catch (error) {
     recordingStatus.textContent = `Recording status unavailable: ${error.message}`;
   }
+}
+
+async function refreshRecordTopics() {
+  if (!recordTopicGroups) {
+    return;
+  }
+  setRecordTopicRefreshBusy(true);
+  try {
+    const catalog = await fetchJson("/api/recording/topics");
+    renderTopicCatalog(catalog, { resetSelection: true });
+    setRecordTopicStatus(catalog, "Topic list refreshed");
+  } catch (error) {
+    if (recordTopicStatus) {
+      recordTopicStatus.textContent = `Topic refresh failed: ${error.message}`;
+    }
+  } finally {
+    setRecordTopicRefreshBusy(false);
+  }
+}
+
+function setRecordTopicRefreshBusy(isBusy) {
+  if (refreshRecordTopicsButton) {
+    refreshRecordTopicsButton.disabled = isBusy;
+    refreshRecordTopicsButton.classList.toggle("is-busy", isBusy);
+  }
+}
+
+function setRecordTopicStatus(catalog, prefix = "Topic list ready") {
+  if (!recordTopicStatus || !catalog) {
+    return;
+  }
+  const count = Array.isArray(catalog.topics) ? catalog.topics.length : 0;
+  recordTopicStatus.textContent = `${prefix}: ${count} topic${count === 1 ? "" : "s"}`;
 }
 
 async function startRecording() {
@@ -1501,6 +1726,13 @@ async function refreshAlignmentStatus() {
 }
 
 async function startAlignment() {
+  if (!monitorDashboardRunning) {
+    if (alignmentLogOutput) {
+      alignmentLogOutput.textContent = "请先打开本地 Monitor Dashboard，再开始校准。";
+    }
+    updateAlignmentStartAvailability();
+    return;
+  }
   setAlignmentBusy(true);
   try {
     renderAlignmentStatus(await fetchJson("/api/alignment/start", { method: "POST", body: "{}" }));
@@ -1530,6 +1762,7 @@ function renderAlignmentStatus(status) {
   if (!alignmentLogOutput) {
     return;
   }
+  latestAlignmentStatus = status;
   const logs = Array.isArray(status.logs) ? status.logs : [];
   const header = [
     `Status: ${status.status || "unknown"}`,
@@ -1537,11 +1770,24 @@ function renderAlignmentStatus(status) {
     `Result: ${status.result_txt || "-"}`
   ];
   alignmentLogOutput.textContent = `${header.join("\n")}\n\n${logs.length ? logs.join("\n") : "No alignment logs yet."}`;
-  if (alignmentStartButton) {
-    alignmentStartButton.disabled = Boolean(status.active);
-  }
+  updateAlignmentStartAvailability();
   if (alignmentStopButton) {
     alignmentStopButton.disabled = !status.active;
+  }
+}
+
+function updateAlignmentStartAvailability() {
+  const active = Boolean(latestAlignmentStatus?.active);
+  if (alignmentStartButton) {
+    alignmentStartButton.disabled = active || !monitorDashboardRunning;
+    alignmentStartButton.title = monitorDashboardRunning
+      ? ""
+      : "请先打开本地 Monitor Dashboard";
+  }
+  if (alignmentStartHint) {
+    alignmentStartHint.textContent = monitorDashboardRunning
+      ? "本地 Monitor Dashboard 已启动，可以开始校准。"
+      : "请先打开本地 Monitor Dashboard，再开始校准。";
   }
 }
 
@@ -1619,12 +1865,12 @@ function renderResultChips(statuses) {
     .join("");
 }
 
-function renderTopicCatalog(catalog) {
+function renderTopicCatalog(catalog, options = {}) {
   if (!recordTopicGroups || !catalog) {
     return;
   }
   const allTopics = Array.isArray(catalog.topics) ? catalog.topics : [];
-  if (!recordTopicsInitialized) {
+  if (!recordTopicsInitialized || options.resetSelection) {
     selectedRecordTopics = new Set(allTopics);
     knownRecordTopics = new Set(allTopics);
     recordTopicsInitialized = true;
@@ -1637,10 +1883,13 @@ function renderTopicCatalog(catalog) {
     knownRecordTopics = new Set(allTopics);
   }
   const cameraGroups = Array.isArray(catalog.cameras) ? catalog.cameras : [];
+  const visibleCameraGroups = cameraGroups.filter(
+    (group) => group.detected && Array.isArray(group.topics) && group.topics.length > 0
+  );
   const otherTopics = Array.isArray(catalog.other) ? catalog.other : [];
-  const cameraHtml = cameraGroups.length
-    ? cameraGroups.map(renderCameraTopicGroup).join("")
-    : `<div class="empty-state">No detected cameras.</div>`;
+  const cameraHtml = visibleCameraGroups.length
+    ? visibleCameraGroups.map(renderCameraTopicGroup).join("")
+    : `<div class="empty-state">No live camera topics found.</div>`;
   const otherHtml = otherTopics.length
     ? renderTopicList("Other", otherTopics)
     : `<div class="empty-state">No other topics configured.</div>`;

@@ -20,12 +20,22 @@ function copyFile(source, target) {
   fs.copyFileSync(source, target);
 }
 
+function copyHtml(source, target, version) {
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const html = fs.readFileSync(source, "utf8")
+    .split("/static/styles.css").join(`/static/styles.css?v=${version}`)
+    .split("/static/app.js").join(`/static/app.js?v=${version}`);
+  fs.writeFileSync(target, html);
+}
+
 resetDir(generatedDir);
 resetDir(staticDir);
 
-copyFile(path.join(srcDir, "index.html"), path.join(generatedDir, "index.html"));
-copyFile(path.join(srcDir, "3d.html"), path.join(generatedDir, "3d.html"));
-copyFile(path.join(srcDir, "cameras.html"), path.join(generatedDir, "cameras.html"));
+const buildVersion = String(Date.now());
+
+copyHtml(path.join(srcDir, "index.html"), path.join(generatedDir, "index.html"), buildVersion);
+copyHtml(path.join(srcDir, "3d.html"), path.join(generatedDir, "3d.html"), buildVersion);
+copyHtml(path.join(srcDir, "cameras.html"), path.join(generatedDir, "cameras.html"), buildVersion);
 copyFile(path.join(srcDir, "app.js"), path.join(staticDir, "app.js"));
 copyFile(path.join(srcDir, "styles.css"), path.join(staticDir, "styles.css"));
 if (fs.existsSync(vendorSrcDir)) {
