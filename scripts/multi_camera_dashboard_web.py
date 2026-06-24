@@ -42,7 +42,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     CompressedImage = None
     RosImage = None
 
-from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
+from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup, relay_topic
 from live_alignment import LiveAlignmentMixin
 from post_processing import (
     PostProcessor,
@@ -62,6 +62,18 @@ WEB_DASHBOARD_VERSION = "trail-source-key-playback-cachefix-20260624"
 
 def playback_topic(topic: str) -> str:
     return f"{PLAYBACK_TOPIC_PREFIX}/{str(topic).strip('/')}"
+
+
+def raw_topic_from_relay(topic: str, raw_config: Dict) -> str:
+    relay_settings = raw_config.get("topic_relay", {})
+    if not isinstance(relay_settings, dict) or not relay_settings.get("enabled", False):
+        return topic
+    prefix = str(relay_settings.get("prefix", "/insight_relay") or "/insight_relay").rstrip("/")
+    topic_name = str(topic)
+    relay_root = f"{prefix}/"
+    if topic_name.startswith(relay_root):
+        return "/" + topic_name[len(relay_root) :]
+    return topic_name
 
 
 def make_qos(depth: int = 10) -> QoSProfile:
@@ -133,6 +145,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.pose_timeout_sec = 0.5
 
         raw_config = load_setup(config_path)
+        self.raw_config = raw_config
         config = build_dashboard_config(raw_config)
         enabled_camera_map = {
             camera["name"]: camera for camera in raw_config.get("cameras", []) if camera.get("enabled", True)
@@ -350,8 +363,8 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         for camera in self.cameras:
             camera_name = camera.name
             namespace = camera.namespace
-            calib_topic = image_topic(namespace, self.live_alignment_image_stream)
-            calib_info_topic = camera_info_topic(namespace, self.live_alignment_image_stream)
+            calib_topic = relay_topic(image_topic(namespace, self.live_alignment_image_stream), self.raw_config)
+            calib_info_topic = relay_topic(camera_info_topic(namespace, self.live_alignment_image_stream), self.raw_config)
             calib_type = IMAGE_STREAMS[self.live_alignment_image_stream]["type"]
             self.live_alignment_topic_by_camera[camera_name] = calib_topic
 
@@ -1154,12 +1167,18 @@ def main() -> None:
     if not results_dir.is_absolute():
         results_dir = (config_path.parents[1] / results_dir).resolve()
     rosbag_store = RosbagStore(rosbag_path, results_root=results_dir)
+    playback_remaps = {}
+    for camera in node.cameras:
+        playback_target = playback_topic(camera.topic)
+        playback_remaps[camera.topic] = playback_target
+        playback_remaps[raw_topic_from_relay(camera.topic, raw_config)] = playback_target
+    for pose in node.poses:
+        playback_target = playback_topic(pose.topic)
+        playback_remaps[pose.topic] = playback_target
+        playback_remaps[raw_topic_from_relay(pose.topic, raw_config)] = playback_target
     playback_manager = RosbagPlaybackManager(
         rosbag_store,
-        topic_remaps={
-            **{camera.topic: playback_topic(camera.topic) for camera in node.cameras},
-            **{pose.topic: playback_topic(pose.topic) for pose in node.poses},
-        },
+        topic_remaps=playback_remaps,
     )
     recording_manager = RecordingManager(
         rosbag_store,

@@ -31,6 +31,7 @@ else
 fi
 
 bash "${ROOT_DIR}/scripts/dev/check_env.sh" --fix --quiet
+bash "${SCRIPT_DIR}/start_topic_relay.sh"
 
 PYTHON_ARGS=(
   --config "${CONFIG_PATH}"

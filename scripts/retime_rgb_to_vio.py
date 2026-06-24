@@ -58,9 +58,9 @@ def main() -> None:
     parser.add_argument("input_bag", help="Input rosbag directory")
     parser.add_argument("output_bag", help="Output rosbag directory")
     parser.add_argument("--storage-id", default="mcap")
-    parser.add_argument("--rgb-topic", default="/insight9_a/camera/color/image_rect_raw/compressed")
-    parser.add_argument("--camera-info-topic", default="/insight9_a/camera/color/camera_info")
-    parser.add_argument("--vio-topic", default="/insight9_a/camera/vio_100hz")
+    parser.add_argument("--rgb-topic", default="/insight_relay/insight9_a/camera/color/image_rect_raw/compressed")
+    parser.add_argument("--camera-info-topic", default="/insight_relay/insight9_a/camera/color/camera_info")
+    parser.add_argument("--vio-topic", default="/insight_relay/insight9_a/camera/vio_100hz")
     args = parser.parse_args()
 
     input_bag = Path(args.input_bag).resolve()

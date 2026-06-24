@@ -36,14 +36,14 @@ class LiveAlignmentMixin:
         self.live_alignment_available = self.session_alignment_enabled and hasattr(cv2, "aruco")
         self.live_alignment_active = False
         self.live_alignment_image_stream = str(calibration_config.get("image_stream", "color") or "color")
-        self.live_alignment_method = "board_relative"
+        self.live_alignment_method = "board_center"
+        self.live_alignment_frame = "board_center"
         self.live_alignment_required_samples = int(calibration_config.get("required_samples", 12))
         self.live_alignment_window = max(
             int(calibration_config.get("stability_window", 20)),
             self.live_alignment_required_samples,
         )
         self.live_alignment_min_detected_tags = max(2, int(calibration_config.get("min_detected_tags", 4)))
-        self.live_alignment_max_group_span_ns = int(float(calibration_config.get("max_group_span_ms", 180.0)) * 1_000_000)
         self.live_alignment_pending_image_limit = max(2, int(calibration_config.get("pending_image_limit", 8)))
         self.live_alignment_pending_max_age_ns = int(float(calibration_config.get("pending_max_age_ms", 500.0)) * 1_000_000)
         self.live_alignment_detection_buffer_limit = max(
@@ -87,14 +87,13 @@ class LiveAlignmentMixin:
         self.live_alignment_max_translation_err_m = float(calibration_config.get("max_translation_std_m", 0.25))
         self.live_alignment_max_rotation_err_deg = float(calibration_config.get("max_rotation_std_deg", 6.0))
         self.live_alignment_last_status = "live alignment idle"
-        self.live_alignment_last_signature: Optional[Tuple[int, ...]] = None
         self.live_alignment_visible_cameras: int = 0
         self.live_alignment_inlier_counts: Dict[str, int] = {}
         self.live_alignment_logged_status: Optional[str] = None
-        self.live_alignment_last_sync_span_ms: float = 0.0
         self.live_alignment_last_transform_summary: Dict[str, str] = {}
         self.live_alignment_last_raw_transform_summary: Dict[str, str] = {}
         self.live_alignment_last_anchor_summary: Dict[str, str] = {}
+        self.live_alignment_last_calibrated_cameras: List[str] = []
         self.live_alignment_last_tag_count: Dict[str, int] = {
             camera["name"]: 0
             for camera in raw_config.get("cameras", [])
@@ -126,6 +125,19 @@ class LiveAlignmentMixin:
         board_cols = int(calibration_config.get("board_cols", 6))
         marker_length_m = float(calibration_config.get("marker_length_m", 0.055))
         marker_separation_m = float(calibration_config.get("marker_separation_m", 0.0165))
+        self.live_alignment_board_width_m = board_cols * marker_length_m + (board_cols - 1) * marker_separation_m
+        self.live_alignment_board_height_m = board_rows * marker_length_m + (board_rows - 1) * marker_separation_m
+        self.live_alignment_board_center_offset = matrix_to_transform(
+            np.eye(3, dtype=np.float64),
+            np.array(
+                [
+                    self.live_alignment_board_width_m * 0.5,
+                    self.live_alignment_board_height_m * 0.5,
+                    0.0,
+                ],
+                dtype=np.float64,
+            ),
+        )
         if hasattr(cv2.aruco, "GridBoard"):
             self.live_alignment_board = cv2.aruco.GridBoard(
                 (board_cols, board_rows),
@@ -225,9 +237,7 @@ class LiveAlignmentMixin:
             return self.live_alignment_last_status
         self._set_live_alignment_timer_enabled(True)
         self.live_alignment_active = True
-        self.world_to_reference = {}
-        self.live_alignment_last_status = "alignment on"
-        self.live_alignment_last_signature = None
+        self.live_alignment_last_status = "collecting"
         self.live_alignment_latest_detection = {camera.name: None for camera in self.cameras}
         self.live_alignment_detection_buffer = {camera.name: [] for camera in self.cameras}
         self.live_alignment_pending_images = {camera.name: [] for camera in self.cameras}
@@ -236,33 +246,31 @@ class LiveAlignmentMixin:
         self.live_alignment_visible_cameras = 0
         self.live_alignment_inlier_counts = {}
         self.live_alignment_logged_status = None
-        self.live_alignment_last_sync_span_ms = 0.0
         self.live_alignment_last_transform_summary = {}
         self.live_alignment_last_raw_transform_summary = {}
         self.live_alignment_last_anchor_summary = {}
+        self.live_alignment_last_calibrated_cameras = []
         self.live_alignment_last_tag_count = {camera.name: 0 for camera in self.cameras}
         self.live_alignment_last_summary_time = 0.0
         self._reset_live_alignment_debug_state()
         self._reset_alignment_result_txt()
         self._log_live_alignment_status(force=True)
         self._emit_alignment_log(
-            "config "
-            f"method={self.live_alignment_method} stream={self.live_alignment_image_stream} "
-            f"dict={self.live_alignment_dictionary_name} scale={self.live_alignment_image_scale:.2f} "
-            f"processing_hz={self.live_alignment_processing_hz:.1f} "
-            f"min_tags={self.live_alignment_min_detected_tags} required={self.live_alignment_required_samples} "
-            f"display_axis_alignment={'on' if self.live_alignment_display_axis_alignment else 'off'} "
-            f"lock_on_first_solution={'on' if self.live_alignment_lock_on_first_solution else 'off'} "
-            f"reset_traces_on_lock={'on' if self.live_alignment_reset_traces_on_lock else 'off'} "
-            f"anchor_rotation_mode={self.live_alignment_anchor_rotation_mode} "
-            f"horizontal_yaw_mode={self.live_alignment_dashboard_horizontal_yaw_mode} "
-            f"horizontal_yaw_deg={self.live_alignment_dashboard_horizontal_yaw_deg:.1f}"
+            "single-camera board-center calibration started | "
+            f"stream={self.live_alignment_image_stream} dict={self.live_alignment_dictionary_name} "
+            f"min_tags={self.live_alignment_min_detected_tags} samples_required={self.live_alignment_required_samples} "
+            f"processing_hz={self.live_alignment_processing_hz:.1f} board_origin=center "
+            f"anchor_rotation={self.live_alignment_anchor_rotation_mode}"
         )
         for camera in self.cameras:
             self._emit_alignment_log(
-                f"subscribe {camera.name}: image={self.live_alignment_topic_by_camera.get(camera.name, '-')} "
-                f"info={camera.camera_info_topic} pose=not_used"
+                f"watching {camera.name}: image={self.live_alignment_topic_by_camera.get(camera.name, '-')} "
+                f"camera_info={camera.camera_info_topic}"
             )
+        calibrated = sorted(self.world_to_reference.keys())
+        self._emit_alignment_log(
+            f"already calibrated cameras: {','.join(calibrated) if calibrated else 'none'}"
+        )
         return self.alignment_status_text()
 
     def stop_live_alignment(self) -> str:
@@ -276,14 +284,16 @@ class LiveAlignmentMixin:
         self._set_live_alignment_timer_enabled(False)
         self.live_alignment_active = False
         self.live_alignment_last_status = "locked"
-        self.live_alignment_last_signature = None
         self.live_alignment_latest_detection = {camera.name: None for camera in self.cameras}
         self.live_alignment_detection_buffer = {camera.name: [] for camera in self.cameras}
         self.live_alignment_pending_images = {camera.name: [] for camera in self.cameras}
         self.live_alignment_processed_stamp_ns = {camera.name: -1 for camera in self.cameras}
         self.live_alignment_samples_by_camera = {camera.name: [] for camera in self.cameras}
         if self.live_alignment_reset_traces_on_lock:
+            calibrated = set(self.live_alignment_last_calibrated_cameras)
             for pose in self.poses:
+                if calibrated and pose.name not in calibrated:
+                    continue
                 raw_trace = self.raw_traces.get(pose.name, [])
                 if not raw_trace:
                     continue
@@ -443,7 +453,8 @@ class LiveAlignmentMixin:
             self._set_alignment_debug(camera_name, stage="pose_board_failed")
             return True
         rotation, _ = cv2.Rodrigues(rvec)
-        t_camera_board = matrix_to_transform(rotation, tvec.reshape(3))
+        t_camera_board_corner = matrix_to_transform(rotation, tvec.reshape(3))
+        t_camera_board = t_camera_board_corner @ self.live_alignment_board_center_offset
         self.live_alignment_latest_detection[camera_name] = DetectionSample(
             stamp_ns=stamp_ns,
             marker_transform=t_camera_board,
@@ -454,7 +465,7 @@ class LiveAlignmentMixin:
             stage="detection_ok",
             tags=self.live_alignment_last_tag_count[camera_name],
         )
-        self._update_live_alignment_solution()
+        self._update_live_alignment_solution(camera_name)
         return True
 
     @staticmethod
@@ -593,6 +604,40 @@ class LiveAlignmentMixin:
                 anchors[camera.name] = display_camera_transforms[camera.name] @ invert_transform(pose_transform)
         return anchors
 
+    def _build_dashboard_world_anchor(
+        self,
+        camera_name: str,
+        stamp_ns: int,
+        display_camera_transform: np.ndarray,
+    ) -> Optional[np.ndarray]:
+        pose_sample = self._find_dashboard_pose_sample(camera_name, stamp_ns)
+        if pose_sample is None:
+            self._emit_alignment_log(
+                f"{camera_name}: waiting for matching VIO pose at stamp={stamp_ns}"
+            )
+            return None
+        pose_transform = pose_sample.as_transform()
+        if self.live_alignment_anchor_rotation_mode == "none":
+            display_translation = display_camera_transform[:3, 3]
+            pose_translation = np.array(pose_sample.position, dtype=np.float64)
+            anchor_translation = display_translation - pose_translation
+            return matrix_to_transform(np.eye(3, dtype=np.float64), anchor_translation)
+        if self.live_alignment_anchor_rotation_mode == "yaw":
+            target_yaw = math.atan2(
+                float(display_camera_transform[1, 0]),
+                float(display_camera_transform[0, 0]),
+            )
+            pose_yaw = math.atan2(
+                float(pose_transform[1, 0]),
+                float(pose_transform[0, 0]),
+            )
+            anchor_rotation = self._rotation_about_display_z(math.degrees(target_yaw - pose_yaw))
+            display_translation = display_camera_transform[:3, 3]
+            pose_translation = pose_transform[:3, 3]
+            anchor_translation = display_translation - anchor_rotation @ pose_translation
+            return matrix_to_transform(anchor_rotation, anchor_translation)
+        return display_camera_transform @ invert_transform(pose_transform)
+
     def _store_live_alignment_detection(self, camera_name: str, sample: DetectionSample) -> None:
         lock = getattr(self, "live_alignment_solution_lock", None)
         if lock is None:
@@ -648,185 +693,80 @@ class LiveAlignmentMixin:
                     : len(self.live_alignment_pending_images[camera_name]) - self.live_alignment_pending_image_limit
                 ]
 
-    def _update_live_alignment_solution(self) -> None:
-        lock = getattr(self, "live_alignment_solution_lock", None)
-        if lock is None:
-            detections = self._find_live_alignment_detection_group_unlocked()
-        else:
-            with lock:
-                detections = self._find_live_alignment_detection_group_unlocked()
-        if detections is None:
+    def _update_live_alignment_solution(self, camera_name: str) -> None:
+        detection = self.live_alignment_latest_detection.get(camera_name)
+        if detection is None:
             self._log_live_alignment_status()
             return
-        self.live_alignment_visible_cameras = len(detections)
-        stamps = [sample.stamp_ns for sample in detections.values()]
-        self.live_alignment_last_sync_span_ms = (max(stamps) - min(stamps)) / 1_000_000.0
-        if max(stamps) - min(stamps) > self.live_alignment_max_group_span_ns:
-            self.live_alignment_last_status = "waiting-sync"
-            self._log_live_alignment_status()
-            return
-        signature = tuple(stamps)
-        if signature == self.live_alignment_last_signature:
-            return
-        self.live_alignment_last_signature = signature
-        reference_detection = detections[self.reference_camera]
-        raw_transforms = {self.reference_camera: np.eye(4, dtype=np.float64)}
-        for camera in self.cameras:
-            if camera.name == self.reference_camera:
-                continue
-            current = detections[camera.name]
-            transform = reference_detection.marker_transform @ invert_transform(current.marker_transform)
-            samples = self.live_alignment_samples_by_camera[camera.name]
-            samples.append(transform)
-            if len(samples) > self.live_alignment_window:
-                del samples[: len(samples) - self.live_alignment_window]
-        counts = {}
-        for camera in self.cameras:
-            if camera.name == self.reference_camera:
-                counts[camera.name] = self.live_alignment_required_samples
-                continue
-            inliers = self._inlier_transforms(self.live_alignment_samples_by_camera[camera.name])
-            counts[camera.name] = len(inliers)
-            if len(inliers) < self.live_alignment_required_samples:
-                self.live_alignment_inlier_counts = counts
-                self.live_alignment_last_status = "collecting"
-                self._log_live_alignment_status()
-                return
-            averaged = average_transforms(inliers[-self.live_alignment_required_samples :])
-            if averaged is None:
-                return
-            raw_transforms[camera.name] = averaged
-        raw_transforms[self.reference_camera] = np.eye(4, dtype=np.float64)
-        base_transforms = {
-            camera.name: self._dashboard_transform_from_optical(raw_transforms[camera.name])
+
+        board_to_camera = invert_transform(detection.marker_transform)
+        samples = self.live_alignment_samples_by_camera[camera_name]
+        samples.append(board_to_camera)
+        if len(samples) > self.live_alignment_window:
+            del samples[: len(samples) - self.live_alignment_window]
+
+        counts = {
+            camera.name: len(self._inlier_transforms(self.live_alignment_samples_by_camera[camera.name]))
             for camera in self.cameras
         }
-        dashboard_yaw_deg = self._dashboard_horizontal_yaw_deg_from_transforms(base_transforms)
-        display_camera_transforms = self._apply_dashboard_horizontal_yaw(base_transforms, dashboard_yaw_deg)
-        display_camera_transforms = self._canonicalize_display_transforms(display_camera_transforms)
-        trajectory_anchor_transforms = self._build_dashboard_world_anchors(detections, display_camera_transforms)
-        if trajectory_anchor_transforms is None:
-            self.live_alignment_last_status = "waiting-sync"
+        self.live_alignment_inlier_counts = counts
+        inliers = self._inlier_transforms(samples)
+        if len(inliers) < self.live_alignment_required_samples:
+            self.live_alignment_last_status = "collecting"
             self._log_live_alignment_status()
             return
+
+        averaged_board_to_camera = average_transforms(inliers[-self.live_alignment_required_samples :])
+        if averaged_board_to_camera is None:
+            return
+        base_transform = self._dashboard_transform_from_optical(averaged_board_to_camera)
+        dashboard_yaw_deg = self._dashboard_horizontal_yaw_deg_from_transforms({camera_name: base_transform})
+        display_transform = self._apply_dashboard_horizontal_yaw({camera_name: base_transform}, dashboard_yaw_deg)[camera_name]
+        display_transform = self._canonicalize_display_transforms({camera_name: display_transform})[camera_name]
+        anchor_transform = self._build_dashboard_world_anchor(camera_name, detection.stamp_ns, display_transform)
+        if anchor_transform is None:
+            self.live_alignment_last_status = "waiting-pose"
+            self._log_live_alignment_status()
+            return
+
+        lock = getattr(self, "live_alignment_solution_lock", None)
         if lock is None:
-            self.world_to_reference = trajectory_anchor_transforms
-            self.live_alignment_last_transform_summary = {
-                camera.name: self._format_transform_summary(display_camera_transforms[camera.name])
-                for camera in self.cameras
-            }
-            self.live_alignment_last_raw_transform_summary = {
-                camera.name: self._format_transform_summary(raw_transforms[camera.name])
-                for camera in self.cameras
-            }
-            self.live_alignment_last_anchor_summary = {
-                camera.name: self._format_transform_summary(trajectory_anchor_transforms[camera.name])
-                for camera in self.cameras
-            }
+            self.world_to_reference[camera_name] = anchor_transform
+            self.live_alignment_last_transform_summary[camera_name] = self._format_transform_summary(display_transform)
+            self.live_alignment_last_raw_transform_summary[camera_name] = self._format_transform_summary(averaged_board_to_camera)
+            self.live_alignment_last_anchor_summary[camera_name] = self._format_transform_summary(anchor_transform)
         else:
             with lock:
-                self.world_to_reference = trajectory_anchor_transforms
-                self.live_alignment_last_transform_summary = {
-                    camera.name: self._format_transform_summary(display_camera_transforms[camera.name])
-                    for camera in self.cameras
-                }
-                self.live_alignment_last_raw_transform_summary = {
-                    camera.name: self._format_transform_summary(raw_transforms[camera.name])
-                    for camera in self.cameras
-                }
-                self.live_alignment_last_anchor_summary = {
-                    camera.name: self._format_transform_summary(trajectory_anchor_transforms[camera.name])
-                    for camera in self.cameras
-                }
-        self._write_alignment_result_txt(detections, raw_transforms, display_camera_transforms, trajectory_anchor_transforms)
+                self.world_to_reference[camera_name] = anchor_transform
+                self.live_alignment_last_transform_summary[camera_name] = self._format_transform_summary(display_transform)
+                self.live_alignment_last_raw_transform_summary[camera_name] = self._format_transform_summary(averaged_board_to_camera)
+                self.live_alignment_last_anchor_summary[camera_name] = self._format_transform_summary(anchor_transform)
+
+        self._write_alignment_result_txt(
+            {camera_name: detection},
+            {camera_name: averaged_board_to_camera},
+            {camera_name: display_transform},
+            {camera_name: anchor_transform},
+        )
         self._refresh_transformed_poses()
-        self.live_alignment_inlier_counts = counts
+        self.live_alignment_last_calibrated_cameras = [camera_name]
         self.live_alignment_last_status = "tracking"
         self._log_live_alignment_status()
-        self._emit_alignment_log(f"reference_camera={self.reference_camera}")
-        self._emit_alignment_log("axis_convention: reference optical frame (x right, y down, z forward)")
-        self._emit_alignment_log("dashboard_frame: x=forward, y=right, z=up")
+        raw_translation = averaged_board_to_camera[:3, 3]
+        display_translation = display_transform[:3, 3]
+        anchor_translation = anchor_transform[:3, 3]
         self._emit_alignment_log(
-            f"display_axes_canonical={'on' if self.live_alignment_display_axis_alignment else 'off'}"
+            f"CALIBRATED {camera_name} | samples={len(inliers)} "
+            f"board_to_camera=({raw_translation[0]:.3f}, {raw_translation[1]:.3f}, {raw_translation[2]:.3f})m "
+            f"dashboard_position=({display_translation[0]:.3f}, {display_translation[1]:.3f}, {display_translation[2]:.3f})m "
+            f"vio_to_board_anchor=({anchor_translation[0]:.3f}, {anchor_translation[1]:.3f}, {anchor_translation[2]:.3f})m"
         )
-        self._emit_alignment_log(f"dashboard_horizontal_yaw_deg={dashboard_yaw_deg:.1f}")
-        self._emit_alignment_log("final camera transforms relative to reference:")
-        for camera in self.cameras:
-            raw_transform = raw_transforms.get(camera.name)
-            display_transform = display_camera_transforms.get(camera.name)
-            anchor_transform = trajectory_anchor_transforms.get(camera.name)
-            if raw_transform is None or display_transform is None or anchor_transform is None:
-                continue
-            raw_translation = raw_transform[:3, 3]
-            display_translation = display_transform[:3, 3]
-            anchor_translation = anchor_transform[:3, 3]
-            self._emit_alignment_log(
-                f"{camera.name}: optical=({raw_translation[0]:.3f}, {raw_translation[1]:.3f}, {raw_translation[2]:.3f}) "
-                f"display=({display_translation[0]:.3f}, {display_translation[1]:.3f}, {display_translation[2]:.3f}) "
-                f"anchor=({anchor_translation[0]:.3f}, {anchor_translation[1]:.3f}, {anchor_translation[2]:.3f}) "
-                f"height_up={display_translation[2]:.3f}"
-            )
+        self._emit_alignment_log(f"updated only {camera_name}; other calibrated cameras were kept")
         if self.live_alignment_lock_on_first_solution:
-            self._emit_alignment_log("solution locked: future VIO uses this calibrated relative offset")
+            self._emit_alignment_log("calibration stopped after this camera; press Start Alignment again for another camera")
             self._lock_live_alignment_solution()
         else:
             self._persist_alignment_state()
-
-    def _find_live_alignment_detection_group_unlocked(self) -> Optional[Dict[str, DetectionSample]]:
-        newest_stamp_ns = max(
-            (
-                buffer[-1].stamp_ns
-                for buffer in self.live_alignment_detection_buffer.values()
-                if buffer
-            ),
-            default=0,
-        )
-        if newest_stamp_ns > 0:
-            min_stamp_ns = newest_stamp_ns - self.live_alignment_detection_max_age_ns
-            for camera in self.cameras:
-                buffer = self.live_alignment_detection_buffer.get(camera.name, [])
-                if not buffer:
-                    continue
-                buffer[:] = [sample for sample in buffer if sample.stamp_ns >= min_stamp_ns]
-        buffers = {
-            camera.name: list(self.live_alignment_detection_buffer.get(camera.name, []))
-            for camera in self.cameras
-        }
-        available = {name: buffer for name, buffer in buffers.items() if buffer}
-        self.live_alignment_visible_cameras = len(available)
-        if self.reference_camera not in available:
-            self.live_alignment_last_status = "waiting-reference"
-            return None
-        if len(available) < len(self.cameras):
-            self.live_alignment_last_status = "waiting-board"
-            return None
-
-        best_group = None
-        best_span = None
-        for reference_sample in available[self.reference_camera]:
-            group = {self.reference_camera: reference_sample}
-            for camera in self.cameras:
-                if camera.name == self.reference_camera:
-                    continue
-                candidate = min(
-                    available[camera.name],
-                    key=lambda sample: abs(sample.stamp_ns - reference_sample.stamp_ns),
-                )
-                group[camera.name] = candidate
-            stamps = [sample.stamp_ns for sample in group.values()]
-            span_ns = max(stamps) - min(stamps)
-            if best_span is None or span_ns < best_span:
-                best_span = span_ns
-                best_group = group
-
-        self.live_alignment_last_sync_span_ms = 0.0 if best_span is None else best_span / 1_000_000.0
-        if best_group is None:
-            self.live_alignment_last_status = "waiting-board"
-            return None
-        if best_span is not None and best_span > self.live_alignment_max_group_span_ns:
-            self.live_alignment_last_status = "waiting-sync"
-            return None
-        return best_group
 
     def _refresh_transformed_poses(self) -> None:
         for pose in self.poses:
@@ -892,12 +832,16 @@ class LiveAlignmentMixin:
         detection_ok = []
         pnp_failed = []
         pending_parts = []
+        sample_parts = []
         for camera in self.cameras:
             has_image = self.live_alignment_latest_image_stamp_ns[camera.name] > 0
             tag_count = self.live_alignment_last_tag_count.get(camera.name, 0)
             state = self.live_alignment_debug_state.get(camera.name, {})
             stage = str(state.get("stage", "-"))
             pending_parts.append(f"{camera.name}={state.get('pending', 0)}")
+            sample_parts.append(
+                f"{camera.name}={self.live_alignment_inlier_counts.get(camera.name, 0)}/{self.live_alignment_required_samples}"
+            )
             if stage == "detection_ok":
                 detection_ok.append(camera.name)
             elif stage == "pose_board_failed":
@@ -920,9 +864,10 @@ class LiveAlignmentMixin:
             f" | ok={','.join(detection_ok) if detection_ok else 'none'}"
             f" pnp_fail={','.join(pnp_failed) if pnp_failed else 'none'}"
             f" pending={' '.join(pending_parts)}"
+            f" samples={' '.join(sample_parts)}"
         )
         self._emit_alignment_log(
-            f"tags {' '.join(parts)} | seen={seen_text} | usable={usable_text}{missing_text}{stage_text} | {self.alignment_status_text()}"
+            f"board detection | tags {' '.join(parts)} | seen={seen_text} | usable={usable_text}{missing_text}{stage_text} | {self.alignment_status_text()}"
         )
 
     def _emit_alignment_log(self, message: str) -> None:
@@ -937,7 +882,7 @@ class LiveAlignmentMixin:
             "available": bool(self.live_alignment_available),
             "active": bool(self.live_alignment_active),
             "status": self.alignment_status_text(),
-            "reference_camera": self.reference_camera,
+            "alignment_frame": self.live_alignment_frame,
             "result_txt": str(self.live_alignment_result_txt_path),
             "logs": list(self.live_alignment_log_lines[-80:]),
             "debug": self.live_alignment_debug_state,
@@ -945,7 +890,6 @@ class LiveAlignmentMixin:
             "visible_cameras": self.live_alignment_visible_cameras,
             "required_samples": self.live_alignment_required_samples,
             "inlier_counts": self.live_alignment_inlier_counts,
-            "sync_span_ms": self.live_alignment_last_sync_span_ms,
         }
 
     def _reset_live_alignment_debug_state(self) -> None:
@@ -969,7 +913,8 @@ class LiveAlignmentMixin:
             header = (
                 "# Insight live alignment latest result\n"
                 f"# file={self.live_alignment_result_txt_path}\n"
-                f"# reference_camera={self.reference_camera}\n"
+                f"# alignment_frame={self.live_alignment_frame}\n"
+                "# board_origin=center\n"
                 f"# method={self.live_alignment_method}\n"
             )
             self.live_alignment_result_txt_path.write_text(header, encoding="utf-8")
@@ -989,9 +934,9 @@ class LiveAlignmentMixin:
             lines = [
                 "# Insight live alignment latest result",
                 f"time={timestamp}",
-                f"reference_camera={self.reference_camera}",
+                f"alignment_frame={self.live_alignment_frame}",
+                "board_origin=center",
                 f"status={self.alignment_status_text()}",
-                f"sync_span_ms={self.live_alignment_last_sync_span_ms:.1f}",
                 "",
             ]
             for camera in self.cameras:
@@ -1010,13 +955,13 @@ class LiveAlignmentMixin:
                 display_translation = display_transform[:3, 3]
                 anchor_translation = anchor_transform[:3, 3]
                 lines.append(
-                    f"optical_xyz_m=({raw_translation[0]:.6f}, {raw_translation[1]:.6f}, {raw_translation[2]:.6f})"
+                    f"board_to_camera_xyz_m=({raw_translation[0]:.6f}, {raw_translation[1]:.6f}, {raw_translation[2]:.6f})"
                 )
                 lines.append(
-                    f"display_xyz_m=({display_translation[0]:.6f}, {display_translation[1]:.6f}, {display_translation[2]:.6f})"
+                    f"camera_in_board_display_xyz_m=({display_translation[0]:.6f}, {display_translation[1]:.6f}, {display_translation[2]:.6f})"
                 )
                 lines.append(
-                    f"anchor_xyz_m=({anchor_translation[0]:.6f}, {anchor_translation[1]:.6f}, {anchor_translation[2]:.6f})"
+                    f"vio_to_board_anchor_xyz_m=({anchor_translation[0]:.6f}, {anchor_translation[1]:.6f}, {anchor_translation[2]:.6f})"
                 )
                 lines.append("")
             self.live_alignment_result_txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -1049,17 +994,18 @@ class LiveAlignmentMixin:
             for camera_name, transform in source_transforms.items():
                 transforms[camera_name] = self._serialize_transform(transform)
             payload = {
-                "version": 1,
+                "version": 2,
                 "saved_at_epoch_s": time.time(),
                 "saved_at_local": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "reference_camera": self.reference_camera,
+                "alignment_frame": self.live_alignment_frame,
+                "board_origin": "center",
                 "status": self.alignment_status_text(),
                 "display_axis_alignment": bool(self.live_alignment_display_axis_alignment),
                 "anchor_rotation_mode": self.live_alignment_anchor_rotation_mode,
                 "dashboard_horizontal_yaw_mode": self.live_alignment_dashboard_horizontal_yaw_mode,
                 "dashboard_horizontal_yaw_deg": float(self.live_alignment_dashboard_horizontal_yaw_deg),
                 "camera_names": [camera.name for camera in self.cameras],
-                "world_to_reference": transforms,
+                "world_to_board": transforms,
             }
             self.live_alignment_state_path.parent.mkdir(parents=True, exist_ok=True)
             self.live_alignment_state_path.write_text(
@@ -1080,7 +1026,12 @@ class LiveAlignmentMixin:
         except Exception as exc:
             self._emit_alignment_log(f"alignment state load failed: {exc}")
             return
-        transforms_payload = payload.get("world_to_reference")
+        if payload.get("alignment_frame") != self.live_alignment_frame:
+            self._emit_alignment_log(
+                "alignment state ignored: legacy state is not board-center calibration"
+            )
+            return
+        transforms_payload = payload.get("world_to_board")
         if not isinstance(transforms_payload, dict):
             return
         available_cameras = {camera.name for camera in self.cameras}
@@ -1094,11 +1045,6 @@ class LiveAlignmentMixin:
             loaded_transforms[camera_name] = matrix
         if not loaded_transforms:
             return
-        if self.reference_camera in available_cameras:
-            persisted_reference = str(payload.get("reference_camera") or self.reference_camera)
-            if persisted_reference == self.reference_camera:
-                identity = np.eye(4, dtype=np.float64)
-                loaded_transforms.setdefault(self.reference_camera, identity)
         lock = getattr(self, "live_alignment_solution_lock", None)
         if lock is None:
             self.world_to_reference = loaded_transforms
@@ -1150,18 +1096,20 @@ class LiveAlignmentMixin:
         if not self.session_alignment_enabled:
             return "alignment disabled"
         if self.live_alignment_active:
-            if self.live_alignment_last_status == "waiting-reference":
-                return f"Alignment ON | waiting {self.reference_camera}"
             if self.live_alignment_last_status == "waiting-board":
-                return f"Alignment ON | board {self.live_alignment_visible_cameras}/{len(self.cameras)}"
-            if self.live_alignment_last_status == "waiting-sync":
-                return "Alignment ON | sync"
+                return "Alignment ON | waiting board"
+            if self.live_alignment_last_status == "waiting-pose":
+                return "Alignment ON | waiting pose"
             if self.live_alignment_last_status == "collecting":
-                done = min(self.live_alignment_inlier_counts.values(), default=0)
-                return f"Alignment ON | samples {done}/{self.live_alignment_required_samples}"
+                parts = [
+                    f"{camera.name}:{self.live_alignment_inlier_counts.get(camera.name, 0)}/{self.live_alignment_required_samples}"
+                    for camera in self.cameras
+                ]
+                return f"Alignment ON | per-camera samples {' '.join(parts)}"
             if self.live_alignment_last_status == "tracking":
-                return "Alignment ON | tracking"
+                calibrated = ",".join(self.live_alignment_last_calibrated_cameras) or "camera"
+                return f"Alignment ON | calibrated {calibrated}"
             return "Alignment ON"
         if not self.world_to_reference:
             return "Alignment OFF"
-        return "Alignment OFF | locked"
+        return "Alignment OFF | board-center locked"

@@ -13,6 +13,7 @@ IMAGE_STREAMS = {
     "color": {"topic": "color/image_rect_raw", "type": "image"},
     "color_compressed": {"topic": "color/image_rect_raw/compressed", "type": "compressed"},
 }
+DEFAULT_RELAY_PREFIX = "/insight_relay"
 
 WINDOW_DEFAULTS = {
     "dashboard": {"mode": "manual", "x": 0, "y": 0, "width": 960, "height": 1080, "frameless": True},
@@ -28,6 +29,24 @@ def load_setup(config_path: Path) -> Dict:
 
 def camera_base(namespace: str) -> str:
     return f"/{namespace}/camera"
+
+
+def relay_config(config: Dict) -> Dict:
+    raw = config.get("topic_relay", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "enabled": _as_bool(raw.get("enabled", False), False),
+        "prefix": str(raw.get("prefix", DEFAULT_RELAY_PREFIX) or DEFAULT_RELAY_PREFIX).rstrip("/"),
+    }
+
+
+def relay_topic(source_topic: str, config: Dict) -> str:
+    settings = relay_config(config)
+    if not settings["enabled"]:
+        return source_topic
+    prefix = settings["prefix"]
+    return f"{prefix}/{str(source_topic).strip('/')}"
 
 
 def image_topic(namespace: str, stream: str) -> str:
@@ -104,6 +123,8 @@ def build_dashboard_config(config: Dict) -> Dict:
         image_stream = camera["dashboard_image_stream"]
         image_topic_value = camera.get("dashboard_image_topic") or image_topic(namespace, image_stream)
         camera_info_topic_value = camera.get("dashboard_camera_info_topic") or camera_info_topic(namespace, image_stream)
+        image_topic_value = relay_topic(image_topic_value, config)
+        camera_info_topic_value = relay_topic(camera_info_topic_value, config)
         cameras.append(
             {
                 "name": camera["name"],
@@ -125,6 +146,7 @@ def build_dashboard_config(config: Dict) -> Dict:
             pose_topic = vio_topic(namespace, pose_rate)
         else:
             pose_topic = pose_stream
+        pose_topic = relay_topic(pose_topic, config)
         poses.append(
             {
                 "name": camera["name"],
@@ -143,8 +165,10 @@ def build_dashboard_config(config: Dict) -> Dict:
         "windows": build_window_layout(config),
         "session_alignment": {
             "enabled": bool(session_alignment.get("enabled", False)),
+            "alignment_frame": session_alignment.get("alignment_frame", "board_center"),
             "reference_camera": session_alignment.get("reference_camera"),
         },
+        "topic_relay": relay_config(config),
         "cameras": cameras,
         "poses": poses,
     }

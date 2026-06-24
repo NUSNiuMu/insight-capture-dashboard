@@ -1766,7 +1766,7 @@ function renderAlignmentStatus(status) {
   const logs = Array.isArray(status.logs) ? status.logs : [];
   const header = [
     `Status: ${status.status || "unknown"}`,
-    `Reference: ${status.reference_camera || "-"}`,
+    `Frame: ${status.alignment_frame || "board_center"}`,
     `Result: ${status.result_txt || "-"}`
   ];
   alignmentLogOutput.textContent = `${header.join("\n")}\n\n${logs.length ? logs.join("\n") : "No alignment logs yet."}`;
@@ -1786,8 +1786,8 @@ function updateAlignmentStartAvailability() {
   }
   if (alignmentStartHint) {
     alignmentStartHint.textContent = monitorDashboardRunning
-      ? "本地 Monitor Dashboard 已启动，可以开始校准。"
-      : "请先打开本地 Monitor Dashboard，再开始校准。";
+      ? "本地 Monitor Dashboard 已启动；把任意一个相机对准标定板后点击 Start Alignment。"
+      : "请先打开本地 Monitor Dashboard，再做单相机标定板校准。";
   }
 }
 

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from camera_setup import DEFAULT_RELAY_PREFIX, camera_info_topic, image_topic, relay_config, relay_topic
+
 
 DEFAULT_ROSBAG_ROOT = "/workspace/rosbags"
 DEFAULT_RECORD_TOPICS = [
@@ -41,18 +43,17 @@ def build_default_topics(cameras_config: Dict[str, object]) -> List[str]:
         pose_stream = str(camera.get("dashboard_pose_stream", "vio_100hz")).strip("/")
         image_stream = str(camera.get("dashboard_image_stream", "infra1")).strip("/")
         if namespace:
-            topics.add(f"/{namespace}/camera/{pose_stream}")
-            topics.add(f"/{namespace}/camera/{image_stream}/camera_info")
-            if image_stream.startswith("color"):
-                topics.add(f"/{namespace}/camera/{image_stream}/image_raw")
-                topics.add(f"/{namespace}/camera/{image_stream}/image_rect_raw/compressed")
-            else:
-                topics.add(f"/{namespace}/camera/{image_stream}/image_rect_raw")
+            topics.add(relay_topic(f"/{namespace}/camera/{pose_stream}", cameras_config))
+            topics.add(relay_topic(camera_info_topic(namespace, image_stream), cameras_config))
+            topics.add(relay_topic(image_topic(namespace, image_stream), cameras_config))
     return sorted(topics)
 
 
 def topic_summary(topic_name: str) -> Dict[str, str]:
     parts = [part for part in str(topic_name).strip().split("/") if part]
+    relay_prefix_parts = [part for part in DEFAULT_RELAY_PREFIX.strip("/").split("/") if part]
+    if parts[: len(relay_prefix_parts)] == relay_prefix_parts:
+        parts = parts[len(relay_prefix_parts) :]
     if len(parts) >= 3 and parts[1] == "camera":
         camera = parts[0]
         tail = "/".join(parts[2:])
@@ -85,7 +86,8 @@ def build_recording_topic_catalog(cameras_config: Dict[str, object], topics: Lis
         label = str(camera.get("label") or camera.get("dashboard_label") or name or namespace)
         camera_topics = []
         for topic in configured_topics:
-            if topic.startswith(f"/{namespace}/camera/"):
+            relay_root = f"{relay_config(cameras_config)['prefix']}/{namespace}/camera/"
+            if topic.startswith(f"/{namespace}/camera/") or topic.startswith(relay_root):
                 summary = topic_summary(topic)
                 camera_topics.append({"name": topic, "label": summary["tail"], **summary})
                 assigned.add(topic)
@@ -156,7 +158,10 @@ def filter_recordable_live_topics(cameras_config: Dict[str, object], topics: Lis
         if camera.get("enabled", True)
     }
     namespaces.discard("")
+    relay_settings = relay_config(cameras_config)
     allowed_roots = {f"/{namespace}/camera/" for namespace in namespaces}
+    if relay_settings["enabled"]:
+        allowed_roots = {f"{relay_settings['prefix']}/{namespace}/camera/" for namespace in namespaces}
     filtered = []
     for topic in topics:
         topic_name = str(topic)

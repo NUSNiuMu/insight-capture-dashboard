@@ -22,7 +22,7 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy, DurabilityPo
 from sensor_msgs.msg import CameraInfo
 from sensor_msgs.msg import CompressedImage, Image as RosImage
 
-from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
+from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup, relay_topic
 from dashboard_widgets import ImagePanel
 from live_alignment import LiveAlignmentMixin
 from session_alignment import PoseSample
@@ -86,6 +86,7 @@ class DashboardNode(LiveAlignmentMixin, Node):
         super().__init__("insight_multi_camera_dashboard_qt")
 
         raw_config = load_setup(config_path)
+        self.raw_config = raw_config
         config = build_dashboard_config(raw_config)
         enabled_camera_map = {camera["name"]: camera for camera in raw_config.get("cameras", []) if camera.get("enabled", True)}
         self.window_title = config.get("window_title", "Insight Dashboard")
@@ -195,8 +196,8 @@ class DashboardNode(LiveAlignmentMixin, Node):
             self.dashboard_subscriptions.append(info_sub)
             self.get_logger().info(f"CameraInfo: {camera.label} <- {camera.camera_info_topic}")
             if self.live_alignment_available:
-                calib_topic = image_topic(camera.namespace, self.live_alignment_image_stream)
-                calib_info_topic = camera_info_topic(camera.namespace, self.live_alignment_image_stream)
+                calib_topic = relay_topic(image_topic(camera.namespace, self.live_alignment_image_stream), self.raw_config)
+                calib_info_topic = relay_topic(camera_info_topic(camera.namespace, self.live_alignment_image_stream), self.raw_config)
                 calib_type = IMAGE_STREAMS[self.live_alignment_image_stream]["type"]
                 self.live_alignment_topic_by_camera[camera.name] = calib_topic
                 calib_msg_type = CompressedImage if calib_type == "compressed" else RosImage

@@ -35,6 +35,8 @@ set -u
 export ROS_LOG_DIR="${ROS_LOG_DIR:-/tmp/ros_logs}"
 mkdir -p "${ROS_LOG_DIR}"
 
+bash "${SCRIPT_DIR}/start_topic_relay.sh"
+
 echo "ROS_DOMAIN_ID: ${ROS_DOMAIN_ID}"
 echo "DISPLAY: ${DISPLAY}"
 echo "QT_QPA_PLATFORM_PLUGIN_PATH: ${QT_QPA_PLATFORM_PLUGIN_PATH:-unset}"
