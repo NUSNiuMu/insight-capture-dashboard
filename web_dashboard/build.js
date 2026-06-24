@@ -3,8 +3,8 @@ const path = require("path");
 
 const root = __dirname;
 const srcDir = path.join(root, "src");
-const distDir = path.join(root, "dist");
-const staticDir = path.join(distDir, "static");
+const generatedDir = path.join(root, "generated");
+const staticDir = path.join(generatedDir, "static");
 const vendorSrcDir = path.join(srcDir, "vendor");
 const vendorDistDir = path.join(staticDir, "vendor");
 
@@ -20,12 +20,12 @@ function copyFile(source, target) {
   fs.copyFileSync(source, target);
 }
 
-resetDir(distDir);
+resetDir(generatedDir);
 resetDir(staticDir);
 
-copyFile(path.join(srcDir, "index.html"), path.join(distDir, "index.html"));
-copyFile(path.join(srcDir, "3d.html"), path.join(distDir, "3d.html"));
-copyFile(path.join(srcDir, "cameras.html"), path.join(distDir, "cameras.html"));
+copyFile(path.join(srcDir, "index.html"), path.join(generatedDir, "index.html"));
+copyFile(path.join(srcDir, "3d.html"), path.join(generatedDir, "3d.html"));
+copyFile(path.join(srcDir, "cameras.html"), path.join(generatedDir, "cameras.html"));
 copyFile(path.join(srcDir, "app.js"), path.join(staticDir, "app.js"));
 copyFile(path.join(srcDir, "styles.css"), path.join(staticDir, "styles.css"));
 if (fs.existsSync(vendorSrcDir)) {
@@ -35,4 +35,4 @@ if (fs.existsSync(vendorSrcDir)) {
   }
 }
 
-console.log("Built web dashboard into " + distDir);
+console.log("Built web dashboard into " + generatedDir);

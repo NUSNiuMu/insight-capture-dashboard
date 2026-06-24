@@ -1,3 +1,8 @@
 bags/
 logs/
+rosbags/
+tmp_convert_output.yaml
 scripts/__pycache__/
+scripts/dev.bak/
+scripts/dashboard.bak/
+web_dashboard/generated/

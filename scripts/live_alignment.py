@@ -109,6 +109,7 @@ class LiveAlignmentMixin:
             os.environ.get("INSIGHT_ALIGNMENT_STATE", str(default_state_path))
         )
         self.live_alignment_debug_state: Dict[str, Dict[str, object]] = {}
+        self.live_alignment_log_lines: List[str] = []
 
         dictionary_name = str(calibration_config.get("dictionary", "DICT_APRILTAG_36h11"))
         dictionary_id = getattr(cv2.aruco, dictionary_name)
@@ -926,7 +927,26 @@ class LiveAlignmentMixin:
 
     def _emit_alignment_log(self, message: str) -> None:
         text = f"[alignment] {message}"
+        self.live_alignment_log_lines.append(text)
+        if len(self.live_alignment_log_lines) > 300:
+            del self.live_alignment_log_lines[: len(self.live_alignment_log_lines) - 300]
         print(text, flush=True)
+
+    def live_alignment_status_payload(self) -> Dict[str, object]:
+        return {
+            "available": bool(self.live_alignment_available),
+            "active": bool(self.live_alignment_active),
+            "status": self.alignment_status_text(),
+            "reference_camera": self.reference_camera,
+            "result_txt": str(self.live_alignment_result_txt_path),
+            "logs": list(self.live_alignment_log_lines[-80:]),
+            "debug": self.live_alignment_debug_state,
+            "tag_counts": self.live_alignment_last_tag_count,
+            "visible_cameras": self.live_alignment_visible_cameras,
+            "required_samples": self.live_alignment_required_samples,
+            "inlier_counts": self.live_alignment_inlier_counts,
+            "sync_span_ms": self.live_alignment_last_sync_span_ms,
+        }
 
     def _reset_live_alignment_debug_state(self) -> None:
         self.live_alignment_debug_state = {

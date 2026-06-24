@@ -99,33 +99,33 @@ newer_than() {
   find "${source_dir}" -type f -newer "${target_path}" -print -quit | grep -q .
 }
 
-web_dist_stale() {
+web_generated_stale() {
   local web_root="${ROOT_DIR}/web_dashboard"
-  local dist_dir="${web_root}/dist"
-  local marker="${dist_dir}/static/app.js"
+  local generated_dir="${web_root}/generated"
+  local marker="${generated_dir}/static/app.js"
 
-  [[ ! -f "${dist_dir}/index.html" ]] && return 0
-  [[ ! -f "${dist_dir}/3d.html" ]] && return 0
-  [[ ! -f "${dist_dir}/cameras.html" ]] && return 0
+  [[ ! -f "${generated_dir}/index.html" ]] && return 0
+  [[ ! -f "${generated_dir}/3d.html" ]] && return 0
+  [[ ! -f "${generated_dir}/cameras.html" ]] && return 0
   [[ ! -f "${marker}" ]] && return 0
-  [[ ! -f "${dist_dir}/static/styles.css" ]] && return 0
+  [[ ! -f "${generated_dir}/static/styles.css" ]] && return 0
   newer_than "${web_root}/src" "${marker}" && return 0
   [[ "${web_root}/build.js" -nt "${marker}" ]] && return 0
   [[ "${web_root}/package.json" -nt "${marker}" ]] && return 0
   return 1
 }
 
-ensure_web_dist() {
-  if web_dist_stale; then
+ensure_web_generated() {
+  if web_generated_stale; then
     if [[ "${FIX}" == "1" ]]; then
-      log "[fix] rebuilding web_dashboard/dist"
+      log "[fix] rebuilding web_dashboard/generated"
       node "${ROOT_DIR}/web_dashboard/build.js"
     else
-      echo "[stale] web_dashboard/dist; run scripts/dev/check_env.sh --fix" >&2
+      echo "[stale] web_dashboard/generated; run scripts/dev/check_env.sh --fix" >&2
       failures=$((failures + 1))
     fi
   else
-    log "[ok] web_dashboard/dist is current"
+    log "[ok] web_dashboard/generated is current"
   fi
 }
 
@@ -175,8 +175,8 @@ check_container() {
     failures=$((failures + 1))
   fi
 
-  mkdir -p "${INSIGHT_ROSBAG_DIR:-/workspace/rosbags}"
-  ensure_web_dist
+  mkdir -p "${INSIGHT_ROSBAG_DIR:-${ROOT_DIR}/rosbags}"
+  ensure_web_generated
 }
 
 if [[ -f /opt/ros/humble/setup.bash ]]; then

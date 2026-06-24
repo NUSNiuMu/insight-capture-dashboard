@@ -34,7 +34,7 @@ bash "${ROOT_DIR}/scripts/dev/check_env.sh" --fix --quiet
 
 PYTHON_ARGS=(
   --config "${CONFIG_PATH}"
-  --web-root "${WEB_ROOT}/dist"
+  --web-root "${WEB_ROOT}/generated"
 )
 
 if [[ "${HOST_ARG_PRESENT}" != "1" && -n "${INSIGHT_DASHBOARD_HOST:-}" ]]; then

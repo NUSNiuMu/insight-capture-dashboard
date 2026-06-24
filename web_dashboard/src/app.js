@@ -10,10 +10,12 @@ const trailWidthValue = document.getElementById("trail-width-value");
 const cameraDock = document.getElementById("camera-dock");
 const enableCameras = Boolean(cameraDock);
 const cameraPageMeta = document.getElementById("camera-page-meta");
-const postprocessPanel = document.getElementById("postprocess-panel");
 const refreshBagsButton = document.getElementById("refresh-bags-button");
-const rosbagSelect = document.getElementById("rosbag-select");
 const imageSourceSelect = document.getElementById("image-source-select");
+const imageLiveButton = document.getElementById("image-live-button");
+const imagePlayButton = document.getElementById("image-play-button");
+const imageStopButton = document.getElementById("image-stop-button");
+const imagePlaybackStatus = document.getElementById("image-playback-status");
 const bagList = document.getElementById("bag-list");
 const bagRoot = document.getElementById("bag-root");
 const dashboardStatus = document.getElementById("dashboard-status");
@@ -24,7 +26,15 @@ const jobSummary = document.getElementById("job-summary");
 const recordingStatus = document.getElementById("recording-status");
 const startRecordingButton = document.getElementById("start-recording-button");
 const stopRecordingButton = document.getElementById("stop-recording-button");
+const alignmentStartButton = document.getElementById("alignment-start-button");
+const alignmentStopButton = document.getElementById("alignment-stop-button");
+const alignmentLogOutput = document.getElementById("alignment-log-output");
 const postprocessOutput = document.getElementById("postprocess-output");
+const workflowOutputs = Array.from(document.querySelectorAll("[data-workflow-output]"));
+const monitorDashboardButtons = Array.from(document.querySelectorAll("[data-monitor-dashboard-launch]"));
+const monitorDashboardStatuses = Array.from(document.querySelectorAll("[data-monitor-dashboard-status]"));
+const actionBagSelects = Array.from(document.querySelectorAll("[data-action-bag]"));
+const recordTopicGroups = document.getElementById("record-topic-groups");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#57d67c", primitive: "sphere", modelColor: "#d6a07d" },
@@ -56,6 +66,7 @@ const cameraPollState = new Map();
 let maximizedCameraName = null;
 
 const CAMERA_FPS_WINDOW_MS = 1500;
+const CAMERA_METADATA_INTERVAL_MS = 2000;
 const DEFAULT_TRAIL_ENABLED = {
   head: true,
   left_hand: true,
@@ -67,6 +78,12 @@ const SCENE_MAPPING_VERSION = "RUF-v3";
 let manualGripperOpenRatio = null;
 let selectedBagName = "";
 let knownBags = [];
+let selectedRecordTopics = new Set();
+let knownRecordTopics = new Set();
+let recordTopicsInitialized = false;
+let latestLegendPoses = [];
+let currentLegendSignature = "";
+let currentView = "main";
 
 initializeNavigation();
 if (engine && scene) {
@@ -93,6 +110,7 @@ if (enableCameras) {
   startCameraPolling();
 }
 initializePostProcessingPanel();
+initializeMonitorDashboardLauncher();
 
 function resolveWebSocketUrl() {
   const query = new URLSearchParams(window.location.search);
@@ -112,6 +130,7 @@ function initializeNavigation() {
     return;
   }
   const showView = (viewName) => {
+    currentView = viewName;
     views.forEach((view) => view.classList.toggle("active", view.dataset.view === viewName));
     buttons.forEach((button) => button.classList.toggle("active", button.dataset.viewLink === viewName));
     if (window.location.hash !== `#${viewName}`) {
@@ -120,9 +139,19 @@ function initializeNavigation() {
     if (engine) {
       window.setTimeout(() => engine.resize(), 50);
     }
+    if (viewName === "main" || viewName === "images") {
+      pollCameraMetadata();
+    }
+    if (viewName === "recording") {
+      refreshRecordingStatus({ refreshTopics: true });
+    }
+    if (viewName === "alignment") {
+      refreshAlignmentStatus();
+    }
   };
   buttons.forEach((button) => button.addEventListener("click", () => showView(button.dataset.viewLink)));
-  const initial = window.location.hash.replace("#", "") || "main";
+  const initialHash = window.location.hash.replace("#", "");
+  const initial = initialHash === "postprocess" ? "recording" : (initialHash || "main");
   showView(views.some((view) => view.dataset.view === initial) ? initial : "main");
 }
 
@@ -216,10 +245,13 @@ function startCameraPolling() {
     return;
   }
   pollCameraMetadata();
-  window.setInterval(pollCameraMetadata, 100);
+  window.setInterval(pollCameraMetadata, CAMERA_METADATA_INTERVAL_MS);
 }
 
 async function pollCameraMetadata() {
+  if (currentView !== "main" && currentView !== "images") {
+    return;
+  }
   try {
     const response = await fetch(`/api/cameras?ts=${Date.now()}`, { cache: "no-store" });
     if (!response.ok) {
@@ -247,8 +279,10 @@ async function applyPoseUpdate(payload) {
   if (!enable3d || !scene) {
     return;
   }
-  const legendRows = [];
-  for (const pose of payload.poses || []) {
+  const poses = payload.poses || [];
+  latestLegendPoses = poses;
+  renderPoseLegend(poses);
+  for (const pose of poses) {
     const node = ensurePoseNode(pose);
     if (!node) {
       continue;
@@ -280,9 +314,24 @@ async function applyPoseUpdate(payload) {
     applyPoseArticulation(pose, node);
     updateTrailFromPose(pose);
 
+  }
+}
+
+function renderPoseLegend(poses) {
+  if (!legend) {
+    return;
+  }
+  const signature = (poses || [])
+    .map((pose) => `${pose.role}:${pose.name}:${pose.visible ? 1 : 0}:${isTrailEnabled(pose.role) ? 1 : 0}`)
+    .join("|");
+  if (signature === currentLegendSignature) {
+    return;
+  }
+  currentLegendSignature = signature;
+  legend.innerHTML = (poses || []).map((pose) => {
     const style = ROLE_STYLE[pose.role] || { label: pose.role, color: "#cccccc" };
-    legendRows.push(
-      `<div class="legend-row">
+    return `
+      <div class="legend-row">
         <div class="legend-main">
           <span><span class="swatch" style="background:${style.color}"></span><strong>${style.label}</strong></span>
           <span class="legend-meta">${pose.visible ? pose.name : pose.name + " hidden"}</span>
@@ -291,13 +340,9 @@ async function applyPoseUpdate(payload) {
           <span>Trail</span>
           <input type="checkbox" data-role="${escapeHtml(pose.role)}" ${isTrailEnabled(pose.role) ? "checked" : ""}>
         </label>
-      </div>`
-    );
-  }
-  if (legend) {
-    legend.innerHTML = legendRows.join("");
-    bindTrailToggles();
-  }
+      </div>`;
+  }).join("");
+  bindTrailToggles();
 }
 
 function ensurePoseNode(pose) {
@@ -358,10 +403,16 @@ function renderCameraPanels(cameras) {
     updateCameraPanelAspect(panel, camera);
     updateCameraPanelLayout(panel, index);
     const status = panel.querySelector("[data-camera-status]");
-    status.textContent = camera.stale ? "stale" : camera.visible ? "live" : "waiting";
+    const statusText = camera.stale ? "stale" : camera.visible ? "live" : "waiting";
+    if (status.textContent !== statusText) {
+      status.textContent = statusText;
+    }
     const frame = panel.querySelector("[data-camera-frame]");
     if (frame) {
-      frame.textContent = `frame ${camera.frame_id || 0}`;
+      const frameText = `frame ${camera.frame_id || 0}`;
+      if (frame.textContent !== frameText) {
+        frame.textContent = frameText;
+      }
       frame.title = camera.stamp_ns ? `stamp ${camera.stamp_ns}` : "stamp unavailable";
     }
     updateCameraStream(panel, camera);
@@ -424,6 +475,7 @@ function ensureCameraPanel(camera) {
   cameraPanels.set(camera.name, panel);
   cameraPollState.set(camera.name, {
     frameUrl: "",
+    streamUrl: "",
     version: -1,
     aspectInitialized: false,
     backendFps: 0,
@@ -435,6 +487,11 @@ function ensureCameraPanel(camera) {
 function updateCameraPanelAspect(panel, camera) {
   const body = panel.querySelector(".camera-body");
   const rotation = normalizeRotation(camera.rotation_deg || 0);
+  const aspectKey = `${rotation}:${camera.width || 0}:${camera.height || 0}`;
+  if (body.dataset.aspectKey === aspectKey) {
+    return;
+  }
+  body.dataset.aspectKey = aspectKey;
   body.style.setProperty("--camera-rotation", `${rotation}deg`);
   if (camera.width && camera.height) {
     const rotated = rotation === 90 || rotation === 270;
@@ -449,25 +506,28 @@ function updateCameraPanelAspect(panel, camera) {
 }
 
 function updateCameraPanelLayout(panel, index) {
+  if (panel.dataset.layoutIndex === String(index)) {
+    return;
+  }
+  panel.dataset.layoutIndex = String(index);
   panel.style.gridColumn = `${index + 1} / span 1`;
   panel.style.gridRow = "1 / span 1";
 }
 
 function updateCameraStream(panel, camera) {
   const img = panel.querySelector(".camera-frame");
-  const pollState = cameraPollState.get(camera.name) || { frameUrl: "", version: -1 };
+  const pollState = cameraPollState.get(camera.name) || { frameUrl: "", streamUrl: "", version: -1 };
   const version = Number(camera.version || 0);
-  if (
-    pollState.frameUrl === camera.frame_url &&
-    pollState.version === version &&
-    img.getAttribute("src")
-  ) {
+  const streamUrl = camera.stream_url || camera.frame_url;
+  if (pollState.streamUrl === streamUrl && img.getAttribute("src")) {
     return;
   }
   pollState.frameUrl = camera.frame_url;
+  pollState.streamUrl = streamUrl;
   pollState.version = version;
   cameraPollState.set(camera.name, pollState);
-  img.src = `${camera.frame_url}?v=${version}&ts=${Date.now()}`;
+  const separator = streamUrl.includes("?") ? "&" : "?";
+  img.src = `${streamUrl}${separator}ts=${Date.now()}`;
 }
 
 function updateCameraFps(cameraName, fps) {
@@ -518,10 +578,9 @@ function renderCameraFps(cameraName) {
   if (!label) {
     return;
   }
-  const displayFps = computeDisplayedFps(pollState.displayFrameTimes);
   const backendFps = Number(pollState.backendFps || 0);
-  label.textContent = displayFps > 0 ? `${displayFps.toFixed(1)} fps` : "-- fps";
-  label.title = backendFps > 0 ? `rx ${backendFps.toFixed(1)} fps` : "rx -- fps";
+  label.textContent = backendFps > 0 ? `${backendFps.toFixed(1)} fps` : "-- fps";
+  label.title = backendFps > 0 ? `stream rx ${backendFps.toFixed(1)} fps` : "stream rx -- fps";
 }
 
 function normalizeRotation(value) {
@@ -929,7 +988,7 @@ function bindTrailToggles() {
   legend.dataset.trailToggleBound = "true";
   legend.addEventListener("change", (event) => {
     const target = event.target;
-    if (!(target instanceof HTMLInputElement) || !target.matches("input[data-role]")) {
+    if (!target || target.tagName !== "INPUT" || !target.matches("input[data-role]")) {
       return;
     }
     const role = target.getAttribute("data-role");
@@ -940,7 +999,7 @@ function bindTrailToggles() {
 function updateTrails() {
   for (const trail of trailStates.values()) {
     if (!trail.enabled) {
-      clearTrail(trail);
+      disposeTrailMesh(trail);
     }
   }
 }
@@ -962,8 +1021,10 @@ function ensureTrailState(role) {
 function setTrailEnabled(role, enabled) {
   const trail = ensureTrailState(role);
   trail.enabled = Boolean(enabled);
+  currentLegendSignature = "";
+  renderPoseLegend(latestLegendPoses);
   if (!trail.enabled) {
-    clearTrail(trail);
+    disposeTrailMesh(trail);
     return;
   }
   refreshAllTrails();
@@ -975,6 +1036,10 @@ function isTrailEnabled(role) {
 
 function clearTrail(trail) {
   trail.points = [];
+  disposeTrailMesh(trail);
+}
+
+function disposeTrailMesh(trail) {
   if (trail.mesh) {
     trail.mesh.dispose(false, true);
     trail.mesh = null;
@@ -1020,7 +1085,7 @@ function refreshAllTrails() {
 
 function updateTrailFromPose(pose) {
   const trail = ensureTrailState(pose.role);
-  if (!trail.enabled || !pose.visible) {
+  if (!pose.visible) {
     clearTrail(trail);
     return;
   }
@@ -1036,6 +1101,10 @@ function updateTrailFromPose(pose) {
     return;
   }
   trail.points = sourcePoints;
+  if (!trail.enabled) {
+    disposeTrailMesh(trail);
+    return;
+  }
   refreshTrailMesh(trail);
 }
 
@@ -1090,54 +1159,139 @@ function escapeHtml(value) {
 }
 
 function initializePostProcessingPanel() {
-  if (!postprocessPanel) {
+  if (!refreshBagsButton && !imageSourceSelect && !actionBagSelects.length && !startRecordingButton) {
     return;
   }
   refreshBagsButton?.addEventListener("click", refreshRosbags);
-  rosbagSelect?.addEventListener("change", () => {
-    selectedBagName = rosbagSelect.value;
-    if (imageSourceSelect) {
-      imageSourceSelect.value = selectedBagName;
-    }
-    renderBagList(knownBags);
-    setPostprocessOutput(selectedBagName ? `Selected ${selectedBagName}` : "No rosbag selected.");
-  });
   imageSourceSelect?.addEventListener("change", () => {
     selectedBagName = imageSourceSelect.value;
-    if (rosbagSelect) {
-      rosbagSelect.value = selectedBagName;
-    }
+    syncBagSelects(selectedBagName);
     renderBagList(knownBags);
+    if (!selectedBagName) {
+      stopImagePlayback({ clearSelection: true });
+    } else {
+      renderImagePlaybackStatus({ playing: false });
+    }
+  });
+  imageLiveButton?.addEventListener("click", () => stopImagePlayback({ clearSelection: true }));
+  imagePlayButton?.addEventListener("click", playSelectedImageBag);
+  imageStopButton?.addEventListener("click", () => stopImagePlayback());
+  actionBagSelects.forEach((select) => {
+    select.addEventListener("change", () => {
+      selectedBagName = select.value;
+      syncBagSelects(selectedBagName);
+      renderBagList(knownBags);
+      setPostprocessOutput(selectedBagName ? `Selected ${selectedBagName}` : "No rosbag selected.");
+    });
   });
   startRecordingButton?.addEventListener("click", startRecording);
   stopRecordingButton?.addEventListener("click", stopRecording);
-  for (const button of postprocessPanel.querySelectorAll("[data-post-action]")) {
+  alignmentStartButton?.addEventListener("click", startAlignment);
+  alignmentStopButton?.addEventListener("click", stopAlignment);
+  for (const button of document.querySelectorAll("[data-post-action]")) {
     button.addEventListener("click", () => runPostprocessAction(button.dataset.postAction));
   }
   refreshRosbags();
-  refreshRecordingStatus();
-  window.setInterval(refreshRecordingStatus, 1500);
+  refreshRecordingStatus({ refreshTopics: currentView === "recording" });
+  refreshImagePlaybackStatus();
+  window.setInterval(() => refreshRecordingStatus({ refreshTopics: false }), 1500);
+  window.setInterval(refreshImagePlaybackStatus, 1500);
+  window.setInterval(refreshAlignmentStatus, 1500);
+}
+
+function initializeMonitorDashboardLauncher() {
+  if (!monitorDashboardButtons.length && !monitorDashboardStatuses.length) {
+    return;
+  }
+  monitorDashboardButtons.forEach((button) => {
+    button.addEventListener("click", toggleMonitorDashboard);
+  });
+  refreshMonitorDashboardStatus();
+  window.setInterval(refreshMonitorDashboardStatus, 1500);
+}
+
+async function refreshMonitorDashboardStatus() {
+  if (!monitorDashboardStatuses.length) {
+    return;
+  }
+  try {
+    const status = await fetchJson("/api/monitor-dashboard/status");
+    renderMonitorDashboardStatus(status);
+  } catch (error) {
+    setMonitorDashboardStatus(`本地监控窗口状态不可用：${error.message}`);
+  }
+}
+
+async function toggleMonitorDashboard() {
+  if (!monitorDashboardButtons.length) {
+    return;
+  }
+  setMonitorDashboardBusy(true);
+  try {
+    const current = await fetchJson("/api/monitor-dashboard/status");
+    const endpoint = current.running ? "/api/monitor-dashboard/stop" : "/api/monitor-dashboard/start";
+    const status = await fetchJson(endpoint, { method: "POST", body: "{}" });
+    renderMonitorDashboardStatus(status);
+  } catch (error) {
+    setMonitorDashboardStatus(`操作失败：${error.message}`);
+  } finally {
+    setMonitorDashboardBusy(false);
+  }
+}
+
+function renderMonitorDashboardStatus(status) {
+  if (!monitorDashboardStatuses.length) {
+    return;
+  }
+  if (status.running) {
+    const pid = Number(status.pid || 0);
+    setMonitorDashboardStatus(pid > 0
+      ? `本地监控窗口已启动 (PID ${pid})`
+      : "本地监控窗口已启动");
+    setMonitorDashboardButtonText("关闭本地 Monitor Dashboard");
+    return;
+  }
+  setMonitorDashboardButtonText("打开本地 Monitor Dashboard");
+  setMonitorDashboardStatus("本地监控窗口未启动");
+}
+
+function setMonitorDashboardBusy(isBusy) {
+  monitorDashboardButtons.forEach((button) => {
+    button.disabled = isBusy;
+    button.classList.toggle("is-busy", isBusy);
+  });
+}
+
+function setMonitorDashboardStatus(message) {
+  monitorDashboardStatuses.forEach((status) => {
+    status.textContent = message;
+  });
+}
+
+function setMonitorDashboardButtonText(message) {
+  monitorDashboardButtons.forEach((button) => {
+    button.textContent = message;
+  });
 }
 
 async function refreshRosbags() {
-  if (!rosbagSelect) {
+  if (!imageSourceSelect && !actionBagSelects.length && !bagList) {
     return;
   }
   try {
     const payload = await fetchJson("/api/bags");
-    const previous = selectedBagName || rosbagSelect.value;
+    const previous = selectedBagName || imageSourceSelect?.value || "";
     const bags = payload.bags || [];
     knownBags = bags;
     if (bagRoot) {
       bagRoot.textContent = `Root: ${payload.rosbag_root || "unknown"}`;
     }
-    rosbagSelect.innerHTML = "";
     if (imageSourceSelect) {
       imageSourceSelect.innerHTML = "";
+      imageSourceSelect.append(new Option("Live stream", ""));
     }
     if (!bags.length) {
-      rosbagSelect.append(new Option("No rosbags found", ""));
-      imageSourceSelect?.append(new Option("Live stream", ""));
+      populateActionBagSelects([]);
       selectedBagName = "";
       renderBagList([]);
       if (bagSummary) {
@@ -1147,22 +1301,102 @@ async function refreshRosbags() {
     }
     for (const bag of bags) {
       const label = `${bag.name} (${formatBytes(bag.size_bytes)})`;
-      rosbagSelect.append(new Option(label, bag.name));
       imageSourceSelect?.append(new Option(label, bag.name));
     }
-    selectedBagName = bags.some((bag) => bag.name === previous) ? previous : bags[0].name;
-    rosbagSelect.value = selectedBagName;
-    if (imageSourceSelect) {
-      imageSourceSelect.value = selectedBagName;
-    }
+    populateActionBagSelects(bags);
+    selectedBagName = bags.some((bag) => bag.name === previous) ? previous : "";
+    syncBagSelects(selectedBagName);
     renderBagList(bags);
     if (bagSummary) {
       bagSummary.textContent = `${bags.length} bag${bags.length === 1 ? "" : "s"} found`;
     }
-    setPostprocessOutput(`Selected ${selectedBagName}`);
   } catch (error) {
     setPostprocessOutput(`Bag refresh failed: ${error.message}`);
   }
+}
+
+async function playSelectedImageBag() {
+  if (!selectedBagName) {
+    setImagePlaybackStatus("Select a rosbag to play.");
+    return;
+  }
+  setImagePlaybackBusy(true);
+  try {
+    const status = await fetchJson("/api/playback/start", {
+      method: "POST",
+      body: JSON.stringify({ bag_id: selectedBagName })
+    });
+    renderImagePlaybackStatus(status);
+    await pollCameraMetadata();
+  } catch (error) {
+    setImagePlaybackStatus(`Playback failed: ${error.message}`);
+  } finally {
+    setImagePlaybackBusy(false);
+  }
+}
+
+async function stopImagePlayback({ clearSelection = false } = {}) {
+  setImagePlaybackBusy(true);
+  try {
+    const status = await fetchJson("/api/playback/stop", { method: "POST", body: "{}" });
+    if (clearSelection && imageSourceSelect) {
+      imageSourceSelect.value = "";
+    }
+    if (clearSelection) {
+      selectedBagName = "";
+    }
+    renderImagePlaybackStatus(status);
+    await pollCameraMetadata();
+  } catch (error) {
+    setImagePlaybackStatus(`Stop playback failed: ${error.message}`);
+  } finally {
+    setImagePlaybackBusy(false);
+  }
+}
+
+async function refreshImagePlaybackStatus() {
+  if (!imagePlaybackStatus) {
+    return;
+  }
+  try {
+    renderImagePlaybackStatus(await fetchJson("/api/playback/status"));
+  } catch (error) {
+    setImagePlaybackStatus(`Playback status unavailable: ${error.message}`);
+  }
+}
+
+function renderImagePlaybackStatus(status) {
+  if (status.playing) {
+    setImagePlaybackStatus(`Playing ${status.bag || "selected bag"}`);
+    if (imagePlayButton) {
+      imagePlayButton.disabled = true;
+    }
+    if (imageStopButton) {
+      imageStopButton.disabled = false;
+    }
+    return;
+  }
+  setImagePlaybackStatus("Live stream");
+  if (imagePlayButton) {
+    imagePlayButton.disabled = !selectedBagName;
+  }
+  if (imageStopButton) {
+    imageStopButton.disabled = true;
+  }
+}
+
+function setImagePlaybackStatus(message) {
+  if (imagePlaybackStatus) {
+    imagePlaybackStatus.textContent = message;
+  }
+}
+
+function setImagePlaybackBusy(isBusy) {
+  [imageLiveButton, imagePlayButton, imageStopButton].forEach((button) => {
+    if (button) {
+      button.classList.toggle("is-busy", isBusy);
+    }
+  });
 }
 
 function renderBagList(bags) {
@@ -1174,7 +1408,7 @@ function renderBagList(bags) {
     return;
   }
   bagList.innerHTML = bags.map((bag) => {
-    const topics = (bag.topics || []).slice(0, 4).map((topic) => escapeHtml(topic.name)).join(", ");
+    const topics = (bag.topics || []).slice(0, 4).map((topic) => escapeHtml(topic.short_name || topic.name)).join(", ");
     return `
       <button class="bag-row ${bag.name === selectedBagName ? "selected" : ""}" type="button" data-bag-name="${escapeHtml(bag.name)}">
         <div>
@@ -1184,31 +1418,35 @@ function renderBagList(bags) {
         <div>${formatBytes(bag.size_bytes)}</div>
         <div>${formatDuration(bag.duration_sec)}</div>
         <div>${topics || "topics pending"}</div>
-        <div>${bag.has_results ? "results ready" : "no results"}</div>
+        <div class="result-chips">${renderResultChips(bag.result_statuses || {})}</div>
       </button>`;
   }).join("");
   bagList.querySelectorAll("[data-bag-name]").forEach((row) => {
     row.addEventListener("click", () => {
       selectedBagName = row.dataset.bagName;
-      if (rosbagSelect) {
-        rosbagSelect.value = selectedBagName;
-      }
-      if (imageSourceSelect) {
-        imageSourceSelect.value = selectedBagName;
-      }
+      syncBagSelects(selectedBagName);
       renderBagList(knownBags);
       setPostprocessOutput(`Selected ${selectedBagName}`);
     });
   });
 }
 
-async function refreshRecordingStatus() {
+async function refreshRecordingStatus(options = {}) {
   if (!recordingStatus) {
+    return;
+  }
+  if (currentView !== "recording" && !options.force) {
     return;
   }
   try {
     const status = await fetchJson("/api/recording/status");
     renderRecordingStatus(status);
+    if (options.refreshTopics) {
+      const catalog = await fetchJson("/api/recording/topics");
+      renderTopicCatalog(catalog);
+    } else {
+      renderTopicCatalog(status.topic_catalog);
+    }
   } catch (error) {
     recordingStatus.textContent = `Recording status unavailable: ${error.message}`;
   }
@@ -1217,7 +1455,17 @@ async function refreshRecordingStatus() {
 async function startRecording() {
   setRecordingBusy(true);
   try {
-    const status = await fetchJson("/api/recording/start", { method: "POST", body: "{}" });
+    if (recordTopicGroups) {
+      await refreshRecordingStatus({ refreshTopics: true, force: true });
+    }
+    const topics = recordTopicGroups
+      ? Array.from(recordTopicGroups.querySelectorAll("[data-record-topic]:checked")).map((checkbox) => checkbox.value)
+      : Array.from(selectedRecordTopics);
+    if (recordTopicGroups && topics.length === 0) {
+      throw new Error("Select at least one topic to record.");
+    }
+    const body = recordTopicGroups ? JSON.stringify({ topics }) : "{}";
+    const status = await fetchJson("/api/recording/start", { method: "POST", body });
     renderRecordingStatus(status);
     setPostprocessOutput(`Recording started: ${status.output_path || "pending output path"}`);
   } catch (error) {
@@ -1241,11 +1489,79 @@ async function stopRecording() {
   }
 }
 
+async function refreshAlignmentStatus() {
+  if (!alignmentLogOutput || currentView !== "alignment") {
+    return;
+  }
+  try {
+    renderAlignmentStatus(await fetchJson("/api/alignment/status"));
+  } catch (error) {
+    alignmentLogOutput.textContent = `Alignment status unavailable: ${error.message}`;
+  }
+}
+
+async function startAlignment() {
+  setAlignmentBusy(true);
+  try {
+    renderAlignmentStatus(await fetchJson("/api/alignment/start", { method: "POST", body: "{}" }));
+  } catch (error) {
+    if (alignmentLogOutput) {
+      alignmentLogOutput.textContent = `Start alignment failed: ${error.message}`;
+    }
+  } finally {
+    setAlignmentBusy(false);
+  }
+}
+
+async function stopAlignment() {
+  setAlignmentBusy(true);
+  try {
+    renderAlignmentStatus(await fetchJson("/api/alignment/stop", { method: "POST", body: "{}" }));
+  } catch (error) {
+    if (alignmentLogOutput) {
+      alignmentLogOutput.textContent = `Stop alignment failed: ${error.message}`;
+    }
+  } finally {
+    setAlignmentBusy(false);
+  }
+}
+
+function renderAlignmentStatus(status) {
+  if (!alignmentLogOutput) {
+    return;
+  }
+  const logs = Array.isArray(status.logs) ? status.logs : [];
+  const header = [
+    `Status: ${status.status || "unknown"}`,
+    `Reference: ${status.reference_camera || "-"}`,
+    `Result: ${status.result_txt || "-"}`
+  ];
+  alignmentLogOutput.textContent = `${header.join("\n")}\n\n${logs.length ? logs.join("\n") : "No alignment logs yet."}`;
+  if (alignmentStartButton) {
+    alignmentStartButton.disabled = Boolean(status.active);
+  }
+  if (alignmentStopButton) {
+    alignmentStopButton.disabled = !status.active;
+  }
+}
+
+function setAlignmentBusy(isBusy) {
+  [alignmentStartButton, alignmentStopButton].forEach((button) => {
+    if (button) {
+      button.classList.toggle("is-busy", isBusy);
+    }
+  });
+}
+
 async function runPostprocessAction(action) {
-  if (!selectedBagName) {
+  const actionSelect = actionBagSelects.find((select) => select.dataset.actionBag === action);
+  const bagName = actionSelect?.value || selectedBagName;
+  if (!bagName) {
     setPostprocessOutput("Select a rosbag before running post processing.");
     return;
   }
+  selectedBagName = bagName;
+  syncBagSelects(selectedBagName);
   setPostprocessOutput(`Running ${action} on ${selectedBagName}...`);
   try {
     const result = await fetchJson(`/api/process/${encodeURIComponent(action)}`, {
@@ -1260,6 +1576,131 @@ async function runPostprocessAction(action) {
   } catch (error) {
     setPostprocessOutput(`Post processing failed: ${error.message}`);
   }
+}
+
+function populateActionBagSelects(bags) {
+  actionBagSelects.forEach((select) => {
+    const previous = select.value;
+    select.innerHTML = "";
+    if (!bags.length) {
+      select.append(new Option("No rosbags found", ""));
+      return;
+    }
+    for (const bag of bags) {
+      select.append(new Option(`${bag.name} (${formatBytes(bag.size_bytes)})`, bag.name));
+    }
+    select.value = bags.some((bag) => bag.name === previous) ? previous : bags[0].name;
+  });
+}
+
+function syncBagSelects(value) {
+  if (imageSourceSelect) {
+    imageSourceSelect.value = value;
+  }
+  actionBagSelects.forEach((select) => {
+    if (value) {
+      select.value = value;
+    }
+  });
+}
+
+function renderResultChips(statuses) {
+  const labels = [
+    ["trajectory-scoring", "Score"],
+    ["trajectory-optimization", "Optimize"],
+    ["coordinate-alignment", "Align"]
+  ];
+  return labels
+    .filter(([key]) => key !== "coordinate-alignment" || Boolean(statuses[key]?.ready))
+    .map(([key, label]) => {
+      const ready = Boolean(statuses[key]?.ready);
+      return `<span class="result-chip ${ready ? "ready" : ""}">${ready ? label : `No ${label}`}</span>`;
+    })
+    .join("");
+}
+
+function renderTopicCatalog(catalog) {
+  if (!recordTopicGroups || !catalog) {
+    return;
+  }
+  const allTopics = Array.isArray(catalog.topics) ? catalog.topics : [];
+  if (!recordTopicsInitialized) {
+    selectedRecordTopics = new Set(allTopics);
+    knownRecordTopics = new Set(allTopics);
+    recordTopicsInitialized = true;
+  } else {
+    for (const topic of allTopics) {
+      if (!knownRecordTopics.has(topic)) {
+        selectedRecordTopics.add(topic);
+      }
+    }
+    knownRecordTopics = new Set(allTopics);
+  }
+  const cameraGroups = Array.isArray(catalog.cameras) ? catalog.cameras : [];
+  const otherTopics = Array.isArray(catalog.other) ? catalog.other : [];
+  const cameraHtml = cameraGroups.length
+    ? cameraGroups.map(renderCameraTopicGroup).join("")
+    : `<div class="empty-state">No detected cameras.</div>`;
+  const otherHtml = otherTopics.length
+    ? renderTopicList("Other", otherTopics)
+    : `<div class="empty-state">No other topics configured.</div>`;
+  recordTopicGroups.innerHTML = `${cameraHtml}${otherHtml}`;
+  recordTopicGroups.querySelectorAll("[data-record-camera-toggle]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const group = checkbox.closest(".topic-group");
+      if (!group) {
+        return;
+      }
+      group.querySelectorAll("[data-record-topic]").forEach((topicCheckbox) => {
+        topicCheckbox.checked = checkbox.checked;
+        if (topicCheckbox.checked) {
+          selectedRecordTopics.add(topicCheckbox.value);
+        } else {
+          selectedRecordTopics.delete(topicCheckbox.value);
+        }
+      });
+    });
+  });
+  recordTopicGroups.querySelectorAll("[data-record-topic]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        selectedRecordTopics.add(checkbox.value);
+      } else {
+        selectedRecordTopics.delete(checkbox.value);
+      }
+    });
+  });
+}
+
+function renderCameraTopicGroup(group) {
+  if (!group.detected) {
+    return `<details class="topic-group" open><summary>${escapeHtml(group.label || group.name)}</summary><div class="empty-state">Camera not detected.</div></details>`;
+  }
+  if (!group.topics || !group.topics.length) {
+    return `<details class="topic-group" open><summary>${escapeHtml(group.label || group.name)}</summary><div class="empty-state">No configured topics for this camera.</div></details>`;
+  }
+  return renderTopicList(group.label || group.name, group.topics);
+}
+
+function renderTopicList(title, topics) {
+  const allChecked = topics.length > 0 && topics.every((topic) => selectedRecordTopics.has(topic.name));
+  return `
+    <details class="topic-group" open>
+      <summary>
+        <label class="topic-group-toggle">
+          <input type="checkbox" data-record-camera-toggle ${allChecked ? "checked" : ""}>
+          <span>${escapeHtml(title)}</span>
+        </label>
+      </summary>
+      <div class="topic-list">
+        ${topics.map((topic) => `
+          <label class="topic-option">
+            <input type="checkbox" data-record-topic value="${escapeHtml(topic.name)}" ${selectedRecordTopics.has(topic.name) ? "checked" : ""}>
+            <span>${escapeHtml(topic.label || topic.tail || topic.name)}</span>
+          </label>
+        `).join("")}
+      </div>
+    </details>`;
 }
 
 function renderRecordingStatus(status) {
@@ -1288,6 +1729,9 @@ function setPostprocessOutput(message) {
   if (postprocessOutput) {
     postprocessOutput.textContent = message;
   }
+  workflowOutputs.forEach((output) => {
+    output.textContent = message;
+  });
 }
 
 async function fetchJson(url, options = {}) {

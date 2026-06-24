@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const url = require("url");
 
-const root = path.join(__dirname, "dist");
+const root = path.join(__dirname, "generated");
 const port = Number(process.env.PORT || 8080);
 
 const types = {

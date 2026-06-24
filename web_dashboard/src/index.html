@@ -23,7 +23,10 @@
           <button type="button" data-view-link="trajectory">3D Trajectory</button>
           <button type="button" data-view-link="images">Images</button>
           <button type="button" data-view-link="bags">Rosbags</button>
-          <button type="button" data-view-link="postprocess">Post Process</button>
+          <button type="button" data-view-link="recording">Recording</button>
+          <button type="button" data-view-link="alignment">Alignment</button>
+          <button type="button" data-view-link="scoring">Scoring</button>
+          <button type="button" data-view-link="optimization">Optimization</button>
         </nav>
       </aside>
 
@@ -35,6 +38,10 @@
               <h1>Insight Capture Control Room</h1>
             </div>
             <div class="page-meta" id="dashboard-status">Starting</div>
+          </div>
+          <div class="dashboard-launch-banner">
+            <button class="primary-button" type="button" data-monitor-dashboard-launch>启动外部监控窗口</button>
+            <span class="image-launch-status" data-monitor-dashboard-status>本地监控窗口未启动</span>
           </div>
           <div class="summary-grid">
             <button class="summary-tile" type="button" data-view-link="trajectory">
@@ -49,19 +56,12 @@
               <span>Rosbags</span>
               <strong id="bag-summary">Bags pending</strong>
             </button>
-            <button class="summary-tile" type="button" data-view-link="postprocess">
-              <span>Post Process</span>
+            <button class="summary-tile" type="button" data-view-link="recording">
+              <span>Recording</span>
               <strong id="job-summary">No job yet</strong>
             </button>
           </div>
-          <section class="dashboard-panel">
-            <h2>Selected Rosbag</h2>
-            <label class="bag-picker" for="rosbag-select">
-              <span>Data source</span>
-              <select id="rosbag-select"></select>
-            </label>
-            <pre class="postprocess-output" id="postprocess-output">No rosbag selected.</pre>
-          </section>
+          <pre class="postprocess-output main-output" id="postprocess-output" data-workflow-output>No workflow action yet.</pre>
         </section>
 
         <section class="page-view trajectory-view" data-view="trajectory">
@@ -97,6 +97,14 @@
           <div class="image-source-row">
             <span>Rosbag / source</span>
             <select id="image-source-select"></select>
+            <button class="secondary-button" id="image-live-button" type="button">Live</button>
+            <button class="primary-button" id="image-play-button" type="button">Play</button>
+            <button class="secondary-button" id="image-stop-button" type="button">Stop</button>
+            <span class="image-playback-status" id="image-playback-status">Live stream</span>
+          </div>
+          <div class="image-launch-row">
+            <button class="primary-button" type="button" data-monitor-dashboard-launch>启动外部监控窗口</button>
+            <span class="image-launch-status" data-monitor-dashboard-status>本地监控窗口未启动</span>
           </div>
           <div class="camera-dock camera-dock-page" id="camera-dock"></div>
         </section>
@@ -113,11 +121,11 @@
           <div class="bag-list" id="bag-list"></div>
         </section>
 
-        <section class="page-view postprocess-view" data-view="postprocess">
+        <section class="page-view workflow-page" data-view="recording">
           <div class="page-header">
             <div>
-              <div class="panel-eyebrow">Workflow</div>
-              <h1>Post Processing</h1>
+              <div class="panel-eyebrow">Recording</div>
+              <h1>Rosbag Recording</h1>
             </div>
             <div class="recording-status" id="recording-status">Recording status pending</div>
           </div>
@@ -125,11 +133,61 @@
             <button class="primary-button" id="start-recording-button" type="button">Start Recording</button>
             <button class="secondary-button" id="stop-recording-button" type="button">Stop Recording</button>
           </div>
-          <div class="postprocess-actions" id="postprocess-panel">
-            <button type="button" data-post-action="align">Coordinate Alignment</button>
-            <button type="button" data-post-action="score">Trajectory Scoring</button>
-            <button type="button" data-post-action="optimize">Trajectory Optimization</button>
+          <div class="topic-groups" id="record-topic-groups"></div>
+          <pre class="postprocess-output" data-workflow-output>No recording action yet.</pre>
+        </section>
+
+        <section class="page-view workflow-page" data-view="alignment">
+          <div class="page-header">
+            <div>
+              <div class="panel-eyebrow">Calibration</div>
+              <h1>Coordinate Alignment</h1>
+            </div>
+            <span class="image-launch-status" data-monitor-dashboard-status>本地监控窗口未启动</span>
           </div>
+          <div class="workflow-controls">
+            <button class="primary-button" type="button" data-monitor-dashboard-launch>打开本地 Monitor Dashboard</button>
+            <button class="secondary-button" id="alignment-start-button" type="button">Start Alignment</button>
+            <button class="secondary-button" id="alignment-stop-button" type="button">Stop Alignment</button>
+          </div>
+          <pre class="postprocess-output alignment-log-output" id="alignment-log-output">Alignment log pending.</pre>
+          <pre class="postprocess-output" data-workflow-output>校准应在录制 rosbag 之前完成。</pre>
+        </section>
+
+        <section class="page-view workflow-page" data-view="scoring">
+          <div class="page-header">
+            <div>
+              <div class="panel-eyebrow">Evaluation</div>
+              <h1>Trajectory Scoring</h1>
+            </div>
+            <div class="page-meta">Select a rosbag to score</div>
+          </div>
+          <div class="workflow-controls">
+            <label class="bag-picker">
+              <span>Rosbag</span>
+              <select class="action-bag-select" data-action-bag="score"></select>
+            </label>
+            <button class="primary-button" type="button" data-post-action="score">Run Scoring</button>
+          </div>
+          <pre class="postprocess-output" data-workflow-output>No scoring result yet.</pre>
+        </section>
+
+        <section class="page-view workflow-page" data-view="optimization">
+          <div class="page-header">
+            <div>
+              <div class="panel-eyebrow">Optimization</div>
+              <h1>Trajectory Optimization</h1>
+            </div>
+            <div class="page-meta">Select a rosbag to optimize</div>
+          </div>
+          <div class="workflow-controls">
+            <label class="bag-picker">
+              <span>Rosbag</span>
+              <select class="action-bag-select" data-action-bag="optimize"></select>
+            </label>
+            <button class="primary-button" type="button" data-post-action="optimize">Run Optimization</button>
+          </div>
+          <pre class="postprocess-output" data-workflow-output>No optimization result yet.</pre>
         </section>
       </main>
     </div>

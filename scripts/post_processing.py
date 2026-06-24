@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import contextlib
 import os
 import re
 import signal
@@ -9,13 +10,19 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 
 DEFAULT_ROSBAG_ROOT = "/workspace/rosbags"
 DEFAULT_RECORD_TOPICS = [
     "/tf_static",
 ]
+
+RESULT_ACTIONS = {
+    "coordinate-alignment": "coordinate-alignment.json",
+    "trajectory-scoring": "trajectory-scoring.json",
+    "trajectory-optimization": "trajectory-optimization.json",
+}
 
 
 def load_json_config(path: Path) -> Dict[str, object]:
@@ -44,6 +51,92 @@ def build_default_topics(cameras_config: Dict[str, object]) -> List[str]:
     return sorted(topics)
 
 
+def topic_summary(topic_name: str) -> Dict[str, str]:
+    parts = [part for part in str(topic_name).strip().split("/") if part]
+    if len(parts) >= 3 and parts[1] == "camera":
+        camera = parts[0]
+        tail = "/".join(parts[2:])
+        return {
+            "camera": camera,
+            "tail": tail,
+            "short_name": f"{camera} - {tail}",
+            "group": camera,
+        }
+    tail = parts[-1] if parts else str(topic_name)
+    return {
+        "camera": "",
+        "tail": tail,
+        "short_name": f"Other - {tail}",
+        "group": "Other",
+    }
+
+
+def build_recording_topic_catalog(cameras_config: Dict[str, object], topics: List[str]) -> Dict[str, object]:
+    configured_topics = list(dict.fromkeys(str(topic) for topic in topics))
+    enabled_cameras = [
+        camera for camera in cameras_config.get("cameras", [])
+        if camera.get("enabled", True)
+    ]
+    camera_groups = []
+    assigned = set()
+    for camera in enabled_cameras:
+        name = str(camera.get("name") or camera.get("namespace") or "").strip()
+        namespace = str(camera.get("namespace") or name).strip("/")
+        label = str(camera.get("label") or camera.get("dashboard_label") or name or namespace)
+        camera_topics = []
+        for topic in configured_topics:
+            if topic.startswith(f"/{namespace}/camera/"):
+                summary = topic_summary(topic)
+                camera_topics.append({"name": topic, "label": summary["tail"], **summary})
+                assigned.add(topic)
+        camera_groups.append(
+            {
+                "name": name or namespace,
+                "namespace": namespace,
+                "label": label,
+                "detected": bool(camera_topics),
+                "topics": camera_topics,
+            }
+        )
+    other_topics = []
+    for topic in configured_topics:
+        if topic in assigned:
+            continue
+        summary = topic_summary(topic)
+        other_topics.append({"name": topic, "label": summary["tail"], **summary})
+    return {
+        "cameras": camera_groups,
+        "other": other_topics,
+        "topics": configured_topics,
+    }
+
+
+def discover_live_topics(
+    cameras_config: Dict[str, object],
+    timeout_sec: float = 2.0,
+) -> Dict[str, object]:
+    try:
+        completed = subprocess.run(
+            ["ros2", "topic", "list", "-t"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+    except Exception:
+        return build_recording_topic_catalog(cameras_config, [])
+
+    topics = []
+    for line in completed.stdout.splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        name = raw.split(" ", 1)[0].strip()
+        if name.startswith("/"):
+            topics.append(name)
+    return build_recording_topic_catalog(cameras_config, sorted(set(topics)))
+
+
 @dataclass
 class RosbagEntry:
     name: str
@@ -55,8 +148,10 @@ class RosbagEntry:
     duration_sec: Optional[float] = None
     message_count: Optional[int] = None
     topics: Optional[List[Dict[str, object]]] = None
+    result_statuses: Optional[Dict[str, Dict[str, object]]] = None
 
     def to_dict(self) -> Dict[str, object]:
+        result_statuses = self.result_statuses or {}
         return {
             "name": self.name,
             "path": str(self.path),
@@ -66,7 +161,8 @@ class RosbagEntry:
             "duration_sec": self.duration_sec,
             "message_count": self.message_count,
             "topics": self.topics or [],
-            "has_results": bool(self.result_path and self.result_path.exists()),
+            "result_statuses": result_statuses,
+            "has_results": any(bool(item.get("ready")) for item in result_statuses.values()),
             "result_path": str(self.result_path) if self.result_path else None,
         }
 
@@ -89,6 +185,7 @@ class RosbagStore:
                 if not metadata.exists() and not db_files:
                     continue
                 info = self._metadata_info(metadata)
+                result_path = self.results_root / child.name
                 entries.append(
                     RosbagEntry(
                         name=child.name,
@@ -96,13 +193,15 @@ class RosbagStore:
                         size_bytes=self._path_size(child),
                         modified_time=child.stat().st_mtime,
                         metadata_path=metadata if metadata.exists() else None,
-                        result_path=self.results_root / child.name,
+                        result_path=result_path,
                         duration_sec=info.get("duration_sec"),
                         message_count=info.get("message_count"),
                         topics=info.get("topics"),
+                        result_statuses=self._result_statuses(result_path),
                     )
                 )
             elif child.suffix in {".db3", ".mcap"}:
+                result_path = self.results_root / child.stem
                 entries.append(
                     RosbagEntry(
                         name=child.name,
@@ -110,7 +209,8 @@ class RosbagStore:
                         size_bytes=child.stat().st_size,
                         modified_time=child.stat().st_mtime,
                         metadata_path=None,
-                        result_path=self.results_root / child.stem,
+                        result_path=result_path,
+                        result_statuses=self._result_statuses(result_path),
                     )
                 )
         return entries
@@ -163,16 +263,37 @@ class RosbagStore:
                         "name": name_match.group(1).strip().strip("'\""),
                         "type": type_match.group(1).strip().strip("'\"") if type_match else "",
                         "message_count": int(count_match.group(1)) if count_match else None,
-                    }
+                    } | topic_summary(name_match.group(1).strip().strip("'\""))
                 )
         return {"duration_sec": duration_sec, "message_count": message_count, "topics": topics}
 
+    @staticmethod
+    def _result_statuses(result_dir: Path) -> Dict[str, Dict[str, object]]:
+        statuses = {}
+        for action, file_name in RESULT_ACTIONS.items():
+            path = result_dir / file_name
+            statuses[action] = {
+                "ready": path.exists(),
+                "path": str(path),
+                "modified_time": path.stat().st_mtime if path.exists() else None,
+            }
+        return statuses
+
 
 class RecordingManager:
-    def __init__(self, store: RosbagStore, topics: List[str], max_cache_size: int = 2147483648) -> None:
+    def __init__(
+        self,
+        store: RosbagStore,
+        topics: List[str],
+        max_cache_size: int = 2147483648,
+        topic_catalog: Optional[Dict[str, object]] = None,
+        topic_catalog_provider: Optional[Callable[[], Dict[str, object]]] = None,
+    ) -> None:
         self.store = store
         self.topics = topics
         self.max_cache_size = int(max_cache_size)
+        self.topic_catalog = topic_catalog or {"cameras": [], "other": [], "topics": topics}
+        self.topic_catalog_provider = topic_catalog_provider
         self.process: Optional[subprocess.Popen] = None
         self.output_path: Optional[Path] = None
         self.started_at: Optional[float] = None
@@ -180,13 +301,21 @@ class RecordingManager:
     def status(self) -> Dict[str, object]:
         if self.process and self.process.poll() is not None:
             self.process = None
+        topic_catalog = self.current_topic_catalog(refresh=False)
         return {
             "recording": self.process is not None,
             "pid": self.process.pid if self.process else None,
             "output_path": str(self.output_path) if self.output_path else None,
             "started_at": self.started_at,
-            "topics": self.topics,
+            "topics": topic_catalog.get("topics", self.topics),
+            "topic_catalog": topic_catalog,
         }
+
+    def current_topic_catalog(self, refresh: bool = True) -> Dict[str, object]:
+        if not refresh or not self.topic_catalog_provider:
+            return self.topic_catalog
+        self.topic_catalog = self.topic_catalog_provider()
+        return self.topic_catalog
 
     def start(self, topics: Optional[List[str]] = None) -> Dict[str, object]:
         if self.process and self.process.poll() is None:
@@ -335,3 +464,61 @@ class PostProcessor:
         result["result_file"] = str(target)
         target.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         return result
+
+
+class RosbagPlaybackManager:
+    def __init__(self, store: RosbagStore, topic_remaps: Optional[Dict[str, str]] = None) -> None:
+        self.store = store
+        self.topic_remaps = topic_remaps or {}
+        self.process: Optional[subprocess.Popen] = None
+        self.bag_name: Optional[str] = None
+        self.started_at: Optional[float] = None
+
+    def status(self) -> Dict[str, object]:
+        if self.process and self.process.poll() is not None:
+            self.process = None
+            self.bag_name = None
+            self.started_at = None
+        return {
+            "playing": self.process is not None,
+            "pid": self.process.pid if self.process else None,
+            "bag": self.bag_name,
+            "started_at": self.started_at,
+        }
+
+    def play(self, bag_name: str) -> Dict[str, object]:
+        self.stop()
+        bag = self.store.resolve_bag(bag_name)
+        command = ["ros2", "bag", "play", str(bag.path), "--loop"]
+        if self.topic_remaps:
+            command.extend(["--remap", *[f"{source}:={target}" for source, target in self.topic_remaps.items()]])
+        self.process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+            env=os.environ.copy(),
+        )
+        self.bag_name = bag.name
+        self.started_at = time.time()
+        return self.status()
+
+    def stop(self, timeout_sec: float = 3.0) -> Dict[str, object]:
+        if not self.process or self.process.poll() is not None:
+            self.process = None
+            self.bag_name = None
+            self.started_at = None
+            return self.status()
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(os.getpgid(self.process.pid), signal.SIGINT)
+        try:
+            self.process.wait(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+            self.process.wait(timeout=2.0)
+        self.process = None
+        self.bag_name = None
+        self.started_at = None
+        return self.status()

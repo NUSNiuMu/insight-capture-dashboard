@@ -4,54 +4,12 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Insight 3D Dashboard</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <script src="/static/vendor/babylon.js"></script>
-    <script src="/static/vendor/babylonjs.loaders.min.js"></script>
+    <meta http-equiv="refresh" content="0; url=/#trajectory">
   </head>
-  <body data-dashboard-view="3d">
-    <div class="shell shell-3d-only">
-      <div class="hud">
-        <section class="postprocess-panel" id="postprocess-panel">
-          <div class="panel-header">
-            <div>
-              <div class="panel-eyebrow">Rosbag Workflow</div>
-              <h2>Post Processing</h2>
-            </div>
-            <button class="icon-button" id="refresh-bags-button" type="button" title="Refresh bags">Refresh</button>
-          </div>
-          <div class="recording-row">
-            <button class="primary-button" id="start-recording-button" type="button">Start Recording</button>
-            <button class="secondary-button" id="stop-recording-button" type="button">Stop Recording</button>
-          </div>
-          <div class="recording-status" id="recording-status">Recording status pending</div>
-          <label class="bag-picker" for="rosbag-select">
-            <span>Selected Rosbag</span>
-            <select id="rosbag-select"></select>
-          </label>
-          <div class="postprocess-actions">
-            <button type="button" data-post-action="coordinate-alignment">Coordinate Alignment</button>
-            <button type="button" data-post-action="trajectory-scoring">Trajectory Scoring</button>
-            <button type="button" data-post-action="trajectory-optimization">Trajectory Optimization</button>
-          </div>
-          <pre class="postprocess-output" id="postprocess-output">No rosbag selected.</pre>
-        </section>
-        <div class="trail-controls" id="trail-controls">
-          <div class="trail-controls-title">Trail Width</div>
-          <label class="trail-width-control" for="trail-width-slider">
-            <input id="trail-width-slider" type="range" min="0.1" max="1.5" step="0.1" value="1.0">
-            <span id="trail-width-value">1.0x</span>
-          </label>
-        </div>
-        <div class="legend" id="pose-legend"></div>
-      </div>
-      <canvas id="render-canvas"></canvas>
-      <div class="footer">
-        <span>Babylon.js GPU scene</span>
-        <span>Gripper: N close / M open / B auto</span>
-        <span id="mapping-version">Mapping: pending</span>
-        <span id="model-status">Models: waiting</span>
-      </div>
-    </div>
-    <script type="module" src="/static/app.js"></script>
+  <body>
+    <p>Opening Insight 3D Trajectory...</p>
+    <script>
+      window.location.replace("/#trajectory");
+    </script>
   </body>
 </html>
