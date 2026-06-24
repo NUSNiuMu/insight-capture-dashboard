@@ -1,9 +1,5 @@
 {
   "ros_domain_id": 20,
-  "topic_relay": {
-    "enabled": true,
-    "prefix": "/insight_relay"
-  },
   "session_alignment": {
     "enabled": true,
     "alignment_frame": "board_center",
@@ -65,7 +61,7 @@
       "ui_refresh_ms": 50,
       "image_decode_reduction": 0,
       "display_fps_limit": 20,
-      "image_qos_reliability": "best_effort",
+      "image_qos_reliability": "reliable",
       "title": "3D VIO Trajectory",
       "subtitle": "Interactive 3D view of x/y with z as up using current VIO poses.",
       "axis_label": "x/y plane, z up"
