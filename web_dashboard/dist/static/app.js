@@ -63,6 +63,7 @@ let recordingLogLines = [];
 let knownRosbags = [];
 
 const CAMERA_FPS_WINDOW_MS = 1500;
+const CAMERA_POLL_INTERVAL_MS = 50;
 const DEFAULT_TRAIL_ENABLED = {
   head: true,
   left_hand: true,
@@ -867,7 +868,7 @@ function startCameraPolling() {
     return;
   }
   pollCameraMetadata();
-  window.setInterval(pollCameraMetadata, 100);
+  window.setInterval(pollCameraMetadata, CAMERA_POLL_INTERVAL_MS);
 }
 
 async function pollCameraMetadata() {
