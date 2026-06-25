@@ -31,8 +31,6 @@ const imageCapabilityStatus = document.getElementById("image-capability-status")
 const imageCapabilityList = document.getElementById("image-capability-list");
 const imagePipelineNotes = document.getElementById("image-pipeline-notes");
 const refreshImageCapabilitiesButton = document.getElementById("refresh-image-capabilities-button");
-const probeWebrtcButton = document.getElementById("probe-webrtc-button");
-const webrtcProbeOutput = document.getElementById("webrtc-probe-output");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#79c47b", primitive: "sphere", modelColor: "#b99572" },
@@ -134,11 +132,6 @@ if (refreshBagsButton) {
 if (refreshImageCapabilitiesButton) {
   refreshImageCapabilitiesButton.addEventListener("click", () => {
     void refreshImageCapabilities();
-  });
-}
-if (probeWebrtcButton) {
-  probeWebrtcButton.addEventListener("click", () => {
-    void probeWebrtcPipeline("vp8");
   });
 }
 
@@ -854,44 +847,6 @@ function renderImageCapabilities(payload) {
 function setImageCapabilityStatus(message) {
   if (imageCapabilityStatus) {
     imageCapabilityStatus.textContent = message;
-  }
-}
-
-async function probeWebrtcPipeline(codec = "vp8") {
-  if (probeWebrtcButton) {
-    probeWebrtcButton.disabled = true;
-  }
-  if (webrtcProbeOutput) {
-    webrtcProbeOutput.textContent = `Running ${codec.toUpperCase()} WebRTC probe...`;
-  }
-  try {
-    const response = await fetch("/api/images/webrtc/probe", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ codec })
-    });
-    const payload = await response.json();
-    const text = [
-      payload.ok ? "Probe OK" : "Probe failed",
-      `codec=${payload.codec || codec}`,
-      payload.stdout || "",
-      payload.stderr ? `stderr:\n${payload.stderr}` : ""
-    ].filter(Boolean).join("\n\n");
-    if (webrtcProbeOutput) {
-      webrtcProbeOutput.textContent = text;
-    }
-    if (!response.ok) {
-      throw new Error(payload.stderr || payload.error || "WebRTC probe failed.");
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (webrtcProbeOutput) {
-      webrtcProbeOutput.textContent = `Probe request failed:\n${message}`;
-    }
-  } finally {
-    if (probeWebrtcButton) {
-      probeWebrtcButton.disabled = false;
-    }
   }
 }
 
