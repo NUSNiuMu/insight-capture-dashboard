@@ -12,7 +12,7 @@
         <div>
           <div class="camera-page-eyebrow">INSIGHT</div>
           <h1>Rosbag Recording</h1>
-          <p class="recording-page-copy">Refresh live topics, choose what to record, then start or stop rosbag from this page.</p>
+          <p class="recording-page-copy">Refresh live topics, choose what to record, then start or stop rosbag from this page. Sync Latest To Host copies the most recent finished bag to the configured SSH host.</p>
         </div>
         <div class="recording-page-links">
           <a href="/3d">3D</a>
@@ -28,7 +28,7 @@
           <h2 id="recording-status">Recording idle</h2>
           <div class="recording-actions">
             <button type="button" id="refresh-record-topics-button" class="recording-button recording-button-secondary">Refresh Topics</button>
-            <button type="button" id="sync-recording-button" class="recording-button recording-button-secondary">Sync To Host</button>
+            <button type="button" id="sync-recording-button" class="recording-button recording-button-secondary" title="Copy the latest stopped rosbag to the configured host path.">Sync Latest To Host</button>
             <button type="button" id="start-recording-button" class="recording-button">Start</button>
             <button type="button" id="stop-recording-button" class="recording-button recording-button-danger">Stop</button>
           </div>

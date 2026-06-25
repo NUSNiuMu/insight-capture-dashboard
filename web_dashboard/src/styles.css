@@ -11,22 +11,42 @@
   --line: rgba(229, 236, 224, 0.11);
 }
 
-html, body {
+html {
   margin: 0;
   width: 100%;
   height: 100%;
+  min-height: 100%;
   background:
     radial-gradient(circle at 18% -8%, rgba(154, 194, 132, 0.12), transparent 30%),
     linear-gradient(115deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 100%),
     linear-gradient(180deg, var(--bg-1), var(--bg-0));
   background-size: auto, 34px 34px, auto;
+  background-attachment: fixed;
+}
+
+body {
+  margin: 0;
+  width: 100%;
+  min-height: 100%;
+  background: transparent;
   color: var(--text);
   font-family: "Aptos", "Segoe UI", sans-serif;
+}
+
+body[data-dashboard-view="3d"],
+body[data-dashboard-view="full"] {
+  height: 100%;
+  overflow: hidden;
 }
 
 .shell {
   position: relative;
   width: 100%;
+  min-height: 100%;
+}
+
+.shell-3d-only,
+body[data-dashboard-view="full"] .shell {
   height: 100%;
 }
 
