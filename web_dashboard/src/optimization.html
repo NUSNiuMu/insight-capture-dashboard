@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight Trajectory Optimization</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body data-dashboard-view="optimization">
+    <div class="shell shell-page">
+      <header class="page-header">
+        <div>
+          <div class="camera-page-eyebrow">INSIGHT</div>
+          <h1>Trajectory Optimization</h1>
+          <p class="page-copy">Select a rosbag for optimization. Processing controls will be added when the optimizer is ready.</p>
+        </div>
+        <nav class="page-nav" aria-label="Dashboard pages">
+          <a href="/3d">3D</a>
+          <a href="/images">Images</a>
+          <a href="/recording">Recording</a>
+          <a href="/bags">Bags</a>
+          <a href="/scoring">Scoring</a>
+          <a href="/optimization" aria-current="page">Optimization</a>
+        </nav>
+      </header>
+
+      <main class="tool-panel">
+        <p class="eyebrow">Optimization Input</p>
+        <label class="field-label" for="optimization-bag-select">Rosbag</label>
+        <select id="optimization-bag-select" class="bag-select" data-bag-select></select>
+        <p id="optimization-bag-meta" class="page-copy">Loading bags...</p>
+        <button type="button" class="recording-button" disabled>Run Optimization</button>
+      </main>
+    </div>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

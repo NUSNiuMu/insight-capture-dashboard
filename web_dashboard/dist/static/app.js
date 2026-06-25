@@ -21,6 +21,11 @@ const recordTopicStatus = document.getElementById("record-topic-status");
 const recordSyncStatus = document.getElementById("record-sync-status");
 const recordTopicGroups = document.getElementById("record-topic-groups");
 const recordingOutput = document.getElementById("recording-output");
+const bagList = document.getElementById("bag-list");
+const bagListStatus = document.getElementById("bag-list-status");
+const refreshBagsButton = document.getElementById("refresh-bags-button");
+const scoringBagMeta = document.getElementById("scoring-bag-meta");
+const optimizationBagMeta = document.getElementById("optimization-bag-meta");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#57d67c", primitive: "sphere", modelColor: "#d6a07d" },
@@ -50,6 +55,7 @@ let selectedRecordTopics = new Set();
 let knownRecordTopics = new Set();
 let recordTopicsInitialized = false;
 let recordingLogLines = [];
+let knownRosbags = [];
 
 const CAMERA_FPS_WINDOW_MS = 1500;
 const DEFAULT_TRAIL_ENABLED = {
@@ -80,6 +86,9 @@ if (recordingPanel) {
     void refreshRecordingStatus({ refreshTopics: false });
   }, 1500);
 }
+if (bagList || document.querySelector("[data-bag-select]")) {
+  void refreshRosbags();
+}
 
 if (alignmentToggle) {
   alignmentToggle.addEventListener("click", () => {
@@ -104,6 +113,11 @@ if (stopRecordingButton) {
 if (syncRecordingButton) {
   syncRecordingButton.addEventListener("click", () => {
     void syncRecordingToHost();
+  });
+}
+if (refreshBagsButton) {
+  refreshBagsButton.addEventListener("click", () => {
+    void refreshRosbags();
   });
 }
 
@@ -662,6 +676,108 @@ function cssEscape(value) {
     return window.CSS.escape(String(value));
   }
   return String(value).replaceAll('"', '\\"');
+}
+
+async function refreshRosbags() {
+  setBagListStatus("Loading bags...");
+  try {
+    const response = await fetch(`/api/rosbags?ts=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to load rosbags.");
+    }
+    knownRosbags = Array.isArray(payload.bags) ? payload.bags : [];
+    renderBagList(knownRosbags);
+    renderBagSelects(knownRosbags);
+    setBagListStatus(`${knownRosbags.length} bags in ${payload.rosbag_root || "rosbags"}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setBagListStatus(message);
+    renderBagList([]);
+    renderBagSelects([]);
+  }
+}
+
+function renderBagList(bags) {
+  if (!bagList) {
+    return;
+  }
+  if (!Array.isArray(bags) || bags.length === 0) {
+    bagList.innerHTML = '<div class="empty-state">No local rosbags found yet.</div>';
+    return;
+  }
+  bagList.innerHTML = bags.map((bag) => `
+    <article class="bag-row">
+      <div class="bag-row-main">
+        <strong>${escapeHtml(bag.name || "unnamed bag")}</strong>
+        <span>${escapeHtml(bag.path || "")}</span>
+      </div>
+      <div class="bag-row-stats">
+        <span>${formatDuration(Number(bag.duration_s || 0))}</span>
+        <span>${escapeHtml(bag.size_label || "--")}</span>
+        <span>${Number(bag.message_count || 0).toLocaleString()} msgs</span>
+        <span>${Number(bag.topic_count || 0)} topics</span>
+      </div>
+      <div class="bag-badges">
+        <span class="bag-badge ${bag.labeled ? "is-ok" : ""}">${bag.labeled ? "labeled" : "unlabeled"}</span>
+        <span class="bag-badge ${bag.scored ? "is-ok" : ""}">${bag.scored ? "scored" : "unscored"}</span>
+        <span class="bag-badge ${bag.optimized ? "is-ok" : ""}">${bag.optimized ? "optimized" : "not optimized"}</span>
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderBagSelects(bags) {
+  const selects = Array.from(document.querySelectorAll("[data-bag-select]"));
+  if (selects.length === 0) {
+    return;
+  }
+  selects.forEach((select) => {
+    const previous = select.value;
+    if (!Array.isArray(bags) || bags.length === 0) {
+      select.innerHTML = '<option value="">No local rosbags found</option>';
+      updateSelectedBagMeta(select);
+      return;
+    }
+    select.innerHTML = bags.map((bag) => `<option value="${escapeHtml(bag.name || "")}">${escapeHtml(bag.name || "")}</option>`).join("");
+    if (previous && bags.some((bag) => bag.name === previous)) {
+      select.value = previous;
+    }
+    select.onchange = () => updateSelectedBagMeta(select);
+    updateSelectedBagMeta(select);
+  });
+}
+
+function updateSelectedBagMeta(select) {
+  const bag = knownRosbags.find((item) => item.name === select.value);
+  const meta = select.id === "optimization-bag-select" ? optimizationBagMeta : scoringBagMeta;
+  if (!meta) {
+    return;
+  }
+  if (!bag) {
+    meta.textContent = "No rosbag selected.";
+    return;
+  }
+  meta.textContent = `${formatDuration(Number(bag.duration_s || 0))} · ${bag.size_label || "--"} · ${Number(bag.message_count || 0).toLocaleString()} messages · ${bag.label || ""}`;
+}
+
+function setBagListStatus(message) {
+  if (bagListStatus) {
+    bagListStatus.textContent = message;
+  }
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "--";
+  }
+  const total = Math.round(seconds);
+  const minutes = Math.floor(total / 60);
+  const remainder = total % 60;
+  if (minutes <= 0) {
+    return `${seconds.toFixed(1)}s`;
+  }
+  return `${minutes}m ${remainder}s`;
 }
 
 function startCameraPolling() {

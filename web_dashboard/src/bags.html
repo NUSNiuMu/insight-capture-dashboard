@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight Rosbags</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body data-dashboard-view="bags">
+    <div class="shell shell-page">
+      <header class="page-header">
+        <div>
+          <div class="camera-page-eyebrow">INSIGHT</div>
+          <h1>Rosbags</h1>
+          <p class="page-copy">Local recordings with size, duration, scoring state, and optimization state.</p>
+        </div>
+        <nav class="page-nav" aria-label="Dashboard pages">
+          <a href="/3d">3D</a>
+          <a href="/images">Images</a>
+          <a href="/recording">Recording</a>
+          <a href="/bags" aria-current="page">Bags</a>
+          <a href="/scoring">Scoring</a>
+          <a href="/optimization">Optimization</a>
+        </nav>
+      </header>
+
+      <main class="tool-panel">
+        <div class="panel-title-row">
+          <div>
+            <p class="eyebrow">Local Rosbag Index</p>
+            <h2 id="bag-list-status">Loading bags...</h2>
+          </div>
+          <button type="button" id="refresh-bags-button" class="recording-button recording-button-secondary">Refresh</button>
+        </div>
+        <div id="bag-list" class="bag-list"></div>
+      </main>
+    </div>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

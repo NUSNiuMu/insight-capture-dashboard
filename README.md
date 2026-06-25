@@ -18,6 +18,7 @@
 - dashboard 显示哪三路图像
 - dashboard 使用哪三路 VIO
 - 在线对齐使用的 AprilTag board 参数
+- 标定输出使用哪个参考系，当前默认是 `board_center`
 - 默认 `ROS_DOMAIN_ID`
 
 如果要把相机换成新的命名空间，通常只需要改对应相机的：
@@ -37,10 +38,12 @@
 - `scripts/open_monitor_dashboard.sh`: 当前 dashboard 启动入口
 - `scripts/multi_camera_dashboard_qt.py`: Qt dashboard 主入口，负责 ROS 订阅、图像解码和窗口组装
 - `scripts/multi_camera_dashboard_web.py`: Web dashboard 后端，负责 ROS2 pose 订阅、fake-pose demo 和 WebSocket 推流
+- `scripts/post_processing.py`: Web 版 rosbag 录制管理、topic 发现与分组
 - `scripts/live_alignment.py`: 在线 AprilTag 相对位姿对齐和诊断日志
 - `scripts/dashboard_widgets.py`: 图像面板、轨迹控件和轨迹绘制逻辑
 - `scripts/camera_setup.py`: 从 `config/cameras.json` 生成 dashboard 所需 topic
 - `scripts/session_alignment.py`: 在线对齐使用的位姿/矩阵数学工具
+- `config/post_processing.json`: Web 版 rosbag 默认录制配置
 - `web_dashboard/`: Babylon.js Web 前端，`npm run build` 后生成静态页面
 
 ## 启动 Dashboard
@@ -77,7 +80,32 @@ python3 scripts/multi_camera_dashboard_web.py
 
 - WebSocket: `ws://localhost:8765/ws`
 - pose 快照: `http://localhost:8765/api/poses`
-- 构建后的前端页面: `http://localhost:8765/`
+- alignment 状态: `http://localhost:8765/api/alignment`
+- recording 状态: `http://localhost:8765/api/recording/status`
+- recording topics: `http://localhost:8765/api/recording/topics`
+- 3D 页面: `http://localhost:8765/` 或 `http://localhost:8765/3d`
+- Recording 页面: `http://localhost:8765/recording`
+
+网页右上角现在也有 `Start Alignment / Stop Alignment` 按钮：
+
+- 不需要 `--start-alignment` 参数也可以随时开始校准
+- Web 后端会提前订阅校准所需图像和相机内参
+- 适合左边继续看 RGB，右边 3D 页面手动控制开始/停止
+
+网页里也新增了独立的 rosbag Recording 页面：
+
+- `Refresh Topics` 会按当前 `ROS_DOMAIN_ID` 发现 live topics
+- topic 会按相机分组显示，支持按组全选/取消
+- `Start` 只录制当前勾选的 topics
+- `Stop` 会优雅结束 `ros2 bag record`
+- 输出目录默认写到 `config/post_processing.json` 里的 `rosbag_dir`
+
+`rosbag_dir` 优先级：
+
+1. CLI: `--rosbag-dir` 或 `-rosbag-dir`
+2. 环境变量: `INSIGHT_ROSBAG_DIR`
+3. `config/post_processing.json`
+4. 默认值: `rosbags`
 
 没 ROS2 硬件时可直接跑 demo：
 
@@ -113,7 +141,14 @@ python3 scripts/multi_camera_dashboard_web.py --fake-pose
 
 ## 在线轨迹对齐
 
-如果三台相机每次佩戴位置不同，直接在 dashboard 里点击 `Start Live Alignment`，或者按 `C`。
+如果相机每次佩戴位置不同，可以在 Qt dashboard 里点击 `Start Live Alignment` / 按 `C`，也可以直接在 Web 3D 页面右上角点击 `Start Alignment`。
+
+当前实现参考 `NUSNiuMu/insight-capture-dashboard` 的做法，使用 `AprilTag GridBoard` 的中心作为参考系：
+
+- `session_alignment.alignment_frame = "board_center"`
+- `session_alignment.calibration.method = "board_center"`
+- 每台相机都可以单独完成标定，不要求三台相机同时看到同一块板
+- 输出的是该相机 `VIO world -> board_center` 的锚定变换，适合单机先标、分批标、最后一起显示
 
 当前默认 AprilTag board 参数：
 
@@ -122,26 +157,29 @@ python3 scripts/multi_camera_dashboard_web.py --fake-pose
 - marker 间隔 `1.65 cm`
 - 字典 `DICT_APRILTAG_36h11`
 
-建议流程：
+单相机场景建议流程：
 
-1. 三台设备和 VIO 都先启动。
-2. 让三台相机同时稳定看到同一块 AprilTag board 几秒。
-3. 三台相机和标定板都可以运动，但需要三台在同一时段持续看到同一块板。
-4. dashboard 会自动丢掉离群样本，并在收够一致样本后开始稳定跟踪相对位姿。
-5. 停止在线对齐后，会保留最后一次内存中的对齐结果继续显示轨迹。
+1. 启动要标定的那一路相机和它自己的 VIO。
+2. 让这一路相机稳定看到同一块 AprilTag board 几秒。
+3. 相机和标定板都可以运动，但在采样阶段需要持续看到同一块板。
+4. dashboard 会自动丢掉离群样本，并在收够一致样本后持续更新这一路相机相对于 `board_center` 的结果。
+5. 继续按任意顺序对其它相机重复这个过程，不需要等它自动停。
+6. 需要结束时手动点击 `Stop Alignment`；停止后会保留最后一次内存中的对齐结果继续显示轨迹。
+
+如果三台都在线，也可以按任意顺序逐台标定；不再要求严格时间同步。
 
 状态含义：
 
 - `Alignment ON | board 2/3`: 还有相机没有形成有效板位姿
-- `Alignment ON | sync`: 三台都看到了，但时间戳跨度太大
 - `Alignment ON | samples 5/12`: 正在累计一致样本
+- `Alignment ON | waiting pose`: 板检测成功，但这一路暂时没有匹配到可用 VIO pose
 - `Alignment ON | tracking`: 已经在稳定跟踪相对位姿
 - `Alignment OFF | locked`: 在线对齐已关闭，保留最后一次结果
 
 在线对齐开启后，终端每秒输出一行简洁状态：
 
 ```text
-[alignment] tags insight7_a=12 insight7_b=9 insight9_a=10 | seen=insight7_a,insight7_b,insight9_a | usable=insight7_a,insight7_b,insight9_a | Alignment ON | samples 5/12
+[alignment] CALIBRATED insight7_a | samples=12 board_to_camera=(0.184, 0.092, 0.614)m dashboard_position=(0.614, 0.184, -0.092)m vio_to_board_anchor=(1.203, -0.447, 0.128)m
 ```
 
 详细诊断日志默认写到：

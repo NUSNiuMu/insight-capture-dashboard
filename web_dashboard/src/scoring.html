@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight Trajectory Scoring</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body data-dashboard-view="scoring">
+    <div class="shell shell-page">
+      <header class="page-header">
+        <div>
+          <div class="camera-page-eyebrow">INSIGHT</div>
+          <h1>Trajectory Scoring</h1>
+          <p class="page-copy">Select a local rosbag for scoring. The scoring runner will be wired here once the backend exists.</p>
+        </div>
+        <nav class="page-nav" aria-label="Dashboard pages">
+          <a href="/3d">3D</a>
+          <a href="/images">Images</a>
+          <a href="/recording">Recording</a>
+          <a href="/bags">Bags</a>
+          <a href="/scoring" aria-current="page">Scoring</a>
+          <a href="/optimization">Optimization</a>
+        </nav>
+      </header>
+
+      <main class="tool-panel">
+        <p class="eyebrow">Scoring Input</p>
+        <label class="field-label" for="scoring-bag-select">Rosbag</label>
+        <select id="scoring-bag-select" class="bag-select" data-bag-select></select>
+        <p id="scoring-bag-meta" class="page-copy">Loading bags...</p>
+        <button type="button" class="recording-button" disabled>Run Scoring</button>
+      </main>
+    </div>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

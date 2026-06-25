@@ -45,6 +45,7 @@ from live_alignment import LiveAlignmentMixin
 from post_processing import (
     RecordingManager,
     build_default_topics,
+    list_rosbags,
     load_post_processing_config,
 )
 from session_alignment import PoseSample
@@ -394,6 +395,7 @@ class WebDashboardServer:
         web_root: Optional[Path],
         project_root: Path,
         recording_manager: RecordingManager,
+        results_root: Path,
     ) -> None:
         self.node = node
         self.host = host
@@ -401,6 +403,7 @@ class WebDashboardServer:
         self.web_root = web_root.resolve() if web_root else None
         self.project_root = project_root.resolve()
         self.recording_manager = recording_manager
+        self.results_root = results_root.resolve()
         self._clients: Set[web.WebSocketResponse] = set()
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
@@ -430,11 +433,17 @@ class WebDashboardServer:
         app.router.add_post("/api/recording/start", self._handle_recording_start)
         app.router.add_post("/api/recording/stop", self._handle_recording_stop)
         app.router.add_post("/api/recording/sync", self._handle_recording_sync)
+        app.router.add_get("/api/rosbags", self._handle_rosbag_list)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
             app.router.add_get("/3d", self._handle_index)
+            app.router.add_get("/cameras", self._handle_cameras_page)
+            app.router.add_get("/images", self._handle_images_page)
+            app.router.add_get("/bags", self._handle_bags_page)
             app.router.add_get("/recording", self._handle_recording_page)
+            app.router.add_get("/scoring", self._handle_scoring_page)
+            app.router.add_get("/optimization", self._handle_optimization_page)
             static_root = self.web_root / "static"
             if static_root.exists():
                 app.router.add_static("/static/", str(static_root), show_index=False)
@@ -578,11 +587,36 @@ class WebDashboardServer:
         payload["sync_status"] = sync_status
         return web.json_response(payload)
 
+    async def _handle_rosbag_list(self, _request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "type": "rosbag_list",
+                "rosbag_root": str(self.recording_manager.rosbag_root),
+                "results_root": str(self.results_root),
+                "bags": list_rosbags(self.recording_manager.rosbag_root, self.results_root),
+            }
+        )
+
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "3d.html")
 
     async def _handle_recording_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "recording.html")
+
+    async def _handle_cameras_page(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.web_root / "cameras.html")
+
+    async def _handle_images_page(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.web_root / "images.html")
+
+    async def _handle_bags_page(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.web_root / "bags.html")
+
+    async def _handle_scoring_page(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.web_root / "scoring.html")
+
+    async def _handle_optimization_page(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.web_root / "optimization.html")
 
     async def _handle_asset(self, request: web.Request) -> web.StreamResponse:
         raw_path = request.query.get("path", "").strip()
@@ -695,7 +729,7 @@ def main() -> None:
     spin_thread.start()
 
     web_root = Path(args.web_root) if args.web_root else None
-    server = WebDashboardServer(node, args.host, args.port, web_root, node.project_root, recording_manager)
+    server = WebDashboardServer(node, args.host, args.port, web_root, node.project_root, recording_manager, results_root)
     server.start()
 
     try:

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight Images</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body data-dashboard-view="images">
+    <div class="shell shell-page">
+      <header class="page-header">
+        <div>
+          <div class="camera-page-eyebrow">INSIGHT</div>
+          <h1>Images</h1>
+          <p class="page-copy">Live camera viewing will land here after we choose the transport path.</p>
+        </div>
+        <nav class="page-nav" aria-label="Dashboard pages">
+          <a href="/3d">3D</a>
+          <a href="/images" aria-current="page">Images</a>
+          <a href="/recording">Recording</a>
+          <a href="/bags">Bags</a>
+          <a href="/scoring">Scoring</a>
+          <a href="/optimization">Optimization</a>
+        </nav>
+      </header>
+
+      <main class="page-grid">
+        <section class="tool-panel">
+          <p class="eyebrow">Streaming Decision</p>
+          <h2>Candidate paths</h2>
+          <div class="option-list">
+            <div class="option-row">
+              <strong>WebRTC video stream</strong>
+              <span>Best fit for high FPS and low latency after encoding H.264/VP8 on the backend.</span>
+            </div>
+            <div class="option-row">
+              <strong>CompressedImage snapshots</strong>
+              <span>Fastest to implement with current ROS topics, but browser refresh and JPEG decode can become the bottleneck.</span>
+            </div>
+            <div class="option-row">
+              <strong>WebSocket binary frames</strong>
+              <span>Good control over backpressure; pair with createImageBitmap or OffscreenCanvas to keep the UI responsive.</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="tool-panel">
+          <p class="eyebrow">Next Build Step</p>
+          <h2>Pending agreement</h2>
+          <p class="page-copy">We should pick whether the first implementation optimizes for quick delivery or for high-FPS streaming quality. Once chosen, this page can become the live image console.</p>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
