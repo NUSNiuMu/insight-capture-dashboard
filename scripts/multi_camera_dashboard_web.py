@@ -926,7 +926,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--web-root", default=str(Path(__file__).resolve().parents[1] / "web_dashboard" / "dist"))
     parser.add_argument("--view-mode", choices=("3d",), default="3d")
     parser.add_argument("--fake-pose", action="store_true")
-    parser.add_argument("--pose-publish-hz", type=float, default=30.0)
+    parser.add_argument("--pose-publish-hz", type=float, default=20.0)
     parser.add_argument("--start-alignment", action="store_true")
     parser.add_argument("--post-processing-config", default=str(Path(__file__).resolve().parents[1] / "config" / "post_processing.json"))
     parser.add_argument("--rosbag-dir", "-rosbag-dir", default=None)
