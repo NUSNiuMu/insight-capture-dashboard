@@ -8,6 +8,7 @@ import math
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -601,6 +602,7 @@ class WebDashboardServer:
         app.router.add_get("/api/cameras", self._handle_camera_snapshot)
         app.router.add_get("/api/cameras/{camera_name}/frame", self._handle_camera_frame)
         app.router.add_get("/api/images/capabilities", self._handle_image_capabilities)
+        app.router.add_post("/api/images/webrtc/probe", self._handle_image_webrtc_probe)
         app.router.add_get("/api/recording/status", self._handle_recording_status)
         app.router.add_get("/api/recording/topics", self._handle_recording_topics)
         app.router.add_post("/api/recording/start", self._handle_recording_start)
@@ -745,6 +747,47 @@ class WebDashboardServer:
 
     async def _handle_image_capabilities(self, _request: web.Request) -> web.Response:
         return web.json_response(self._build_image_capabilities())
+
+    async def _handle_image_webrtc_probe(self, request: web.Request) -> web.Response:
+        payload = {}
+        if request.can_read_body:
+            try:
+                payload = await request.json()
+            except json.JSONDecodeError:
+                payload = {}
+        codec = str(payload.get("codec", "vp8") if isinstance(payload, dict) else "vp8").lower()
+        if codec not in {"vp8", "h264"}:
+            raise web.HTTPBadRequest(text="codec must be vp8 or h264")
+        script_path = Path(__file__).resolve().parent / "probe_webrtc_pipeline.py"
+
+        def run_probe() -> subprocess.CompletedProcess:
+            return subprocess.run(
+                [sys.executable, str(script_path), "--codec", codec],
+                cwd=str(self.project_root),
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=8.0,
+            )
+
+        try:
+            result = await asyncio.to_thread(run_probe)
+        except subprocess.TimeoutExpired:
+            return web.json_response(
+                {"ok": False, "codec": codec, "stdout": "", "stderr": "WebRTC probe timed out"},
+                status=504,
+            )
+        return web.json_response(
+            {
+                "ok": result.returncode == 0,
+                "codec": codec,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            },
+            status=200 if result.returncode == 0 else 409,
+        )
 
     def _build_image_capabilities(self) -> Dict[str, object]:
         elements = self._detect_gstreamer_elements(

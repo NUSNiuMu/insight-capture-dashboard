@@ -261,6 +261,14 @@ body[data-dashboard-view="full"] .shell {
   margin-bottom: 14px;
 }
 
+.button-cluster {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .ghost-button {
   border: 1px solid rgba(229, 236, 224, 0.14);
   border-radius: 999px;
@@ -277,6 +285,20 @@ body[data-dashboard-view="full"] .shell {
 .ghost-button:disabled {
   cursor: wait;
   opacity: 0.6;
+}
+
+.webrtc-probe-output {
+  margin: 14px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(3, 10, 15, 0.62);
+  color: #d7e4e9;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .option-list {
