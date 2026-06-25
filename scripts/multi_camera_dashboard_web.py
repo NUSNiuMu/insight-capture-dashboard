@@ -22,6 +22,19 @@ import cv2
 from aiohttp import web
 
 try:
+    import gi
+
+    gi.require_version("Gst", "1.0")
+    gi.require_version("GstSdp", "1.0")
+    gi.require_version("GstWebRTC", "1.0")
+    from gi.repository import Gst, GstSdp, GstWebRTC
+except Exception:  # pragma: no cover - WebRTC support is optional
+    gi = None
+    Gst = None
+    GstSdp = None
+    GstWebRTC = None
+
+try:
     import rclpy
     from geometry_msgs.msg import PoseStamped
     from rclpy.callback_groups import ReentrantCallbackGroup
@@ -113,6 +126,163 @@ class CameraFrame:
     width: int
     height: int
     version: int
+
+
+class WebRTCCameraSession:
+    def __init__(self, session_id: str, camera_name: str, frame_provider, fps: int = 10) -> None:
+        if Gst is None or GstSdp is None or GstWebRTC is None:
+            raise RuntimeError("GStreamer WebRTC Python bindings are unavailable")
+        Gst.init(None)
+        self.session_id = session_id
+        self.camera_name = camera_name
+        self.frame_provider = frame_provider
+        self.fps = max(1, int(fps))
+        self.duration_ns = int(1_000_000_000 / self.fps)
+        self.pipeline = None
+        self.appsrc = None
+        self.webrtc = None
+        self.offer_sdp: Optional[str] = None
+        self.local_candidates: List[Dict[str, object]] = []
+        self._candidate_lock = threading.Lock()
+        self._offer_event = threading.Event()
+        self._error: Optional[str] = None
+        self._running = False
+        self._push_thread: Optional[threading.Thread] = None
+        self._frame_index = 0
+        self.created_monotonic = time.monotonic()
+
+    def start(self) -> str:
+        pipeline_description = (
+            "appsrc name=src is-live=true block=false format=time do-timestamp=false "
+            f"caps=image/jpeg,framerate={self.fps}/1 "
+            "! jpegdec "
+            "! videoconvert "
+            "! video/x-raw,format=I420 "
+            "! queue max-size-buffers=2 leaky=downstream "
+            "! vp8enc deadline=1 keyframe-max-dist=30 target-bitrate=800000 "
+            "! rtpvp8pay pt=96 "
+            "! application/x-rtp,media=video,encoding-name=VP8,payload=96 "
+            "! webrtcbin name=webrtc bundle-policy=max-bundle"
+        )
+        self.pipeline = Gst.parse_launch(pipeline_description)
+        self.appsrc = self.pipeline.get_by_name("src")
+        self.webrtc = self.pipeline.get_by_name("webrtc")
+        if self.appsrc is None or self.webrtc is None:
+            raise RuntimeError("Failed to create appsrc/webrtcbin pipeline elements")
+        self.webrtc.connect("on-negotiation-needed", self._on_negotiation_needed)
+        self.webrtc.connect("on-ice-candidate", self._on_ice_candidate)
+        bus = self.pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message", self._on_bus_message)
+
+        self._running = True
+        self.pipeline.set_state(Gst.State.PLAYING)
+        self._push_thread = threading.Thread(
+            target=self._push_loop,
+            daemon=True,
+            name=f"webrtc_push_{self.camera_name}_{self.session_id}",
+        )
+        self._push_thread.start()
+        if not self._offer_event.wait(timeout=5.0):
+            self.stop()
+            raise RuntimeError("Timed out creating WebRTC offer")
+        if self._error:
+            self.stop()
+            raise RuntimeError(self._error)
+        if not self.offer_sdp:
+            self.stop()
+            raise RuntimeError("WebRTC offer was empty")
+        return self.offer_sdp
+
+    def stop(self) -> None:
+        self._running = False
+        if self.appsrc is not None:
+            with contextlib.suppress(Exception):
+                self.appsrc.emit("end-of-stream")
+        if self._push_thread and self._push_thread.is_alive():
+            self._push_thread.join(timeout=1.0)
+        if self.pipeline is not None:
+            with contextlib.suppress(Exception):
+                self.pipeline.set_state(Gst.State.NULL)
+
+    def set_answer(self, sdp: str) -> None:
+        result, message = GstSdp.SDPMessage.new()
+        if result != GstSdp.SDPResult.OK:
+            raise RuntimeError("Failed to allocate SDP message")
+        parse_result = GstSdp.sdp_message_parse_buffer(bytes(sdp, "utf-8"), message)
+        if parse_result != GstSdp.SDPResult.OK:
+            raise ValueError("Invalid SDP answer")
+        answer = GstWebRTC.WebRTCSessionDescription.new(GstWebRTC.WebRTCSDPType.ANSWER, message)
+        promise = Gst.Promise.new()
+        self.webrtc.emit("set-remote-description", answer, promise)
+        promise.interrupt()
+
+    def add_remote_candidate(self, candidate: str, sdp_mline_index: int) -> None:
+        if self.webrtc is None:
+            return
+        self.webrtc.emit("add-ice-candidate", int(sdp_mline_index), str(candidate))
+
+    def drain_local_candidates(self) -> List[Dict[str, object]]:
+        with self._candidate_lock:
+            candidates = list(self.local_candidates)
+            self.local_candidates.clear()
+        return candidates
+
+    def _on_negotiation_needed(self, element) -> None:
+        promise = Gst.Promise.new_with_change_func(self._on_offer_created, None)
+        element.emit("create-offer", None, promise)
+
+    def _on_offer_created(self, promise, _unused) -> None:
+        reply = promise.get_reply()
+        offer = reply.get_value("offer") if reply is not None else None
+        if offer is None:
+            self._error = "create-offer returned no offer"
+            self._offer_event.set()
+            return
+        local_promise = Gst.Promise.new()
+        self.webrtc.emit("set-local-description", offer, local_promise)
+        local_promise.interrupt()
+        self.offer_sdp = offer.sdp.as_text()
+        self._offer_event.set()
+
+    def _on_ice_candidate(self, _element, mline_index: int, candidate: str) -> None:
+        with self._candidate_lock:
+            self.local_candidates.append(
+                {
+                    "sdpMLineIndex": int(mline_index),
+                    "candidate": str(candidate),
+                }
+            )
+
+    def _on_bus_message(self, _bus, message) -> None:
+        if message.type == Gst.MessageType.ERROR:
+            error, debug = message.parse_error()
+            self._error = f"{error.message} | {debug or ''}"
+            self._offer_event.set()
+
+    def _push_loop(self) -> None:
+        last_stamp_ns = -1
+        interval = 1.0 / self.fps
+        while self._running:
+            frame = self.frame_provider(self.camera_name)
+            if frame is not None and frame.data and frame.stamp_ns != last_stamp_ns:
+                self._push_frame(frame)
+                last_stamp_ns = frame.stamp_ns
+            time.sleep(interval)
+
+    def _push_frame(self, frame: CameraFrame) -> None:
+        if self.appsrc is None:
+            return
+        buffer = Gst.Buffer.new_allocate(None, len(frame.data), None)
+        buffer.fill(0, frame.data)
+        pts = self._frame_index * self.duration_ns
+        buffer.pts = pts
+        buffer.dts = pts
+        buffer.duration = self.duration_ns
+        self._frame_index += 1
+        result = self.appsrc.emit("push-buffer", buffer)
+        if result != Gst.FlowReturn.OK:
+            self._error = f"appsrc push-buffer failed: {result.value_nick}"
 
 
 class PoseBridgeNode(LiveAlignmentMixin, Node):
@@ -576,6 +746,8 @@ class WebDashboardServer:
         self.recording_manager = recording_manager
         self.results_root = results_root.resolve()
         self._clients: Set[web.WebSocketResponse] = set()
+        self._webrtc_sessions: Dict[str, WebRTCCameraSession] = {}
+        self._webrtc_session_lock = threading.Lock()
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
         self._started = threading.Event()
@@ -603,6 +775,11 @@ class WebDashboardServer:
         app.router.add_get("/api/cameras/{camera_name}/frame", self._handle_camera_frame)
         app.router.add_get("/api/images/capabilities", self._handle_image_capabilities)
         app.router.add_post("/api/images/webrtc/probe", self._handle_image_webrtc_probe)
+        app.router.add_post("/api/images/webrtc/{camera_name}/offer", self._handle_image_webrtc_offer)
+        app.router.add_post("/api/images/webrtc/{session_id}/answer", self._handle_image_webrtc_answer)
+        app.router.add_post("/api/images/webrtc/{session_id}/candidate", self._handle_image_webrtc_candidate)
+        app.router.add_get("/api/images/webrtc/{session_id}/candidates", self._handle_image_webrtc_candidates)
+        app.router.add_delete("/api/images/webrtc/{session_id}", self._handle_image_webrtc_stop)
         app.router.add_get("/api/recording/status", self._handle_recording_status)
         app.router.add_get("/api/recording/topics", self._handle_recording_topics)
         app.router.add_post("/api/recording/start", self._handle_recording_start)
@@ -645,6 +822,7 @@ class WebDashboardServer:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        self._stop_all_webrtc_sessions()
         self.recording_manager.stop()
 
     async def _broadcast_loop(self) -> None:
@@ -788,6 +966,112 @@ class WebDashboardServer:
             },
             status=200 if result.returncode == 0 else 409,
         )
+
+    async def _handle_image_webrtc_offer(self, request: web.Request) -> web.Response:
+        camera_name = request.match_info.get("camera_name", "")
+        known_cameras = {camera.name for camera in self.node.cameras}
+        if camera_name not in known_cameras:
+            raise web.HTTPNotFound(text="unknown camera")
+        if self.node.latest_camera_frame(camera_name) is None:
+            raise web.HTTPConflict(text="camera frame not available yet")
+        session_id = f"{camera_name}_{int(time.time() * 1000)}"
+        session = WebRTCCameraSession(
+            session_id=session_id,
+            camera_name=camera_name,
+            frame_provider=self.node.latest_camera_frame,
+            fps=10,
+        )
+        self._stop_webrtc_sessions_for_camera(camera_name)
+        try:
+            offer_sdp = await asyncio.to_thread(session.start)
+        except Exception:
+            session.stop()
+            raise
+        with self._webrtc_session_lock:
+            self._webrtc_sessions[session_id] = session
+        return web.json_response(
+            {
+                "ok": True,
+                "session_id": session_id,
+                "camera_name": camera_name,
+                "codec": "vp8",
+                "offer": {
+                    "type": "offer",
+                    "sdp": offer_sdp,
+                },
+            }
+        )
+
+    async def _handle_image_webrtc_answer(self, request: web.Request) -> web.Response:
+        session = self._get_webrtc_session(request.match_info.get("session_id", ""))
+        payload = await request.json()
+        answer = payload.get("answer") if isinstance(payload, dict) else None
+        sdp = answer.get("sdp") if isinstance(answer, dict) else None
+        if not sdp:
+            raise web.HTTPBadRequest(text="missing answer.sdp")
+        await asyncio.to_thread(session.set_answer, sdp)
+        return web.json_response({"ok": True, "session_id": session.session_id})
+
+    async def _handle_image_webrtc_candidate(self, request: web.Request) -> web.Response:
+        session = self._get_webrtc_session(request.match_info.get("session_id", ""))
+        payload = await request.json()
+        candidate = payload.get("candidate") if isinstance(payload, dict) else None
+        if not isinstance(candidate, dict):
+            raise web.HTTPBadRequest(text="missing candidate")
+        candidate_text = candidate.get("candidate")
+        if not candidate_text:
+            return web.json_response({"ok": True, "ignored": True})
+        session.add_remote_candidate(
+            candidate=str(candidate_text),
+            sdp_mline_index=int(candidate.get("sdpMLineIndex", 0)),
+        )
+        return web.json_response({"ok": True, "session_id": session.session_id})
+
+    async def _handle_image_webrtc_candidates(self, request: web.Request) -> web.Response:
+        session = self._get_webrtc_session(request.match_info.get("session_id", ""))
+        return web.json_response(
+            {
+                "ok": True,
+                "session_id": session.session_id,
+                "candidates": session.drain_local_candidates(),
+            }
+        )
+
+    async def _handle_image_webrtc_stop(self, request: web.Request) -> web.Response:
+        session_id = request.match_info.get("session_id", "")
+        stopped = self._stop_webrtc_session(session_id)
+        return web.json_response({"ok": True, "session_id": session_id, "stopped": stopped})
+
+    def _get_webrtc_session(self, session_id: str) -> WebRTCCameraSession:
+        with self._webrtc_session_lock:
+            session = self._webrtc_sessions.get(session_id)
+        if session is None:
+            raise web.HTTPNotFound(text="WebRTC session not found")
+        return session
+
+    def _stop_webrtc_session(self, session_id: str) -> bool:
+        with self._webrtc_session_lock:
+            session = self._webrtc_sessions.pop(session_id, None)
+        if session is None:
+            return False
+        session.stop()
+        return True
+
+    def _stop_webrtc_sessions_for_camera(self, camera_name: str) -> None:
+        with self._webrtc_session_lock:
+            session_ids = [
+                session_id
+                for session_id, session in self._webrtc_sessions.items()
+                if session.camera_name == camera_name
+            ]
+        for session_id in session_ids:
+            self._stop_webrtc_session(session_id)
+
+    def _stop_all_webrtc_sessions(self) -> None:
+        with self._webrtc_session_lock:
+            session_ids = list(self._webrtc_sessions)
+        for session_id in session_ids:
+            self._stop_webrtc_session(session_id)
 
     def _build_image_capabilities(self) -> Dict[str, object]:
         elements = self._detect_gstreamer_elements(
