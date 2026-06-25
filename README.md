@@ -83,8 +83,16 @@ python3 scripts/multi_camera_dashboard_web.py
 - alignment 状态: `http://localhost:8765/api/alignment`
 - recording 状态: `http://localhost:8765/api/recording/status`
 - recording topics: `http://localhost:8765/api/recording/topics`
-- 3D 页面: `http://localhost:8765/` 或 `http://localhost:8765/3d`
-- Recording 页面: `http://localhost:8765/recording`
+- rosbag 列表: `http://localhost:8765/api/rosbags`
+
+页面入口：
+
+- `http://localhost:8765/` 或 `/3d`: 3D VIO 轨迹页，保留 Babylon.js GPU 场景和在线校准按钮
+- `/recording`: 独立 rosbag 录制页，负责 topic 发现、勾选、录制、停止和同步到主机
+- `/images`: 图片页骨架，先放高帧率实时看图方案，具体传输实现需要再确认
+- `/bags`: 本地 rosbag 列表页，显示路径、大小、时长、label/scoring/optimization 状态
+- `/scoring`: 轨迹评分页骨架，下拉选择 rosbag，后端评分 runner 以后再接
+- `/optimization`: 轨迹优化页骨架，下拉选择 rosbag，后端 optimizer 以后再接
 
 网页右上角现在也有 `Start Alignment / Stop Alignment` 按钮：
 
@@ -106,6 +114,31 @@ python3 scripts/multi_camera_dashboard_web.py
 2. 环境变量: `INSIGHT_ROSBAG_DIR`
 3. `config/post_processing.json`
 4. 默认值: `rosbags`
+
+本地 rosbag 列表页会扫描 `metadata.yaml`，并展示：
+
+- 目录路径
+- 递归文件大小
+- rosbag duration
+- message 数量和 topic 数量
+- label 状态：检查 `outputs/results/labels`、`label`、`labeled`
+- scoring 状态：检查 `outputs/results/scores`、`scoring`
+- optimization 状态：检查 `outputs/results/optimized`、`optimization`
+
+### Images 页面实时看图方案
+
+当前 `/images` 先作为方案页，不直接假装已经实现实时图像。下一步建议三选一：
+
+- 快速版：直接订阅 ROS `CompressedImage`，通过 HTTP/WebSocket 推 JPEG/PNG 快照，开发最快，但高帧率时浏览器解码和带宽压力明显。
+- 折中版：WebSocket binary frame + `createImageBitmap`，需要做队列丢帧和 backpressure，适合先把当前 ROS topic 接到页面上。
+- 高帧率版：后端编码视频流，前端用 WebRTC 或 WebCodecs 管线，延迟和吞吐更适合实时多相机，但实现复杂度最高。
+
+查过的方向：
+
+- WebRTC 适合实时音视频传输和低延迟媒体通道
+- WebCodecs 提供底层视频帧/编码块控制，适合把解码从普通 `<img>` 刷新里拆出来
+- OffscreenCanvas 可以把绘制从主线程转移出去
+- `createImageBitmap` 可异步解码图像源，适合 WebSocket 二进制图片帧的中间方案
 
 没 ROS2 硬件时可直接跑 demo：
 
