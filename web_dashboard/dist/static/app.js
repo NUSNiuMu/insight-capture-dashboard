@@ -54,7 +54,6 @@ const modelWarnings = new Set();
 const trailStates = new Map();
 const cameraPanels = new Map();
 const cameraPollState = new Map();
-const cameraWebrtcState = new Map();
 let maximizedCameraName = null;
 let alignmentBusy = false;
 let recordingBusy = false;
@@ -1077,14 +1076,12 @@ function ensureCameraPanel(camera) {
         <span>${escapeHtml(camera.name)}</span>
       </div>
       <div class="camera-actions">
-        <button type="button" data-camera-webrtc title="Try WebRTC">W</button>
         <button type="button" data-camera-maximize title="Maximize">□</button>
         <button type="button" data-camera-toggle title="Minimize">−</button>
       </div>
     </div>
     <div class="camera-body">
       <img class="camera-frame" alt="${escapeHtml(camera.label || camera.name)}">
-      <video class="camera-webrtc-video" playsinline autoplay muted></video>
       <div class="camera-overlay">
         <span class="camera-fps" data-camera-fps>-- fps</span>
         <span data-camera-status>waiting</span>
@@ -1104,10 +1101,6 @@ function ensureCameraPanel(camera) {
   const maximize = panel.querySelector("[data-camera-maximize]");
   maximize.addEventListener("click", () => {
     toggleCameraMaximized(camera.name);
-  });
-  const webrtc = panel.querySelector("[data-camera-webrtc]");
-  webrtc.addEventListener("click", () => {
-    void toggleCameraWebrtc(camera.name);
   });
   const body = panel.querySelector(".camera-body");
   body.addEventListener("dblclick", () => toggleCameraMaximized(camera.name));
@@ -1151,9 +1144,6 @@ function updateCameraPanelLayout(panel, index) {
 }
 
 function updateCameraStream(panel, camera) {
-  if (cameraWebrtcState.has(camera.name)) {
-    return;
-  }
   const img = panel.querySelector(".camera-frame");
   const pollState = cameraPollState.get(camera.name) || { frameUrl: "", version: -1 };
   const version = Number(camera.version || 0);
@@ -1168,169 +1158,6 @@ function updateCameraStream(panel, camera) {
   pollState.version = version;
   cameraPollState.set(camera.name, pollState);
   img.src = `${camera.frame_url}?v=${version}&ts=${Date.now()}`;
-}
-
-async function toggleCameraWebrtc(cameraName) {
-  if (cameraWebrtcState.has(cameraName)) {
-    await stopCameraWebrtc(cameraName);
-    return;
-  }
-  await startCameraWebrtc(cameraName);
-}
-
-async function startCameraWebrtc(cameraName) {
-  const panel = cameraPanels.get(cameraName);
-  if (!panel) {
-    return;
-  }
-  const button = panel.querySelector("[data-camera-webrtc]");
-  const status = panel.querySelector("[data-camera-status]");
-  const video = panel.querySelector(".camera-webrtc-video");
-  const img = panel.querySelector(".camera-frame");
-  if (button) {
-    button.disabled = true;
-    button.textContent = "...";
-  }
-  if (status) {
-    status.textContent = "webrtc starting";
-  }
-  const peer = new RTCPeerConnection({ iceServers: [] });
-  let sessionId = "";
-  let candidateTimer = null;
-  try {
-    peer.ontrack = (event) => {
-      if (video && event.streams && event.streams[0]) {
-        video.srcObject = event.streams[0];
-        video.classList.add("is-active");
-        img.classList.add("is-hidden");
-      }
-    };
-    peer.onicecandidate = (event) => {
-      if (!event.candidate || !sessionId) {
-        return;
-      }
-      void fetch(`/api/images/webrtc/${encodeURIComponent(sessionId)}/candidate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ candidate: event.candidate.toJSON() })
-      });
-    };
-    peer.onconnectionstatechange = () => {
-      if (status) {
-        status.textContent = `webrtc ${peer.connectionState}`;
-      }
-    };
-    const offerResponse = await fetch(`/api/images/webrtc/${encodeURIComponent(cameraName)}/offer`, {
-      method: "POST"
-    });
-    const offerPayload = await offerResponse.json();
-    if (!offerResponse.ok) {
-      throw new Error(offerPayload.error || "Failed to create WebRTC offer.");
-    }
-    sessionId = offerPayload.session_id;
-    await peer.setRemoteDescription(offerPayload.offer);
-    const answer = await peer.createAnswer();
-    await peer.setLocalDescription(answer);
-    const answerResponse = await fetch(`/api/images/webrtc/${encodeURIComponent(sessionId)}/answer`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ answer: peer.localDescription })
-    });
-    if (!answerResponse.ok) {
-      const payload = await answerResponse.json();
-      throw new Error(payload.error || "Failed to send WebRTC answer.");
-    }
-    candidateTimer = window.setInterval(() => {
-      void pollCameraWebrtcCandidates(sessionId, peer);
-    }, 400);
-    cameraWebrtcState.set(cameraName, { peer, sessionId, candidateTimer });
-    panel.classList.add("is-webrtc");
-    if (button) {
-      button.disabled = false;
-      button.textContent = "J";
-      button.title = "Return to JPEG preview";
-    }
-  } catch (error) {
-    if (candidateTimer) {
-      window.clearInterval(candidateTimer);
-    }
-    peer.close();
-    if (sessionId) {
-      await fetch(`/api/images/webrtc/${encodeURIComponent(sessionId)}`, { method: "DELETE" }).catch(() => {});
-    }
-    if (video) {
-      video.srcObject = null;
-      video.classList.remove("is-active");
-    }
-    img.classList.remove("is-hidden");
-    if (status) {
-      status.textContent = error instanceof Error ? error.message : String(error);
-    }
-    if (button) {
-      button.disabled = false;
-      button.textContent = "W";
-    }
-  }
-}
-
-async function pollCameraWebrtcCandidates(sessionId, peer) {
-  if (!sessionId || !peer || peer.connectionState === "closed") {
-    return;
-  }
-  try {
-    const response = await fetch(`/api/images/webrtc/${encodeURIComponent(sessionId)}/candidates?ts=${Date.now()}`, {
-      cache: "no-store"
-    });
-    if (!response.ok) {
-      return;
-    }
-    const payload = await response.json();
-    for (const candidate of payload.candidates || []) {
-      await peer.addIceCandidate(candidate);
-    }
-  } catch (_error) {
-    // Candidate polling is best effort; connection state will surface hard failures.
-  }
-}
-
-async function stopCameraWebrtc(cameraName) {
-  const state = cameraWebrtcState.get(cameraName);
-  const panel = cameraPanels.get(cameraName);
-  if (!state) {
-    return;
-  }
-  cameraWebrtcState.delete(cameraName);
-  if (state.candidateTimer) {
-    window.clearInterval(state.candidateTimer);
-  }
-  if (state.peer) {
-    state.peer.close();
-  }
-  if (state.sessionId) {
-    await fetch(`/api/images/webrtc/${encodeURIComponent(state.sessionId)}`, { method: "DELETE" }).catch(() => {});
-  }
-  if (panel) {
-    const video = panel.querySelector(".camera-webrtc-video");
-    const img = panel.querySelector(".camera-frame");
-    const button = panel.querySelector("[data-camera-webrtc]");
-    const status = panel.querySelector("[data-camera-status]");
-    if (video) {
-      video.srcObject = null;
-      video.classList.remove("is-active");
-    }
-    if (img) {
-      img.classList.remove("is-hidden");
-    }
-    if (button) {
-      button.disabled = false;
-      button.textContent = "W";
-      button.title = "Try WebRTC";
-    }
-    if (status) {
-      status.textContent = "jpeg preview";
-    }
-    panel.classList.remove("is-webrtc");
-  }
 }
 
 function updateCameraFps(cameraName, fps) {
