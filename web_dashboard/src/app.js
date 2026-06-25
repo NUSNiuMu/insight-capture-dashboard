@@ -28,9 +28,9 @@ const scoringBagMeta = document.getElementById("scoring-bag-meta");
 const optimizationBagMeta = document.getElementById("optimization-bag-meta");
 
 const ROLE_STYLE = {
-  head: { label: "Head", color: "#57d67c", primitive: "sphere", modelColor: "#d6a07d" },
-  left_hand: { label: "Left Hand", color: "#4aa8ff", primitive: "box", modelColor: "#c98d6b" },
-  right_hand: { label: "Right Hand", color: "#ff6f61", primitive: "box", modelColor: "#c98d6b" }
+  head: { label: "Head", color: "#79c47b", primitive: "sphere", modelColor: "#b99572" },
+  left_hand: { label: "Left Hand", color: "#79adc2", primitive: "box", modelColor: "#9f8569" },
+  right_hand: { label: "Right Hand", color: "#cf7f6f", primitive: "box", modelColor: "#9f8569" }
 };
 const TRAIL_RADIUS_BY_ROLE = {
   head: 0.01,

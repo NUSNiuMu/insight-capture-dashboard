@@ -41,6 +41,10 @@
               <strong>WebSocket binary frames</strong>
               <span>Good control over backpressure; pair with createImageBitmap or OffscreenCanvas to keep the UI responsive.</span>
             </div>
+            <div class="option-row">
+              <strong>WebCodecs pipeline</strong>
+              <span>Most useful once we send encoded video chunks instead of JPEG snapshots; it gives low-level frame control and can run decode work away from the main UI path.</span>
+            </div>
           </div>
         </section>
 
