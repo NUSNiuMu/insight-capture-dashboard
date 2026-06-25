@@ -6,6 +6,7 @@ import contextlib
 import json
 import math
 import os
+import resource
 import shutil
 import subprocess
 import sys
@@ -149,6 +150,9 @@ class WebRTCCameraSession:
         self._running = False
         self._push_thread: Optional[threading.Thread] = None
         self._frame_index = 0
+        self._pushed_frames = 0
+        self._push_started_monotonic = 0.0
+        self._last_pushed_stamp_ns = 0
         self.created_monotonic = time.monotonic()
 
     def start(self) -> str:
@@ -176,6 +180,7 @@ class WebRTCCameraSession:
         bus.connect("message", self._on_bus_message)
 
         self._running = True
+        self._push_started_monotonic = time.monotonic()
         self.pipeline.set_state(Gst.State.PLAYING)
         self._push_thread = threading.Thread(
             target=self._push_loop,
@@ -227,6 +232,22 @@ class WebRTCCameraSession:
             candidates = list(self.local_candidates)
             self.local_candidates.clear()
         return candidates
+
+    def stats(self) -> Dict[str, object]:
+        now = time.monotonic()
+        elapsed_s = max(now - self.created_monotonic, 1e-6)
+        push_elapsed_s = max(now - self._push_started_monotonic, 1e-6) if self._push_started_monotonic else 0.0
+        return {
+            "session_id": self.session_id,
+            "camera_name": self.camera_name,
+            "codec": "vp8",
+            "target_fps": self.fps,
+            "age_s": elapsed_s,
+            "pushed_frames": self._pushed_frames,
+            "pushed_fps": self._pushed_frames / push_elapsed_s if push_elapsed_s > 0 else 0.0,
+            "last_pushed_stamp_ns": self._last_pushed_stamp_ns,
+            "error": self._error,
+        }
 
     def _on_negotiation_needed(self, element) -> None:
         promise = Gst.Promise.new_with_change_func(self._on_offer_created, None)
@@ -283,6 +304,9 @@ class WebRTCCameraSession:
         result = self.appsrc.emit("push-buffer", buffer)
         if result != Gst.FlowReturn.OK:
             self._error = f"appsrc push-buffer failed: {result.value_nick}"
+            return
+        self._pushed_frames += 1
+        self._last_pushed_stamp_ns = frame.stamp_ns
 
 
 class PoseBridgeNode(LiveAlignmentMixin, Node):
@@ -774,6 +798,7 @@ class WebDashboardServer:
         app.router.add_get("/api/cameras", self._handle_camera_snapshot)
         app.router.add_get("/api/cameras/{camera_name}/frame", self._handle_camera_frame)
         app.router.add_get("/api/images/capabilities", self._handle_image_capabilities)
+        app.router.add_get("/api/images/performance", self._handle_image_performance)
         app.router.add_post("/api/images/webrtc/probe", self._handle_image_webrtc_probe)
         app.router.add_post("/api/images/webrtc/{camera_name}/offer", self._handle_image_webrtc_offer)
         app.router.add_post("/api/images/webrtc/{session_id}/answer", self._handle_image_webrtc_answer)
@@ -925,6 +950,28 @@ class WebDashboardServer:
 
     async def _handle_image_capabilities(self, _request: web.Request) -> web.Response:
         return web.json_response(self._build_image_capabilities())
+
+    async def _handle_image_performance(self, _request: web.Request) -> web.Response:
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        with self._webrtc_session_lock:
+            sessions = [session.stats() for session in self._webrtc_sessions.values()]
+        return web.json_response(
+            {
+                "type": "image_performance",
+                "timestamp_ms": int(time.time() * 1000),
+                "process": {
+                    "user_cpu_s": float(usage.ru_utime),
+                    "system_cpu_s": float(usage.ru_stime),
+                    "max_rss_kb": int(usage.ru_maxrss),
+                    "thread_count": threading.active_count(),
+                },
+                "webrtc_sessions": sessions,
+                "jpeg_preview": {
+                    "poll_interval_ms": 100,
+                    "transport": "http-jpeg",
+                },
+            }
+        )
 
     async def _handle_image_webrtc_probe(self, request: web.Request) -> web.Response:
         payload = {}

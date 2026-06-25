@@ -33,6 +33,7 @@ const imagePipelineNotes = document.getElementById("image-pipeline-notes");
 const refreshImageCapabilitiesButton = document.getElementById("refresh-image-capabilities-button");
 const probeWebrtcButton = document.getElementById("probe-webrtc-button");
 const webrtcProbeOutput = document.getElementById("webrtc-probe-output");
+const imagePerformanceGrid = document.getElementById("image-performance-grid");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#79c47b", primitive: "sphere", modelColor: "#b99572" },
@@ -64,6 +65,7 @@ let knownRecordTopics = new Set();
 let recordTopicsInitialized = false;
 let recordingLogLines = [];
 let knownRosbags = [];
+let lastPerformanceSample = null;
 
 const CAMERA_FPS_WINDOW_MS = 1500;
 const CAMERA_POLL_INTERVAL_MS = 100;
@@ -91,6 +93,8 @@ if (enableCameras) {
 }
 if (enableImages) {
   void refreshImageCapabilities();
+  void refreshImagePerformance();
+  window.setInterval(refreshImagePerformance, 1000);
 }
 if (recordingPanel) {
   void refreshRecordingStatus({ refreshTopics: true, force: true });
@@ -896,6 +900,71 @@ async function probeWebrtcPipeline(codec = "vp8") {
   }
 }
 
+async function refreshImagePerformance() {
+  if (!imagePerformanceGrid) {
+    return null;
+  }
+  try {
+    const response = await fetch(`/api/images/performance?ts=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to load image performance.");
+    }
+    renderImagePerformance(payload);
+    lastPerformanceSample = payload;
+    return payload;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    imagePerformanceGrid.innerHTML = `<div class="empty-state">${escapeHtml(message)}</div>`;
+    return null;
+  }
+}
+
+function renderImagePerformance(payload) {
+  if (!imagePerformanceGrid) {
+    return;
+  }
+  const processInfo = (payload && payload.process) || {};
+  const previous = lastPerformanceSample && lastPerformanceSample.process ? lastPerformanceSample : null;
+  const currentCpu = Number(processInfo.user_cpu_s || 0) + Number(processInfo.system_cpu_s || 0);
+  let cpuRate = null;
+  if (previous) {
+    const previousCpu = Number(previous.process.user_cpu_s || 0) + Number(previous.process.system_cpu_s || 0);
+    const dt = Math.max((Number(payload.timestamp_ms || 0) - Number(previous.timestamp_ms || 0)) / 1000, 1e-6);
+    cpuRate = (currentCpu - previousCpu) / dt;
+  }
+  const sessions = Array.isArray(payload && payload.webrtc_sessions) ? payload.webrtc_sessions : [];
+  const activeWebrtc = new Map(sessions.map((session) => [session.camera_name, session]));
+  const cameraRows = Array.from(cameraPanels.keys()).map((cameraName) => {
+    const session = activeWebrtc.get(cameraName);
+    const pollState = cameraPollState.get(cameraName) || {};
+    const mode = cameraWebrtcState.has(cameraName) ? "WebRTC" : "JPEG";
+    const displayFps = computeDisplayedFps(pollState.displayFrameTimes || []);
+    const backendFps = Number(pollState.backendFps || 0);
+    const pushedFps = session ? Number(session.pushed_fps || 0) : 0;
+    return `
+      <div class="performance-row">
+        <strong>${escapeHtml(cameraName)} · ${mode}</strong>
+        <span>display ${displayFps > 0 ? displayFps.toFixed(1) : "--"} fps · rx ${backendFps > 0 ? backendFps.toFixed(1) : "--"} fps${session ? ` · pushed ${pushedFps.toFixed(1)} fps` : ""}</span>
+      </div>
+    `;
+  }).join("");
+  const sessionText = sessions.length === 0
+    ? "0 WebRTC sessions"
+    : `${sessions.length} WebRTC session${sessions.length === 1 ? "" : "s"}`;
+  imagePerformanceGrid.innerHTML = `
+    <div class="performance-row">
+      <strong>Dashboard process</strong>
+      <span>CPU total ${currentCpu.toFixed(1)}s${cpuRate === null ? "" : ` · approx ${(cpuRate * 100).toFixed(0)}% of one core`} · RSS ${formatBytes(Number(processInfo.max_rss_kb || 0) * 1024)} · threads ${Number(processInfo.thread_count || 0)}</span>
+    </div>
+    <div class="performance-row">
+      <strong>Active transport</strong>
+      <span>JPEG poll ${payload && payload.jpeg_preview ? payload.jpeg_preview.poll_interval_ms : "--"}ms · ${sessionText}</span>
+    </div>
+    ${cameraRows || '<div class="empty-state">No camera panels yet.</div>'}
+  `;
+}
+
 function formatDuration(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return "--";
@@ -907,6 +976,20 @@ function formatDuration(seconds) {
     return `${seconds.toFixed(1)}s`;
   }
   return `${minutes}m ${remainder}s`;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "--";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function startCameraPolling() {
@@ -1203,6 +1286,7 @@ async function startCameraWebrtc(cameraName) {
         video.srcObject = event.streams[0];
         video.classList.add("is-active");
         img.classList.add("is-hidden");
+        startVideoFrameStats(cameraName, video);
       }
     };
     peer.onicecandidate = (event) => {
@@ -1243,7 +1327,10 @@ async function startCameraWebrtc(cameraName) {
     candidateTimer = window.setInterval(() => {
       void pollCameraWebrtcCandidates(sessionId, peer);
     }, 400);
-    cameraWebrtcState.set(cameraName, { peer, sessionId, candidateTimer });
+    cameraWebrtcState.set(cameraName, { peer, sessionId, candidateTimer, videoStatsActive: true });
+    if (video && video.srcObject) {
+      startVideoFrameStats(cameraName, video);
+    }
     panel.classList.add("is-webrtc");
     if (button) {
       button.disabled = false;
@@ -1258,10 +1345,10 @@ async function startCameraWebrtc(cameraName) {
     if (sessionId) {
       await fetch(`/api/images/webrtc/${encodeURIComponent(sessionId)}`, { method: "DELETE" }).catch(() => {});
     }
-    if (video) {
-      video.srcObject = null;
-      video.classList.remove("is-active");
-    }
+  if (video) {
+    video.srcObject = null;
+    video.classList.remove("is-active");
+  }
     img.classList.remove("is-hidden");
     if (status) {
       status.textContent = error instanceof Error ? error.message : String(error);
@@ -1358,6 +1445,20 @@ function recordDisplayedFrame(cameraName) {
   pollState.displayFrameTimes = frameTimes;
   cameraPollState.set(cameraName, pollState);
   renderCameraFps(cameraName);
+}
+
+function startVideoFrameStats(cameraName, video) {
+  if (!video || typeof video.requestVideoFrameCallback !== "function") {
+    return;
+  }
+  const onFrame = () => {
+    if (!cameraWebrtcState.has(cameraName)) {
+      return;
+    }
+    recordDisplayedFrame(cameraName);
+    video.requestVideoFrameCallback(onFrame);
+  };
+  video.requestVideoFrameCallback(onFrame);
 }
 
 function computeDisplayedFps(frameTimes) {
