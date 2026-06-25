@@ -2,9 +2,10 @@
   "ros_domain_id": 20,
   "session_alignment": {
     "enabled": true,
+    "alignment_frame": "board_center",
     "reference_camera": "insight9_a",
     "calibration": {
-      "method": "board_relative",
+      "method": "board_center",
       "image_stream": "color_compressed",
       "marker_length_m": 0.055,
       "marker_separation_m": 0.0165,
@@ -24,7 +25,7 @@
       "alignment_image_scale": 1.0,
       "processing_hz": 5.0,
       "display_axis_alignment": true,
-      "lock_on_first_solution": true,
+      "lock_on_first_solution": false,
       "reset_traces_on_lock": true,
       "anchor_rotation_mode": "yaw",
       "dashboard_horizontal_yaw_mode": "manual",
