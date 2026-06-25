@@ -7,6 +7,20 @@ const modelStatus = document.getElementById("model-status");
 const legend = document.getElementById("pose-legend");
 const cameraDock = document.getElementById("camera-dock");
 const cameraPageMeta = document.getElementById("camera-page-meta");
+const alignmentPanel = document.getElementById("alignment-panel");
+const alignmentStatus = document.getElementById("alignment-status");
+const alignmentMeta = document.getElementById("alignment-meta");
+const alignmentToggle = document.getElementById("alignment-toggle");
+const recordingPanel = document.getElementById("recording-panel");
+const recordingStatus = document.getElementById("recording-status");
+const startRecordingButton = document.getElementById("start-recording-button");
+const stopRecordingButton = document.getElementById("stop-recording-button");
+const syncRecordingButton = document.getElementById("sync-recording-button");
+const refreshRecordTopicsButton = document.getElementById("refresh-record-topics-button");
+const recordTopicStatus = document.getElementById("record-topic-status");
+const recordSyncStatus = document.getElementById("record-sync-status");
+const recordTopicGroups = document.getElementById("record-topic-groups");
+const recordingOutput = document.getElementById("recording-output");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#57d67c", primitive: "sphere", modelColor: "#d6a07d" },
@@ -29,6 +43,13 @@ const trailStates = new Map();
 const cameraPanels = new Map();
 const cameraPollState = new Map();
 let maximizedCameraName = null;
+let alignmentBusy = false;
+let recordingBusy = false;
+let recordTopicRefreshBusy = false;
+let selectedRecordTopics = new Set();
+let knownRecordTopics = new Set();
+let recordTopicsInitialized = false;
+let recordingLogLines = [];
 
 const CAMERA_FPS_WINDOW_MS = 1500;
 const DEFAULT_TRAIL_ENABLED = {
@@ -48,9 +69,42 @@ if (engine && scene) {
 
 if (enable3d) {
   connect();
+  fetchAlignmentStatus();
 }
 if (enableCameras) {
   startCameraPolling();
+}
+if (recordingPanel) {
+  void refreshRecordingStatus({ refreshTopics: true, force: true });
+  window.setInterval(() => {
+    void refreshRecordingStatus({ refreshTopics: false });
+  }, 1500);
+}
+
+if (alignmentToggle) {
+  alignmentToggle.addEventListener("click", () => {
+    void toggleAlignment();
+  });
+}
+if (refreshRecordTopicsButton) {
+  refreshRecordTopicsButton.addEventListener("click", () => {
+    void refreshRecordTopics({ resetSelection: true });
+  });
+}
+if (startRecordingButton) {
+  startRecordingButton.addEventListener("click", () => {
+    void startRecording();
+  });
+}
+if (stopRecordingButton) {
+  stopRecordingButton.addEventListener("click", () => {
+    void stopRecording();
+  });
+}
+if (syncRecordingButton) {
+  syncRecordingButton.addEventListener("click", () => {
+    void syncRecordingToHost();
+  });
 }
 
 function resolveWebSocketUrl() {
@@ -122,6 +176,9 @@ function connect() {
 
   ws.onmessage = (event) => {
     const payload = JSON.parse(event.data);
+    if (payload.alignment) {
+      renderAlignment(payload.alignment);
+    }
     if (payload.type !== "pose_update") {
       return;
     }
@@ -140,6 +197,471 @@ function connect() {
     }
     window.setTimeout(connect, 1000);
   };
+}
+
+async function fetchAlignmentStatus() {
+  if (!alignmentPanel) {
+    return;
+  }
+  try {
+    const response = await fetch(`/api/alignment?ts=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const payload = await response.json();
+    if (payload && payload.alignment) {
+      renderAlignment(payload.alignment);
+    }
+  } catch (_error) {
+    // The websocket will refresh status once connected.
+  }
+}
+
+async function toggleAlignment() {
+  if (!alignmentToggle || alignmentBusy) {
+    return;
+  }
+  const shouldStop = alignmentToggle.dataset.action === "stop";
+  alignmentBusy = true;
+  syncAlignmentButtonState();
+  try {
+    const response = await fetch(shouldStop ? "/api/alignment/stop" : "/api/alignment/start", {
+      method: "POST"
+    });
+    const payload = await response.json();
+    if (payload && payload.alignment) {
+      renderAlignment(payload.alignment);
+    }
+  } catch (_error) {
+    if (alignmentMeta) {
+      alignmentMeta.textContent = "Alignment control request failed";
+    }
+  } finally {
+    alignmentBusy = false;
+    syncAlignmentButtonState();
+  }
+}
+
+function renderAlignment(alignment) {
+  if (!alignmentPanel) {
+    return;
+  }
+  const available = Boolean(alignment && alignment.available);
+  const active = Boolean(alignment && alignment.active);
+  const statusText = (alignment && alignment.status_text) || "Alignment OFF";
+  const requiredSamples = Number((alignment && alignment.required_samples) || 0);
+  const inlierCount = Number((alignment && alignment.inlier_count) || 0);
+  const visibleCameras = Number((alignment && alignment.visible_cameras) || 0);
+  const cameraCount = Number((alignment && alignment.camera_count) || 0);
+  const hasSolution = Boolean(alignment && alignment.has_solution);
+  const lockOnFirst = Boolean(alignment && alignment.lock_on_first_solution);
+
+  if (alignmentStatus) {
+    alignmentStatus.textContent = statusText;
+  }
+  if (alignmentToggle) {
+    alignmentToggle.dataset.action = active ? "stop" : "start";
+    alignmentToggle.dataset.state = active ? "stop" : "start";
+    alignmentToggle.textContent = active ? "Stop Alignment" : "Start Alignment";
+    alignmentToggle.disabled = !available || alignmentBusy;
+  }
+  if (alignmentMeta) {
+    if (!available) {
+      alignmentMeta.textContent = "Alignment stream unavailable in this backend session";
+    } else if (active) {
+      alignmentMeta.textContent =
+        `Board ${visibleCameras}/${cameraCount} visible · samples ${inlierCount}/${requiredSamples}` +
+        (lockOnFirst ? " · auto-lock after first camera is ON" : " · manual stop mode");
+    } else if (hasSolution) {
+      alignmentMeta.textContent = "Last calibration remains applied to the 3D view. Press Start Alignment to recalibrate.";
+    } else {
+      alignmentMeta.textContent = "Ready to calibrate from the web view. Press Start Alignment when the board is visible.";
+    }
+  }
+  syncAlignmentButtonState();
+}
+
+function syncAlignmentButtonState() {
+  if (!alignmentToggle) {
+    return;
+  }
+  if (alignmentBusy) {
+    alignmentToggle.disabled = true;
+    alignmentToggle.classList.add("is-busy");
+    alignmentToggle.textContent = alignmentToggle.dataset.action === "stop" ? "Stopping..." : "Starting...";
+    return;
+  }
+  alignmentToggle.classList.remove("is-busy");
+}
+
+async function refreshRecordingStatus({ refreshTopics = false, force = false } = {}) {
+  if (!recordingPanel) {
+    return null;
+  }
+  if (!force && !recordingPanel.isConnected) {
+    return null;
+  }
+  try {
+    const response = await fetch(`/api/recording/status?ts=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to fetch recording status.");
+    }
+    renderRecordingStatus(payload);
+    if (Array.isArray(payload.recent_output) && payload.recent_output.length > 0) {
+      replaceRecordingOutput(payload.recent_output.join("\n"));
+    }
+    if (refreshTopics) {
+      await refreshRecordTopics({ resetSelection: !recordTopicsInitialized });
+    }
+    return payload;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setRecordingOutput(`Recording status error: ${message}`);
+    setRecordTopicStatus(message);
+    return null;
+  }
+}
+
+async function refreshRecordTopics({ resetSelection = false } = {}) {
+  if (!recordTopicGroups) {
+    return null;
+  }
+  setRecordTopicRefreshBusy(true);
+  try {
+    const response = await fetch(`/api/recording/topics?ts=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to refresh recording topics.");
+    }
+    renderTopicCatalog(payload, { resetSelection });
+    setRecordTopicStatus(`Topic list refreshed: ${(payload.topics || []).length} topics`);
+    return payload;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setRecordTopicStatus(message);
+    setRecordingOutput(`Topic refresh error: ${message}`);
+    return null;
+  } finally {
+    setRecordTopicRefreshBusy(false);
+  }
+}
+
+function renderTopicCatalog(catalog, { resetSelection = false } = {}) {
+  if (!recordTopicGroups) {
+    return;
+  }
+  const liveTopics = Array.isArray(catalog && catalog.topics) ? catalog.topics : [];
+  const defaultSelectedTopics = Array.isArray(catalog && catalog.default_selected_topics)
+    ? catalog.default_selected_topics.filter((topic) => liveTopics.includes(topic))
+    : [];
+  const previousSelection = new Set(selectedRecordTopics);
+  const previousKnown = new Set(knownRecordTopics);
+  if (resetSelection || !recordTopicsInitialized) {
+    selectedRecordTopics = new Set(defaultSelectedTopics);
+  } else {
+    const mergedSelection = new Set();
+    liveTopics.forEach((topic) => {
+      if (previousSelection.has(topic) || !previousKnown.has(topic)) {
+        mergedSelection.add(topic);
+      }
+    });
+    selectedRecordTopics = mergedSelection;
+  }
+  knownRecordTopics = new Set(liveTopics);
+  recordTopicsInitialized = true;
+
+  const groups = [];
+  ((catalog && catalog.cameras) || []).forEach((camera) => {
+    groups.push(renderCameraTopicGroup(camera));
+  });
+  if (Array.isArray(catalog && catalog.other) && catalog.other.length > 0) {
+    groups.push(renderCameraTopicGroup({ namespace: "Other", label: "Other", detected: true, topics: catalog.other }));
+  }
+  recordTopicGroups.innerHTML = groups.length > 0 ? groups.join("") : '<div class="recording-output">No live topics found yet.</div>';
+  bindRecordTopicInputs();
+  updateRecordTopicSummary();
+}
+
+function renderCameraTopicGroup(group) {
+  const topics = Array.isArray(group && group.topics) ? group.topics : [];
+  const groupKey = escapeHtml((group && (group.namespace || group.label)) || "Other");
+  const groupLabel = escapeHtml((group && (group.label || group.namespace)) || "Other");
+  const selectedCount = topics.filter((topic) => selectedRecordTopics.has(topic.name)).length;
+  return `
+    <details class="record-topic-group" open>
+      <summary>
+        <div class="record-topic-summary">
+          <label class="record-topic-select-all">
+            <input type="checkbox" data-record-group="${groupKey}" ${selectedCount > 0 ? "checked" : ""}>
+            <span class="record-topic-summary-main">
+              <strong>${groupLabel}</strong>
+              <span class="record-topic-summary-meta">${selectedCount}/${topics.length} selected</span>
+            </span>
+          </label>
+        </div>
+      </summary>
+      <div class="record-topic-list">
+        ${renderTopicList(topics)}
+      </div>
+    </details>
+  `;
+}
+
+function renderTopicList(topics) {
+  return topics.map((topic) => {
+    const checked = selectedRecordTopics.has(topic.name) ? "checked" : "";
+    return `
+      <label class="record-topic-item">
+        <input type="checkbox" data-record-topic value="${escapeHtml(topic.name)}" data-record-group-name="${escapeHtml(topic.group || "")}" ${checked}>
+        <span class="record-topic-copy">
+          <strong>${escapeHtml(topic.short_name || topic.name)}</strong>
+          <span>${escapeHtml(topic.name)}</span>
+        </span>
+      </label>
+    `;
+  }).join("");
+}
+
+function bindRecordTopicInputs() {
+  if (!recordTopicGroups) {
+    return;
+  }
+  recordTopicGroups.querySelectorAll("[data-record-topic]").forEach((input) => {
+    input.addEventListener("change", (event) => {
+      const topic = event.currentTarget.value;
+      if (event.currentTarget.checked) {
+        selectedRecordTopics.add(topic);
+      } else {
+        selectedRecordTopics.delete(topic);
+      }
+      syncRecordGroupStates();
+      updateRecordTopicSummary();
+    });
+  });
+  recordTopicGroups.querySelectorAll("[data-record-group]").forEach((input) => {
+    input.addEventListener("change", (event) => {
+      const group = event.currentTarget.getAttribute("data-record-group");
+      const checked = Boolean(event.currentTarget.checked);
+      recordTopicGroups.querySelectorAll(`[data-record-group-name="${cssEscape(group)}"]`).forEach((topicInput) => {
+        topicInput.checked = checked;
+        if (checked) {
+          selectedRecordTopics.add(topicInput.value);
+        } else {
+          selectedRecordTopics.delete(topicInput.value);
+        }
+      });
+      syncRecordGroupStates();
+      updateRecordTopicSummary();
+    });
+  });
+  syncRecordGroupStates();
+}
+
+function syncRecordGroupStates() {
+  if (!recordTopicGroups) {
+    return;
+  }
+  recordTopicGroups.querySelectorAll("[data-record-group]").forEach((input) => {
+    const group = input.getAttribute("data-record-group");
+    const topicInputs = Array.from(recordTopicGroups.querySelectorAll(`[data-record-group-name="${cssEscape(group)}"]`));
+    const checkedCount = topicInputs.filter((item) => item.checked).length;
+    input.indeterminate = checkedCount > 0 && checkedCount < topicInputs.length;
+    input.checked = topicInputs.length > 0 && checkedCount === topicInputs.length;
+  });
+}
+
+function updateRecordTopicSummary() {
+  const selectedCount = selectedRecordTopics.size;
+  const totalCount = knownRecordTopics.size;
+  if (totalCount === 0) {
+    setRecordTopicStatus("No live topics found. Refresh after ROS topics are available.");
+    return;
+  }
+  setRecordTopicStatus(`${selectedCount}/${totalCount} topics selected`);
+}
+
+async function startRecording() {
+  if (recordingBusy) {
+    return;
+  }
+  await refreshRecordingStatus({ refreshTopics: false, force: true });
+  const topics = collectSelectedRecordTopics();
+  if (topics.length === 0) {
+    const message = "Select at least one topic to record.";
+    setRecordTopicStatus(message);
+    setRecordingOutput(message);
+    return;
+  }
+  setRecordingBusy(true);
+  try {
+    const response = await fetch("/api/recording/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topics })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to start recording.");
+    }
+    renderRecordingStatus(payload);
+    setRecordingOutput(`Recording started: ${payload.output_path || "(pending path)"}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setRecordingOutput(`Recording start failed: ${message}`);
+  } finally {
+    setRecordingBusy(false);
+  }
+}
+
+async function stopRecording() {
+  if (recordingBusy) {
+    return;
+  }
+  setRecordingBusy(true);
+  try {
+    const response = await fetch("/api/recording/stop", { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to stop recording.");
+    }
+    renderRecordingStatus(payload);
+    const syncMessage = payload && payload.sync_status && payload.sync_status.message;
+    setRecordingOutput(syncMessage ? `Recording stopped. ${syncMessage}` : "Recording stopped.");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setRecordingOutput(`Recording stop failed: ${message}`);
+  } finally {
+    setRecordingBusy(false);
+  }
+}
+
+async function syncRecordingToHost() {
+  if (recordingBusy) {
+    return;
+  }
+  setRecordingBusy(true);
+  try {
+    const response = await fetch("/api/recording/sync", { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to sync recording to host.");
+    }
+    renderRecordingStatus(payload);
+    const syncMessage = payload && payload.sync_status && payload.sync_status.message;
+    setRecordingOutput(syncMessage || "Recording synced to host.");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setRecordingOutput(`Recording sync failed: ${message}`);
+  } finally {
+    setRecordingBusy(false);
+  }
+}
+
+function collectSelectedRecordTopics() {
+  if (!recordTopicGroups) {
+    return [];
+  }
+  const topics = [];
+  recordTopicGroups.querySelectorAll("[data-record-topic]").forEach((input) => {
+    if (input.checked) {
+      topics.push(input.value);
+    }
+  });
+  selectedRecordTopics = new Set(topics);
+  return topics;
+}
+
+function renderRecordingStatus(status) {
+  const active = Boolean(status && status.recording);
+  const outputPath = (status && status.output_path) || "";
+  const syncStatus = status && status.sync_status;
+  const hostSyncDir = (status && status.host_sync_dir) || "";
+  const hostSyncSshTarget = (status && status.host_sync_ssh_target) || "";
+  if (recordingStatus) {
+    recordingStatus.textContent = active ? `Recording to ${outputPath}` : "Recording idle";
+  }
+  if (recordSyncStatus) {
+    const hostTargetText = hostSyncSshTarget || hostSyncDir;
+    if (syncStatus && syncStatus.message) {
+      recordSyncStatus.textContent = hostTargetText
+        ? `${syncStatus.message} | host: ${hostTargetText}`
+        : syncStatus.message;
+    } else if (hostTargetText) {
+      recordSyncStatus.textContent = `Host sync ready: ${hostTargetText}`;
+    } else {
+      recordSyncStatus.textContent = "Host sync not configured";
+    }
+  }
+  if (!active && outputPath && recordingOutput && recordingLogLines.length === 0) {
+    setRecordingOutput(`Last output: ${outputPath}`);
+  }
+  if (status && status.topic_catalog && !recordTopicsInitialized) {
+    renderTopicCatalog(status.topic_catalog, { resetSelection: true });
+  }
+  setRecordingBusy(recordingBusy, { active });
+}
+
+function setRecordingBusy(isBusy, { active } = {}) {
+  recordingBusy = Boolean(isBusy);
+  const isActive = typeof active === "boolean" ? active : Boolean(recordingStatus && recordingStatus.textContent.startsWith("Recording to "));
+  if (startRecordingButton) {
+    startRecordingButton.disabled = recordingBusy || isActive;
+    startRecordingButton.classList.toggle("is-busy", recordingBusy && !isActive);
+  }
+  if (stopRecordingButton) {
+    stopRecordingButton.disabled = recordingBusy || !isActive;
+    stopRecordingButton.classList.toggle("is-busy", recordingBusy && isActive);
+  }
+  if (syncRecordingButton) {
+    syncRecordingButton.disabled = recordingBusy || isActive;
+    syncRecordingButton.classList.toggle("is-busy", recordingBusy && !isActive);
+  }
+}
+
+function setRecordTopicRefreshBusy(isBusy) {
+  recordTopicRefreshBusy = Boolean(isBusy);
+  if (refreshRecordTopicsButton) {
+    refreshRecordTopicsButton.disabled = recordTopicRefreshBusy;
+    refreshRecordTopicsButton.classList.toggle("is-busy", recordTopicRefreshBusy);
+  }
+}
+
+function setRecordTopicStatus(message) {
+  if (recordTopicStatus) {
+    recordTopicStatus.textContent = message;
+  }
+}
+
+function setRecordingOutput(message) {
+  if (!recordingOutput) {
+    return;
+  }
+  const text = String(message || "").trim();
+  if (!text) {
+    return;
+  }
+  recordingLogLines.push(text);
+  if (recordingLogLines.length > 12) {
+    recordingLogLines = recordingLogLines.slice(-12);
+  }
+  recordingOutput.textContent = recordingLogLines.join("\n");
+}
+
+function replaceRecordingOutput(message) {
+  if (!recordingOutput) {
+    return;
+  }
+  const text = String(message || "").trim();
+  recordingLogLines = text ? text.split("\n").slice(-12) : [];
+  recordingOutput.textContent = recordingLogLines.join("\n");
+}
+
+function cssEscape(value) {
+  if (window.CSS && typeof window.CSS.escape === "function") {
+    return window.CSS.escape(String(value));
+  }
+  return String(value).replaceAll('"', '\\"');
 }
 
 function startCameraPolling() {

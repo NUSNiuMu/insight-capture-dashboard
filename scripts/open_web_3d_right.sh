@@ -29,7 +29,7 @@ fi
 
 exec python3 "${SCRIPT_DIR}/web_3d_window.py" \
   --url "${URL}" \
-  --x 960 \
+  --x 0 \
   --y 0 \
-  --width 960 \
+  --width 1920 \
   --height 1080

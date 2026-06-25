@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import contextlib
+import json
 import math
 import os
 import threading
@@ -41,6 +42,11 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
 
 from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
 from live_alignment import LiveAlignmentMixin
+from post_processing import (
+    RecordingManager,
+    build_default_topics,
+    load_post_processing_config,
+)
 from session_alignment import PoseSample
 
 
@@ -154,15 +160,16 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             self.get_logger().info("Running in fake-pose demo mode")
         else:
             self._create_pose_subscriptions()
-            if self.enable_alignment_stream:
+            if self.live_alignment_available:
                 self._create_alignment_subscriptions()
 
-        if self.enable_alignment_stream and self.live_alignment_available:
+        if self.live_alignment_available:
             self.live_alignment_timer = self.create_timer(
                 1.0 / max(self.live_alignment_processing_hz, 0.5),
                 self._process_live_alignment,
                 callback_group=self.ros_callback_group,
             )
+            self._set_live_alignment_timer_enabled(False)
 
     def _create_pose_subscriptions(self) -> None:
         pose_qos = make_qos()
@@ -339,7 +346,24 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             "type": "pose_update",
             "timestamp_ms": int(time.time() * 1000),
             "fake_pose": self.fake_pose,
+            "alignment": self.build_alignment_payload(),
             "poses": poses,
+        }
+
+    def build_alignment_payload(self) -> Dict[str, object]:
+        target_camera = getattr(self, "live_alignment_target_camera", None)
+        inlier_counts = getattr(self, "live_alignment_inlier_counts", {})
+        return {
+            "available": bool(self.live_alignment_available and not self.fake_pose),
+            "active": bool(self.live_alignment_active),
+            "status_text": self.alignment_status_text(),
+            "lock_on_first_solution": bool(self.live_alignment_lock_on_first_solution),
+            "required_samples": int(self.live_alignment_required_samples),
+            "visible_cameras": int(getattr(self, "live_alignment_visible_cameras", 0)),
+            "camera_count": len(self.cameras),
+            "inlier_count": int(0 if target_camera is None else inlier_counts.get(target_camera, 0)),
+            "last_status": str(getattr(self, "live_alignment_last_status", "")),
+            "has_solution": bool(self.world_to_reference),
         }
 
     def model_asset_url(self, avatar_model: Optional[str]) -> Optional[str]:
@@ -369,12 +393,14 @@ class WebDashboardServer:
         port: int,
         web_root: Optional[Path],
         project_root: Path,
+        recording_manager: RecordingManager,
     ) -> None:
         self.node = node
         self.host = host
         self.port = int(port)
         self.web_root = web_root.resolve() if web_root else None
         self.project_root = project_root.resolve()
+        self.recording_manager = recording_manager
         self._clients: Set[web.WebSocketResponse] = set()
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
@@ -392,14 +418,23 @@ class WebDashboardServer:
 
     def _run_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
-        app = web.Application()
+        app = web.Application(middlewares=[self._json_error_middleware])
         app.router.add_get("/ws", self._handle_ws)
         app.router.add_get("/healthz", self._handle_healthz)
         app.router.add_get("/api/poses", self._handle_pose_snapshot)
+        app.router.add_get("/api/alignment", self._handle_alignment_snapshot)
+        app.router.add_post("/api/alignment/start", self._handle_alignment_start)
+        app.router.add_post("/api/alignment/stop", self._handle_alignment_stop)
+        app.router.add_get("/api/recording/status", self._handle_recording_status)
+        app.router.add_get("/api/recording/topics", self._handle_recording_topics)
+        app.router.add_post("/api/recording/start", self._handle_recording_start)
+        app.router.add_post("/api/recording/stop", self._handle_recording_stop)
+        app.router.add_post("/api/recording/sync", self._handle_recording_sync)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
             app.router.add_get("/3d", self._handle_index)
+            app.router.add_get("/recording", self._handle_recording_page)
             static_root = self.web_root / "static"
             if static_root.exists():
                 app.router.add_static("/static/", str(static_root), show_index=False)
@@ -426,6 +461,7 @@ class WebDashboardServer:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        self.recording_manager.stop()
 
     async def _broadcast_loop(self) -> None:
         while True:
@@ -466,8 +502,87 @@ class WebDashboardServer:
             pose["asset_url"] = self.node.model_asset_url(pose.get("avatar_model"))
         return web.json_response(payload)
 
+    @web.middleware
+    async def _json_error_middleware(self, request: web.Request, handler):
+        try:
+            return await handler(request)
+        except web.HTTPException:
+            raise
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except RuntimeError as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        except Exception as exc:
+            self.node.get_logger().error(f"Unhandled web error for {request.path}: {exc}")
+            return web.json_response({"error": str(exc)}, status=500)
+
+    async def _handle_alignment_snapshot(self, _request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "type": "alignment_status",
+                "alignment": self.node.build_alignment_payload(),
+            }
+        )
+
+    async def _handle_alignment_start(self, _request: web.Request) -> web.Response:
+        status_text = self.node.start_live_alignment()
+        return web.json_response(
+            {
+                "ok": bool(self.node.live_alignment_active),
+                "type": "alignment_status",
+                "status_text": status_text,
+                "alignment": self.node.build_alignment_payload(),
+            }
+        )
+
+    async def _handle_alignment_stop(self, _request: web.Request) -> web.Response:
+        status_text = self.node.stop_live_alignment()
+        return web.json_response(
+            {
+                "ok": True,
+                "type": "alignment_status",
+                "status_text": status_text,
+                "alignment": self.node.build_alignment_payload(),
+            }
+        )
+
+    async def _handle_recording_status(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.recording_manager.status())
+
+    async def _handle_recording_topics(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.recording_manager.current_topic_catalog(refresh=True))
+
+    async def _handle_recording_start(self, request: web.Request) -> web.Response:
+        payload = {}
+        if request.can_read_body:
+            try:
+                payload = await request.json()
+            except json.JSONDecodeError as exc:
+                return web.json_response({"error": f"Invalid JSON body: {exc}"}, status=400)
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            return web.json_response({"error": "Request body must be a JSON object."}, status=400)
+        topics = payload.get("topics")
+        if "topics" in payload and not isinstance(topics, list):
+            return web.json_response({"error": "Field 'topics' must be a list."}, status=400)
+        status = self.recording_manager.start(topics=topics)
+        return web.json_response(status)
+
+    async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.recording_manager.stop())
+
+    async def _handle_recording_sync(self, _request: web.Request) -> web.Response:
+        sync_status = self.recording_manager.sync_recording_to_host()
+        payload = self.recording_manager.status()
+        payload["sync_status"] = sync_status
+        return web.json_response(payload)
+
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "3d.html")
+
+    async def _handle_recording_page(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.web_root / "recording.html")
 
     async def _handle_asset(self, request: web.Request) -> web.StreamResponse:
         raw_path = request.query.get("path", "").strip()
@@ -502,6 +617,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fake-pose", action="store_true")
     parser.add_argument("--pose-publish-hz", type=float, default=30.0)
     parser.add_argument("--start-alignment", action="store_true")
+    parser.add_argument("--post-processing-config", default=str(Path(__file__).resolve().parents[1] / "config" / "post_processing.json"))
+    parser.add_argument("--rosbag-dir", "-rosbag-dir", default=None)
     return parser.parse_args()
 
 
@@ -509,13 +626,60 @@ def main() -> None:
     args = parse_args()
     config_path = Path(args.config).resolve()
     raw_config = load_setup(config_path)
+    project_root = config_path.resolve().parents[1]
+    post_processing_config = load_post_processing_config(Path(args.post_processing_config).resolve())
     ros_domain_id = int(raw_config.get("ros_domain_id", 10))
     if rclpy is None:
         raise RuntimeError("rclpy is not available in this environment")
 
     os.environ.setdefault("ROS_DOMAIN_ID", str(ros_domain_id))
+    rosbag_dir_value = (
+        args.rosbag_dir
+        or os.environ.get("INSIGHT_ROSBAG_DIR")
+        or post_processing_config.get("rosbag_dir")
+        or "rosbags"
+    )
+    host_rosbag_sync_value = (
+        os.environ.get("INSIGHT_HOST_ROSBAG_SYNC_DIR")
+        or post_processing_config.get("host_rosbag_sync_dir")
+        or ""
+    )
+    host_rosbag_sync_ssh_target = (
+        os.environ.get("INSIGHT_HOST_ROSBAG_SYNC_SSH_TARGET")
+        or post_processing_config.get("host_rosbag_sync_ssh_target")
+        or ""
+    )
+    results_dir_value = post_processing_config.get("results_dir", "outputs/results")
+    rosbag_root = Path(rosbag_dir_value)
+    if not rosbag_root.is_absolute():
+        rosbag_root = (project_root / rosbag_root).resolve()
+    host_rosbag_sync_root: Optional[Path] = None
+    if str(host_rosbag_sync_value).strip():
+        host_rosbag_sync_root = Path(str(host_rosbag_sync_value).strip())
+        if not host_rosbag_sync_root.is_absolute():
+            host_rosbag_sync_root = (project_root / host_rosbag_sync_root).resolve()
+    results_root = Path(results_dir_value)
+    if not results_root.is_absolute():
+        results_root = (project_root / results_root).resolve()
+    rosbag_root.mkdir(parents=True, exist_ok=True)
+    results_root.mkdir(parents=True, exist_ok=True)
+
+    configured_record_topics = post_processing_config.get("record_topics") or []
+    default_record_topics = configured_record_topics if configured_record_topics else build_default_topics(raw_config)
+    recording_manager = RecordingManager(
+        raw_config=raw_config,
+        ros_domain_id=ros_domain_id,
+        rosbag_root=rosbag_root,
+        max_cache_size=int(post_processing_config.get("max_cache_size", 2147483648)),
+        default_topics=default_record_topics,
+        host_sync_dir=host_rosbag_sync_root,
+        host_sync_ssh_target=str(host_rosbag_sync_ssh_target or "").strip(),
+        sync_to_host_on_stop=bool(post_processing_config.get("sync_rosbag_to_host", False)),
+        publisher_checker=None,
+    )
+
     rclpy.init(args=None)
-    enable_alignment_stream = bool(args.start_alignment)
+    enable_alignment_stream = not args.fake_pose
     node = PoseBridgeNode(
         config_path,
         fake_pose=args.fake_pose,
@@ -531,7 +695,7 @@ def main() -> None:
     spin_thread.start()
 
     web_root = Path(args.web_root) if args.web_root else None
-    server = WebDashboardServer(node, args.host, args.port, web_root, node.project_root)
+    server = WebDashboardServer(node, args.host, args.port, web_root, node.project_root, recording_manager)
     server.start()
 
     try:

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight Recording Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body data-dashboard-view="recording">
+    <div class="shell shell-recording-only">
+      <div class="recording-page-header">
+        <div>
+          <div class="camera-page-eyebrow">INSIGHT</div>
+          <h1>Rosbag Recording</h1>
+          <p class="recording-page-copy">Refresh live topics, choose what to record, then start or stop rosbag from this page.</p>
+        </div>
+        <div class="recording-page-links">
+          <a href="/3d">Back To 3D</a>
+        </div>
+      </div>
+      <div class="recording-page-panel recording-panel" id="recording-panel">
+        <p class="eyebrow">ROS 2 Rosbag</p>
+        <div class="recording-panel-row">
+          <h2 id="recording-status">Recording idle</h2>
+          <div class="recording-actions">
+            <button type="button" id="refresh-record-topics-button" class="recording-button recording-button-secondary">Refresh Topics</button>
+            <button type="button" id="sync-recording-button" class="recording-button recording-button-secondary">Sync To Host</button>
+            <button type="button" id="start-recording-button" class="recording-button">Start</button>
+            <button type="button" id="stop-recording-button" class="recording-button recording-button-danger">Stop</button>
+          </div>
+        </div>
+        <p id="record-topic-status" class="record-topic-status">Waiting for topic catalog...</p>
+        <p id="record-sync-status" class="record-sync-status">Host sync idle</p>
+        <div id="record-topic-groups" class="record-topic-groups"></div>
+        <pre id="recording-output" class="recording-output">Recording panel ready</pre>
+      </div>
+    </div>
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>

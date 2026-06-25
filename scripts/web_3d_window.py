@@ -14,10 +14,11 @@ class Web3DWindow(QtWidgets.QMainWindow):
         super().__init__()
         self._drag_active = False
         self._drag_offset = QtCore.QPoint()
+        self._default_geometry = QtCore.QRect(x, y, width, height)
 
         self.setWindowTitle("Insight Web 3D")
         self.setWindowFlag(QtCore.Qt.FramelessWindowHint, True)
-        self.setGeometry(x, y, width, height)
+        self.setGeometry(self._default_geometry)
 
         view = QWebEngineView(self)
         profile = view.page().profile()
@@ -56,7 +57,7 @@ class Web3DWindow(QtWidgets.QMainWindow):
 
     def mouseDoubleClickEvent(self, event) -> None:
         if event.button() == QtCore.Qt.LeftButton:
-            self.setGeometry(960, 0, 960, 1080)
+            self.setGeometry(self._default_geometry)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)

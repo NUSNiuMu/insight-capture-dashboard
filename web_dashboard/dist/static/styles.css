@@ -33,6 +33,12 @@ html, body {
   padding: 18px 20px 24px;
 }
 
+.shell-recording-only {
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 18px 20px 24px;
+}
+
 .shell-3d-only #render-canvas {
   height: 100vh;
 }
@@ -63,6 +69,37 @@ html, body {
   font-size: 14px;
   padding-top: 6px;
   text-align: right;
+}
+
+.recording-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.recording-page-copy {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  max-width: 720px;
+}
+
+.recording-page-links {
+  padding-top: 6px;
+  text-align: right;
+}
+
+.recording-page-links a,
+.footer-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.recording-page-links a:hover,
+.footer-link:hover {
+  text-decoration: underline;
 }
 
 .camera-dock {
@@ -110,7 +147,16 @@ html, body {
 
 .hud {
   top: 18px;
-  justify-content: flex-end;
+  justify-content: space-between;
+}
+
+.hud-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 420px;
+  max-width: min(44vw, 560px);
+  pointer-events: auto;
 }
 
 .footer {
@@ -119,7 +165,7 @@ html, body {
   font-size: 13px;
 }
 
-.hud > div, .footer {
+.hud > div, .hud-stack > div, .footer {
   background: var(--panel);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
@@ -147,6 +193,259 @@ h1 {
 
 .legend {
   min-width: 280px;
+}
+
+.alignment-panel {
+  min-width: 0;
+  max-width: none;
+  pointer-events: auto;
+}
+
+.alignment-panel-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.alignment-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.alignment-panel h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.alignment-meta {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.alignment-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 11px 16px;
+  background: linear-gradient(135deg, #ffc857, #ff9a3d);
+  color: #11202b;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.alignment-button[data-state="stop"] {
+  background: linear-gradient(135deg, #ff8b7e, #ff5f52);
+  color: #fff7f4;
+}
+
+.alignment-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.nav-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 11px 16px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.nav-button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.recording-panel {
+  min-width: 0;
+  max-width: none;
+  pointer-events: auto;
+}
+
+.recording-page-panel {
+  width: min(1400px, 100%);
+  max-width: none;
+}
+
+.recording-panel-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.recording-panel h2 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.recording-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.recording-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 14px;
+  background: linear-gradient(135deg, #5ad7a2, #3ab98a);
+  color: #072116;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.recording-button-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+.recording-button-danger {
+  background: linear-gradient(135deg, #ff8b7e, #ff5f52);
+  color: #fff7f4;
+}
+
+.recording-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.recording-button.is-busy,
+.alignment-button.is-busy {
+  box-shadow: 0 0 0 1px rgba(255, 200, 87, 0.45), 0 0 22px rgba(255, 200, 87, 0.18);
+}
+
+.record-topic-status {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.record-sync-status {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.record-topic-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  max-height: 270px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.shell-recording-only .record-topic-groups {
+  max-height: none;
+  overflow: visible;
+}
+
+.record-topic-group {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+
+.record-topic-group summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 10px 12px;
+}
+
+.record-topic-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.record-topic-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.record-topic-summary-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.record-topic-summary-main strong {
+  color: var(--text);
+}
+
+.record-topic-summary-meta {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.record-topic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 12px 12px;
+}
+
+.record-topic-item,
+.record-topic-select-all {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.record-topic-item input,
+.record-topic-select-all input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.record-topic-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.record-topic-copy strong {
+  color: var(--text);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.record-topic-copy span {
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.recording-output {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(3, 10, 15, 0.62);
+  color: #d7e4e9;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  min-height: 54px;
+  max-height: 130px;
+  overflow: auto;
 }
 
 .legend-row {
@@ -334,6 +633,20 @@ h1 {
     flex-direction: column;
   }
 
+  .alignment-panel,
+  .hud-stack,
+  .legend,
+  .recording-panel {
+    min-width: 0;
+    max-width: none;
+  }
+
+  .alignment-panel-row,
+  .recording-panel-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .camera-dock {
     left: 12px;
     top: 12px;
@@ -348,6 +661,10 @@ h1 {
     width: 100%;
     height: auto;
     max-width: none;
+  }
+
+  .recording-page-header {
+    flex-direction: column;
   }
 
   h1 {

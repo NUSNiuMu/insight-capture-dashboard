@@ -11,6 +11,17 @@
   <body data-dashboard-view="3d">
     <div class="shell shell-3d-only">
       <div class="hud">
+        <div class="alignment-panel" id="alignment-panel">
+          <p class="eyebrow">Live Alignment</p>
+          <div class="alignment-panel-row">
+            <h2 id="alignment-status">Alignment OFF</h2>
+            <div class="alignment-actions">
+              <a href="/recording" class="nav-button">Open Recording</a>
+              <button type="button" id="alignment-toggle" class="alignment-button">Start Alignment</button>
+            </div>
+          </div>
+          <p id="alignment-meta" class="alignment-meta">Web control ready</p>
+        </div>
         <div class="legend" id="pose-legend"></div>
       </div>
       <canvas id="render-canvas"></canvas>

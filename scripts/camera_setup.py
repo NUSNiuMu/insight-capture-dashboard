@@ -88,6 +88,7 @@ def build_dashboard_config(config: Dict) -> Dict:
         "trajectory": dashboard.get("trajectory", {}),
         "session_alignment": {
             "enabled": bool(session_alignment.get("enabled", False)),
+            "alignment_frame": session_alignment.get("alignment_frame", "board_center"),
             "reference_camera": session_alignment.get("reference_camera"),
         },
         "cameras": cameras,
