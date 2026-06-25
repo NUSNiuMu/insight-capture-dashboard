@@ -63,7 +63,7 @@ let recordingLogLines = [];
 let knownRosbags = [];
 
 const CAMERA_FPS_WINDOW_MS = 1500;
-const CAMERA_POLL_INTERVAL_MS = 67;
+const CAMERA_POLL_INTERVAL_MS = 100;
 const DEFAULT_TRAIL_ENABLED = {
   head: true,
   left_hand: true,
