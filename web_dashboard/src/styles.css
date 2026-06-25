@@ -168,6 +168,77 @@ body[data-dashboard-view="full"] .shell {
   gap: 14px;
 }
 
+.image-console {
+  display: grid;
+  grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+}
+
+.image-stream-panel {
+  min-width: 0;
+}
+
+.image-camera-dock {
+  position: static;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  width: 100%;
+  max-width: none;
+  height: auto;
+  max-height: none;
+  margin-top: 16px;
+  pointer-events: auto;
+}
+
+.image-camera-dock .camera-panel {
+  width: 100%;
+  max-width: none;
+}
+
+.capability-grid {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.capability-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 12px;
+  background: rgba(255, 255, 255, 0.028);
+}
+
+.capability-row strong,
+.capability-row span {
+  display: block;
+}
+
+.capability-row strong {
+  font-size: 13px;
+}
+
+.capability-row span {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.capability-row.is-ok {
+  border-color: rgba(154, 194, 132, 0.28);
+}
+
+.capability-row.is-missing {
+  border-color: rgba(207, 127, 111, 0.24);
+}
+
+.image-pipeline-notes {
+  margin: 14px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .tool-panel {
   background: var(--panel);
   border: 1px solid var(--line);
@@ -188,6 +259,24 @@ body[data-dashboard-view="full"] .shell {
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 14px;
+}
+
+.ghost-button {
+  border: 1px solid rgba(229, 236, 224, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  padding: 9px 13px;
+  cursor: pointer;
+}
+
+.ghost-button:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.ghost-button:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 
 .option-list {
@@ -822,6 +911,10 @@ h1 {
 }
 
 @media (max-width: 900px) {
+  .image-console {
+    grid-template-columns: 1fr;
+  }
+
   .hud, .footer {
     left: 12px;
     right: 12px;

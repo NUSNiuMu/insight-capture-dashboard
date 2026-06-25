@@ -6,6 +6,8 @@ import contextlib
 import json
 import math
 import os
+import shutil
+import subprocess
 import threading
 import time
 from collections import deque
@@ -15,6 +17,7 @@ from typing import Deque, Dict, List, Optional, Set, Tuple
 from urllib.parse import quote
 
 import numpy as np
+import cv2
 from aiohttp import web
 
 try:
@@ -89,7 +92,26 @@ class PoseSpec:
 class CameraSpec:
     name: str
     namespace: str
+    label: str
+    topic: str
     camera_info_topic: str
+    topic_type: str
+    rotation_deg: int
+    row: int
+    column: int
+    column_span: int
+    row_span: int
+
+
+@dataclass
+class CameraFrame:
+    data: bytes
+    stamp_ns: int
+    received_monotonic: float
+    mime_type: str
+    width: int
+    height: int
+    version: int
 
 
 class PoseBridgeNode(LiveAlignmentMixin, Node):
@@ -124,7 +146,15 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             CameraSpec(
                 name=item["name"],
                 namespace=enabled_camera_map[item["name"]]["namespace"],
+                label=item.get("label", item["name"]),
+                topic=item["topic"],
                 camera_info_topic=item["camera_info_topic"],
+                topic_type=item["type"],
+                rotation_deg=int(item.get("rotation_deg", 0)),
+                row=int(item.get("row", 0)),
+                column=int(item.get("column", 0)),
+                column_span=int(item.get("column_span", 1)),
+                row_span=int(item.get("row_span", 1)),
             )
             for item in config.get("cameras", [])
         ]
@@ -150,6 +180,10 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.pose_history: Dict[str, Deque[PoseSample]] = {pose.name: deque(maxlen=160) for pose in self.poses}
         self.pose_history_lock = threading.Lock()
         self.pose_lock = threading.Lock()
+        self.camera_frame_lock = threading.Lock()
+        self.latest_camera_frames: Dict[str, Optional[CameraFrame]] = {camera.name: None for camera in self.cameras}
+        self.camera_frame_versions: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
+        self.camera_frame_times: Dict[str, Deque[float]] = {camera.name: deque(maxlen=90) for camera in self.cameras}
         self.live_alignment_image_lock = threading.Lock()
         self.live_alignment_solution_lock = threading.Lock()
         self.ros_callback_group = ReentrantCallbackGroup()
@@ -163,6 +197,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             self.get_logger().info("Running in fake-pose demo mode")
         else:
             self._create_pose_subscriptions()
+            self._create_dashboard_image_subscriptions()
             if self.live_alignment_available:
                 self._create_alignment_subscriptions()
 
@@ -186,6 +221,20 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             )
             self.dashboard_subscriptions.append(sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
+
+    def _create_dashboard_image_subscriptions(self) -> None:
+        image_qos = make_image_qos(reliability=self.image_qos_reliability)
+        for camera in self.cameras:
+            msg_type = CompressedImage if camera.topic_type == "compressed" else RosImage
+            sub = self.create_subscription(
+                msg_type,
+                camera.topic,
+                self._make_dashboard_image_callback(camera.name, camera.topic_type),
+                image_qos,
+                callback_group=self.ros_callback_group,
+            )
+            self.dashboard_subscriptions.append(sub)
+            self.get_logger().info(f"Images: {camera.name} <- {camera.topic} type={camera.topic_type}")
 
     def _create_alignment_subscriptions(self) -> None:
         if not self.live_alignment_available:
@@ -247,6 +296,80 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             self.live_alignment_dist_coeffs[camera_name] = np.array(msg.d, dtype=np.float64).reshape((-1, 1))
 
         return callback
+
+    def _make_dashboard_image_callback(self, camera_name: str, topic_type: str):
+        def callback(msg) -> None:
+            frame = self._encode_dashboard_frame(camera_name, topic_type, msg)
+            if frame is None:
+                return
+            with self.camera_frame_lock:
+                self.latest_camera_frames[camera_name] = frame
+                self.camera_frame_times[camera_name].append(frame.received_monotonic)
+
+        return callback
+
+    def _encode_dashboard_frame(self, camera_name: str, topic_type: str, msg: object) -> Optional[CameraFrame]:
+        stamp_ns = self._stamp_to_ns(msg.header.stamp)
+        received_monotonic = time.monotonic()
+        with self.camera_frame_lock:
+            version = self.camera_frame_versions.get(camera_name, 0) + 1
+            self.camera_frame_versions[camera_name] = version
+        if topic_type == "compressed":
+            data = bytes(msg.data)
+            width, height = self._jpeg_dimensions(data)
+            return CameraFrame(
+                data=data,
+                stamp_ns=stamp_ns,
+                received_monotonic=received_monotonic,
+                mime_type="image/jpeg",
+                width=width,
+                height=height,
+                version=version,
+            )
+        image = self._decode_calibration_message(topic_type, msg)
+        if image is None:
+            return None
+        ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+        if not ok:
+            return None
+        height, width = image.shape[:2]
+        return CameraFrame(
+            data=encoded.tobytes(),
+            stamp_ns=stamp_ns,
+            received_monotonic=received_monotonic,
+            mime_type="image/jpeg",
+            width=int(width),
+            height=int(height),
+            version=version,
+        )
+
+    @staticmethod
+    def _jpeg_dimensions(data: bytes) -> Tuple[int, int]:
+        # Fast JPEG SOF scan so compressed display does not need a full decode.
+        try:
+            index = 2
+            length = len(data)
+            while index + 9 < length:
+                if data[index] != 0xFF:
+                    index += 1
+                    continue
+                marker = data[index + 1]
+                index += 2
+                if marker in {0xD8, 0xD9, 0x01} or 0xD0 <= marker <= 0xD7:
+                    continue
+                if index + 2 > length:
+                    break
+                segment_length = int.from_bytes(data[index:index + 2], byteorder="big")
+                if segment_length < 2 or index + segment_length > length:
+                    break
+                if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
+                    height = int.from_bytes(data[index + 3:index + 5], byteorder="big")
+                    width = int.from_bytes(data[index + 5:index + 7], byteorder="big")
+                    return width, height
+                index += segment_length
+        except Exception:
+            pass
+        return 0, 0
 
     def _make_live_alignment_image_callback(self, camera_name: str, topic_type: str):
         def callback(msg) -> None:
@@ -369,6 +492,51 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             "has_solution": bool(self.world_to_reference),
         }
 
+    def build_camera_payload(self) -> Dict[str, object]:
+        now = time.monotonic()
+        cameras = []
+        with self.camera_frame_lock:
+            for camera in self.cameras:
+                frame = self.latest_camera_frames.get(camera.name)
+                frame_times = list(self.camera_frame_times.get(camera.name, []))
+                recent_times = [item for item in frame_times if now - item <= 2.0]
+                fps = 0.0
+                if len(recent_times) >= 2:
+                    span = max(recent_times[-1] - recent_times[0], 1e-6)
+                    fps = (len(recent_times) - 1) / span
+                stale = frame is None or (now - frame.received_monotonic) > 1.0
+                cameras.append(
+                    {
+                        "name": camera.name,
+                        "label": camera.label,
+                        "topic": camera.topic,
+                        "type": camera.topic_type,
+                        "visible": frame is not None,
+                        "stale": stale,
+                        "stamp_ns": 0 if frame is None else frame.stamp_ns,
+                        "age_ms": None if frame is None else (now - frame.received_monotonic) * 1000.0,
+                        "fps": fps,
+                        "width": 0 if frame is None else frame.width,
+                        "height": 0 if frame is None else frame.height,
+                        "version": 0 if frame is None else frame.version,
+                        "frame_url": f"/api/cameras/{quote(camera.name, safe='')}/frame",
+                        "rotation_deg": camera.rotation_deg,
+                        "row": camera.row,
+                        "column": camera.column,
+                        "row_span": camera.row_span,
+                        "column_span": camera.column_span,
+                    }
+                )
+        return {
+            "type": "camera_update",
+            "timestamp_ms": int(time.time() * 1000),
+            "cameras": cameras,
+        }
+
+    def latest_camera_frame(self, camera_name: str) -> Optional[CameraFrame]:
+        with self.camera_frame_lock:
+            return self.latest_camera_frames.get(camera_name)
+
     def model_asset_url(self, avatar_model: Optional[str]) -> Optional[str]:
         if not avatar_model:
             return None
@@ -430,6 +598,9 @@ class WebDashboardServer:
         app.router.add_get("/api/alignment", self._handle_alignment_snapshot)
         app.router.add_post("/api/alignment/start", self._handle_alignment_start)
         app.router.add_post("/api/alignment/stop", self._handle_alignment_stop)
+        app.router.add_get("/api/cameras", self._handle_camera_snapshot)
+        app.router.add_get("/api/cameras/{camera_name}/frame", self._handle_camera_frame)
+        app.router.add_get("/api/images/capabilities", self._handle_image_capabilities)
         app.router.add_get("/api/recording/status", self._handle_recording_status)
         app.router.add_get("/api/recording/topics", self._handle_recording_topics)
         app.router.add_post("/api/recording/start", self._handle_recording_start)
@@ -556,6 +727,110 @@ class WebDashboardServer:
                 "alignment": self.node.build_alignment_payload(),
             }
         )
+
+    async def _handle_camera_snapshot(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.node.build_camera_payload())
+
+    async def _handle_camera_frame(self, request: web.Request) -> web.Response:
+        camera_name = request.match_info.get("camera_name", "")
+        frame = self.node.latest_camera_frame(camera_name)
+        if frame is None:
+            raise web.HTTPNotFound(text="camera frame not available yet")
+        headers = {
+            "Cache-Control": "no-store, max-age=0",
+            "X-Frame-Stamp-Ns": str(frame.stamp_ns),
+            "X-Frame-Version": str(frame.version),
+        }
+        return web.Response(body=frame.data, content_type=frame.mime_type, headers=headers)
+
+    async def _handle_image_capabilities(self, _request: web.Request) -> web.Response:
+        return web.json_response(self._build_image_capabilities())
+
+    def _build_image_capabilities(self) -> Dict[str, object]:
+        elements = self._detect_gstreamer_elements(
+            [
+                "webrtcbin",
+                "nice",
+                "nvv4l2h264enc",
+                "nvv4l2h265enc",
+                "nvv4l2decoder",
+                "nvjpegdec",
+                "nvvidconv",
+                "openh264enc",
+                "x264enc",
+                "vp8enc",
+            ]
+        )
+        has_webrtc = bool(elements.get("webrtcbin") and elements.get("nice"))
+        hardware_encoder = None
+        if elements.get("nvv4l2h264enc"):
+            hardware_encoder = "nvv4l2h264enc"
+        elif elements.get("nvv4l2h265enc"):
+            hardware_encoder = "nvv4l2h265enc"
+        software_encoder = None
+        for candidate in ("openh264enc", "x264enc", "vp8enc"):
+            if elements.get(candidate):
+                software_encoder = candidate
+                break
+        active_path = "webrtc-hardware-h264" if hardware_encoder else "jpeg-preview"
+        if has_webrtc and not hardware_encoder and software_encoder:
+            active_path = "webrtc-software-low-latency-planned"
+        notes = []
+        if hardware_encoder:
+            notes.append(f"Hardware encoder available: {hardware_encoder}.")
+        else:
+            notes.append("No Jetson hardware H.264/H.265 encoder detected on this device.")
+        if elements.get("nvjpegdec") or elements.get("nvvidconv"):
+            notes.append("NVIDIA decode/convert elements are available for the pre-encode path.")
+        if has_webrtc:
+            notes.append("WebRTC transport dependencies are present.")
+        else:
+            notes.append("WebRTC transport is incomplete; install gstreamer1.0-nice if nice is missing.")
+        return {
+            "type": "image_capabilities",
+            "gstreamer": {
+                "available": shutil.which("gst-inspect-1.0") is not None,
+                "elements": elements,
+            },
+            "webrtc_ready": has_webrtc,
+            "hardware_encoder": hardware_encoder,
+            "software_encoder": software_encoder,
+            "decode_acceleration": {
+                "nvjpegdec": bool(elements.get("nvjpegdec")),
+                "nvv4l2decoder": bool(elements.get("nvv4l2decoder")),
+                "nvvidconv": bool(elements.get("nvvidconv")),
+            },
+            "active_path": active_path,
+            "cameras": [
+                {
+                    "name": camera.name,
+                    "label": camera.label,
+                    "topic": camera.topic,
+                    "type": camera.topic_type,
+                }
+                for camera in self.node.cameras
+            ],
+            "notes": notes,
+        }
+
+    @staticmethod
+    def _detect_gstreamer_elements(elements: List[str]) -> Dict[str, bool]:
+        if shutil.which("gst-inspect-1.0") is None:
+            return {element: False for element in elements}
+        detected = {}
+        for element in elements:
+            try:
+                result = subprocess.run(
+                    ["gst-inspect-1.0", element],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2.0,
+                )
+                detected[element] = result.returncode == 0
+            except Exception:
+                detected[element] = False
+        return detected
 
     async def _handle_recording_status(self, _request: web.Request) -> web.Response:
         return web.json_response(self.recording_manager.status())

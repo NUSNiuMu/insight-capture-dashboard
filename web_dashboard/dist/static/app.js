@@ -1,6 +1,7 @@
 const dashboardView = document.body.dataset.dashboardView || "full";
 const enable3d = dashboardView === "full" || dashboardView === "3d";
-const enableCameras = dashboardView === "full" || dashboardView === "cameras";
+const enableImages = dashboardView === "images";
+const enableCameras = dashboardView === "full" || dashboardView === "cameras" || enableImages;
 
 const canvas = document.getElementById("render-canvas");
 const modelStatus = document.getElementById("model-status");
@@ -26,6 +27,10 @@ const bagListStatus = document.getElementById("bag-list-status");
 const refreshBagsButton = document.getElementById("refresh-bags-button");
 const scoringBagMeta = document.getElementById("scoring-bag-meta");
 const optimizationBagMeta = document.getElementById("optimization-bag-meta");
+const imageCapabilityStatus = document.getElementById("image-capability-status");
+const imageCapabilityList = document.getElementById("image-capability-list");
+const imagePipelineNotes = document.getElementById("image-pipeline-notes");
+const refreshImageCapabilitiesButton = document.getElementById("refresh-image-capabilities-button");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#79c47b", primitive: "sphere", modelColor: "#b99572" },
@@ -80,6 +85,9 @@ if (enable3d) {
 if (enableCameras) {
   startCameraPolling();
 }
+if (enableImages) {
+  void refreshImageCapabilities();
+}
 if (recordingPanel) {
   void refreshRecordingStatus({ refreshTopics: true, force: true });
   window.setInterval(() => {
@@ -118,6 +126,11 @@ if (syncRecordingButton) {
 if (refreshBagsButton) {
   refreshBagsButton.addEventListener("click", () => {
     void refreshRosbags();
+  });
+}
+if (refreshImageCapabilitiesButton) {
+  refreshImageCapabilitiesButton.addEventListener("click", () => {
+    void refreshImageCapabilities();
   });
 }
 
@@ -767,6 +780,75 @@ function setBagListStatus(message) {
   }
 }
 
+async function refreshImageCapabilities() {
+  if (!imageCapabilityStatus && !imageCapabilityList && !imagePipelineNotes) {
+    return null;
+  }
+  setImageCapabilityStatus("Checking GStreamer/WebRTC capabilities...");
+  if (refreshImageCapabilitiesButton) {
+    refreshImageCapabilitiesButton.disabled = true;
+  }
+  try {
+    const response = await fetch(`/api/images/capabilities?ts=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to load image capabilities.");
+    }
+    renderImageCapabilities(payload);
+    return payload;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setImageCapabilityStatus(message);
+    return null;
+  } finally {
+    if (refreshImageCapabilitiesButton) {
+      refreshImageCapabilitiesButton.disabled = false;
+    }
+  }
+}
+
+function renderImageCapabilities(payload) {
+  const elements = (payload && payload.gstreamer && payload.gstreamer.elements) || {};
+  const hardwareEncoder = payload && payload.hardware_encoder;
+  const softwareEncoder = payload && payload.software_encoder;
+  const activePath = (payload && payload.active_path) || "unknown";
+  if (imageCapabilityStatus) {
+    if (hardwareEncoder) {
+      imageCapabilityStatus.textContent = `WebRTC hardware path ready: ${hardwareEncoder}`;
+    } else if (payload && payload.webrtc_ready && softwareEncoder) {
+      imageCapabilityStatus.textContent = `WebRTC transport ready · encoder fallback: ${softwareEncoder}`;
+    } else {
+      imageCapabilityStatus.textContent = `Preview path active · ${activePath}`;
+    }
+  }
+  if (imageCapabilityList) {
+    const rows = [
+      ["WebRTC", Boolean(payload && payload.webrtc_ready), "webrtcbin + nice"],
+      ["Hardware H.264", Boolean(elements.nvv4l2h264enc), "nvv4l2h264enc"],
+      ["Hardware H.265", Boolean(elements.nvv4l2h265enc), "nvv4l2h265enc"],
+      ["NVIDIA JPEG decode", Boolean(elements.nvjpegdec), "nvjpegdec"],
+      ["NVIDIA color convert", Boolean(elements.nvvidconv), "nvvidconv"],
+      ["Software fallback", Boolean(softwareEncoder), softwareEncoder || "none"]
+    ];
+    imageCapabilityList.innerHTML = rows.map(([label, ok, detail]) => `
+      <div class="capability-row ${ok ? "is-ok" : "is-missing"}">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${ok ? "available" : "missing"} · ${escapeHtml(detail)}</span>
+      </div>
+    `).join("");
+  }
+  if (imagePipelineNotes) {
+    const notes = Array.isArray(payload && payload.notes) ? payload.notes : [];
+    imagePipelineNotes.innerHTML = notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("");
+  }
+}
+
+function setImageCapabilityStatus(message) {
+  if (imageCapabilityStatus) {
+    imageCapabilityStatus.textContent = message;
+  }
+}
+
 function formatDuration(seconds) {
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return "--";
@@ -1006,6 +1088,11 @@ function updateCameraPanelAspect(panel, camera) {
 }
 
 function updateCameraPanelLayout(panel, index) {
+  if (enableImages) {
+    panel.style.gridColumn = "";
+    panel.style.gridRow = "";
+    return;
+  }
   panel.style.gridColumn = `${index + 1} / span 1`;
   panel.style.gridRow = "1 / span 1";
 }
