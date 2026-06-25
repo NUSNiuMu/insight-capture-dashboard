@@ -6,7 +6,7 @@
     "reference_camera": "insight9_a",
     "calibration": {
       "method": "board_center",
-      "image_stream": "color_compressed",
+      "image_stream": "infra1",
       "marker_length_m": 0.055,
       "marker_separation_m": 0.0165,
       "board_rows": 6,
@@ -43,7 +43,9 @@
       "ui_refresh_ms": 50,
       "image_decode_reduction": 0,
       "display_fps_limit": 20,
-      "image_qos_reliability": "reliable",
+      "image_qos_reliability": "best_effort",
+      "pose_timeout_sec": 2.0,
+      "camera_stale_timeout_sec": 2.0,
       "title": "3D VIO Trajectory",
       "subtitle": "Interactive 3D view of x/y with z as up using current VIO poses.",
       "axis_label": "x/y plane, z up"

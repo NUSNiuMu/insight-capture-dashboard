@@ -12,7 +12,7 @@
         <div>
           <div class="camera-page-eyebrow">INSIGHT</div>
           <h1>Trajectory Scoring</h1>
-          <p class="page-copy">Select a local rosbag for scoring. The scoring runner will be wired here once the backend exists.</p>
+          <p class="page-copy">Score VIO trajectory quality from a rosbag using covariance statistics.</p>
         </div>
         <nav class="page-nav" aria-label="Dashboard pages">
           <a href="/3d">3D</a>
@@ -29,7 +29,22 @@
         <label class="field-label" for="scoring-bag-select">Rosbag</label>
         <select id="scoring-bag-select" class="bag-select" data-bag-select></select>
         <p id="scoring-bag-meta" class="page-copy">Loading bags...</p>
-        <button type="button" class="recording-button" disabled>Run Scoring</button>
+
+        <label class="field-label" for="scoring-topic">Topic <span class="page-copy">(auto-detected if blank - looks for PoseWithCovarianceStamped)</span></label>
+        <input id="scoring-topic" class="field-input" type="text" placeholder="/camera/camera/vio_image_cov" autocomplete="off">
+
+        <label class="field-label" for="scoring-ref-cov">Reference covariance <span class="page-copy">(covariance trace = score 100, default 1e-3)</span></label>
+        <input id="scoring-ref-cov" class="field-input" type="text" placeholder="1e-3" autocomplete="off">
+
+        <button id="run-scoring-button" type="button" class="recording-button">Run Scoring</button>
+
+        <p class="eyebrow" id="scoring-status-eyebrow" hidden>Status</p>
+        <p id="scoring-status" class="page-copy" hidden></p>
+
+        <div id="scoring-result" hidden>
+          <p class="eyebrow">Result</p>
+          <div id="scoring-result-body"></div>
+        </div>
       </main>
     </div>
     <script type="module" src="/static/app.js"></script>

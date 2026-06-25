@@ -12,7 +12,6 @@
         <div>
           <div class="camera-page-eyebrow">INSIGHT</div>
           <h1>Images</h1>
-          <p class="page-copy">Live RGB preview plus the WebRTC hardware-acceleration readiness check for this Jetson.</p>
         </div>
         <nav class="page-nav" aria-label="Dashboard pages">
           <a href="/3d">3D</a>
@@ -24,31 +23,8 @@
         </nav>
       </header>
 
-      <main class="image-console">
-        <section class="tool-panel image-capability-panel">
-          <div class="panel-title-row">
-            <div>
-              <p class="eyebrow">Acceleration</p>
-              <h2>WebRTC readiness</h2>
-            </div>
-            <button type="button" class="ghost-button" id="refresh-image-capabilities-button">Refresh</button>
-          </div>
-          <p class="page-copy" id="image-capability-status">Checking GStreamer/WebRTC capabilities...</p>
-          <div class="capability-grid" id="image-capability-list"></div>
-          <ul class="image-pipeline-notes" id="image-pipeline-notes"></ul>
-        </section>
-
-        <section class="tool-panel image-stream-panel">
-          <div class="panel-title-row">
-            <div>
-              <p class="eyebrow">RGB Streams</p>
-              <h2>Live preview</h2>
-            </div>
-            <div class="camera-page-meta" id="camera-page-meta">Waiting for streams...</div>
-          </div>
-          <p class="page-copy">Current preview forwards compressed RGB frames directly when available. The WebRTC media pipeline can reuse the same camera subscriptions.</p>
-          <div class="camera-dock image-camera-dock" id="camera-dock"></div>
-        </section>
+      <main>
+        <div class="camera-dock image-camera-dock" id="camera-dock"></div>
       </main>
     </div>
     <script type="module" src="/static/app.js"></script>

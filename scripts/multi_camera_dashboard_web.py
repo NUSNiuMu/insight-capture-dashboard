@@ -130,7 +130,6 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.pose_publish_hz = max(1.0, float(pose_publish_hz))
         self.enable_alignment_stream = bool(enable_alignment_stream)
         self.max_points = 300
-        self.pose_timeout_sec = 0.5
 
         raw_config = load_setup(config_path)
         config = build_dashboard_config(raw_config)
@@ -139,7 +138,10 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         }
         self.project_root = config_path.resolve().parents[1]
         self.window_title = config.get("window_title", "Insight Web Dashboard")
-        self.image_qos_reliability = str(config.get("trajectory", {}).get("image_qos_reliability", "best_effort"))
+        trajectory_config = config.get("trajectory", {})
+        self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
+        self.pose_timeout_sec = max(0.2, float(trajectory_config.get("pose_timeout_sec", 2.0)))
+        self.camera_stale_timeout_sec = max(0.2, float(trajectory_config.get("camera_stale_timeout_sec", 2.0)))
         self._configure_live_alignment(raw_config, config)
 
         self.cameras: List[CameraSpec] = [
@@ -225,11 +227,18 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
     def _create_dashboard_image_subscriptions(self) -> None:
         image_qos = make_image_qos(reliability=self.image_qos_reliability)
         for camera in self.cameras:
+            namespace = camera.namespace
+            align_topic = (
+                image_topic(namespace, self.live_alignment_image_stream)
+                if self.live_alignment_available
+                else None
+            )
+            also_alignment = self.live_alignment_available and align_topic == camera.topic
             msg_type = CompressedImage if camera.topic_type == "compressed" else RosImage
             sub = self.create_subscription(
                 msg_type,
                 camera.topic,
-                self._make_dashboard_image_callback(camera.name, camera.topic_type),
+                self._make_dashboard_image_callback(camera.name, camera.topic_type, also_alignment=also_alignment),
                 image_qos,
                 callback_group=self.ros_callback_group,
             )
@@ -248,15 +257,27 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             calib_type = IMAGE_STREAMS[self.live_alignment_image_stream]["type"]
             self.live_alignment_topic_by_camera[camera_name] = calib_topic
 
-            calib_msg_type = CompressedImage if calib_type == "compressed" else RosImage
-            calib_sub = self.create_subscription(
-                calib_msg_type,
-                calib_topic,
-                self._make_live_alignment_image_callback(camera_name, calib_type),
-                image_qos,
-                callback_group=self.ros_callback_group,
-            )
-            self.dashboard_subscriptions.append(calib_sub)
+            # Avoid duplicate subscription: if the alignment stream is the same topic
+            # as the display stream, piggyback on the display callback rather than
+            # creating a second RELIABLE subscriber to the same publisher.  Having two
+            # simultaneous RELIABLE subscribers from the same node to the same topic
+            # can trigger a DDS backpressure loop (depth=1 + slow Python GIL) that
+            # permanently stalls one camera's entire participant.
+            if calib_topic != camera.topic:
+                calib_msg_type = CompressedImage if calib_type == "compressed" else RosImage
+                calib_sub = self.create_subscription(
+                    calib_msg_type,
+                    calib_topic,
+                    self._make_live_alignment_image_callback(camera_name, calib_type),
+                    image_qos,
+                    callback_group=self.ros_callback_group,
+                )
+                self.dashboard_subscriptions.append(calib_sub)
+            else:
+                self.get_logger().info(
+                    f"Alignment: {camera_name} shares display topic {calib_topic}; "
+                    "alignment callback will be invoked from display subscription"
+                )
 
             info_sub = self.create_subscription(
                 CameraInfo,
@@ -297,8 +318,12 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
 
         return callback
 
-    def _make_dashboard_image_callback(self, camera_name: str, topic_type: str):
+    def _make_dashboard_image_callback(self, camera_name: str, topic_type: str, also_alignment: bool = False):
+        alignment_cb = self._make_live_alignment_image_callback(camera_name, topic_type) if also_alignment else None
+
         def callback(msg) -> None:
+            if alignment_cb is not None:
+                alignment_cb(msg)
             frame = self._encode_dashboard_frame(camera_name, topic_type, msg)
             if frame is None:
                 return
@@ -504,7 +529,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                 if len(recent_times) >= 2:
                     span = max(recent_times[-1] - recent_times[0], 1e-6)
                     fps = (len(recent_times) - 1) / span
-                stale = frame is None or (now - frame.received_monotonic) > 1.0
+                stale = frame is None or (now - frame.received_monotonic) > self.camera_stale_timeout_sec
                 cameras.append(
                     {
                         "name": camera.name,
@@ -556,6 +581,127 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         return (0.0, 0.0, math.sin(half), math.cos(half))
 
 
+@dataclass
+class _ScoringJob:
+    bag_name: str
+    bag_path: str
+    topic: str
+    ref_cov: float
+    status: str  # "running" | "done" | "error"
+    result: Optional[Dict] = None
+    error: Optional[str] = None
+    started_at: float = 0.0
+    finished_at: float = 0.0
+
+
+class ScoringManager:
+    _TRAJ_SCORE = Path(__file__).with_name("traj_score.py")
+    _DEFAULT_REF_COV = 1e-3
+
+    def __init__(self, rosbag_root: Path, results_root: Path) -> None:
+        self.rosbag_root = rosbag_root
+        self.results_root = results_root
+        self._lock = threading.Lock()
+        self._current_job: Optional[_ScoringJob] = None
+
+    @property
+    def status(self) -> Dict:
+        with self._lock:
+            if self._current_job is None:
+                return {"status": "idle"}
+            job = self._current_job
+            payload: Dict = {
+                "status": job.status,
+                "bag_name": job.bag_name,
+                "topic": job.topic,
+                "started_at": job.started_at,
+            }
+            if job.result is not None:
+                payload["result"] = job.result
+            if job.error is not None:
+                payload["error"] = job.error
+            if job.finished_at:
+                payload["finished_at"] = job.finished_at
+            return payload
+
+    def run(self, bag_name: str, topic: str = "", ref_cov: float = _DEFAULT_REF_COV) -> bool:
+        """Start a new scoring job. Returns False if a job is already running."""
+        with self._lock:
+            if self._current_job and self._current_job.status == "running":
+                return False
+            bag_path = str((self.rosbag_root / bag_name).resolve())
+            job = _ScoringJob(
+                bag_name=bag_name,
+                bag_path=bag_path,
+                topic=topic,
+                ref_cov=ref_cov,
+                status="running",
+                started_at=time.monotonic(),
+            )
+            self._current_job = job
+        threading.Thread(target=self._worker, args=(job,), daemon=True, name="traj_score").start()
+        return True
+
+    def _worker(self, job: _ScoringJob) -> None:
+        try:
+            topic = job.topic or self._find_cov_topic(job.bag_path)
+            if not topic:
+                raise RuntimeError(
+                    "No PoseWithCovarianceStamped topic found in bag. Specify the topic explicitly."
+                )
+            with self._lock:
+                job.topic = topic
+
+            scores_dir = self.results_root / "scores"
+            scores_dir.mkdir(parents=True, exist_ok=True)
+            output_json = scores_dir / f"{job.bag_name}.json"
+
+            cmd = [
+                "/usr/bin/python3",
+                str(self._TRAJ_SCORE),
+                job.bag_path,
+                "--topic", topic,
+                "--ref-cov", str(job.ref_cov),
+                "--json", str(output_json),
+            ]
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=300, env=os.environ.copy()
+            )
+            if proc.returncode != 0:
+                raise RuntimeError((proc.stderr or proc.stdout).strip())
+
+            with output_json.open(encoding="utf-8") as file:
+                data = json.load(file)
+
+            with self._lock:
+                job.status = "done"
+                job.result = data
+                job.finished_at = time.monotonic()
+
+        except Exception as exc:
+            with self._lock:
+                job.status = "error"
+                job.error = str(exc)
+                job.finished_at = time.monotonic()
+
+    def _find_cov_topic(self, bag_path: str) -> str:
+        """Scan bag topics and return the first PoseWithCovarianceStamped topic found."""
+        cmd = ["/usr/bin/python3", str(self._TRAJ_SCORE), bag_path, "--list-topics"]
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=30, env=os.environ.copy()
+            )
+            for line in proc.stdout.splitlines():
+                stripped = line.strip()
+                if "PoseWithCovarianceStamped" in stripped:
+                    topic = stripped.split("[")[0].strip()
+                    if topic.startswith("/"):
+                        return topic
+        except Exception:
+            pass
+        return ""
+
+
 class WebDashboardServer:
     def __init__(
         self,
@@ -574,6 +720,10 @@ class WebDashboardServer:
         self.project_root = project_root.resolve()
         self.recording_manager = recording_manager
         self.results_root = results_root.resolve()
+        self.scoring_manager = ScoringManager(
+            rosbag_root=recording_manager.rosbag_root,
+            results_root=self.results_root,
+        )
         self._clients: Set[web.WebSocketResponse] = set()
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
@@ -607,6 +757,8 @@ class WebDashboardServer:
         app.router.add_post("/api/recording/stop", self._handle_recording_stop)
         app.router.add_post("/api/recording/sync", self._handle_recording_sync)
         app.router.add_get("/api/rosbags", self._handle_rosbag_list)
+        app.router.add_post("/api/scoring/run", self._handle_scoring_run)
+        app.router.add_get("/api/scoring/status", self._handle_scoring_status)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
@@ -873,6 +1025,32 @@ class WebDashboardServer:
                 "bags": list_rosbags(self.recording_manager.rosbag_root, self.results_root),
             }
         )
+
+    async def _handle_scoring_run(self, request: web.Request) -> web.Response:
+        if request.can_read_body:
+            try:
+                body = await request.json()
+            except json.JSONDecodeError as exc:
+                return web.json_response({"error": f"Invalid JSON: {exc}"}, status=400)
+        else:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        bag_name = str(body.get("bag_name", "")).strip()
+        if not bag_name:
+            return web.json_response({"error": "bag_name is required"}, status=400)
+        topic = str(body.get("topic", "")).strip()
+        try:
+            ref_cov = float(body.get("ref_cov", ScoringManager._DEFAULT_REF_COV))
+        except (TypeError, ValueError):
+            ref_cov = ScoringManager._DEFAULT_REF_COV
+        started = self.scoring_manager.run(bag_name, topic, ref_cov)
+        if not started:
+            return web.json_response({"error": "A scoring job is already running."}, status=409)
+        return web.json_response({"status": "started", "bag_name": bag_name})
+
+    async def _handle_scoring_status(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.scoring_manager.status)
 
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "3d.html")

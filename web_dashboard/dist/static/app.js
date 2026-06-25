@@ -27,6 +27,13 @@ const bagListStatus = document.getElementById("bag-list-status");
 const refreshBagsButton = document.getElementById("refresh-bags-button");
 const scoringBagMeta = document.getElementById("scoring-bag-meta");
 const optimizationBagMeta = document.getElementById("optimization-bag-meta");
+const runScoringButton = document.getElementById("run-scoring-button");
+const scoringTopicInput = document.getElementById("scoring-topic");
+const scoringRefCovInput = document.getElementById("scoring-ref-cov");
+const scoringStatusEyebrow = document.getElementById("scoring-status-eyebrow");
+const scoringStatusEl = document.getElementById("scoring-status");
+const scoringResultEl = document.getElementById("scoring-result");
+const scoringResultBody = document.getElementById("scoring-result-body");
 const imageCapabilityStatus = document.getElementById("image-capability-status");
 const imageCapabilityList = document.getElementById("image-capability-list");
 const imagePipelineNotes = document.getElementById("image-pipeline-notes");
@@ -55,6 +62,8 @@ const cameraPollState = new Map();
 let maximizedCameraName = null;
 let alignmentBusy = false;
 let recordingBusy = false;
+let scoringBusy = false;
+let scoringPollTimer = null;
 let recordTopicRefreshBusy = false;
 let selectedRecordTopics = new Set();
 let knownRecordTopics = new Set();
@@ -98,7 +107,9 @@ if (recordingPanel) {
 if (bagList || document.querySelector("[data-bag-select]")) {
   void refreshRosbags();
 }
-
+if (runScoringButton) {
+  void pollScoringStatus();
+}
 if (alignmentToggle) {
   alignmentToggle.addEventListener("click", () => {
     void toggleAlignment();
@@ -127,6 +138,11 @@ if (syncRecordingButton) {
 if (refreshBagsButton) {
   refreshBagsButton.addEventListener("click", () => {
     void refreshRosbags();
+  });
+}
+if (runScoringButton) {
+  runScoringButton.addEventListener("click", () => {
+    void runScoring();
   });
 }
 if (refreshImageCapabilitiesButton) {
@@ -1005,6 +1021,10 @@ function renderCameraPanels(cameras) {
     updateCameraPanelLayout(panel, index);
     const status = panel.querySelector("[data-camera-status]");
     status.textContent = camera.stale ? "stale" : camera.visible ? "live" : "waiting";
+    const topic = panel.querySelector("[data-camera-topic]");
+    if (topic && camera.topic) {
+      topic.textContent = camera.topic;
+    }
     updateCameraStream(panel, camera);
     updateCameraFps(camera.name, Number(camera.fps || 0));
     });
@@ -1028,7 +1048,7 @@ function ensureCameraPanel(camera) {
     <div class="camera-header">
       <div class="camera-title">
         <strong>${escapeHtml(camera.label || camera.name)}</strong>
-        <span>${escapeHtml(camera.name)}</span>
+        <span data-camera-topic>${escapeHtml(camera.topic || camera.name)}</span>
       </div>
       <div class="camera-actions">
         <button type="button" data-camera-maximize title="Maximize">□</button>
@@ -1459,6 +1479,147 @@ function refreshTrailMesh(trail) {
     trail.mesh.material = material;
   }
   trail.mesh.material.alpha = 0.96;
+}
+
+async function runScoring() {
+  if (scoringBusy) {
+    return;
+  }
+  const bagSelect = document.getElementById("scoring-bag-select");
+  const bagName = bagSelect ? bagSelect.value : "";
+  if (!bagName) {
+    setScoringStatus("Select a rosbag first.");
+    return;
+  }
+  const topic = scoringTopicInput ? scoringTopicInput.value.trim() : "";
+  const refCovRaw = scoringRefCovInput ? scoringRefCovInput.value.trim() : "";
+  const refCov = refCovRaw ? parseFloat(refCovRaw) : undefined;
+
+  scoringBusy = true;
+  if (runScoringButton) {
+    runScoringButton.disabled = true;
+  }
+  hideScoringResult();
+  setScoringStatus("Starting...");
+
+  try {
+    const body = { bag_name: bagName };
+    if (topic) {
+      body.topic = topic;
+    }
+    if (refCov !== undefined && !isNaN(refCov)) {
+      body.ref_cov = refCov;
+    }
+    const response = await fetch("/api/scoring/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      setScoringStatus(`Error: ${payload.error || "Failed to start scoring."}`);
+      scoringBusy = false;
+      if (runScoringButton) {
+        runScoringButton.disabled = false;
+      }
+      return;
+    }
+    setScoringStatus("Running... (this may take a minute)");
+    scheduleScoringPoll(1500);
+  } catch (error) {
+    setScoringStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    scoringBusy = false;
+    if (runScoringButton) {
+      runScoringButton.disabled = false;
+    }
+  }
+}
+
+async function pollScoringStatus() {
+  try {
+    const response = await fetch(`/api/scoring/status?ts=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      return;
+    }
+    const status = payload.status;
+    if (status === "running") {
+      scoringBusy = true;
+      if (runScoringButton) {
+        runScoringButton.disabled = true;
+      }
+      const topic = payload.topic ? ` (${payload.topic})` : "";
+      setScoringStatus(`Running...${topic}`);
+      scheduleScoringPoll(1500);
+    } else if (status === "done") {
+      scoringBusy = false;
+      if (runScoringButton) {
+        runScoringButton.disabled = false;
+      }
+      setScoringStatus(`Scored: ${payload.bag_name || ""}`);
+      renderScoringResult(payload.result);
+      void refreshRosbags();
+    } else if (status === "error") {
+      scoringBusy = false;
+      if (runScoringButton) {
+        runScoringButton.disabled = false;
+      }
+      setScoringStatus(`Error: ${payload.error || "Unknown error"}`);
+    }
+  } catch (_err) {
+    // Silently ignore transient polling failures.
+  }
+}
+
+function scheduleScoringPoll(delayMs) {
+  if (scoringPollTimer !== null) {
+    clearTimeout(scoringPollTimer);
+  }
+  scoringPollTimer = window.setTimeout(() => {
+    scoringPollTimer = null;
+    void pollScoringStatus();
+  }, delayMs);
+}
+
+function setScoringStatus(message) {
+  if (scoringStatusEyebrow) {
+    scoringStatusEyebrow.hidden = !message;
+  }
+  if (scoringStatusEl) {
+    scoringStatusEl.hidden = !message;
+    scoringStatusEl.textContent = message;
+  }
+}
+
+function hideScoringResult() {
+  if (scoringResultEl) {
+    scoringResultEl.hidden = true;
+  }
+}
+
+function renderScoringResult(result) {
+  if (!scoringResultEl || !scoringResultBody || !result) {
+    return;
+  }
+  const scoreColor = result.score >= 90 ? "#57d67c" : result.score >= 70 ? "#4aa8ff" : result.score >= 50 ? "#f0c040" : "#ff5a5a";
+  scoringResultBody.innerHTML = `
+    <div class="bag-row-main" style="margin-bottom:0.75rem">
+      <strong style="font-size:2rem;color:${escapeHtml(scoreColor)}">${escapeHtml(String(result.score))} / 100</strong>
+      <span style="font-size:1.1rem">${escapeHtml(result.quality || "")}</span>
+    </div>
+    <table style="border-collapse:collapse;width:100%;font-size:0.85rem">
+      <tbody>
+        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Poses processed</td><td>${escapeHtml(String(result.n_poses))}</td></tr>
+        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Topic</td><td style="font-family:monospace;font-size:0.8rem">${escapeHtml(result.topic || "")}</td></tr>
+        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Mean cov trace</td><td>${escapeHtml((result.mean_trace || 0).toExponential(4))}</td></tr>
+        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Max cov trace</td><td>${escapeHtml((result.max_trace || 0).toExponential(4))}</td></tr>
+        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">p90 cov trace</td><td>${escapeHtml((result.p90_trace || 0).toExponential(4))}</td></tr>
+        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">p99 cov trace</td><td>${escapeHtml((result.p99_trace || 0).toExponential(4))}</td></tr>
+        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Reference cov</td><td>${escapeHtml((result.ref_cov || 0).toExponential(4))}</td></tr>
+      </tbody>
+    </table>
+  `;
+  scoringResultEl.hidden = false;
 }
 
 function escapeHtml(value) {

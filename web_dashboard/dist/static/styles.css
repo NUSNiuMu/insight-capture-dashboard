@@ -181,18 +181,20 @@ body[data-dashboard-view="full"] .shell {
 
 .camera-dock.image-camera-dock {
   position: static;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
   width: 100%;
   max-width: none;
   height: auto;
   max-height: none;
-  margin-top: 16px;
   pointer-events: auto;
 }
 
 .camera-dock.image-camera-dock .camera-panel {
   width: 100%;
   max-width: none;
+  resize: none;
 }
 
 .capability-grid {
@@ -912,6 +914,10 @@ h1 {
 
 @media (max-width: 900px) {
   .image-console {
+    grid-template-columns: 1fr;
+  }
+
+  .camera-dock.image-camera-dock {
     grid-template-columns: 1fr;
   }
 
