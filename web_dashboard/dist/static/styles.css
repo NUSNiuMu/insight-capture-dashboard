@@ -409,15 +409,15 @@ h1 {
   border: 0;
   border-radius: 999px;
   padding: 11px 16px;
-  background: linear-gradient(135deg, #ffc857, #ff9a3d);
-  color: #11202b;
+  background: linear-gradient(135deg, #a4cb8e, #6eac78);
+  color: #101b12;
   font-weight: 700;
   cursor: pointer;
 }
 
 .alignment-button[data-state="stop"] {
-  background: linear-gradient(135deg, #ff8b7e, #ff5f52);
-  color: #fff7f4;
+  background: linear-gradient(135deg, #cf7f6f, #a95148);
+  color: #fff8f5;
 }
 
 .alignment-button:disabled {
