@@ -89,6 +89,7 @@ class PoseSpec:
 class CameraSpec:
     name: str
     namespace: str
+    camera_info_topic: str
 
 
 class PoseBridgeNode(LiveAlignmentMixin, Node):
@@ -123,6 +124,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             CameraSpec(
                 name=item["name"],
                 namespace=enabled_camera_map[item["name"]]["namespace"],
+                camera_info_topic=item["camera_info_topic"],
             )
             for item in config.get("cameras", [])
         ]
