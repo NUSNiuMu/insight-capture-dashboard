@@ -168,16 +168,6 @@ body[data-dashboard-view="full"] .shell {
   gap: 14px;
 }
 
-.image-console {
-  display: grid;
-  grid-template-columns: minmax(280px, 420px) minmax(0, 1fr);
-  align-items: start;
-  gap: 14px;
-}
-
-.image-stream-panel {
-  min-width: 0;
-}
 
 .camera-dock.image-camera-dock {
   position: static;
@@ -197,11 +187,6 @@ body[data-dashboard-view="full"] .shell {
   resize: none;
 }
 
-.capability-grid {
-  display: grid;
-  gap: 8px;
-  margin-top: 14px;
-}
 
 .capability-row {
   border: 1px solid var(--line);
@@ -263,48 +248,6 @@ body[data-dashboard-view="full"] .shell {
   margin-bottom: 14px;
 }
 
-.ghost-button {
-  border: 1px solid rgba(229, 236, 224, 0.14);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  padding: 9px 13px;
-  cursor: pointer;
-}
-
-.ghost-button:hover {
-  background: rgba(255, 255, 255, 0.09);
-}
-
-.ghost-button:disabled {
-  cursor: wait;
-  opacity: 0.6;
-}
-
-.option-list {
-  display: grid;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.option-row {
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.028);
-}
-
-.option-row strong,
-.option-row span {
-  display: block;
-}
-
-.option-row span {
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.45;
-  margin-top: 4px;
-}
 
 .bag-list {
   display: grid;
@@ -439,14 +382,6 @@ body[data-dashboard-view="full"] .shell {
   justify-content: space-between;
 }
 
-.hud-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 420px;
-  max-width: min(44vw, 560px);
-  pointer-events: auto;
-}
 
 .footer {
   bottom: 18px;
@@ -454,7 +389,7 @@ body[data-dashboard-view="full"] .shell {
   font-size: 13px;
 }
 
-.hud > div, .hud-stack > div, .footer {
+.hud > div, .footer {
   background: var(--panel);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 16px;
@@ -913,10 +848,6 @@ h1 {
 }
 
 @media (max-width: 900px) {
-  .image-console {
-    grid-template-columns: 1fr;
-  }
-
   .camera-dock.image-camera-dock {
     grid-template-columns: 1fr;
   }
@@ -931,7 +862,6 @@ h1 {
   }
 
   .alignment-panel,
-  .hud-stack,
   .legend,
   .recording-panel {
     min-width: 0;

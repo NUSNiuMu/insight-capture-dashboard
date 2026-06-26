@@ -780,7 +780,6 @@ class WebDashboardServer:
         app = web.Application(middlewares=[self._json_error_middleware])
         app.router.add_get("/ws", self._handle_ws)
         app.router.add_get("/healthz", self._handle_healthz)
-        app.router.add_get("/api/poses", self._handle_pose_snapshot)
         app.router.add_get("/api/alignment", self._handle_alignment_snapshot)
         app.router.add_post("/api/alignment/start", self._handle_alignment_start)
         app.router.add_post("/api/alignment/stop", self._handle_alignment_stop)
@@ -803,7 +802,7 @@ class WebDashboardServer:
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
             app.router.add_get("/3d", self._handle_index)
-            app.router.add_get("/cameras", self._handle_cameras_page)
+
             app.router.add_get("/images", self._handle_images_page)
             app.router.add_get("/bags", self._handle_bags_page)
             app.router.add_get("/recording", self._handle_recording_page)
@@ -869,12 +868,6 @@ class WebDashboardServer:
 
     async def _handle_healthz(self, _request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "fake_pose": self.node.fake_pose})
-
-    async def _handle_pose_snapshot(self, _request: web.Request) -> web.Response:
-        payload = self.node.build_pose_payload()
-        for pose in payload["poses"]:
-            pose["asset_url"] = self.node.model_asset_url(pose.get("avatar_model"))
-        return web.json_response(payload)
 
     @web.middleware
     async def _json_error_middleware(self, request: web.Request, handler):
@@ -1127,9 +1120,6 @@ class WebDashboardServer:
 
     async def _handle_recording_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "recording.html")
-
-    async def _handle_cameras_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.web_root / "cameras.html")
 
     async def _handle_images_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "images.html")
