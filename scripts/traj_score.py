@@ -28,7 +28,7 @@ from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
 
 
-DEFAULT_TOPIC = "/camera/camera/vio_image_cov"
+DEFAULT_TOPIC = "/insight7_a/camera/vio_image_cov"
 DEFAULT_REF_COV = 1e-3
 
 QUALITY_TIERS = [

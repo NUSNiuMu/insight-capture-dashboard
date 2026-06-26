@@ -25,6 +25,14 @@ const recordingOutput = document.getElementById("recording-output");
 const bagList = document.getElementById("bag-list");
 const bagListStatus = document.getElementById("bag-list-status");
 const refreshBagsButton = document.getElementById("refresh-bags-button");
+const playbackPanel = document.getElementById("playback-panel");
+const playbackBagSelect = document.getElementById("playback-bag-select");
+const startPlaybackButton = document.getElementById("start-playback-button");
+const stopPlaybackButton = document.getElementById("stop-playback-button");
+const goLiveButton = document.getElementById("go-live-button");
+const playbackStatusEl = document.getElementById("playback-status");
+const clearTrajectoryButton = document.getElementById("clear-trajectory-button");
+const keepTrajectoryToggle = document.getElementById("keep-trajectory-toggle");
 const scoringBagMeta = document.getElementById("scoring-bag-meta");
 const optimizationBagMeta = document.getElementById("optimization-bag-meta");
 const runScoringButton = document.getElementById("run-scoring-button");
@@ -70,6 +78,10 @@ let knownRecordTopics = new Set();
 let recordTopicsInitialized = false;
 let recordingLogLines = [];
 let knownRosbags = [];
+let playbackBusy = false;
+let playbackPollTimer = null;
+let keepTrajectory = false;
+const keptPoints = new Map();
 
 const CAMERA_FPS_WINDOW_MS = 1500;
 const CAMERA_POLL_INTERVAL_MS = 100;
@@ -149,6 +161,42 @@ if (refreshImageCapabilitiesButton) {
   refreshImageCapabilitiesButton.addEventListener("click", () => {
     void refreshImageCapabilities();
   });
+}
+if (startPlaybackButton) {
+  startPlaybackButton.addEventListener("click", () => {
+    void startPlayback();
+  });
+}
+if (stopPlaybackButton) {
+  stopPlaybackButton.addEventListener("click", () => {
+    void stopPlayback();
+  });
+}
+if (goLiveButton) {
+  goLiveButton.addEventListener("click", () => {
+    void goLive();
+  });
+}
+if (clearTrajectoryButton) {
+  clearTrajectoryButton.addEventListener("click", () => {
+    void clearAllTrajectories();
+  });
+}
+if (keepTrajectoryToggle) {
+  keepTrajectoryToggle.addEventListener("click", () => {
+    keepTrajectory = !keepTrajectory;
+    keepTrajectoryToggle.setAttribute("aria-pressed", String(keepTrajectory));
+    keepTrajectoryToggle.classList.toggle("is-active", keepTrajectory);
+    if (!keepTrajectory) {
+      keptPoints.clear();
+    }
+  });
+}
+if (playbackPanel) {
+  void refreshPlaybackStatus();
+  playbackPollTimer = window.setInterval(() => {
+    void refreshPlaybackStatus();
+  }, 1500);
 }
 
 function resolveWebSocketUrl() {
@@ -708,6 +756,107 @@ function cssEscape(value) {
   return String(value).replaceAll('"', '\\"');
 }
 
+async function startPlayback() {
+  if (playbackBusy) return;
+  const bagName = playbackBagSelect ? playbackBagSelect.value : "";
+  if (!bagName) {
+    if (playbackStatusEl) playbackStatusEl.textContent = "No bag selected.";
+    return;
+  }
+  playbackBusy = true;
+  if (startPlaybackButton) startPlaybackButton.disabled = true;
+  if (playbackStatusEl) playbackStatusEl.textContent = "Starting playback...";
+  try {
+    const response = await fetch("/api/playback/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bag_name: bagName }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Failed to start playback.");
+    keptPoints.clear();
+    renderPlaybackStatus(payload);
+  } catch (error) {
+    if (playbackStatusEl) playbackStatusEl.textContent = error instanceof Error ? error.message : String(error);
+    if (startPlaybackButton) startPlaybackButton.disabled = false;
+  } finally {
+    playbackBusy = false;
+  }
+}
+
+async function stopPlayback() {
+  if (playbackBusy) return;
+  playbackBusy = true;
+  if (stopPlaybackButton) stopPlaybackButton.disabled = true;
+  try {
+    const response = await fetch("/api/playback/stop", { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Failed to stop playback.");
+    renderPlaybackStatus({ state: "idle", bag_name: "" });
+  } catch (error) {
+    if (playbackStatusEl) playbackStatusEl.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    playbackBusy = false;
+    if (stopPlaybackButton) stopPlaybackButton.disabled = false;
+  }
+}
+
+async function goLive() {
+  if (playbackBusy) return;
+  playbackBusy = true;
+  if (goLiveButton) goLiveButton.disabled = true;
+  try {
+    await fetch("/api/playback/stop", { method: "POST" });
+    await fetch("/api/trajectory/clear", { method: "POST" });
+    keptPoints.clear();
+    for (const trail of trailStates.values()) clearTrail(trail);
+    renderPlaybackStatus({ state: "idle", bag_name: "" });
+  } catch (error) {
+    if (playbackStatusEl) playbackStatusEl.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    playbackBusy = false;
+    if (goLiveButton) goLiveButton.disabled = false;
+  }
+}
+
+async function refreshPlaybackStatus() {
+  if (!playbackPanel) return;
+  try {
+    const response = await fetch(`/api/playback/status?ts=${Date.now()}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const payload = await response.json();
+    renderPlaybackStatus(payload);
+  } catch (_) {
+    // ignore network errors during polling
+  }
+}
+
+function renderPlaybackStatus(payload) {
+  const state = (payload && payload.state) || "idle";
+  const bagName = (payload && payload.bag_name) || "";
+  const isPlaying = state === "playing";
+  if (startPlaybackButton) {
+    startPlaybackButton.hidden = isPlaying;
+    if (!isPlaying) startPlaybackButton.disabled = false;
+  }
+  if (stopPlaybackButton) stopPlaybackButton.hidden = !isPlaying;
+  if (goLiveButton) goLiveButton.hidden = !isPlaying;
+  if (playbackBagSelect) playbackBagSelect.disabled = isPlaying;
+  if (playbackStatusEl) {
+    playbackStatusEl.textContent = isPlaying ? `Playing: ${bagName}` : "Idle";
+  }
+}
+
+async function clearAllTrajectories() {
+  keptPoints.clear();
+  for (const trail of trailStates.values()) clearTrail(trail);
+  try {
+    await fetch("/api/trajectory/clear", { method: "POST" });
+  } catch (_) {
+    // best-effort
+  }
+}
+
 async function refreshRosbags() {
   setBagListStatus("Loading bags...");
   try {
@@ -897,10 +1046,11 @@ async function pollCameraMetadata() {
     if (payload.type !== "camera_update") {
       return;
     }
-    renderCameraPanels(payload.cameras || []);
+    const isPlayback = Boolean(payload.playback_mode);
+    renderCameraPanels(payload.cameras || [], isPlayback);
     if (cameraPageMeta) {
       const liveCount = (payload.cameras || []).filter((camera) => !camera.stale && camera.visible).length;
-      cameraPageMeta.textContent = `${liveCount}/${(payload.cameras || []).length} streams live`;
+      cameraPageMeta.textContent = `${liveCount}/${(payload.cameras || []).length} streams ${isPlayback ? "playback" : "live"}`;
     }
   } catch (_error) {
     // The pose WebSocket remains the primary status signal; image polling can retry quietly.
@@ -1001,7 +1151,7 @@ function mapDashboardQuaternionToScene(quaternion) {
   return sceneQuaternion;
 }
 
-function renderCameraPanels(cameras) {
+function renderCameraPanels(cameras, isPlayback = false) {
   if (!cameraDock) {
     return;
   }
@@ -1020,7 +1170,7 @@ function renderCameraPanels(cameras) {
     updateCameraPanelAspect(panel, camera);
     updateCameraPanelLayout(panel, index);
     const status = panel.querySelector("[data-camera-status]");
-    status.textContent = camera.stale ? "stale" : camera.visible ? "live" : "waiting";
+    status.textContent = camera.stale ? "stale" : camera.visible ? (isPlayback ? "playback" : "live") : "waiting";
     const topic = panel.querySelector("[data-camera-topic]");
     if (topic && camera.topic) {
       topic.textContent = camera.topic;
@@ -1412,6 +1562,7 @@ function isTrailEnabled(role) {
 
 function clearTrail(trail) {
   trail.points = [];
+  trail._meshPointCount = 0;
   if (trail.mesh) {
     trail.mesh.dispose(false, true);
     trail.mesh = null;
@@ -1420,7 +1571,37 @@ function clearTrail(trail) {
 
 function updateTrailFromPose(pose) {
   const trail = ensureTrailState(pose.role);
-  if (!trail.enabled || !pose.visible) {
+  if (!trail.enabled) {
+    clearTrail(trail);
+    keptPoints.delete(pose.role);
+    return;
+  }
+
+  if (keepTrajectory) {
+    if (pose.visible && pose.position) {
+      const newPoint = mapDashboardPositionToScene(pose.position);
+      const kept = keptPoints.get(pose.role) || [];
+      const last = kept[kept.length - 1];
+      if (!last || BABYLON.Vector3.Distance(newPoint, last) > 0.001) {
+        kept.push(newPoint);
+        keptPoints.set(pose.role, kept);
+      }
+    }
+    const kept = keptPoints.get(pose.role) || [];
+    if (kept.length >= 2) {
+      const firstPoint = kept[0];
+      const hasMotion = kept.some((point) => BABYLON.Vector3.Distance(point, firstPoint) > 0.02);
+      if (hasMotion) {
+        trail.points = kept.map((p) => p.clone());
+        refreshTrailMesh(trail);
+        return;
+      }
+    }
+    clearTrail(trail);
+    return;
+  }
+
+  if (!pose.visible) {
     clearTrail(trail);
     return;
   }
@@ -1454,6 +1635,11 @@ function refreshTrailMesh(trail) {
   const roleColor = BABYLON.Color3.FromHexString((ROLE_STYLE[trail.role] || ROLE_STYLE.head).color);
   const points = trail.points.map((point) => point.clone());
   const radius = TRAIL_RADIUS_BY_ROLE[trail.role] || 0.016;
+  // Babylon.js tube instance update requires identical path length; dispose and recreate on change.
+  if (trail.mesh && trail._meshPointCount !== points.length) {
+    trail.mesh.dispose(false, true);
+    trail.mesh = null;
+  }
   if (trail.mesh) {
     BABYLON.MeshBuilder.CreateTube(
       null,
@@ -1470,6 +1656,7 @@ function refreshTrailMesh(trail) {
     trail.mesh.alwaysSelectAsActiveMesh = true;
     trail.mesh.renderingGroupId = 1;
   }
+  trail._meshPointCount = points.length;
   if (!trail.mesh.material) {
     const material = new BABYLON.StandardMaterial(`trail-mat-${trail.role}`, scene);
     material.disableLighting = true;

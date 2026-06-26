@@ -994,3 +994,31 @@ h1 {
     font-size: 22px;
   }
 }
+
+.playback-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.playback-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.playback-row .bag-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.nav-button.is-active {
+  background: var(--accent);
+  color: #fff;
+}

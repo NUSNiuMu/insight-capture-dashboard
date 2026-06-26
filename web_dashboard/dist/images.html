@@ -24,6 +24,16 @@
       </header>
 
       <main>
+        <div class="playback-panel" id="playback-panel">
+          <p class="eyebrow">Bag Playback</p>
+          <div class="playback-row">
+            <select id="playback-bag-select" class="bag-select" data-bag-select></select>
+            <button type="button" id="start-playback-button" class="recording-button">Play</button>
+            <button type="button" id="stop-playback-button" class="recording-button" hidden>Stop</button>
+            <button type="button" id="go-live-button" class="recording-button" hidden>Go Live</button>
+          </div>
+          <p id="playback-status" class="page-copy">Idle</p>
+        </div>
         <div class="camera-dock image-camera-dock" id="camera-dock"></div>
       </main>
     </div>

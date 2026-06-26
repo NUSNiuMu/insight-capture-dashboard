@@ -46,6 +46,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
 from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
 from live_alignment import LiveAlignmentMixin
 from post_processing import (
+    PlaybackManager,
     RecordingManager,
     build_default_topics,
     list_rosbags,
@@ -175,6 +176,8 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         if self.reference_camera is None and self.poses:
             self.reference_camera = self.poses[0].name
 
+        self._playback_mode: bool = False
+        self._bag_time_range: Optional[Tuple[int, int]] = None
         self.raw_traces: Dict[str, List[Tuple[float, float, float]]] = {pose.name: [] for pose in self.poses}
         self.latest_pose: Dict[str, Optional[Tuple[float, float, float]]] = {pose.name: None for pose in self.poses}
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
@@ -291,10 +294,17 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                 f"Alignment: {camera_name} image={calib_topic} info={calib_info_topic} type={calib_type}"
             )
 
+    def _in_bag_range(self, stamp_ns: int) -> bool:
+        r = self._bag_time_range
+        return r is not None and r[0] <= stamp_ns <= r[1]
+
     def _make_pose_callback(self, pose_name: str):
         def callback(msg: PoseStamped) -> None:
+            stamp_ns = self._stamp_to_ns(msg.header.stamp)
+            if self._playback_mode and not self._in_bag_range(stamp_ns):
+                return
             pose_sample = PoseSample(
-                stamp_ns=self._stamp_to_ns(msg.header.stamp),
+                stamp_ns=stamp_ns,
                 position=(
                     float(msg.pose.position.x),
                     float(msg.pose.position.y),
@@ -322,6 +332,10 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         alignment_cb = self._make_live_alignment_image_callback(camera_name, topic_type) if also_alignment else None
 
         def callback(msg) -> None:
+            if self._playback_mode:
+                stamp_ns = self._stamp_to_ns(msg.header.stamp)
+                if not self._in_bag_range(stamp_ns):
+                    return
             if alignment_cb is not None:
                 alignment_cb(msg)
             frame = self._encode_dashboard_frame(camera_name, topic_type, msg)
@@ -440,6 +454,22 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             if len(raw_trace) > self.max_points:
                 del raw_trace[: len(raw_trace) - self.max_points]
 
+    def clear_traces(self) -> None:
+        with self.pose_lock:
+            for name in self.raw_traces:
+                self.raw_traces[name].clear()
+            for name in self.last_pose_received_time:
+                self.last_pose_received_time[name] = 0.0
+
+    def set_playback_mode(self, enabled: bool,
+                          bag_time_range: Optional[Tuple[int, int]] = None) -> None:
+        self._playback_mode = enabled
+        self._bag_time_range = bag_time_range if enabled else None
+        self.get_logger().info(
+            f"Playback mode {'ON' if enabled else 'OFF'}"
+            + (f" range=[{bag_time_range[0]}, {bag_time_range[1]}]" if bag_time_range else "")
+        )
+
     def _update_fake_pose(self) -> None:
         now = time.monotonic()
         roles = {
@@ -497,6 +527,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             "type": "pose_update",
             "timestamp_ms": int(time.time() * 1000),
             "fake_pose": self.fake_pose,
+            "playback_mode": self._playback_mode,
             "alignment": self.build_alignment_payload(),
             "poses": poses,
         }
@@ -724,6 +755,11 @@ class WebDashboardServer:
             rosbag_root=recording_manager.rosbag_root,
             results_root=self.results_root,
         )
+        self.playback_manager = PlaybackManager(
+            rosbag_root=recording_manager.rosbag_root,
+            ros_domain_id=recording_manager.ros_domain_id,
+            on_stopped=self._on_playback_finished,
+        )
         self._clients: Set[web.WebSocketResponse] = set()
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
@@ -759,6 +795,10 @@ class WebDashboardServer:
         app.router.add_get("/api/rosbags", self._handle_rosbag_list)
         app.router.add_post("/api/scoring/run", self._handle_scoring_run)
         app.router.add_get("/api/scoring/status", self._handle_scoring_status)
+        app.router.add_post("/api/playback/start", self._handle_playback_start)
+        app.router.add_post("/api/playback/stop", self._handle_playback_stop)
+        app.router.add_get("/api/playback/status", self._handle_playback_status)
+        app.router.add_post("/api/trajectory/clear", self._handle_trajectory_clear)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
@@ -881,7 +921,9 @@ class WebDashboardServer:
         )
 
     async def _handle_camera_snapshot(self, _request: web.Request) -> web.Response:
-        return web.json_response(self.node.build_camera_payload())
+        payload = self.node.build_camera_payload()
+        payload["playback_mode"] = self.playback_manager.status()["state"] == "playing"
+        return web.json_response(payload)
 
     async def _handle_camera_frame(self, request: web.Request) -> web.Response:
         camera_name = request.match_info.get("camera_name", "")
@@ -1051,6 +1093,34 @@ class WebDashboardServer:
 
     async def _handle_scoring_status(self, _request: web.Request) -> web.Response:
         return web.json_response(self.scoring_manager.status)
+
+    def _on_playback_finished(self) -> None:
+        self.node.set_playback_mode(False)
+        self.node.clear_traces()
+
+    async def _handle_playback_start(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        bag_name = str(body.get("bag_name", "")).strip()
+        if not bag_name:
+            return web.json_response({"error": "bag_name is required"}, status=400)
+        time_range = self.playback_manager.get_bag_time_range(bag_name)
+        self.node.set_playback_mode(True, time_range)
+        self.node.clear_traces()
+        self.playback_manager.start(bag_name, self.recording_manager)
+        return web.json_response({"status": "playing", "bag_name": bag_name})
+
+    async def _handle_playback_stop(self, _request: web.Request) -> web.Response:
+        self.playback_manager.stop()
+        self.node.set_playback_mode(False)
+        self.node.clear_traces()
+        return web.json_response({"status": "idle"})
+
+    async def _handle_playback_status(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.playback_manager.status())
+
+    async def _handle_trajectory_clear(self, _request: web.Request) -> web.Response:
+        self.node.clear_traces()
+        return web.json_response({"ok": True})
 
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "3d.html")
