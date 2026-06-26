@@ -851,6 +851,7 @@ class WebDashboardServer:
         app.router.add_post("/api/optimization/stop", self._handle_optimization_stop)
         app.router.add_get("/api/optimization/status", self._handle_optimization_status)
         app.router.add_get("/api/optimization/trajectories", self._handle_optimization_trajectories)
+        app.router.add_get("/api/optimization/runs", self._handle_optimization_runs)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
@@ -1210,6 +1211,22 @@ class WebDashboardServer:
             "vio": _read_tum_points(vio_path),
             "colmap": _read_tum_points(colmap_path),
         })
+
+    async def _handle_optimization_runs(self, _request: web.Request) -> web.Response:
+        runs_root = Path(__file__).resolve().parents[1] / "runs"
+        entries = []
+        if runs_root.exists():
+            for run_dir in sorted(runs_root.iterdir()):
+                if not run_dir.is_dir():
+                    continue
+                sim3 = next(run_dir.glob("viz/*/colmap_sim3.tum"), None)
+                colmap_tum = next(run_dir.glob("colmap/*/colmap.tum"), None)
+                if sim3 or colmap_tum:
+                    entries.append({
+                        "run_name": run_dir.name,
+                        "has_sim3": sim3 is not None,
+                    })
+        return web.json_response({"runs": entries})
 
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "3d.html")

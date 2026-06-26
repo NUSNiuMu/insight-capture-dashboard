@@ -217,7 +217,12 @@ if (stopOptimizationButton) {
 if (optimizationCameraSelect !== null) {
   void populateOptimizationCameras([]);
   void refreshOptimizationStatus();
+  void populateOptimizationRuns();
   optimizationPollTimer = window.setInterval(() => { void refreshOptimizationStatus(); }, 2000);
+}
+const loadOptRunButton = document.getElementById("load-opt-run-button");
+if (loadOptRunButton) {
+  loadOptRunButton.addEventListener("click", () => { void loadSavedOptRun(); });
 }
 if (optimizationBagMeta !== null && optimizationRunNameInput !== null) {
   const bagSel = document.getElementById("optimization-bag-select");
@@ -1970,8 +1975,9 @@ async function refreshOptimizationStatus() {
       optimizationBusy = false;
       if (startOptimizationButton) startOptimizationButton.disabled = false;
       if (stopOptimizationButton) stopOptimizationButton.hidden = true;
-      renderOptimizationResult(payload.result);
+      void renderOptimizationResult(payload.result, payload.run_name || "");
       void refreshRosbags();
+      void populateOptimizationRuns();
     } else if (payload.state === "error") {
       clearInterval(optimizationPollTimer);
       optimizationPollTimer = null;
@@ -2016,23 +2022,46 @@ function renderOptimizationProgress(payload) {
   }
 }
 
-async function renderOptimizationResult(result) {
-  if (!result || !optimizationResultPanel) return;
-  if (optimizationLogLink && result.colmap_log) {
+async function renderOptimizationResult(result, runName) {
+  if (!optimizationResultPanel) return;
+  if (result && optimizationLogLink && result.colmap_log) {
     optimizationLogLink.href = result.colmap_log;
   }
   optimizationResultPanel.hidden = false;
 
-  const runName = (optimizationRunNameInput && optimizationRunNameInput.value.trim()) ||
+  const name = runName ||
+    (optimizationRunNameInput && optimizationRunNameInput.value.trim()) ||
     (document.getElementById("optimization-bag-select") || {}).value || "";
-  if (!runName) return;
+  if (!name) return;
 
   try {
-    const res = await fetch(`/api/optimization/trajectories?run_name=${encodeURIComponent(runName)}`, { cache: "no-store" });
+    const res = await fetch(`/api/optimization/trajectories?run_name=${encodeURIComponent(name)}`, { cache: "no-store" });
     const data = await res.json();
     if (!res.ok) return;
     buildOptTrajScene(data.vio || [], data.colmap || []);
   } catch (_) {}
+}
+
+async function populateOptimizationRuns() {
+  const select = document.getElementById("opt-saved-run-select");
+  if (!select) return;
+  try {
+    const res = await fetch("/api/optimization/runs", { cache: "no-store" });
+    const data = await res.json();
+    const runs = data.runs || [];
+    select.innerHTML = runs.length
+      ? runs.map(r => `<option value="${escapeHtml(r.run_name)}">${escapeHtml(r.run_name)}${r.has_sim3 ? "" : " (no Sim3)"}</option>`).join("")
+      : `<option value="">No saved runs</option>`;
+  } catch (_) {
+    select.innerHTML = `<option value="">Error loading runs</option>`;
+  }
+}
+
+async function loadSavedOptRun() {
+  const select = document.getElementById("opt-saved-run-select");
+  const runName = select ? select.value : "";
+  if (!runName) return;
+  await renderOptimizationResult(null, runName);
 }
 
 let _optEngine = null;

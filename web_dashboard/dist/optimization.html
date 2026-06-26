@@ -58,6 +58,14 @@
           <pre id="optimization-log" class="opt-log"></pre>
         </div>
 
+        <div class="tool-panel" style="grid-column: 1 / -1;">
+          <p class="eyebrow">View Saved Run</p>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <select id="opt-saved-run-select" class="bag-select" style="flex:1;min-width:200px;"></select>
+            <button type="button" id="load-opt-run-button" class="recording-button recording-button-secondary">Load Trajectory</button>
+          </div>
+        </div>
+
         <div class="tool-panel" id="optimization-result-panel" hidden style="grid-column: 1 / -1;">
           <p class="eyebrow">Result — Interactive 3D Trajectory</p>
           <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
