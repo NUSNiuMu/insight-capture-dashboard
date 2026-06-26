@@ -2109,19 +2109,9 @@ function buildOptTrajScene(vioPoints, colmapPoints) {
 
   function drawLine(pts, color) {
     if (pts.length < 2) return;
-    const positions = pts.flatMap((p) => [p[0], p[2], p[1]]);
-    const indices = [];
-    for (let i = 0; i < pts.length - 1; i++) { indices.push(i, i + 1); }
-    const lines = new BABYLON.Mesh("line", scene);
-    const vd = new BABYLON.VertexData();
-    vd.positions = positions;
-    vd.indices = indices;
-    vd.applyToMesh(lines);
-    lines.material = Object.assign(new BABYLON.StandardMaterial("m", scene), {
-      emissiveColor: color,
-      disableLighting: true,
-    });
-    lines.renderingGroupId = 1;
+    const points = pts.map((p) => new BABYLON.Vector3(p[0], p[2], p[1]));
+    const lines = BABYLON.MeshBuilder.CreateLines("line", { points, updatable: false }, scene);
+    lines.color = color;
   }
 
   drawLine(vioNorm, new BABYLON.Color3(1, 0.35, 0.35));
