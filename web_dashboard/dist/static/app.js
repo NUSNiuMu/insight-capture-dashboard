@@ -2006,7 +2006,7 @@ function renderOptimizationProgress(payload) {
     if (state === "idle") optimizationStepLabel.textContent = "Idle";
     else if (state === "done") optimizationStepLabel.textContent = "Complete";
     else if (state === "error") optimizationStepLabel.textContent = `Error — ${stepName || `step ${step}`}`;
-    else optimizationStepLabel.textContent = step > 0 ? `Step ${step}/5 — ${stepName}` : "Starting...";
+    else optimizationStepLabel.textContent = step > 0 ? `Step ${step}/${TOTAL} — ${stepName}` : "Starting...";
   }
 
   if (optimizationLogEl && logLines.length > 0) {

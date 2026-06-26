@@ -881,7 +881,7 @@ class OptimizationManager:
                 "colmap_log": f"/optimization-runs/{run_name}/colmap/color_{hz_label}hz/colmap.log",
             }
             cmd = [
-                sys.executable,
+                sys.executable, "-u",  # force unbuffered stdout so step markers arrive immediately
                 str(self.pipeline_script),
                 "--bag", str(bag_path),
                 "--name", run_name,
