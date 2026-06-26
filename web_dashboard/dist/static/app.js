@@ -42,8 +42,6 @@ const stopOptimizationButton = document.getElementById("stop-optimization-button
 const optimizationStepLabel = document.getElementById("optimization-step-label");
 const optimizationLogEl = document.getElementById("optimization-log");
 const optimizationResultPanel = document.getElementById("optimization-result-panel");
-const optimizationImg3d = document.getElementById("optimization-img-3d");
-const optimizationImg2d = document.getElementById("optimization-img-2d");
 const optimizationLogLink = document.getElementById("optimization-log-link");
 const runScoringButton = document.getElementById("run-scoring-button");
 const scoringTopicInput = document.getElementById("scoring-topic");
@@ -1950,43 +1948,124 @@ function renderOptimizationProgress(payload) {
   const step = Number(payload && payload.step) || 0;
   const stepName = (payload && payload.step_name) || "";
   const logLines = (payload && Array.isArray(payload.log_tail)) ? payload.log_tail : [];
-  const steps = document.querySelectorAll(".opt-progress-step");
-  steps.forEach((el) => {
-    const n = Number(el.dataset.step);
-    el.classList.remove("is-active", "is-done", "is-error");
-    if (state === "error") {
-      if (n === step) el.classList.add("is-error");
-      else if (n < step) el.classList.add("is-done");
-    } else if (state === "done") {
-      el.classList.add("is-done");
-    } else if (n < step) {
-      el.classList.add("is-done");
-    } else if (n === step && state === "running") {
-      el.classList.add("is-active");
-    }
-  });
+  const TOTAL = 5;
+
+  let pct = 0;
+  if (state === "done") pct = 100;
+  else if (state === "running") pct = step > 0 ? Math.round(((step - 1) / TOTAL) * 100 + (100 / TOTAL) * 0.5) : 2;
+  else if (state === "error") pct = step > 0 ? Math.round((step - 1) / TOTAL * 100) : 0;
+
+  const fill = document.getElementById("optimization-progress-fill");
+  if (fill) {
+    fill.style.width = `${pct}%`;
+    fill.classList.toggle("is-error", state === "error");
+  }
+  const percentLabel = document.getElementById("optimization-percent-label");
+  if (percentLabel) percentLabel.textContent = state === "idle" ? "" : `${pct}%`;
+
   if (optimizationStepLabel) {
     if (state === "idle") optimizationStepLabel.textContent = "Idle";
-    else if (state === "done") optimizationStepLabel.textContent = "Done";
-    else if (state === "error") optimizationStepLabel.textContent = `Error at step ${step}${stepName ? ` — ${stepName}` : ""}`;
-    else optimizationStepLabel.textContent = step > 0 ? `Step ${step}/5 — ${stepName}` : stepName || "Starting...";
+    else if (state === "done") optimizationStepLabel.textContent = "Complete";
+    else if (state === "error") optimizationStepLabel.textContent = `Error — ${stepName || `step ${step}`}`;
+    else optimizationStepLabel.textContent = step > 0 ? `Step ${step}/5 — ${stepName}` : "Starting...";
   }
+
   if (optimizationLogEl && logLines.length > 0) {
+    const atBottom = optimizationLogEl.scrollHeight - optimizationLogEl.scrollTop - optimizationLogEl.clientHeight < 40;
     optimizationLogEl.textContent = logLines.join("\n");
-    optimizationLogEl.scrollTop = optimizationLogEl.scrollHeight;
+    if (atBottom) optimizationLogEl.scrollTop = optimizationLogEl.scrollHeight;
   }
 }
 
-function renderOptimizationResult(result) {
+async function renderOptimizationResult(result) {
   if (!result || !optimizationResultPanel) return;
-  if (optimizationImg3d && result.trajectory_3d) {
-    optimizationImg3d.src = `${result.trajectory_3d}?ts=${Date.now()}`;
-  }
-  if (optimizationImg2d && result.trajectory_2d) {
-    optimizationImg2d.src = `${result.trajectory_2d}?ts=${Date.now()}`;
-  }
   if (optimizationLogLink && result.colmap_log) {
     optimizationLogLink.href = result.colmap_log;
   }
   optimizationResultPanel.hidden = false;
+
+  const runName = (optimizationRunNameInput && optimizationRunNameInput.value.trim()) ||
+    (document.getElementById("optimization-bag-select") || {}).value || "";
+  if (!runName) return;
+
+  try {
+    const res = await fetch(`/api/optimization/trajectories?run_name=${encodeURIComponent(runName)}`, { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok) return;
+    buildOptTrajScene(data.vio || [], data.colmap || []);
+  } catch (_) {}
+}
+
+let _optEngine = null;
+
+function buildOptTrajScene(vioPoints, colmapPoints) {
+  const canvas = document.getElementById("opt-traj-canvas");
+  if (!canvas || typeof BABYLON === "undefined") return;
+
+  if (_optEngine) {
+    _optEngine.dispose();
+    _optEngine = null;
+  }
+
+  canvas.width = canvas.offsetWidth;
+  canvas.height = canvas.offsetHeight;
+
+  const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: false, stencil: false });
+  _optEngine = engine;
+  const scene = new BABYLON.Scene(engine);
+  scene.clearColor = new BABYLON.Color4(0.05, 0.07, 0.05, 1);
+
+  const camera = new BABYLON.ArcRotateCamera("cam", -Math.PI / 2, Math.PI / 3, 3, BABYLON.Vector3.Zero(), scene);
+  camera.attachControl(canvas, true);
+  camera.lowerRadiusLimit = 0.1;
+  camera.wheelPrecision = 50;
+
+  new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+
+  function toVec3(p) { return new BABYLON.Vector3(p[0], p[2], p[1]); }
+
+  function centroid(pts) {
+    if (!pts.length) return [0, 0, 0];
+    let sx = 0, sy = 0, sz = 0;
+    for (const p of pts) { sx += p[0]; sy += p[1]; sz += p[2]; }
+    return [sx / pts.length, sy / pts.length, sz / pts.length];
+  }
+
+  const allPts = [...vioPoints, ...colmapPoints];
+  const c = centroid(allPts);
+
+  function normPts(pts) { return pts.map((p) => [p[0] - c[0], p[1] - c[1], p[2] - c[2]]); }
+
+  const vioNorm = normPts(vioPoints);
+  const colmapNorm = normPts(colmapPoints);
+
+  function drawLine(pts, color) {
+    if (pts.length < 2) return;
+    const positions = pts.flatMap((p) => [p[0], p[2], p[1]]);
+    const indices = [];
+    for (let i = 0; i < pts.length - 1; i++) { indices.push(i, i + 1); }
+    const lines = new BABYLON.Mesh("line", scene);
+    const vd = new BABYLON.VertexData();
+    vd.positions = positions;
+    vd.indices = indices;
+    vd.applyToMesh(lines);
+    lines.material = Object.assign(new BABYLON.StandardMaterial("m", scene), {
+      emissiveColor: color,
+      disableLighting: true,
+    });
+    lines.renderingGroupId = 1;
+  }
+
+  drawLine(vioNorm, new BABYLON.Color3(1, 0.35, 0.35));
+  drawLine(colmapNorm, new BABYLON.Color3(0.34, 0.84, 0.48));
+
+  const span = allPts.length > 0 ? Math.max(...allPts.map((p) => Math.abs(p[0] - c[0])), ...allPts.map((p) => Math.abs(p[2] - c[2]))) : 1;
+  camera.radius = Math.max(span * 2.5, 0.5);
+
+  engine.runRenderLoop(() => scene.render());
+  window.addEventListener("resize", () => {
+    canvas.width = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    engine.resize();
+  });
 }

@@ -56,6 +56,28 @@ from post_processing import (
 from session_alignment import PoseSample
 
 
+def _read_tum_points(path: Path, max_points: int = 2000) -> list:
+    """Read a TUM trajectory file and return a downsampled list of [x, y, z] points."""
+    if not path.exists():
+        return []
+    points = []
+    try:
+        with path.open("r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 4:
+                    points.append([float(parts[1]), float(parts[2]), float(parts[3])])
+    except Exception:
+        return []
+    if len(points) <= max_points:
+        return points
+    step = len(points) / max_points
+    return [points[int(i * step)] for i in range(max_points)]
+
+
 def make_qos(depth: int = 10) -> QoSProfile:
     return QoSProfile(
         reliability=ReliabilityPolicy.RELIABLE,
@@ -812,6 +834,7 @@ class WebDashboardServer:
         app.router.add_post("/api/optimization/start", self._handle_optimization_start)
         app.router.add_post("/api/optimization/stop", self._handle_optimization_stop)
         app.router.add_get("/api/optimization/status", self._handle_optimization_status)
+        app.router.add_get("/api/optimization/trajectories", self._handle_optimization_trajectories)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
@@ -1157,6 +1180,19 @@ class WebDashboardServer:
 
     async def _handle_optimization_status(self, _request: web.Request) -> web.Response:
         return web.json_response(self.optimization_manager.status())
+
+    async def _handle_optimization_trajectories(self, request: web.Request) -> web.Response:
+        run_name = request.rel_url.query.get("run_name", "").strip()
+        if not run_name:
+            return web.json_response({"error": "run_name required"}, status=400)
+        project_root = Path(__file__).resolve().parents[1]
+        hz_label = "5"
+        vio_path = project_root / "data" / "derived" / run_name / "trajectories" / "vio_100hz.tum"
+        colmap_path = project_root / "runs" / run_name / "viz" / f"color_{hz_label}hz_vs_vio100" / "colmap_sim3.tum"
+        return web.json_response({
+            "vio": _read_tum_points(vio_path),
+            "colmap": _read_tum_points(colmap_path),
+        })
 
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "3d.html")
