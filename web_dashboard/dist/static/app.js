@@ -1942,6 +1942,7 @@ async function startOptimization() {
       if (stopOptimizationButton) stopOptimizationButton.hidden = true;
       return;
     }
+    clearInterval(optimizationPollTimer);
     optimizationPollTimer = window.setInterval(() => { void refreshOptimizationStatus(); }, 2000);
   } catch (err) {
     renderOptimizationProgress({ state: "error", step: 0, step_name: `Error: ${err instanceof Error ? err.message : String(err)}`, log_tail: [] });
@@ -2038,7 +2039,7 @@ async function renderOptimizationResult(result, runName) {
     const res = await fetch(`/api/optimization/trajectories?run_name=${encodeURIComponent(name)}`, { cache: "no-store" });
     const data = await res.json();
     if (!res.ok) return;
-    buildOptTrajScene(data.vio || [], data.colmap || []);
+    buildOptTrajScene(data.vio || [], data.colmap || [], name);
   } catch (_) {}
 }
 
@@ -2065,8 +2066,11 @@ async function loadSavedOptRun() {
 }
 
 let _optEngine = null;
+let _optRenderedRun = null;
 
-function buildOptTrajScene(vioPoints, colmapPoints) {
+function buildOptTrajScene(vioPoints, colmapPoints, runName) {
+  if (runName && runName === _optRenderedRun) return;
+  _optRenderedRun = runName || null;
   const canvas = document.getElementById("opt-traj-canvas");
   if (!canvas || typeof BABYLON === "undefined") return;
 
