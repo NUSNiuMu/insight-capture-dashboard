@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import signal
 import shutil
 import subprocess
@@ -169,6 +170,8 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         topics.append(f"{camera_base(namespace)}/imu")
         topics.append(camera_info_topic(namespace, image_stream))
         topics.append(image_topic(namespace, image_stream))
+        cov_stream = str(camera.get("dashboard_cov_stream", "vio_image_cov"))
+        topics.append(f"{camera_base(namespace)}/{cov_stream}")
     return _normalize_topics(topics)
 
 
@@ -831,6 +834,20 @@ class OptimizationManager:
     ]
     _MAX_LOG = 60
 
+    # Regexes for fine-grained COLMAP sub-progress
+    _RE_FEATURE = re.compile(r'Processed file \[(\d+)/(\d+)\]')
+    _RE_MATCH   = re.compile(r'Matching image \[(\d+)/(\d+)\]')
+    # Sub-progress fractions within the COLMAP step:
+    #   0.00–0.45  feature extraction
+    #   0.45–0.70  feature matching
+    #   0.70–0.95  mapper
+    #   0.95–1.00  post (model_converter, tum conversion, summary)
+    _COLMAP_FEATURE_END  = 0.45
+    _COLMAP_MATCH_START  = 0.45
+    _COLMAP_MATCH_END    = 0.70
+    _COLMAP_MAPPER_START = 0.70
+    _COLMAP_MAPPER_END   = 0.95
+
     def __init__(
         self,
         project_root: Path,
@@ -844,6 +861,8 @@ class OptimizationManager:
         self._process: Optional[subprocess.Popen] = None
         self._state: str = "idle"
         self._step: int = 0
+        self._sub_progress: float = 0.0   # 0.0–1.0 within current step
+        self._colmap_phase: str = ""       # "feature" | "matching" | "mapper" | "post"
         self._run_name: str = ""
         self._log: List[str] = []
         self._result: Dict = {}
@@ -855,6 +874,7 @@ class OptimizationManager:
                 "step": self._step,
                 "step_name": self.STEP_NAMES[self._step - 1] if 1 <= self._step <= 4 else "",
                 "total_steps": 4,
+                "sub_progress": round(self._sub_progress, 4),
                 "run_name": self._run_name,
                 "log_tail": list(self._log[-30:]),
                 "result": dict(self._result),
@@ -905,6 +925,8 @@ class OptimizationManager:
             self._process = process
             self._state = "running"
             self._step = 0
+            self._sub_progress = 0.0
+            self._colmap_phase = ""
             self._run_name = run_name
             self._log = []
         threading.Thread(
@@ -932,6 +954,8 @@ class OptimizationManager:
                 self._process = None
                 self._state = "idle"
                 self._step = 0
+                self._sub_progress = 0.0
+                self._colmap_phase = ""
 
     def _monitor(self, process: subprocess.Popen) -> None:
         assert process.stdout is not None
@@ -944,7 +968,10 @@ class OptimizationManager:
                 for i, marker in enumerate(self._STEP_MARKERS):
                     if marker in line:
                         self._step = i + 1
+                        self._sub_progress = 0.0
+                        self._colmap_phase = ""
                         break
+                self._update_sub_progress(line)
         return_code = process.wait()
         success = return_code == 0
         with self._lock:
@@ -953,8 +980,55 @@ class OptimizationManager:
                 self._state = "done" if success else "error"
                 if success:
                     self._step = 4
+                    self._sub_progress = 1.0
         if self._on_finished:
             try:
                 self._on_finished(success)
             except Exception:
                 pass
+
+    def _update_sub_progress(self, line: str) -> None:
+        """Parse COLMAP log lines to update fine-grained sub_progress within step 3."""
+        if self._step != 3:
+            return
+
+        # Detect COLMAP sub-phase transitions
+        if "$ colmap feature_extractor" in line or "$ nice" in line and "feature_extractor" in line:
+            self._colmap_phase = "feature"
+            self._sub_progress = 0.0
+            return
+        if "$ colmap sequential_matcher" in line or "$ nice" in line and "sequential_matcher" in line:
+            self._colmap_phase = "matching"
+            self._sub_progress = self._COLMAP_MATCH_START
+            return
+        if "$ colmap mapper" in line or "$ nice" in line and "colmap mapper" in line:
+            self._colmap_phase = "mapper"
+            self._sub_progress = self._COLMAP_MAPPER_START
+            return
+        if "$ colmap model_converter" in line or "COLMAP 重建完成" in line or "完成 COLMAP CLI" in line:
+            self._colmap_phase = "post"
+            self._sub_progress = self._COLMAP_MAPPER_END
+            return
+
+        if self._colmap_phase == "feature":
+            m = self._RE_FEATURE.search(line)
+            if m:
+                n, total = int(m.group(1)), int(m.group(2))
+                if total > 0:
+                    self._sub_progress = (n / total) * self._COLMAP_FEATURE_END
+
+        elif self._colmap_phase == "matching":
+            m = self._RE_MATCH.search(line)
+            if m:
+                n, total = int(m.group(1)), int(m.group(2))
+                if total > 0:
+                    span = self._COLMAP_MATCH_END - self._COLMAP_MATCH_START
+                    self._sub_progress = self._COLMAP_MATCH_START + (n / total) * span
+
+        elif self._colmap_phase == "mapper":
+            # Mapper progress is hard to quantify; nudge forward on every output line
+            # so the bar visually moves, capped just below the mapper end boundary.
+            nudge = 0.0005
+            ceiling = self._COLMAP_MAPPER_END - nudge
+            if self._sub_progress < ceiling:
+                self._sub_progress = min(ceiling, self._sub_progress + nudge)

@@ -108,6 +108,7 @@ if (engine && scene) {
   });
 
   window.addEventListener("resize", () => engine.resize());
+
 }
 
 if (enable3d) {
@@ -1992,14 +1993,35 @@ async function refreshOptimizationStatus() {
 function renderOptimizationProgress(payload) {
   const state = (payload && payload.state) || "idle";
   const step = Number(payload && payload.step) || 0;
+  const subProgress = (payload && typeof payload.sub_progress === "number") ? payload.sub_progress : 0;
   const stepName = (payload && payload.step_name) || "";
   const logLines = (payload && Array.isArray(payload.log_tail)) ? payload.log_tail : [];
-  const TOTAL = 4;
+
+  // Per-step percentage ranges: [start%, end%]
+  // Steps 1-4 occupy these bands; step 3 (COLMAP) gets the big middle.
+  const STEP_RANGES = [
+    [0,  0],   // unused (step 0)
+    [1,  7],   // step 1 — VIO extraction
+    [7, 15],   // step 2 — image extraction
+    [15, 90],  // step 3 — COLMAP (sub_progress gives fine detail)
+    [90, 98],  // step 4 — Sim3 alignment
+  ];
 
   let pct = 0;
-  if (state === "done") pct = 100;
-  else if (state === "running") pct = step > 0 ? Math.round(((step - 1) / TOTAL) * 100 + (100 / TOTAL) * 0.5) : 2;
-  else if (state === "error") pct = step > 0 ? Math.round((step - 1) / TOTAL * 100) : 0;
+  if (state === "done") {
+    pct = 100;
+  } else if (state === "running") {
+    if (step === 0) {
+      pct = 1;
+    } else {
+      const [lo, hi] = STEP_RANGES[step] || [0, 100];
+      const frac = (step === 3) ? subProgress : 0.5;
+      pct = Math.round(lo + frac * (hi - lo));
+    }
+  } else if (state === "error") {
+    const [lo] = (step > 0 ? STEP_RANGES[step] : [0]) || [0];
+    pct = lo;
+  }
 
   const fill = document.getElementById("optimization-progress-fill");
   if (fill) {
@@ -2013,7 +2035,7 @@ function renderOptimizationProgress(payload) {
     if (state === "idle") optimizationStepLabel.textContent = "Idle";
     else if (state === "done") optimizationStepLabel.textContent = "Complete";
     else if (state === "error") optimizationStepLabel.textContent = `Error — ${stepName || `step ${step}`}`;
-    else optimizationStepLabel.textContent = step > 0 ? `Step ${step}/${TOTAL} — ${stepName}` : "Starting...";
+    else optimizationStepLabel.textContent = step > 0 ? `Step ${step}/4 — ${stepName}` : "Starting...";
   }
 
   if (optimizationLogEl && logLines.length > 0) {

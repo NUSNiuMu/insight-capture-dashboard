@@ -13,13 +13,26 @@ function resetDir(target) {
   fs.mkdirSync(target, { recursive: true });
 }
 
+const PRESERVE_STATIC = ["babylon.js", "babylonjs.loaders.min.js"];
+
 function copyFile(source, target) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(source, target);
 }
 
+// Preserve large vendored files that are not rebuilt from source
+const preserved = {};
+for (const name of PRESERVE_STATIC) {
+  const p = path.join(staticDir, name);
+  if (fs.existsSync(p)) preserved[name] = fs.readFileSync(p);
+}
+
 resetDir(distDir);
 resetDir(staticDir);
+
+for (const [name, buf] of Object.entries(preserved)) {
+  fs.writeFileSync(path.join(staticDir, name), buf);
+}
 
 copyFile(path.join(srcDir, "index.html"), path.join(distDir, "index.html"));
 copyFile(path.join(srcDir, "3d.html"), path.join(distDir, "3d.html"));
