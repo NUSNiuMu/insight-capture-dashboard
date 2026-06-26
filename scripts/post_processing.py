@@ -813,14 +813,12 @@ class OptimizationManager:
         "Extracting color images",
         "Running COLMAP",
         "Aligning trajectories (Sim3)",
-        "Generating trajectory plots",
     ]
     _STEP_MARKERS = [
         "1/3 提取 VIO",
         "2/3 提取 color 图片",
         "3/3 运行 COLMAP CLI",
         "4/5 Sim3 对齐 COLMAP 轨迹",
-        "5/5 生成 2D/3D 可视化图",
     ]
     _MAX_LOG = 60
 
@@ -846,8 +844,8 @@ class OptimizationManager:
             return {
                 "state": self._state,
                 "step": self._step,
-                "step_name": self.STEP_NAMES[self._step - 1] if 1 <= self._step <= 5 else "",
-                "total_steps": 5,
+                "step_name": self.STEP_NAMES[self._step - 1] if 1 <= self._step <= 4 else "",
+                "total_steps": 4,
                 "run_name": self._run_name,
                 "log_tail": list(self._log[-30:]),
                 "result": dict(self._result),
@@ -882,6 +880,7 @@ class OptimizationManager:
                 "--image-topic", image_topic_str,
                 "--colmap-runner", "local",
                 "--output-hz", str(output_hz),
+                "--make-plots", "false",
             ]
             process = subprocess.Popen(
                 cmd,
@@ -943,7 +942,7 @@ class OptimizationManager:
                 self._process = None
                 self._state = "done" if success else "error"
                 if success:
-                    self._step = 5
+                    self._step = 4
         if self._on_finished:
             try:
                 self._on_finished(success)

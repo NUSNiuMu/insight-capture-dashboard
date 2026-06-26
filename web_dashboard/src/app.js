@@ -481,7 +481,7 @@ function renderTopicCatalog(catalog, { resetSelection = false } = {}) {
     : [];
   const previousSelection = new Set(selectedRecordTopics);
   const previousKnown = new Set(knownRecordTopics);
-  if (resetSelection || !recordTopicsInitialized) {
+  if (resetSelection || !recordTopicsInitialized || previousKnown.size === 0) {
     selectedRecordTopics = new Set(defaultSelectedTopics);
   } else {
     const mergedSelection = new Set();
@@ -1093,54 +1093,50 @@ async function applyPoseUpdate(payload) {
   if (!enable3d || !scene) {
     return;
   }
-  const legendRows = [];
-  for (const pose of payload.poses || []) {
+  const poses = payload.poses || [];
+  const poseRoleKey = poses.map((p) => p.role).join(",");
+  const needsRebuild = !legend || legend.dataset.roleKey !== poseRoleKey;
+
+  if (needsRebuild && legend) {
+    const legendRows = [];
+    for (const pose of poses) {
+      const style = ROLE_STYLE[pose.role] || { label: pose.role, color: "#cccccc" };
+      legendRows.push(
+        `<div class="legend-row" data-legend-role="${escapeHtml(pose.role)}">
+          <div class="legend-main">
+            <span><span class="swatch" style="background:${style.color}"></span><strong>${style.label}</strong></span>
+            <span class="legend-meta"></span>
+          </div>
+          <label class="trail-toggle">
+            <span>Trail</span>
+            <input type="checkbox" data-role="${escapeHtml(pose.role)}" ${isTrailEnabled(pose.role) ? "checked" : ""}>
+          </label>
+        </div>`
+      );
+    }
+    legend.innerHTML = legendRows.join("");
+    legend.dataset.roleKey = poseRoleKey;
+    bindTrailToggles();
+  }
+
+  for (const pose of poses) {
     const node = ensurePoseNode(pose);
-    if (!node) {
-      continue;
-    }
-    if (!node.position) {
-      node.position = new BABYLON.Vector3(0, 0, 0);
-    }
-    if (!node.rotationQuaternion) {
-      node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
-    }
+    if (!node) continue;
+    if (!node.position) node.position = new BABYLON.Vector3(0, 0, 0);
+    if (!node.rotationQuaternion) node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
     const position = Array.isArray(pose.position) ? pose.position : [0, 0, 0];
     const quaternion = Array.isArray(pose.quaternion_xyzw) ? pose.quaternion_xyzw : [0, 0, 0, 1];
     const scenePosition = mapDashboardPositionToScene(position);
     const sceneQuaternion = mapDashboardQuaternionToScene(quaternion);
     node.setEnabled(Boolean(pose.visible));
-    node.position.copyFromFloats(
-      scenePosition.x,
-      scenePosition.y,
-      scenePosition.z
-    );
-    node.rotationQuaternion.copyFromFloats(
-      sceneQuaternion.x,
-      sceneQuaternion.y,
-      sceneQuaternion.z,
-      sceneQuaternion.w
-    );
+    node.position.copyFromFloats(scenePosition.x, scenePosition.y, scenePosition.z);
+    node.rotationQuaternion.copyFromFloats(sceneQuaternion.x, sceneQuaternion.y, sceneQuaternion.z, sceneQuaternion.w);
     await ensurePoseVisual(pose, node);
     updateTrailFromPose(pose);
-
-    const style = ROLE_STYLE[pose.role] || { label: pose.role, color: "#cccccc" };
-    legendRows.push(
-      `<div class="legend-row">
-        <div class="legend-main">
-          <span><span class="swatch" style="background:${style.color}"></span><strong>${style.label}</strong></span>
-          <span class="legend-meta">${pose.visible ? pose.name : pose.name + " hidden"}</span>
-        </div>
-        <label class="trail-toggle">
-          <span>Trail</span>
-          <input type="checkbox" data-role="${escapeHtml(pose.role)}" ${isTrailEnabled(pose.role) ? "checked" : ""}>
-        </label>
-      </div>`
-    );
-  }
-  if (legend) {
-    legend.innerHTML = legendRows.join("");
-    bindTrailToggles();
+    if (legend) {
+      const row = legend.querySelector(`[data-legend-role="${CSS.escape(pose.role)}"] .legend-meta`);
+      if (row) row.textContent = pose.visible ? pose.name : `${pose.name} hidden`;
+    }
   }
 }
 
@@ -1767,8 +1763,8 @@ async function pollScoringStatus() {
       if (runScoringButton) {
         runScoringButton.disabled = true;
       }
-      const topic = payload.topic ? ` (${payload.topic})` : "";
-      setScoringStatus(`Running...${topic}`);
+      const topic = payload.topic ? ` — ${payload.topic}` : "";
+      setScoringStatus(`Scoring${topic}`);
       scheduleScoringPoll(1500);
     } else if (status === "done") {
       scoringBusy = false;
@@ -1816,28 +1812,67 @@ function hideScoringResult() {
   }
 }
 
+function scoringColor(score) {
+  return score >= 90 ? "#57d67c" : score >= 70 ? "#4aa8ff" : score >= 50 ? "#f0c040" : "#ff5a5a";
+}
+
+function renderScoringCameraCard(cam) {
+  if (cam.error) {
+    return `
+      <div style="padding:12px 16px;border-radius:8px;background:var(--panel);border:1px solid var(--line)">
+        <div style="font-family:monospace;font-size:0.78rem;color:var(--muted);margin-bottom:6px">${escapeHtml(cam.topic || "")}</div>
+        <span style="color:#ff5a5a;font-size:0.85rem">Error: ${escapeHtml(cam.error)}</span>
+      </div>`;
+  }
+  const color = scoringColor(cam.score || 0);
+  return `
+    <div style="padding:12px 16px;border-radius:8px;background:var(--panel);border:1px solid var(--line)">
+      <div style="font-family:monospace;font-size:0.78rem;color:var(--muted);margin-bottom:8px">${escapeHtml(cam.topic || "")}</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px">
+        <strong style="font-size:1.7rem;color:${escapeHtml(color)}">${escapeHtml(String(cam.score))} / 100</strong>
+        <span style="font-size:0.95rem;color:var(--muted)">${escapeHtml(cam.quality || "")}</span>
+      </div>
+      <table style="border-collapse:collapse;width:100%;font-size:0.82rem">
+        <tbody>
+          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Poses</td><td>${escapeHtml(String(cam.n_poses))}</td></tr>
+          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Mean trace</td><td>${escapeHtml((cam.mean_trace || 0).toExponential(3))}</td></tr>
+          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Max trace</td><td>${escapeHtml((cam.max_trace || 0).toExponential(3))}</td></tr>
+          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">p99 trace</td><td>${escapeHtml((cam.p99_trace || 0).toExponential(3))}</td></tr>
+        </tbody>
+      </table>
+    </div>`;
+}
+
 function renderScoringResult(result) {
   if (!scoringResultEl || !scoringResultBody || !result) {
     return;
   }
-  const scoreColor = result.score >= 90 ? "#57d67c" : result.score >= 70 ? "#4aa8ff" : result.score >= 50 ? "#f0c040" : "#ff5a5a";
-  scoringResultBody.innerHTML = `
-    <div class="bag-row-main" style="margin-bottom:0.75rem">
-      <strong style="font-size:2rem;color:${escapeHtml(scoreColor)}">${escapeHtml(String(result.score))} / 100</strong>
-      <span style="font-size:1.1rem">${escapeHtml(result.quality || "")}</span>
-    </div>
-    <table style="border-collapse:collapse;width:100%;font-size:0.85rem">
-      <tbody>
-        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Poses processed</td><td>${escapeHtml(String(result.n_poses))}</td></tr>
-        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Topic</td><td style="font-family:monospace;font-size:0.8rem">${escapeHtml(result.topic || "")}</td></tr>
-        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Mean cov trace</td><td>${escapeHtml((result.mean_trace || 0).toExponential(4))}</td></tr>
-        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Max cov trace</td><td>${escapeHtml((result.max_trace || 0).toExponential(4))}</td></tr>
-        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">p90 cov trace</td><td>${escapeHtml((result.p90_trace || 0).toExponential(4))}</td></tr>
-        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">p99 cov trace</td><td>${escapeHtml((result.p99_trace || 0).toExponential(4))}</td></tr>
-        <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Reference cov</td><td>${escapeHtml((result.ref_cov || 0).toExponential(4))}</td></tr>
-      </tbody>
-    </table>
-  `;
+  // multi-camera result: {cameras: [...]}
+  if (result.cameras && Array.isArray(result.cameras)) {
+    scoringResultBody.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px">
+        ${result.cameras.map(renderScoringCameraCard).join("")}
+      </div>`;
+  } else {
+    // legacy single-topic result
+    const color = scoringColor(result.score || 0);
+    scoringResultBody.innerHTML = `
+      <div class="bag-row-main" style="margin-bottom:0.75rem">
+        <strong style="font-size:2rem;color:${escapeHtml(color)}">${escapeHtml(String(result.score))} / 100</strong>
+        <span style="font-size:1.1rem">${escapeHtml(result.quality || "")}</span>
+      </div>
+      <table style="border-collapse:collapse;width:100%;font-size:0.85rem">
+        <tbody>
+          <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Poses processed</td><td>${escapeHtml(String(result.n_poses))}</td></tr>
+          <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Topic</td><td style="font-family:monospace;font-size:0.8rem">${escapeHtml(result.topic || "")}</td></tr>
+          <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Mean cov trace</td><td>${escapeHtml((result.mean_trace || 0).toExponential(4))}</td></tr>
+          <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Max cov trace</td><td>${escapeHtml((result.max_trace || 0).toExponential(4))}</td></tr>
+          <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">p90 cov trace</td><td>${escapeHtml((result.p90_trace || 0).toExponential(4))}</td></tr>
+          <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">p99 cov trace</td><td>${escapeHtml((result.p99_trace || 0).toExponential(4))}</td></tr>
+          <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Reference cov</td><td>${escapeHtml((result.ref_cov || 0).toExponential(4))}</td></tr>
+        </tbody>
+      </table>`;
+  }
   scoringResultEl.hidden = false;
 }
 
@@ -1948,7 +1983,7 @@ function renderOptimizationProgress(payload) {
   const step = Number(payload && payload.step) || 0;
   const stepName = (payload && payload.step_name) || "";
   const logLines = (payload && Array.isArray(payload.log_tail)) ? payload.log_tail : [];
-  const TOTAL = 5;
+  const TOTAL = 4;
 
   let pct = 0;
   if (state === "done") pct = 100;
