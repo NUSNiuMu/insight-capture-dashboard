@@ -881,6 +881,7 @@ class OptimizationManager:
                 "--colmap-runner", "local",
                 "--output-hz", str(output_hz),
                 "--make-plots", "false",
+                "--overwrite", "true",
             ]
             process = subprocess.Popen(
                 cmd,
