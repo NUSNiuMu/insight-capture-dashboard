@@ -1,0 +1,24 @@
+# Large runtime data — never bake into image; use volume mounts
+rosbags/
+data/
+runs/
+outputs/
+bags/
+
+# Git and IDE
+.git/
+.claude/
+.gitignore
+
+# Node build artifacts (dist/ is checked in and needed; node_modules is not)
+web_dashboard/node_modules/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# macOS
+.DS_Store

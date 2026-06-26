@@ -1,0 +1,52 @@
+services:
+  insight-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      network: host    # Jetson iptables raw table workaround
+    image: insight-dashboard:latest
+    container_name: insight-dashboard
+
+    # ── ROS2 requires host network for DDS multicast ─────────────────────────
+    network_mode: host
+
+    # ── NVIDIA Container Runtime for CUDA (required by COLMAP) ──────────────
+    runtime: nvidia
+
+    environment:
+      - ROS_DOMAIN_ID=20           # Must match devices; override in .env if needed
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # Uncomment to override default port:
+      # - DASHBOARD_PORT=8765
+
+    volumes:
+      # ── Source code (live-mounted; no rebuild needed for code changes) ─────
+      - .:/workspaces/insight_capture
+
+      # ── looper-vio-colmap pipeline (path must stay at ../looper-vio-colmap-handoff
+      #    relative to insight_capture, matching what multi_camera_dashboard_web.py expects)
+      - /home/seeed/workspaces/looper-vio-colmap-handoff:/workspaces/looper-vio-colmap-handoff:ro
+
+      # ── COLMAP binary (custom-built with CUDA sm_87 for Jetson Orin) ───────
+      # The binary links against host CUDA libs; mounting keeps everything consistent.
+      - /usr/local/bin/colmap:/usr/local/bin/colmap:ro
+
+      # COLMAP custom libraries not in standard apt (built alongside COLMAP):
+      - /lib/libceres.so.2:/lib/libceres.so.2:ro
+      - /lib/libceres.so.2.0.0:/lib/libceres.so.2.0.0:ro
+
+      # CUDA runtime (COLMAP needs libcudart, libcufft, etc.)
+      - /usr/local/cuda:/usr/local/cuda:ro
+
+      # SSH keys for rosbag remote sync (optional; remove if not using sync)
+      - /home/seeed/.ssh:/root/.ssh:ro
+
+    restart: unless-stopped
+
+    # ── Resource limits ──────────────────────────────────────────────────────
+    # COLMAP can spike to 100% on all 6 cores; leave some headroom for ROS2
+    deploy:
+      resources:
+        limits:
+          cpus: '5.5'
