@@ -518,6 +518,24 @@ h1 {
   gap: 8px;
 }
 
+.recording-bag-name-input {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.85rem;
+  min-width: 280px;
+  outline: none;
+}
+.recording-bag-name-input:focus {
+  border-color: #5ad7a2;
+}
+.recording-bag-name-input::placeholder {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
 .recording-button {
   border: 0;
   border-radius: 999px;

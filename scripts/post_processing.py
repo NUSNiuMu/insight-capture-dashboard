@@ -443,7 +443,11 @@ class RecordingManager:
         with self._lock:
             return self.topic_catalog
 
-    def start(self, topics: Optional[Sequence[str]] = None) -> Dict[str, object]:
+    def start(
+        self,
+        topics: Optional[Sequence[str]] = None,
+        bag_name: Optional[str] = None,
+    ) -> Dict[str, object]:
         selected_topics = self.default_topics if topics is None else _normalize_topics(topics)
         if not selected_topics:
             raise ValueError("No topics selected for recording.")
@@ -453,7 +457,12 @@ class RecordingManager:
                 raise RuntimeError("Recording is already running.")
 
             timestamp = time.strftime("%Y%m%d_%H%M%S")
-            output_path = self.rosbag_root / f"insight_record_{timestamp}"
+            if bag_name:
+                safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in bag_name.strip())
+                name = safe or f"insight_record_{timestamp}"
+            else:
+                name = f"insight_record_{timestamp}"
+            output_path = self.rosbag_root / name
             env = os.environ.copy()
             env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
             cmd = [

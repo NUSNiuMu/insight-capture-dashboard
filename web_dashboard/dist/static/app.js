@@ -617,12 +617,17 @@ async function startRecording() {
     setRecordingOutput(message);
     return;
   }
+  const bagNameInput = document.getElementById("recording-bag-name");
+  const bagName = bagNameInput ? bagNameInput.value.trim() : "";
+
   setRecordingBusy(true);
   try {
+    const body = { topics };
+    if (bagName) body.bag_name = bagName;
     const response = await fetch("/api/recording/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topics })
+      body: JSON.stringify(body)
     });
     const payload = await response.json();
     if (!response.ok) {
@@ -930,7 +935,6 @@ function renderBagList(bags) {
         <span>${Number(bag.topic_count || 0)} topics</span>
       </div>
       <div class="bag-badges">
-        <span class="bag-badge ${bag.labeled ? "is-ok" : ""}">${bag.labeled ? "labeled" : "unlabeled"}</span>
         <span class="bag-badge ${bag.scored ? "is-ok" : ""}">${bag.scored ? "scored" : "unscored"}</span>
         <span class="bag-badge ${bag.optimized ? "is-ok" : ""}">${bag.optimized ? "optimized" : "not optimized"}</span>
       </div>

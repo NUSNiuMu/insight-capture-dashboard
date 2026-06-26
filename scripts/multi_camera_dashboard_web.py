@@ -1095,7 +1095,8 @@ class WebDashboardServer:
         topics = payload.get("topics")
         if "topics" in payload and not isinstance(topics, list):
             return web.json_response({"error": "Field 'topics' must be a list."}, status=400)
-        status = self.recording_manager.start(topics=topics)
+        bag_name = str(payload.get("bag_name", "")).strip() or None
+        status = self.recording_manager.start(topics=topics, bag_name=bag_name)
         return web.json_response(status)
 
     async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
