@@ -5,6 +5,7 @@ import os
 import signal
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -800,5 +801,151 @@ class PlaybackManager:
         if stopped and self._on_stopped:
             try:
                 self._on_stopped()
+            except Exception:
+                pass
+
+
+class OptimizationManager:
+    """Runs the looper-vio-colmap pipeline as a background subprocess."""
+
+    STEP_NAMES = [
+        "Extracting VIO",
+        "Extracting color images",
+        "Running COLMAP",
+        "Aligning trajectories (Sim3)",
+        "Generating trajectory plots",
+    ]
+    _STEP_MARKERS = [
+        "1/3 提取 VIO",
+        "2/3 提取 color 图片",
+        "3/3 运行 COLMAP CLI",
+        "4/5 Sim3 对齐 COLMAP 轨迹",
+        "5/5 生成 2D/3D 可视化图",
+    ]
+    _MAX_LOG = 60
+
+    def __init__(
+        self,
+        project_root: Path,
+        pipeline_script: Path,
+        on_finished: Optional[Callable[[bool], None]] = None,
+    ) -> None:
+        self.project_root = project_root.resolve()
+        self.pipeline_script = pipeline_script.resolve()
+        self._on_finished = on_finished
+        self._lock = threading.Lock()
+        self._process: Optional[subprocess.Popen] = None
+        self._state: str = "idle"
+        self._step: int = 0
+        self._run_name: str = ""
+        self._log: List[str] = []
+        self._result: Dict = {}
+
+    def status(self) -> Dict:
+        with self._lock:
+            return {
+                "state": self._state,
+                "step": self._step,
+                "step_name": self.STEP_NAMES[self._step - 1] if 1 <= self._step <= 5 else "",
+                "total_steps": 5,
+                "run_name": self._run_name,
+                "log_tail": list(self._log[-30:]),
+                "result": dict(self._result),
+            }
+
+    def start(
+        self,
+        bag_name: str,
+        run_name: str,
+        vio_topic: str,
+        image_topic_str: str,
+        output_hz: float = 5.0,
+    ) -> None:
+        with self._lock:
+            if self._state == "running":
+                raise RuntimeError("Optimization already running")
+            bag_path = self.project_root / "rosbags" / bag_name
+            if not bag_path.exists():
+                raise ValueError(f"Bag not found: {bag_name}")
+            hz_label = str(int(output_hz)) if output_hz == int(output_hz) else str(output_hz).replace(".", "p")
+            self._result = {
+                "trajectory_3d": f"/optimization-runs/{run_name}/viz/color_{hz_label}hz_vs_vio100/trajectory_3d.png",
+                "trajectory_2d": f"/optimization-runs/{run_name}/viz/color_{hz_label}hz_vs_vio100/trajectory_2d.png",
+                "colmap_log": f"/optimization-runs/{run_name}/colmap/color_{hz_label}hz/colmap.log",
+            }
+            cmd = [
+                sys.executable,
+                str(self.pipeline_script),
+                "--bag", str(bag_path),
+                "--name", run_name,
+                "--vio-topic", vio_topic,
+                "--image-topic", image_topic_str,
+                "--colmap-runner", "local",
+                "--output-hz", str(output_hz),
+            ]
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                cwd=str(self.project_root),
+                env=os.environ.copy(),
+                start_new_session=True,
+            )
+            self._process = process
+            self._state = "running"
+            self._step = 0
+            self._run_name = run_name
+            self._log = []
+        threading.Thread(
+            target=self._monitor, args=(process,), daemon=True, name="optimization_monitor"
+        ).start()
+
+    def stop(self) -> None:
+        with self._lock:
+            process = self._process
+        if process is None:
+            return
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGINT)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        with self._lock:
+            if self._process is process:
+                self._process = None
+                self._state = "idle"
+                self._step = 0
+
+    def _monitor(self, process: subprocess.Popen) -> None:
+        assert process.stdout is not None
+        for line in process.stdout:
+            line = line.rstrip()
+            with self._lock:
+                self._log.append(line)
+                if len(self._log) > self._MAX_LOG:
+                    self._log = self._log[-self._MAX_LOG:]
+                for i, marker in enumerate(self._STEP_MARKERS):
+                    if marker in line:
+                        self._step = i + 1
+                        break
+        return_code = process.wait()
+        success = return_code == 0
+        with self._lock:
+            if self._process is process:
+                self._process = None
+                self._state = "done" if success else "error"
+                if success:
+                    self._step = 5
+        if self._on_finished:
+            try:
+                self._on_finished(success)
             except Exception:
                 pass

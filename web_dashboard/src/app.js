@@ -35,6 +35,16 @@ const clearTrajectoryButton = document.getElementById("clear-trajectory-button")
 const keepTrajectoryToggle = document.getElementById("keep-trajectory-toggle");
 const scoringBagMeta = document.getElementById("scoring-bag-meta");
 const optimizationBagMeta = document.getElementById("optimization-bag-meta");
+const optimizationCameraSelect = document.getElementById("optimization-camera-select");
+const optimizationRunNameInput = document.getElementById("optimization-run-name");
+const startOptimizationButton = document.getElementById("start-optimization-button");
+const stopOptimizationButton = document.getElementById("stop-optimization-button");
+const optimizationStepLabel = document.getElementById("optimization-step-label");
+const optimizationLogEl = document.getElementById("optimization-log");
+const optimizationResultPanel = document.getElementById("optimization-result-panel");
+const optimizationImg3d = document.getElementById("optimization-img-3d");
+const optimizationImg2d = document.getElementById("optimization-img-2d");
+const optimizationLogLink = document.getElementById("optimization-log-link");
 const runScoringButton = document.getElementById("run-scoring-button");
 const scoringTopicInput = document.getElementById("scoring-topic");
 const scoringRefCovInput = document.getElementById("scoring-ref-cov");
@@ -81,6 +91,8 @@ let knownRosbags = [];
 let playbackBusy = false;
 let playbackPollTimer = null;
 let keepTrajectory = false;
+let optimizationBusy = false;
+let optimizationPollTimer = null;
 const keptPoints = new Map();
 
 const CAMERA_FPS_WINDOW_MS = 1500;
@@ -197,6 +209,28 @@ if (playbackPanel) {
   playbackPollTimer = window.setInterval(() => {
     void refreshPlaybackStatus();
   }, 1500);
+}
+if (startOptimizationButton) {
+  startOptimizationButton.addEventListener("click", () => { void startOptimization(); });
+}
+if (stopOptimizationButton) {
+  stopOptimizationButton.addEventListener("click", () => { void stopOptimization(); });
+}
+if (optimizationCameraSelect !== null) {
+  void populateOptimizationCameras([]);
+  void refreshOptimizationStatus();
+  optimizationPollTimer = window.setInterval(() => { void refreshOptimizationStatus(); }, 2000);
+}
+if (optimizationBagMeta !== null && optimizationRunNameInput !== null) {
+  const bagSel = document.getElementById("optimization-bag-select");
+  if (bagSel) {
+    bagSel.addEventListener("change", () => {
+      if (optimizationRunNameInput.value === "" || optimizationRunNameInput.dataset.autoFilled === "1") {
+        optimizationRunNameInput.value = bagSel.value;
+        optimizationRunNameInput.dataset.autoFilled = "1";
+      }
+    });
+  }
 }
 
 function resolveWebSocketUrl() {
@@ -1815,4 +1849,144 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+// ── Optimization page ──────────────────────────────────────────────────────
+
+async function populateOptimizationCameras(cameras) {
+  if (!optimizationCameraSelect) return;
+  if (!cameras || cameras.length === 0) {
+    try {
+      const res = await fetch(`/api/cameras?ts=${Date.now()}`, { cache: "no-store" });
+      const payload = await res.json();
+      cameras = Array.isArray(payload.cameras) ? payload.cameras : [];
+    } catch (_) {
+      return;
+    }
+  }
+  const prev = optimizationCameraSelect.value;
+  optimizationCameraSelect.innerHTML = cameras
+    .map((c) => `<option value="${escapeHtml(c.name || "")}">${escapeHtml(c.label || c.name || "")}</option>`)
+    .join("");
+  if (prev && cameras.some((c) => c.name === prev)) optimizationCameraSelect.value = prev;
+}
+
+async function startOptimization() {
+  if (optimizationBusy) return;
+  const bagSel = document.getElementById("optimization-bag-select");
+  const bagName = bagSel ? bagSel.value : "";
+  if (!bagName) {
+    if (optimizationStepLabel) optimizationStepLabel.textContent = "Select a rosbag first.";
+    return;
+  }
+  const cameraName = optimizationCameraSelect ? optimizationCameraSelect.value : "";
+  const runName = (optimizationRunNameInput && optimizationRunNameInput.value.trim()) || bagName;
+  optimizationBusy = true;
+  if (startOptimizationButton) startOptimizationButton.disabled = true;
+  if (stopOptimizationButton) stopOptimizationButton.hidden = false;
+  if (optimizationResultPanel) optimizationResultPanel.hidden = true;
+  renderOptimizationProgress({ state: "running", step: 0, step_name: "Starting...", log_tail: [] });
+  try {
+    const res = await fetch("/api/optimization/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bag_name: bagName, camera_name: cameraName, run_name: runName }),
+    });
+    const payload = await res.json();
+    if (!res.ok) {
+      renderOptimizationProgress({ state: "error", step: 0, step_name: `Error: ${payload.error || "Failed"}`, log_tail: [] });
+      optimizationBusy = false;
+      if (startOptimizationButton) startOptimizationButton.disabled = false;
+      if (stopOptimizationButton) stopOptimizationButton.hidden = true;
+      return;
+    }
+    optimizationPollTimer = window.setInterval(() => { void refreshOptimizationStatus(); }, 2000);
+  } catch (err) {
+    renderOptimizationProgress({ state: "error", step: 0, step_name: `Error: ${err instanceof Error ? err.message : String(err)}`, log_tail: [] });
+    optimizationBusy = false;
+    if (startOptimizationButton) startOptimizationButton.disabled = false;
+    if (stopOptimizationButton) stopOptimizationButton.hidden = true;
+  }
+}
+
+async function stopOptimization() {
+  clearInterval(optimizationPollTimer);
+  optimizationPollTimer = null;
+  try {
+    await fetch("/api/optimization/stop", { method: "POST" });
+  } catch (_) {}
+  optimizationBusy = false;
+  if (startOptimizationButton) startOptimizationButton.disabled = false;
+  if (stopOptimizationButton) stopOptimizationButton.hidden = true;
+  renderOptimizationProgress({ state: "idle", step: 0, step_name: "Stopped.", log_tail: [] });
+}
+
+async function refreshOptimizationStatus() {
+  try {
+    const res = await fetch(`/api/optimization/status?ts=${Date.now()}`, { cache: "no-store" });
+    const payload = await res.json();
+    if (!res.ok) return;
+    renderOptimizationProgress(payload);
+    if (payload.state === "done") {
+      clearInterval(optimizationPollTimer);
+      optimizationPollTimer = null;
+      optimizationBusy = false;
+      if (startOptimizationButton) startOptimizationButton.disabled = false;
+      if (stopOptimizationButton) stopOptimizationButton.hidden = true;
+      renderOptimizationResult(payload.result);
+      void refreshRosbags();
+    } else if (payload.state === "error") {
+      clearInterval(optimizationPollTimer);
+      optimizationPollTimer = null;
+      optimizationBusy = false;
+      if (startOptimizationButton) startOptimizationButton.disabled = false;
+      if (stopOptimizationButton) stopOptimizationButton.hidden = true;
+    }
+  } catch (_) {}
+}
+
+function renderOptimizationProgress(payload) {
+  const state = (payload && payload.state) || "idle";
+  const step = Number(payload && payload.step) || 0;
+  const stepName = (payload && payload.step_name) || "";
+  const logLines = (payload && Array.isArray(payload.log_tail)) ? payload.log_tail : [];
+  const steps = document.querySelectorAll(".opt-progress-step");
+  steps.forEach((el) => {
+    const n = Number(el.dataset.step);
+    el.classList.remove("is-active", "is-done", "is-error");
+    if (state === "error") {
+      if (n === step) el.classList.add("is-error");
+      else if (n < step) el.classList.add("is-done");
+    } else if (state === "done") {
+      el.classList.add("is-done");
+    } else if (n < step) {
+      el.classList.add("is-done");
+    } else if (n === step && state === "running") {
+      el.classList.add("is-active");
+    }
+  });
+  if (optimizationStepLabel) {
+    if (state === "idle") optimizationStepLabel.textContent = "Idle";
+    else if (state === "done") optimizationStepLabel.textContent = "Done";
+    else if (state === "error") optimizationStepLabel.textContent = `Error at step ${step}${stepName ? ` — ${stepName}` : ""}`;
+    else optimizationStepLabel.textContent = step > 0 ? `Step ${step}/5 — ${stepName}` : stepName || "Starting...";
+  }
+  if (optimizationLogEl && logLines.length > 0) {
+    optimizationLogEl.textContent = logLines.join("\n");
+    optimizationLogEl.scrollTop = optimizationLogEl.scrollHeight;
+  }
+}
+
+function renderOptimizationResult(result) {
+  if (!result || !optimizationResultPanel) return;
+  if (optimizationImg3d && result.trajectory_3d) {
+    optimizationImg3d.src = `${result.trajectory_3d}?ts=${Date.now()}`;
+  }
+  if (optimizationImg2d && result.trajectory_2d) {
+    optimizationImg2d.src = `${result.trajectory_2d}?ts=${Date.now()}`;
+  }
+  if (optimizationLogLink && result.colmap_log) {
+    optimizationLogLink.href = result.colmap_log;
+  }
+  optimizationResultPanel.hidden = false;
 }

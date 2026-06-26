@@ -46,6 +46,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
 from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
 from live_alignment import LiveAlignmentMixin
 from post_processing import (
+    OptimizationManager,
     PlaybackManager,
     RecordingManager,
     build_default_topics,
@@ -760,6 +761,16 @@ class WebDashboardServer:
             ros_domain_id=recording_manager.ros_domain_id,
             on_stopped=self._on_playback_finished,
         )
+        _pipeline_script = (
+            Path(__file__).resolve().parents[2]
+            / "looper-vio-colmap-handoff"
+            / "scripts"
+            / "run_pipeline_from_rosbag.py"
+        )
+        self.optimization_manager = OptimizationManager(
+            project_root=Path(__file__).resolve().parents[1],
+            pipeline_script=_pipeline_script,
+        )
         self._clients: Set[web.WebSocketResponse] = set()
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
@@ -798,6 +809,9 @@ class WebDashboardServer:
         app.router.add_post("/api/playback/stop", self._handle_playback_stop)
         app.router.add_get("/api/playback/status", self._handle_playback_status)
         app.router.add_post("/api/trajectory/clear", self._handle_trajectory_clear)
+        app.router.add_post("/api/optimization/start", self._handle_optimization_start)
+        app.router.add_post("/api/optimization/stop", self._handle_optimization_stop)
+        app.router.add_get("/api/optimization/status", self._handle_optimization_status)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
@@ -811,6 +825,9 @@ class WebDashboardServer:
             static_root = self.web_root / "static"
             if static_root.exists():
                 app.router.add_static("/static/", str(static_root), show_index=False)
+            runs_root = Path(__file__).resolve().parents[1] / "runs"
+            runs_root.mkdir(exist_ok=True)
+            app.router.add_static("/optimization-runs/", str(runs_root), show_index=False)
         app.on_startup.append(self._on_startup)
         app.on_shutdown.append(self._on_shutdown)
         runner = web.AppRunner(app)
@@ -1114,6 +1131,32 @@ class WebDashboardServer:
     async def _handle_trajectory_clear(self, _request: web.Request) -> web.Response:
         self.node.clear_traces()
         return web.json_response({"ok": True})
+
+    async def _handle_optimization_start(self, request: web.Request) -> web.Response:
+        body = await request.json()
+        bag_name = str(body.get("bag_name", "")).strip()
+        camera_name = str(body.get("camera_name", "")).strip()
+        run_name = str(body.get("run_name", "")).strip() or bag_name
+        if not bag_name:
+            return web.json_response({"error": "bag_name is required"}, status=400)
+        cam = next(
+            (c for c in self.node.cameras if c.name == camera_name),
+            self.node.cameras[0] if self.node.cameras else None,
+        )
+        if cam is None:
+            return web.json_response({"error": "No cameras configured"}, status=400)
+        from camera_setup import camera_base, image_topic as mk_image_topic
+        vio = f"{camera_base(cam.namespace)}/vio_100hz"
+        img = mk_image_topic(cam.namespace, "color_compressed")
+        self.optimization_manager.start(bag_name, run_name, vio, img)
+        return web.json_response({"status": "running", "run_name": run_name})
+
+    async def _handle_optimization_stop(self, _request: web.Request) -> web.Response:
+        self.optimization_manager.stop()
+        return web.json_response({"status": "idle"})
+
+    async def _handle_optimization_status(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.optimization_manager.status())
 
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "3d.html")

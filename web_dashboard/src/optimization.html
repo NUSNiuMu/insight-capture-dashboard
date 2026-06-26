@@ -12,7 +12,7 @@
         <div>
           <div class="camera-page-eyebrow">INSIGHT</div>
           <h1>Trajectory Optimization</h1>
-          <p class="page-copy">Select a rosbag for optimization. Processing controls will be added when the optimizer is ready.</p>
+          <p class="page-copy">Run VIO + COLMAP pipeline on a recorded bag. Results include aligned 2D/3D trajectory plots.</p>
         </div>
         <nav class="page-nav" aria-label="Dashboard pages">
           <a href="/3d">3D</a>
@@ -24,12 +24,49 @@
         </nav>
       </header>
 
-      <main class="tool-panel">
-        <p class="eyebrow">Optimization Input</p>
-        <label class="field-label" for="optimization-bag-select">Rosbag</label>
-        <select id="optimization-bag-select" class="bag-select" data-bag-select></select>
-        <p id="optimization-bag-meta" class="page-copy">Loading bags...</p>
-        <button type="button" class="recording-button" disabled>Run Optimization</button>
+      <main class="page-grid">
+
+        <div class="tool-panel">
+          <p class="eyebrow">Input</p>
+
+          <label class="field-label" for="optimization-bag-select">Rosbag</label>
+          <select id="optimization-bag-select" class="bag-select" data-bag-select></select>
+          <p id="optimization-bag-meta" class="page-copy">Loading bags...</p>
+
+          <label class="field-label" for="optimization-camera-select">Camera</label>
+          <select id="optimization-camera-select" class="bag-select"></select>
+
+          <label class="field-label" for="optimization-run-name">Run Name</label>
+          <input id="optimization-run-name" class="bag-select" type="text" placeholder="auto" style="font-size:13px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);">
+
+          <div style="display:flex;gap:8px;margin-top:16px;">
+            <button type="button" id="start-optimization-button" class="recording-button">Run Optimization</button>
+            <button type="button" id="stop-optimization-button" class="recording-button" hidden>Stop</button>
+          </div>
+        </div>
+
+        <div class="tool-panel" id="optimization-status-panel">
+          <p class="eyebrow">Progress</p>
+          <div id="optimization-progress-bar" class="opt-progress-bar">
+            <div class="opt-progress-step" data-step="1">1</div>
+            <div class="opt-progress-step" data-step="2">2</div>
+            <div class="opt-progress-step" data-step="3">3</div>
+            <div class="opt-progress-step" data-step="4">4</div>
+            <div class="opt-progress-step" data-step="5">5</div>
+          </div>
+          <p id="optimization-step-label" class="page-copy" style="margin-top:8px;">Idle</p>
+          <pre id="optimization-log" class="opt-log"></pre>
+        </div>
+
+        <div class="tool-panel" id="optimization-result-panel" hidden>
+          <p class="eyebrow">Result</p>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;">
+            <img id="optimization-img-3d" src="" alt="3D Trajectory" style="max-width:100%;border-radius:8px;flex:1;min-width:200px;">
+            <img id="optimization-img-2d" src="" alt="2D Trajectory" style="max-width:100%;border-radius:8px;flex:1;min-width:200px;">
+          </div>
+          <a id="optimization-log-link" href="#" target="_blank" class="page-copy" style="display:block;margin-top:10px;color:var(--muted);">View COLMAP log</a>
+        </div>
+
       </main>
     </div>
     <script type="module" src="/static/app.js"></script>
