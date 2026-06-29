@@ -741,10 +741,15 @@ class ScoringManager:
                     data = json.load(fh)
                 cameras.append(data)
 
+            summary = {"cameras": cameras}
+            summary_json = scores_dir / f"{job.bag_name}.json"
+            with summary_json.open("w", encoding="utf-8") as fh:
+                json.dump(summary, fh, indent=2)
+
             with self._lock:
                 job.status = "done"
                 job.current_topic = ""
-                job.result = {"cameras": cameras}
+                job.result = summary
                 job.finished_at = time.monotonic()
 
         except Exception as exc:
