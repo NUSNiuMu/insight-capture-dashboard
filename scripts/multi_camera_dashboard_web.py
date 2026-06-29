@@ -846,6 +846,7 @@ class WebDashboardServer:
         app.router.add_post("/api/recording/stop", self._handle_recording_stop)
         app.router.add_post("/api/recording/sync", self._handle_recording_sync)
         app.router.add_get("/api/rosbags", self._handle_rosbag_list)
+        app.router.add_delete("/api/rosbags/{bag_name}", self._handle_rosbag_delete)
         app.router.add_post("/api/scoring/run", self._handle_scoring_run)
         app.router.add_get("/api/scoring/status", self._handle_scoring_status)
         app.router.add_post("/api/playback/start", self._handle_playback_start)
@@ -1124,6 +1125,18 @@ class WebDashboardServer:
             }
         )
 
+    async def _handle_rosbag_delete(self, request: web.Request) -> web.Response:
+        bag_name = request.match_info.get("bag_name", "").strip()
+        if not bag_name or "/" in bag_name or bag_name in (".", ".."):
+            return web.json_response({"error": "Invalid bag name."}, status=400)
+        bag_path = (self.recording_manager.rosbag_root / bag_name).resolve()
+        if not bag_path.is_relative_to(self.recording_manager.rosbag_root.resolve()):
+            return web.json_response({"error": "Access denied."}, status=403)
+        if not bag_path.exists():
+            return web.json_response({"error": "Bag not found."}, status=404)
+        shutil.rmtree(bag_path)
+        return web.json_response({"status": "deleted", "bag_name": bag_name})
+
     async def _handle_scoring_run(self, request: web.Request) -> web.Response:
         if request.can_read_body:
             try:
@@ -1182,20 +1195,32 @@ class WebDashboardServer:
         body = await request.json()
         bag_name = str(body.get("bag_name", "")).strip()
         camera_name = str(body.get("camera_name", "")).strip()
+        stream_type = str(body.get("stream_type", "color_compressed")).strip()
         run_name = str(body.get("run_name", "")).strip() or bag_name
         if not bag_name:
             return web.json_response({"error": "bag_name is required"}, status=400)
-        cam = next(
-            (c for c in self.node.cameras if c.name == camera_name),
-            self.node.cameras[0] if self.node.cameras else None,
-        )
+        if stream_type not in IMAGE_STREAMS:
+            return web.json_response(
+                {"error": f"Unknown stream_type '{stream_type}'. Valid: {list(IMAGE_STREAMS.keys())}"},
+                status=400,
+            )
+        if camera_name:
+            cam = next((c for c in self.node.cameras if c.name == camera_name), None)
+            if cam is None:
+                available = [c.name for c in self.node.cameras]
+                return web.json_response(
+                    {"error": f"Camera '{camera_name}' not found. Available: {available}"},
+                    status=400,
+                )
+        else:
+            cam = self.node.cameras[0] if self.node.cameras else None
         if cam is None:
             return web.json_response({"error": "No cameras configured"}, status=400)
         from camera_setup import camera_base, image_topic as mk_image_topic
         vio = f"{camera_base(cam.namespace)}/vio_100hz"
-        img = mk_image_topic(cam.namespace, "color_compressed")
+        img = mk_image_topic(cam.namespace, stream_type)
         self.optimization_manager.start(bag_name, run_name, vio, img)
-        return web.json_response({"status": "running", "run_name": run_name})
+        return web.json_response({"status": "running", "run_name": run_name, "camera": cam.name, "stream": stream_type, "image_topic": img})
 
     async def _handle_optimization_stop(self, _request: web.Request) -> web.Response:
         self.optimization_manager.stop()

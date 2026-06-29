@@ -36,6 +36,7 @@ const keepTrajectoryToggle = document.getElementById("keep-trajectory-toggle");
 const scoringBagMeta = document.getElementById("scoring-bag-meta");
 const optimizationBagMeta = document.getElementById("optimization-bag-meta");
 const optimizationCameraSelect = document.getElementById("optimization-camera-select");
+const optimizationStreamSelect = document.getElementById("optimization-stream-select");
 const optimizationRunNameInput = document.getElementById("optimization-run-name");
 const startOptimizationButton = document.getElementById("start-optimization-button");
 const stopOptimizationButton = document.getElementById("stop-optimization-button");
@@ -944,8 +945,14 @@ function renderBagList(bags) {
         <span class="bag-badge ${bag.scored ? "is-ok" : ""}">${bag.scored ? "scored" : "unscored"}</span>
         <span class="bag-badge ${bag.optimized ? "is-ok" : ""}">${bag.optimized ? "optimized" : "not optimized"}</span>
       </div>
+      <div class="bag-row-actions">
+        <button type="button" class="bag-delete-button" data-bag-name="${escapeHtml(bag.name || "")}">Delete</button>
+      </div>
     </article>
   `).join("");
+  bagList.querySelectorAll(".bag-delete-button").forEach((btn) => {
+    btn.addEventListener("click", () => deleteBag(btn.dataset.bagName));
+  });
 }
 
 function renderBagSelects(bags) {
@@ -980,6 +987,22 @@ function updateSelectedBagMeta(select) {
     return;
   }
   meta.textContent = `${formatDuration(Number(bag.duration_s || 0))} · ${bag.size_label || "--"} · ${Number(bag.message_count || 0).toLocaleString()} messages · ${bag.label || ""}`;
+}
+
+async function deleteBag(bagName) {
+  if (!bagName) return;
+  if (!confirm(`Delete bag "${bagName}"?\n\nThis will permanently remove the bag directory and cannot be undone.`)) return;
+  try {
+    const response = await fetch(`/api/rosbags/${encodeURIComponent(bagName)}`, { method: "DELETE" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      alert(`Failed to delete bag: ${payload.error || response.statusText}`);
+      return;
+    }
+    void refreshRosbags();
+  } catch (err) {
+    alert(`Error deleting bag: ${err.message}`);
+  }
 }
 
 function setBagListStatus(message) {
@@ -1923,6 +1946,7 @@ async function startOptimization() {
     return;
   }
   const cameraName = optimizationCameraSelect ? optimizationCameraSelect.value : "";
+  const streamType = optimizationStreamSelect ? optimizationStreamSelect.value : "color_compressed";
   const runName = (optimizationRunNameInput && optimizationRunNameInput.value.trim()) || bagName;
   optimizationBusy = true;
   if (startOptimizationButton) startOptimizationButton.disabled = true;
@@ -1933,7 +1957,7 @@ async function startOptimization() {
     const res = await fetch("/api/optimization/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bag_name: bagName, camera_name: cameraName, run_name: runName }),
+      body: JSON.stringify({ bag_name: bagName, camera_name: cameraName, stream_type: streamType, run_name: runName }),
     });
     const payload = await res.json();
     if (!res.ok) {
@@ -1942,6 +1966,9 @@ async function startOptimization() {
       if (startOptimizationButton) startOptimizationButton.disabled = false;
       if (stopOptimizationButton) stopOptimizationButton.hidden = true;
       return;
+    }
+    if (optimizationStepLabel && payload.image_topic) {
+      optimizationStepLabel.textContent = `Started — camera: ${payload.camera || cameraName}  topic: ${payload.image_topic}`;
     }
     clearInterval(optimizationPollTimer);
     optimizationPollTimer = window.setInterval(() => { void refreshOptimizationStatus(); }, 2000);

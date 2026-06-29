@@ -4,6 +4,6 @@
   "host_rosbag_sync_ssh_target": "muniu-dashboard:/home/muniu/workspace/insight-capture-dashboard/rosbags",
   "sync_rosbag_to_host": false,
   "results_dir": "outputs/results",
-  "max_cache_size": 2147483648,
+  "max_cache_size": 104857600,
   "record_topics": []
 }

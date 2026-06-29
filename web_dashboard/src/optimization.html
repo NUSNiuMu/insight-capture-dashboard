@@ -37,6 +37,14 @@
           <label class="field-label" for="optimization-camera-select">Camera</label>
           <select id="optimization-camera-select" class="bag-select"></select>
 
+          <label class="field-label" for="optimization-stream-select">Image Stream</label>
+          <select id="optimization-stream-select" class="bag-select">
+            <option value="color_compressed">color (compressed)</option>
+            <option value="color">color (raw)</option>
+            <option value="infra1">infra1</option>
+            <option value="infra2">infra2</option>
+          </select>
+
           <label class="field-label" for="optimization-run-name">Run Name</label>
           <input id="optimization-run-name" class="bag-select" type="text" placeholder="auto" style="font-size:13px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);">
 

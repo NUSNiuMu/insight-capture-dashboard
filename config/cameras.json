@@ -6,7 +6,7 @@
     "reference_camera": "insight9_a",
     "calibration": {
       "method": "board_center",
-      "image_stream": "color",
+      "image_stream": "color_compressed",
       "marker_length_m": 0.055,
       "marker_separation_m": 0.0165,
       "board_rows": 6,

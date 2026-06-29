@@ -256,7 +256,7 @@ body[data-dashboard-view="full"] .shell {
 
 .bag-row {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto auto;
+  grid-template-columns: minmax(260px, 1fr) auto auto auto;
   align-items: center;
   gap: 14px;
   border: 1px solid var(--line);
@@ -308,6 +308,29 @@ body[data-dashboard-view="full"] .shell {
 .bag-badge.is-ok {
   color: #112315;
   background: #93c883;
+}
+
+.bag-row-actions {
+  display: flex;
+  align-items: center;
+}
+
+.bag-delete-button {
+  border: 1px solid rgba(255, 95, 82, 0.45);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: transparent;
+  color: #ff8b7e;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+
+.bag-delete-button:hover {
+  background: linear-gradient(135deg, #ff8b7e, #ff5f52);
+  color: #fff7f4;
+  border-color: transparent;
 }
 
 .field-label {
@@ -934,7 +957,8 @@ h1 {
   }
 
   .bag-row-stats,
-  .bag-badges {
+  .bag-badges,
+  .bag-row-actions {
     justify-content: flex-start;
   }
 

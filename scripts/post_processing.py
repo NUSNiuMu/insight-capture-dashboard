@@ -170,6 +170,9 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         topics.append(f"{camera_base(namespace)}/imu")
         topics.append(camera_info_topic(namespace, image_stream))
         topics.append(image_topic(namespace, image_stream))
+        # 额外录 infra1 用于 COLMAP（清晰度远高于 color）
+        topics.append(camera_info_topic(namespace, "infra1"))
+        topics.append(image_topic(namespace, "infra1"))
         cov_stream = str(camera.get("dashboard_cov_stream", "vio_image_cov"))
         topics.append(f"{camera_base(namespace)}/{cov_stream}")
     return _normalize_topics(topics)
@@ -880,6 +883,14 @@ class OptimizationManager:
                 "result": dict(self._result),
             }
 
+    @staticmethod
+    def _stream_name(image_topic: str) -> str:
+        known = ("infra1", "infra2", "color", "depth", "fisheye")
+        for part in reversed(image_topic.rstrip("/").split("/")):
+            if part in known:
+                return part
+        return "image"
+
     def start(
         self,
         bag_name: str,
@@ -887,6 +898,7 @@ class OptimizationManager:
         vio_topic: str,
         image_topic_str: str,
         output_hz: float = 5.0,
+        camera_params: str = "",
     ) -> None:
         with self._lock:
             if self._state == "running":
@@ -895,10 +907,11 @@ class OptimizationManager:
             if not bag_path.exists():
                 raise ValueError(f"Bag not found: {bag_name}")
             hz_label = str(int(output_hz)) if output_hz == int(output_hz) else str(output_hz).replace(".", "p")
+            stream = self._stream_name(image_topic_str)
             self._result = {
-                "trajectory_3d": f"/optimization-runs/{run_name}/viz/color_{hz_label}hz_vs_vio100/trajectory_3d.png",
-                "trajectory_2d": f"/optimization-runs/{run_name}/viz/color_{hz_label}hz_vs_vio100/trajectory_2d.png",
-                "colmap_log": f"/optimization-runs/{run_name}/colmap/color_{hz_label}hz/colmap.log",
+                "trajectory_3d": f"/optimization-runs/{run_name}/viz/{stream}_{hz_label}hz_vs_vio100/trajectory_3d.png",
+                "trajectory_2d": f"/optimization-runs/{run_name}/viz/{stream}_{hz_label}hz_vs_vio100/trajectory_2d.png",
+                "colmap_log": f"/optimization-runs/{run_name}/colmap/{stream}_{hz_label}hz/colmap.log",
             }
             cmd = [
                 sys.executable, "-u",  # force unbuffered stdout so step markers arrive immediately
@@ -911,6 +924,7 @@ class OptimizationManager:
                 "--output-hz", str(output_hz),
                 "--make-plots", "false",
                 "--overwrite", "true",
+                *(["--camera-params", camera_params] if camera_params else []),
             ]
             process = subprocess.Popen(
                 cmd,
