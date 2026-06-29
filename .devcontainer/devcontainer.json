@@ -1,0 +1,72 @@
+{
+  "name": "Insight Capture",
+
+  // Reuse the same Dockerfile as production; dev just needs extra VS Code tooling on top
+  "build": {
+    "dockerfile": "../Dockerfile",
+    "context": ".."
+  },
+
+  // ── Container runtime flags ──────────────────────────────────────────────
+  // --network=host : ROS2 DDS multicast; also avoids Jetson iptables raw table issue
+  // --runtime=nvidia: CUDA access for COLMAP
+  "runArgs": [
+    "--network=host",
+    "--runtime=nvidia",
+    "--env=NVIDIA_VISIBLE_DEVICES=all",
+    "--env=NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+    // looper-vio-colmap must live at ../looper-vio-colmap-handoff relative to workspace
+    "--volume=/home/seeed/workspaces/looper-vio-colmap-handoff:/workspaces/looper-vio-colmap-handoff:ro",
+    // COLMAP binary (custom sm_87 build) + its non-apt library
+    "--volume=/usr/local/bin/colmap:/usr/local/bin/colmap:ro",
+    "--volume=/lib/libceres.so.2:/lib/libceres.so.2:ro",
+    "--volume=/lib/libceres.so.2.0.0:/lib/libceres.so.2.0.0:ro",
+    // CUDA runtime libraries (libcudart etc. needed by COLMAP)
+    "--volume=/usr/local/cuda:/usr/local/cuda:ro",
+    // SSH keys for rosbag remote sync (optional)
+    "--volume=/home/seeed/.ssh:/root/.ssh:ro"
+  ],
+
+  // Workspace inside container mirrors host path so Python relative imports resolve
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/insight_capture,type=bind,consistency=cached",
+  "workspaceFolder": "/workspaces/insight_capture",
+
+  // ── Environment variables ────────────────────────────────────────────────
+  "remoteEnv": {
+    "ROS_DOMAIN_ID": "20",
+    "ROS_DISTRO": "humble",
+    "ROS_VERSION": "2",
+    // ROS2 Python packages (equivalent to sourcing setup.bash)
+    "PYTHONPATH": "/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages",
+    "AMENT_PREFIX_PATH": "/opt/ros/humble",
+    // COLMAP host-mounted libraries
+    "LD_LIBRARY_PATH": "/lib:/lib/aarch64-linux-gnu:/usr/local/cuda/lib64:/opt/ros/humble/lib"
+  },
+
+  // ── One-time setup after container is created ────────────────────────────
+  "postCreateCommand": "echo 'source /opt/ros/humble/setup.bash' >> ~/.bashrc && echo 'export LD_LIBRARY_PATH=/lib:/lib/aarch64-linux-gnu:/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc",
+
+  "remoteUser": "root",
+
+  // ── VS Code extensions & settings inside container ───────────────────────
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.pylance",
+        "ms-iot.vscode-ros"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "python.analysis.extraPaths": [
+          "/opt/ros/humble/lib/python3.10/site-packages",
+          "/opt/ros/humble/local/lib/python3.10/dist-packages"
+        ],
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "terminal.integrated.env.linux": {
+          "ROS_DOMAIN_ID": "20"
+        }
+      }
+    }
+  }
+}
