@@ -34,16 +34,16 @@
           <select id="optimization-bag-select" class="bag-select" data-bag-select></select>
           <p id="optimization-bag-meta" class="page-copy">Loading bags...</p>
 
-          <label class="field-label" for="optimization-camera-select">Camera</label>
-          <select id="optimization-camera-select" class="bag-select"></select>
+          <label class="field-label">Camera</label>
+          <div id="optimization-camera-group" class="opt-radio-group"></div>
 
-          <label class="field-label" for="optimization-stream-select">Image Stream</label>
-          <select id="optimization-stream-select" class="bag-select">
-            <option value="color_compressed">color (compressed)</option>
-            <option value="color">color (raw)</option>
-            <option value="infra1">infra1</option>
-            <option value="infra2">infra2</option>
-          </select>
+          <label class="field-label">Image Stream</label>
+          <div class="opt-radio-group">
+            <label class="opt-radio-item"><input type="radio" name="opt-stream" value="color_compressed" checked><span>color (compressed)</span></label>
+            <label class="opt-radio-item"><input type="radio" name="opt-stream" value="color"><span>color (raw)</span></label>
+            <label class="opt-radio-item"><input type="radio" name="opt-stream" value="infra1"><span>infra1</span></label>
+            <label class="opt-radio-item"><input type="radio" name="opt-stream" value="infra2"><span>infra2</span></label>
+          </div>
 
           <label class="field-label" for="optimization-run-name">Run Name</label>
           <input id="optimization-run-name" class="bag-select" type="text" placeholder="auto" style="font-size:13px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);">

@@ -1116,12 +1116,16 @@ class WebDashboardServer:
         return web.json_response(payload)
 
     async def _handle_rosbag_list(self, _request: web.Request) -> web.Response:
+        loop = asyncio.get_event_loop()
+        bags = await loop.run_in_executor(
+            None, list_rosbags, self.recording_manager.rosbag_root, self.results_root
+        )
         return web.json_response(
             {
                 "type": "rosbag_list",
                 "rosbag_root": str(self.recording_manager.rosbag_root),
                 "results_root": str(self.results_root),
-                "bags": list_rosbags(self.recording_manager.rosbag_root, self.results_root),
+                "bags": bags,
             }
         )
 

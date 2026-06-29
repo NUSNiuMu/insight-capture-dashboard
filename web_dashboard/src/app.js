@@ -35,8 +35,7 @@ const clearTrajectoryButton = document.getElementById("clear-trajectory-button")
 const keepTrajectoryToggle = document.getElementById("keep-trajectory-toggle");
 const scoringBagMeta = document.getElementById("scoring-bag-meta");
 const optimizationBagMeta = document.getElementById("optimization-bag-meta");
-const optimizationCameraSelect = document.getElementById("optimization-camera-select");
-const optimizationStreamSelect = document.getElementById("optimization-stream-select");
+const optimizationCameraSelect = document.getElementById("optimization-camera-group");
 const optimizationRunNameInput = document.getElementById("optimization-run-name");
 const startOptimizationButton = document.getElementById("start-optimization-button");
 const stopOptimizationButton = document.getElementById("stop-optimization-button");
@@ -226,15 +225,13 @@ const loadOptRunButton = document.getElementById("load-opt-run-button");
 if (loadOptRunButton) {
   loadOptRunButton.addEventListener("click", () => { void loadSavedOptRun(); });
 }
-if (optimizationBagMeta !== null && optimizationRunNameInput !== null) {
+if (optimizationRunNameInput !== null) {
+  optimizationRunNameInput.addEventListener("input", () => {
+    optimizationRunNameInput.dataset.autoFilled = "";
+  });
   const bagSel = document.getElementById("optimization-bag-select");
   if (bagSel) {
-    bagSel.addEventListener("change", () => {
-      if (optimizationRunNameInput.value === "" || optimizationRunNameInput.dataset.autoFilled === "1") {
-        optimizationRunNameInput.value = bagSel.value;
-        optimizationRunNameInput.dataset.autoFilled = "1";
-      }
-    });
+    bagSel.addEventListener("change", updateAutoRunName);
   }
 }
 
@@ -1919,8 +1916,21 @@ function escapeHtml(value) {
 
 // ── Optimization page ──────────────────────────────────────────────────────
 
+function updateAutoRunName() {
+  if (!optimizationRunNameInput) return;
+  if (optimizationRunNameInput.value !== "" && optimizationRunNameInput.dataset.autoFilled !== "1") return;
+  const bagSel = document.getElementById("optimization-bag-select");
+  const bagName = bagSel ? bagSel.value : "";
+  const cameraRadio = document.querySelector('input[name="opt-camera"]:checked');
+  const cameraName = cameraRadio ? cameraRadio.value : "";
+  const name = bagName && cameraName ? `${bagName}_${cameraName}` : bagName || "";
+  optimizationRunNameInput.value = name;
+  optimizationRunNameInput.dataset.autoFilled = "1";
+}
+
 async function populateOptimizationCameras(cameras) {
-  if (!optimizationCameraSelect) return;
+  const group = optimizationCameraSelect;
+  if (!group) return;
   if (!cameras || cameras.length === 0) {
     try {
       const res = await fetch(`/api/cameras?ts=${Date.now()}`, { cache: "no-store" });
@@ -1930,11 +1940,17 @@ async function populateOptimizationCameras(cameras) {
       return;
     }
   }
-  const prev = optimizationCameraSelect.value;
-  optimizationCameraSelect.innerHTML = cameras
-    .map((c) => `<option value="${escapeHtml(c.name || "")}">${escapeHtml(c.label || c.name || "")}</option>`)
-    .join("");
-  if (prev && cameras.some((c) => c.name === prev)) optimizationCameraSelect.value = prev;
+  const prevRadio = group.querySelector('input[type="radio"]:checked');
+  const prev = prevRadio ? prevRadio.value : "";
+  group.innerHTML = cameras.map((c, i) => {
+    const id = `opt-camera-${i}`;
+    const checked = (prev ? c.name === prev : i === 0) ? "checked" : "";
+    return `<label class="opt-radio-item"><input type="radio" id="${escapeHtml(id)}" name="opt-camera" value="${escapeHtml(c.name || "")}" ${checked}><span>${escapeHtml(c.label || c.name || "")}</span></label>`;
+  }).join("");
+  group.querySelectorAll('input[type="radio"]').forEach((input) => {
+    input.addEventListener("change", updateAutoRunName);
+  });
+  updateAutoRunName();
 }
 
 async function startOptimization() {
@@ -1945,8 +1961,10 @@ async function startOptimization() {
     if (optimizationStepLabel) optimizationStepLabel.textContent = "Select a rosbag first.";
     return;
   }
-  const cameraName = optimizationCameraSelect ? optimizationCameraSelect.value : "";
-  const streamType = optimizationStreamSelect ? optimizationStreamSelect.value : "color_compressed";
+  const cameraRadio = document.querySelector('input[name="opt-camera"]:checked');
+  const cameraName = cameraRadio ? cameraRadio.value : "";
+  const streamRadio = document.querySelector('input[name="opt-stream"]:checked');
+  const streamType = streamRadio ? streamRadio.value : "color_compressed";
   const runName = (optimizationRunNameInput && optimizationRunNameInput.value.trim()) || bagName;
   optimizationBusy = true;
   if (startOptimizationButton) startOptimizationButton.disabled = true;

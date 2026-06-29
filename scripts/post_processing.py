@@ -54,12 +54,20 @@ def _format_bytes(size_bytes: int) -> str:
 
 def _directory_size_bytes(path: Path) -> int:
     total = 0
-    for item in path.rglob("*"):
-        if item.is_file():
-            try:
-                total += item.stat().st_size
-            except OSError:
-                continue
+    stack = [str(path)]
+    while stack:
+        try:
+            with os.scandir(stack.pop()) as it:
+                for entry in it:
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            total += entry.stat().st_size
+                        elif entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                    except OSError:
+                        continue
+        except OSError:
+            continue
     return total
 
 
@@ -170,9 +178,6 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         topics.append(f"{camera_base(namespace)}/imu")
         topics.append(camera_info_topic(namespace, image_stream))
         topics.append(image_topic(namespace, image_stream))
-        # 额外录 infra1 用于 COLMAP（清晰度远高于 color）
-        topics.append(camera_info_topic(namespace, "infra1"))
-        topics.append(image_topic(namespace, "infra1"))
         cov_stream = str(camera.get("dashboard_cov_stream", "vio_image_cov"))
         topics.append(f"{camera_base(namespace)}/{cov_stream}")
     return _normalize_topics(topics)
@@ -336,11 +341,11 @@ def discover_live_topics(
     env["ROS_DOMAIN_ID"] = str(int(ros_domain_id))
     try:
         result = subprocess.run(
-            ["ros2", "topic", "list", "--no-daemon", "-t"],
+            ["ros2", "topic", "list", "-t"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=2.0,
+            timeout=5.0,
             env=env,
             check=False,
         )

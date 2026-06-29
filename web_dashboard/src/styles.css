@@ -350,6 +350,45 @@ body[data-dashboard-view="full"] .shell {
   color: var(--text);
 }
 
+.opt-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(720px, 100%);
+}
+
+.opt-radio-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid rgba(229, 236, 224, 0.16);
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(9, 13, 10, 0.66);
+  transition: background 0.1s, border-color 0.1s;
+  user-select: none;
+}
+
+.opt-radio-item:hover {
+  background: rgba(154, 194, 132, 0.08);
+  border-color: rgba(154, 194, 132, 0.3);
+}
+
+.opt-radio-item:has(input:checked) {
+  background: rgba(154, 194, 132, 0.13);
+  border-color: var(--accent);
+}
+
+.opt-radio-item input[type="radio"] {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .empty-state {
   color: var(--muted);
   border: 1px dashed rgba(255, 255, 255, 0.16);
