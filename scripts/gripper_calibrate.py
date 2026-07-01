@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import threading
 import time
@@ -44,12 +45,19 @@ def decode_frame(topic_type: str, msg: object) -> "np.ndarray | None":
     return None
 
 
+DEBUG_FRAME_PATH = "/tmp/gripper_calibrate_debug.jpg"
+
+
 class CalibrationNode(Node):
     def __init__(self, camera_name: str, topic: str, topic_type: str) -> None:
         super().__init__("gripper_calibrate")
         self.detector = GripperMarkerDetector()
         self.latest_distance_px = None
         self.latest_found_both = False
+        self.frame_count = 0
+        self.last_decode_failed = False
+        self.last_image_shape = None
+        self.last_ids_seen = []
         msg_type = CompressedImage if topic_type == "compressed" else RosImage
         self.create_subscription(msg_type, topic, self._on_image(topic_type), 5)
         self.get_logger().info(f"Subscribed to {camera_name}: {topic} ({topic_type})")
@@ -58,10 +66,19 @@ class CalibrationNode(Node):
         def callback(msg: object) -> None:
             image = decode_frame(topic_type, msg)
             if image is None:
+                self.last_decode_failed = True
                 return
+            self.frame_count += 1
+            self.last_decode_failed = False
+            self.last_image_shape = image.shape
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            _, ids, _ = self.detector._detector.detectMarkers(gray)
+            self.last_ids_seen = sorted(int(i) for i in ids.ravel()) if ids is not None else []
             result = self.detector.detect(image)
             self.latest_distance_px = result.distance_px
             self.latest_found_both = result.found_both
+            if self.frame_count % 15 == 0:
+                cv2.imwrite(DEBUG_FRAME_PATH, image)
 
         return callback
 
@@ -78,12 +95,12 @@ def wait_for_capture(node: CalibrationNode, prompt: str) -> float:
     thread.start()
     while "go" not in captured:
         rclpy.spin_once(node, timeout_sec=0.05)
-        status = (
-            f"distance = {node.latest_distance_px:7.1f} px"
-            if node.latest_found_both
-            else "markers not both visible..."
-        )
-        print(f"\r  live: {status}   (press Enter to capture)   ", end="", flush=True)
+        if node.latest_found_both:
+            status = f"distance = {node.latest_distance_px:7.1f} px"
+        else:
+            status = f"markers not both visible (seen this frame: {node.last_ids_seen or 'none'})"
+        diag = f"frames={node.frame_count} shape={node.last_image_shape}"
+        print(f"\r  live: {status}  [{diag}]  (press Enter to capture)   ", end="", flush=True)
     print()
     if not node.latest_found_both or node.latest_distance_px is None:
         raise RuntimeError("Both markers were not visible at capture time — reposition and retry.")
@@ -97,13 +114,22 @@ def main() -> None:
     parser.add_argument("--calibration-out", default=DEFAULT_CALIBRATION_PATH)
     args = parser.parse_args()
 
-    dashboard_config = build_dashboard_config(load_setup(Path(args.config)))
+    raw_config = load_setup(Path(args.config))
+    dashboard_config = build_dashboard_config(raw_config)
     camera_entry = next((c for c in dashboard_config["cameras"] if c["name"] == args.camera), None)
     if camera_entry is None:
         raise SystemExit(f"Camera '{args.camera}' not found in {args.config}")
 
+    # Must be set before rclpy.init() — DDS reads it at participant creation time.
+    # Matches multi_camera_dashboard_web.py's own os.environ.setdefault call so this
+    # standalone script joins the same DDS domain as the running dashboard/cameras.
+    ros_domain_id = int(raw_config.get("ros_domain_id", 10))
+    os.environ.setdefault("ROS_DOMAIN_ID", str(ros_domain_id))
+    print(f"Using ROS_DOMAIN_ID={os.environ['ROS_DOMAIN_ID']}")
+
     rclpy.init()
     node = CalibrationNode(args.camera, camera_entry["topic"], camera_entry["type"])
+    print(f"(debug: every 15th decoded frame is saved to {DEBUG_FRAME_PATH} for inspection)")
     try:
         open_px = wait_for_capture(node, "\nOpen the gripper all the way, then press Enter...")
         time.sleep(0.3)
