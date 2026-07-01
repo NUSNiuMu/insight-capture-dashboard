@@ -1582,11 +1582,6 @@ function centerModelContentOnOrigin(contentNode, meshes) {
   contentNode.position.subtractInPlace(centerLocal);
 }
 
-// Visual-only travel distance (model-local meters) for each gripper finger
-// node along its own local X axis; not a physical measurement, just tuned to
-// look right. Left/right move symmetrically apart when opening.
-const GRIPPER_FINGER_MAX_TRAVEL_M = 0.025;
-
 function findGripperFingerNodes(rootNodes, poseName) {
   let left = null;
   let right = null;
@@ -1601,11 +1596,20 @@ function findGripperFingerNodes(rootNodes, poseName) {
   if (!left || !right) {
     return null;
   }
+  // Each finger node's rest (fully-open) local X *is* its distance from the
+  // model's own center plane — export_gripper_split_from_stl.py placed each
+  // finger group's node at its own mesh centroid, with X=0 the mirror-symmetry
+  // plane. Using that distance as the travel-to-closed amount means "closed"
+  // drives each node's local X back to 0, i.e. the two fingers meet at the
+  // center — derived from the model's real geometry instead of a guessed
+  // constant (a fixed guess left a large visible gap at "closed").
   return {
     left,
     right,
     leftRestPosition: left.position.clone(),
     rightRestPosition: right.position.clone(),
+    leftMaxTravel: Math.abs(left.position.x),
+    rightMaxTravel: Math.abs(right.position.x),
   };
 }
 
@@ -1618,9 +1622,9 @@ function applyGripperOpening(pose, node) {
   if (!Number.isFinite(opening)) {
     return; // hold last-applied pose rather than snapping to a default
   }
-  const closeAmount = (1.0 - Math.min(1, Math.max(0, opening))) * GRIPPER_FINGER_MAX_TRAVEL_M;
-  fingers.left.position.copyFrom(fingers.leftRestPosition).addInPlaceFromFloats(closeAmount, 0, 0);
-  fingers.right.position.copyFrom(fingers.rightRestPosition).addInPlaceFromFloats(-closeAmount, 0, 0);
+  const closeFraction = 1.0 - Math.min(1, Math.max(0, opening));
+  fingers.left.position.copyFrom(fingers.leftRestPosition).addInPlaceFromFloats(closeFraction * fingers.leftMaxTravel, 0, 0);
+  fingers.right.position.copyFrom(fingers.rightRestPosition).addInPlaceFromFloats(-closeFraction * fingers.rightMaxTravel, 0, 0);
 }
 
 function collectInstantiatedMeshes(rootNodes) {
