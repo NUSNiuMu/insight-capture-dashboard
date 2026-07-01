@@ -32,7 +32,10 @@ RIGHT_MARKER_ID = 0
 # stale reading indefinitely.
 DETECTION_HOLD_TIMEOUT_SEC = 2.0
 
-DEFAULT_CALIBRATION_PATH = "config/gripper_calibration.json"
+# Resolved relative to this file, not the caller's CWD — a plain relative
+# string here previously caused silent (non-crashing) calibration-load
+# failures when a script was launched from outside the repo root.
+DEFAULT_CALIBRATION_PATH = str(Path(__file__).resolve().parent.parent / "config" / "gripper_calibration.json")
 
 
 @dataclass

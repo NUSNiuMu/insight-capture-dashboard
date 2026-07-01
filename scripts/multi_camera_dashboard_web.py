@@ -219,7 +219,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
         self.live_alignment_solution_lock = threading.Lock()
         self.ros_callback_group = ReentrantCallbackGroup()
         self.dashboard_subscriptions = []
-        self._configure_gripper_tracking()
+        self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
         self._initialize_live_alignment_state()
         if self.world_to_reference:
             self.get_logger().info("Loaded persisted live alignment state for web dashboard startup")

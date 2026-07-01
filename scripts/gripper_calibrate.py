@@ -112,7 +112,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--camera", required=True, help="Camera name from config/cameras.json, e.g. insight7_a")
     parser.add_argument("--config", default=str(project_root / "config" / "cameras.json"))
-    parser.add_argument("--calibration-out", default=str(project_root / DEFAULT_CALIBRATION_PATH))
+    parser.add_argument("--calibration-out", default=DEFAULT_CALIBRATION_PATH)
     args = parser.parse_args()
 
     raw_config = load_setup(Path(args.config))
