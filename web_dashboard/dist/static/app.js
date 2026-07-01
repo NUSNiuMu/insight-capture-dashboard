@@ -1582,6 +1582,8 @@ function centerModelContentOnOrigin(contentNode, meshes) {
   contentNode.position.subtractInPlace(centerLocal);
 }
 
+const GRIPPER_FINGER_TOUCH_CLEARANCE_M = 0.01;
+
 function findGripperFingerNodes(rootNodes, poseName) {
   let left = null;
   let right = null;
@@ -1596,20 +1598,21 @@ function findGripperFingerNodes(rootNodes, poseName) {
   if (!left || !right) {
     return null;
   }
-  // Each finger node's rest (fully-open) local X *is* its distance from the
-  // model's own center plane — export_gripper_split_from_stl.py placed each
-  // finger group's node at its own mesh centroid, with X=0 the mirror-symmetry
-  // plane. Using that distance as the travel-to-closed amount means "closed"
-  // drives each node's local X back to 0, i.e. the two fingers meet at the
-  // center — derived from the model's real geometry instead of a guessed
-  // constant (a fixed guess left a large visible gap at "closed").
+  // Each finger node's rest (fully-open) local X is its distance from the
+  // model's own mirror-symmetry center plane (X=0) — export_gripper_split_from_stl.py
+  // centers each finger group on its own mesh centroid, not its inner (pad) face.
+  // Driving local X all the way to 0 therefore over-closes: the pad's own half-
+  // thickness extends past the centroid, so the two fingers interpenetrate by
+  // about that much before the centroids actually meet. GRIPPER_FINGER_TOUCH_CLEARANCE_M
+  // backs off the travel by that thickness so "closed" stops at first contact
+  // instead of driving through it (tuned from visual feedback: 1cm/side of overshoot).
   return {
     left,
     right,
     leftRestPosition: left.position.clone(),
     rightRestPosition: right.position.clone(),
-    leftMaxTravel: Math.abs(left.position.x),
-    rightMaxTravel: Math.abs(right.position.x),
+    leftMaxTravel: Math.abs(left.position.x) - GRIPPER_FINGER_TOUCH_CLEARANCE_M,
+    rightMaxTravel: Math.abs(right.position.x) - GRIPPER_FINGER_TOUCH_CLEARANCE_M,
   };
 }
 
