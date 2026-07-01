@@ -244,7 +244,8 @@ class LiveAlignmentMixin:
             return self.live_alignment_last_status
         self._set_live_alignment_timer_enabled(True)
         self.live_alignment_active = True
-        self.world_to_reference = {}
+        # Do NOT clear world_to_reference here — existing cameras keep their positions.
+        # Each camera's transform is overwritten only when that camera successfully calibrates.
         self.live_alignment_last_status = "alignment on"
         self.live_alignment_last_signature = None
         self.live_alignment_latest_detection = {camera.name: None for camera in self.cameras}

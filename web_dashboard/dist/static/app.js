@@ -1474,16 +1474,22 @@ async function ensurePoseVisual(pose, node) {
     const scaleMultiplier = (pose.role === "head" || pose.role === "left_hand" || pose.role === "right_hand") ? 0.2 : 1.0;
     const scaledSize = pose.avatar_scale * scaleMultiplier;
     rootNode.scaling = new BABYLON.Vector3(scaledSize, scaledSize, scaledSize);
+    const offset = Array.isArray(pose.avatar_offset_xyz) ? pose.avatar_offset_xyz : [0, 0, 0];
+    rootNode.position = mapDashboardPositionToScene(offset);
     const rotationDeg = Array.isArray(pose.avatar_rotation_deg_xyz) ? pose.avatar_rotation_deg_xyz : [0, 0, 0];
     rootNode.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(
       BABYLON.Angle.FromDegrees(Number(rotationDeg[0] || 0)).radians(),
       BABYLON.Angle.FromDegrees(Number(rotationDeg[1] || 0)).radians(),
       BABYLON.Angle.FromDegrees(Number(rotationDeg[2] || 0)).radians()
     );
+    const contentNode = new BABYLON.TransformNode(`${pose.name}-content`, scene);
+    contentNode.parent = rootNode;
     instantiated.rootNodes.forEach((child) => {
-      child.parent = rootNode;
+      child.parent = contentNode;
     });
-    collectInstantiatedMeshes(instantiated.rootNodes).forEach((mesh) => {
+    const meshes = collectInstantiatedMeshes(instantiated.rootNodes);
+    centerModelContentOnOrigin(contentNode, meshes);
+    meshes.forEach((mesh) => {
       mesh.material = createReadableModelMaterial(pose, mesh.material);
       mesh.visibility = 1.0;
       mesh.isPickable = false;
@@ -1537,6 +1543,39 @@ function createReadableModelMaterial(pose, originalMaterial) {
   return material;
 }
 
+function centerModelContentOnOrigin(contentNode, meshes) {
+  if (!contentNode || !meshes.length) {
+    return;
+  }
+  contentNode.computeWorldMatrix(true);
+  let min = null;
+  let max = null;
+  meshes.forEach((mesh) => {
+    mesh.computeWorldMatrix(true);
+    const info = mesh.getBoundingInfo && mesh.getBoundingInfo();
+    const vectors = info && info.boundingBox && info.boundingBox.vectorsWorld;
+    if (!vectors) {
+      return;
+    }
+    vectors.forEach((point) => {
+      if (!min) {
+        min = point.clone();
+        max = point.clone();
+      } else {
+        min.minimizeInPlace(point);
+        max.maximizeInPlace(point);
+      }
+    });
+  });
+  if (!min || !max) {
+    return;
+  }
+  const centerWorld = BABYLON.Vector3.Center(min, max);
+  const localFromWorld = contentNode.getWorldMatrix().clone().invert();
+  const centerLocal = BABYLON.Vector3.TransformCoordinates(centerWorld, localFromWorld);
+  contentNode.position.subtractInPlace(centerLocal);
+}
+
 function collectInstantiatedMeshes(rootNodes) {
   const meshes = [];
   rootNodes.forEach((node) => {
@@ -1560,7 +1599,9 @@ function disposeNodeChildren(node) {
 }
 
 function buildAssetKey(pose) {
-  return `${pose.avatar_model || "primitive"}:${pose.avatar_scale || 1}`;
+  const rotation = Array.isArray(pose.avatar_rotation_deg_xyz) ? pose.avatar_rotation_deg_xyz.join(",") : "0,0,0";
+  const offset = Array.isArray(pose.avatar_offset_xyz) ? pose.avatar_offset_xyz.join(",") : "0,0,0";
+  return String(pose.avatar_model || "primitive") + ":" + String(pose.avatar_scale || 1) + ":" + rotation + ":" + offset;
 }
 
 function warnOnce(key, message) {
@@ -1864,7 +1905,6 @@ function renderScoringCameraCard(cam) {
       </div>
       <table style="border-collapse:collapse;width:100%;font-size:0.82rem">
         <tbody>
-          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Poses</td><td>${escapeHtml(String(cam.n_poses))}</td></tr>
           <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Mean trace</td><td>${escapeHtml((cam.mean_trace || 0).toExponential(3))}</td></tr>
           <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Max trace</td><td>${escapeHtml((cam.max_trace || 0).toExponential(3))}</td></tr>
           <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">p99 trace</td><td>${escapeHtml((cam.p99_trace || 0).toExponential(3))}</td></tr>
@@ -1893,7 +1933,6 @@ function renderScoringResult(result) {
       </div>
       <table style="border-collapse:collapse;width:100%;font-size:0.85rem">
         <tbody>
-          <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Poses processed</td><td>${escapeHtml(String(result.n_poses))}</td></tr>
           <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Topic</td><td style="font-family:monospace;font-size:0.8rem">${escapeHtml(result.topic || "")}</td></tr>
           <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Mean cov trace</td><td>${escapeHtml((result.mean_trace || 0).toExponential(4))}</td></tr>
           <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Max cov trace</td><td>${escapeHtml((result.max_trace || 0).toExponential(4))}</td></tr>

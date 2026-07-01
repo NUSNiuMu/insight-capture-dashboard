@@ -48,8 +48,19 @@
 
 ## 启动 Dashboard
 
+宿主机路径通常是 `/home/seeed/workspaces/insight_capture`。如果已经 `docker exec` 进容器，项目挂载路径是 `/workspaces/insight_capture`。
+
+宿主机：
+
 ```bash
 cd /home/seeed/workspaces/insight_capture
+./scripts/open_monitor_dashboard.sh
+```
+
+容器内：
+
+```bash
+cd /workspaces/insight_capture
 ./scripts/open_monitor_dashboard.sh
 ```
 
@@ -71,8 +82,17 @@ npm run build
 
 启动 Web 后端：
 
+宿主机：
+
 ```bash
 cd /home/seeed/workspaces/insight_capture
+python3 scripts/multi_camera_dashboard_web.py
+```
+
+容器内：
+
+```bash
+cd /workspaces/insight_capture
 python3 scripts/multi_camera_dashboard_web.py
 ```
 
@@ -155,6 +175,8 @@ python3 scripts/multi_camera_dashboard_web.py --fake-pose
 
 - `avatar_model`: 推荐填相对项目根目录的 `.glb` 或 `.gltf` 路径
 - `avatar_scale`: 模型缩放，默认 `1.0`
+- `avatar_rotation_deg_xyz`: 模型相对 VIO pose 的本地旋转，单位为度，默认 `[0, 0, 0]`
+- `avatar_offset_xyz`: 模型相对 VIO pose 原点的本地平移，使用 dashboard 坐标 `[forward, right, up]`，默认 `[0, 0, 0]`
 
 示例：
 
@@ -234,3 +256,14 @@ INSIGHT_ALIGNMENT_LOG=/tmp/my_alignment.log ./scripts/open_monitor_dashboard.sh
 - `insight9_a`: `/insight9_a/camera/...`
 
 如果实际命名空间变化，改 [config/cameras.json](/home/seeed/workspaces/insight_capture/config/cameras.json:1) 即可。
+
+
+容器内快速启动 Web 后端和右侧 3D 窗口：
+
+```bash
+cd /workspaces/insight_capture
+python3 scripts/multi_camera_dashboard_web.py
+
+cd /workspaces/insight_capture
+./scripts/open_web_3d_right.sh
+```

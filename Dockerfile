@@ -17,9 +17,22 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Python build tools
     python3-pip \
-    # OpenCV (system build; faster than pip wheel on arm64)
-    python3-opencv \
     python3-numpy \
+    # Qt dashboard / frameless WebEngine window support
+    python3-pyqt5 \
+    python3-pyqt5.qtwebengine \
+    libatk-bridge2.0-0 \
+    libasound2 \
+    libgbm1 \
+    libgl1 \
+    libgtk-3-0 \
+    libnss3 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxkbcommon-x11-0 \
+    libxrandr2 \
+    libxcb-cursor0 \
+    libxcb-xinerama0 \
     # ROS2 bag I/O and message types
     ros-humble-rosbag2 \
     ros-humble-rosbag2-py \
@@ -45,15 +58,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python packages not available as apt ────────────────────────────────────
+# opencv-contrib-python-headless (not apt's python3-opencv): the Ubuntu 22.04 apt
+# build is OpenCV 4.5.4, whose cv2.aruco fails to detect DICT_APRILTAG_36h11 markers
+# that the same code detects fine on the host (OpenCV 4.11 via pip) — see
+# live_alignment.py. Headless avoids the GTK/X11 shared-lib deps of the full wheel;
+# nothing here calls cv2.imshow/highgui.
 RUN pip3 install --no-cache-dir \
     "aiohttp==3.13.3" \
-    "matplotlib==3.5.1"
+    "matplotlib==3.5.1" \
+    "opencv-contrib-python-headless==4.11.0.86"
 
 # ── Entrypoint: sources ROS2 and sets library paths ─────────────────────────
 COPY scripts/docker_entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# ── Working directory matches host path so pipeline_script resolves correctly
+# ── Working directory matches docker-compose source mount path
 WORKDIR /workspaces/insight_capture
 
 EXPOSE 8765

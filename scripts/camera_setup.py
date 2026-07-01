@@ -14,10 +14,52 @@ IMAGE_STREAMS = {
     "color_compressed": {"topic": "color/image_rect_raw/compressed", "type": "compressed"},
 }
 
+# Per-model default scale/rotation/offset, keyed by the model's filename (not full path).
+# A camera entry that omits avatar_scale/avatar_rotation_deg_xyz/avatar_offset_xyz picks
+# these up automatically based on its avatar_model; setting the field explicitly in
+# cameras.json still overrides the model default.
+AVATAR_MODEL_DEFAULTS = {
+    "MaleBaseModel_BravFG.glb": {
+        "avatar_scale": 0.024,
+        "avatar_rotation_deg_xyz": [-90.0, 180.0, 90.0],
+    },
+    "ArmBaseModel_BravFG.glb": {
+        "avatar_scale": 0.015,
+        "avatar_rotation_deg_xyz": [0.0, 0.0, 180.0],
+    },
+    "vis_assembly.glb": {
+        "avatar_scale": 3.0,
+        "avatar_rotation_deg_xyz": [0.0, 90.0, 0.0],
+    },
+    "iron-man_helmet_mk3_clean.glb": {
+        "avatar_scale": 0.5,
+        "avatar_rotation_deg_xyz": [90.0, 0.0, -90.0],
+    },
+}
+
+
+def avatar_model_defaults(avatar_model) -> Dict:
+    if not avatar_model:
+        return {}
+    return AVATAR_MODEL_DEFAULTS.get(Path(avatar_model).name, {})
+
 
 def load_setup(config_path: Path) -> Dict:
+    config_path = Path(config_path)
     with config_path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        config = json.load(f)
+
+    session_alignment = config.get("session_alignment")
+    calibration_file = session_alignment.get("calibration_file") if session_alignment else None
+    if calibration_file:
+        project_root = config_path.resolve().parents[1]
+        calibration_path = project_root / calibration_file
+        with calibration_path.open("r", encoding="utf-8") as f:
+            calibration = json.load(f)
+        calibration.update(session_alignment.get("calibration", {}))
+        session_alignment["calibration"] = calibration
+
+    return config
 
 
 def camera_base(namespace: str) -> str:
@@ -71,15 +113,22 @@ def build_dashboard_config(config: Dict) -> Dict:
             pose_topic = vio_topic(namespace, pose_rate)
         else:
             pose_topic = pose_stream
+        avatar_model = camera.get("avatar_model")
+        model_defaults = avatar_model_defaults(avatar_model)
         poses.append(
             {
                 "name": camera["name"],
                 "topic": pose_topic,
                 "color": camera.get("dashboard_color", "#ffffff"),
                 "teleop_role": camera.get("teleop_role", camera["name"]),
-                "avatar_model": camera.get("avatar_model"),
-                "avatar_scale": float(camera.get("avatar_scale", 1.0)),
-                "avatar_rotation_deg_xyz": camera.get("avatar_rotation_deg_xyz", [0.0, 0.0, 0.0]),
+                "avatar_model": avatar_model,
+                "avatar_scale": float(camera.get("avatar_scale", model_defaults.get("avatar_scale", 1.0))),
+                "avatar_rotation_deg_xyz": camera.get(
+                    "avatar_rotation_deg_xyz", model_defaults.get("avatar_rotation_deg_xyz", [0.0, 0.0, 0.0])
+                ),
+                "avatar_offset_xyz": camera.get(
+                    "avatar_offset_xyz", model_defaults.get("avatar_offset_xyz", [0.0, 0.0, 0.0])
+                ),
             }
         )
 

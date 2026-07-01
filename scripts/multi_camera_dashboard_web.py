@@ -110,6 +110,7 @@ class PoseSpec:
     avatar_model: Optional[str]
     avatar_scale: float
     avatar_rotation_deg_xyz: Tuple[float, float, float]
+    avatar_offset_xyz: Tuple[float, float, float]
 
 
 @dataclass
@@ -193,6 +194,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                 avatar_model=item.get("avatar_model"),
                 avatar_scale=float(item.get("avatar_scale", 1.0)),
                 avatar_rotation_deg_xyz=tuple(float(value) for value in item.get("avatar_rotation_deg_xyz", [0.0, 0.0, 0.0])),
+                avatar_offset_xyz=tuple(float(value) for value in item.get("avatar_offset_xyz", [0.0, 0.0, 0.0])),
             )
             for item in config.get("poses", [])
         ]
@@ -544,6 +546,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                         "avatar_model": pose.avatar_model,
                         "avatar_scale": pose.avatar_scale,
                         "avatar_rotation_deg_xyz": [float(value) for value in pose.avatar_rotation_deg_xyz],
+                        "avatar_offset_xyz": [float(value) for value in pose.avatar_offset_xyz],
                     }
                 )
         return {
@@ -569,6 +572,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
             "inlier_count": int(0 if target_camera is None else inlier_counts.get(target_camera, 0)),
             "last_status": str(getattr(self, "live_alignment_last_status", "")),
             "has_solution": bool(self.world_to_reference),
+            "camera_names": [camera.name for camera in self.cameras],
         }
 
     def build_camera_payload(self) -> Dict[str, object]:
