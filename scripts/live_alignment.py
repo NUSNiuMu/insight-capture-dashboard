@@ -578,44 +578,6 @@ class LiveAlignmentMixin:
             return None
         return best_sample
 
-    def _build_dashboard_world_anchors(
-        self,
-        detections: Dict[str, DetectionSample],
-        display_camera_transforms: Dict[str, np.ndarray],
-    ) -> Optional[Dict[str, np.ndarray]]:
-        anchors: Dict[str, np.ndarray] = {}
-        for camera in self.cameras:
-            pose_sample = self._find_dashboard_pose_sample(camera.name, detections[camera.name].stamp_ns)
-            if pose_sample is None:
-                self._emit_alignment_log(
-                    f"dashboard anchor missing pose for {camera.name} at stamp={detections[camera.name].stamp_ns}"
-                )
-                return None
-            pose_transform = pose_sample.as_transform()
-            if self.live_alignment_anchor_rotation_mode == "none":
-                display_translation = display_camera_transforms[camera.name][:3, 3]
-                pose_translation = np.array(pose_sample.position, dtype=np.float64)
-                anchor_translation = display_translation - pose_translation
-                anchors[camera.name] = matrix_to_transform(np.eye(3, dtype=np.float64), anchor_translation)
-            elif self.live_alignment_anchor_rotation_mode == "yaw":
-                display_transform = display_camera_transforms[camera.name]
-                target_yaw = math.atan2(
-                    float(display_transform[1, 0]),
-                    float(display_transform[0, 0]),
-                )
-                pose_yaw = math.atan2(
-                    float(pose_transform[1, 0]),
-                    float(pose_transform[0, 0]),
-                )
-                anchor_rotation = self._rotation_about_display_z(math.degrees(target_yaw - pose_yaw))
-                display_translation = display_transform[:3, 3]
-                pose_translation = pose_transform[:3, 3]
-                anchor_translation = display_translation - anchor_rotation @ pose_translation
-                anchors[camera.name] = matrix_to_transform(anchor_rotation, anchor_translation)
-            else:
-                anchors[camera.name] = display_camera_transforms[camera.name] @ invert_transform(pose_transform)
-        return anchors
-
     def _build_dashboard_world_anchor(
         self,
         camera_name: str,
@@ -785,62 +747,6 @@ class LiveAlignmentMixin:
             self._lock_live_alignment_solution()
         else:
             self._persist_alignment_state()
-
-    def _find_live_alignment_detection_group_unlocked(self) -> Optional[Dict[str, DetectionSample]]:
-        newest_stamp_ns = max(
-            (
-                buffer[-1].stamp_ns
-                for buffer in self.live_alignment_detection_buffer.values()
-                if buffer
-            ),
-            default=0,
-        )
-        if newest_stamp_ns > 0:
-            min_stamp_ns = newest_stamp_ns - self.live_alignment_detection_max_age_ns
-            for camera in self.cameras:
-                buffer = self.live_alignment_detection_buffer.get(camera.name, [])
-                if not buffer:
-                    continue
-                buffer[:] = [sample for sample in buffer if sample.stamp_ns >= min_stamp_ns]
-        buffers = {
-            camera.name: list(self.live_alignment_detection_buffer.get(camera.name, []))
-            for camera in self.cameras
-        }
-        available = {name: buffer for name, buffer in buffers.items() if buffer}
-        self.live_alignment_visible_cameras = len(available)
-        if self.reference_camera not in available:
-            self.live_alignment_last_status = "waiting-reference"
-            return None
-        if len(available) < len(self.cameras):
-            self.live_alignment_last_status = "waiting-board"
-            return None
-
-        best_group = None
-        best_span = None
-        for reference_sample in available[self.reference_camera]:
-            group = {self.reference_camera: reference_sample}
-            for camera in self.cameras:
-                if camera.name == self.reference_camera:
-                    continue
-                candidate = min(
-                    available[camera.name],
-                    key=lambda sample: abs(sample.stamp_ns - reference_sample.stamp_ns),
-                )
-                group[camera.name] = candidate
-            stamps = [sample.stamp_ns for sample in group.values()]
-            span_ns = max(stamps) - min(stamps)
-            if best_span is None or span_ns < best_span:
-                best_span = span_ns
-                best_group = group
-
-        self.live_alignment_last_sync_span_ms = 0.0 if best_span is None else best_span / 1_000_000.0
-        if best_group is None:
-            self.live_alignment_last_status = "waiting-board"
-            return None
-        if best_span is not None and best_span > self.live_alignment_max_group_span_ns:
-            self.live_alignment_last_status = "waiting-sync"
-            return None
-        return best_group
 
     def _refresh_transformed_poses(self) -> None:
         for pose in self.poses:

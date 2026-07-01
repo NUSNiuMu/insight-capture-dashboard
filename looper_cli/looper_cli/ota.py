@@ -149,16 +149,6 @@ def fetch_ota_records_for_device(
     return filter_ota_records_by_device(records, product_map, product_names)
 
 
-def normalize_version(version: str) -> List[int]:
-    parts = []
-    for part in version.split("."):
-        try:
-            parts.append(int(part))
-        except ValueError:
-            parts.append(0)
-    return parts
-
-
 def compare_version(current: str, target: str) -> int:
     def tokenize(value: str) -> List[str]:
         return re.findall(r"[0-9]+|[A-Za-z]+", str(value or "").strip())

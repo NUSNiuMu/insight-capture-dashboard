@@ -304,34 +304,6 @@ def _parse_topic_list_with_types(output: str) -> List[str]:
     return topics
 
 
-def ros2_topic_has_publishers(topic: str, ros_domain_id: int, timeout_sec: float = 0.4) -> bool:
-    env = os.environ.copy()
-    env["ROS_DOMAIN_ID"] = str(int(ros_domain_id))
-    try:
-        result = subprocess.run(
-            ["ros2", "topic", "info", topic, "--verbose"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=timeout_sec,
-            env=env,
-            check=False,
-        )
-    except Exception:
-        return False
-    text = result.stdout or ""
-    for line in text.splitlines():
-        lowered = line.strip().lower()
-        if not lowered.startswith("publisher count:"):
-            continue
-        _, _, count_text = lowered.partition(":")
-        try:
-            return int(count_text.strip()) > 0
-        except ValueError:
-            return False
-    return False
-
-
 def discover_live_topics(
     raw_config: Dict,
     ros_domain_id: int,

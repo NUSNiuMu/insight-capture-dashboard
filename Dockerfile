@@ -13,6 +13,10 @@ FROM ros:humble-ros-base-jammy
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# ── Swap default apt mirrors for Tsinghua (much faster from this network) ───
+RUN sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/|g' /etc/apt/sources.list \
+    && sed -i 's|http://packages.ros.org/ros2/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu|g; s|^Types: deb deb-src|Types: deb|' /etc/apt/sources.list.d/ros2.sources
+
 # ── System & ROS2 packages ──────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Python build tools
@@ -64,6 +68,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # live_alignment.py. Headless avoids the GTK/X11 shared-lib deps of the full wheel;
 # nothing here calls cv2.imshow/highgui.
 RUN pip3 install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "aiohttp==3.13.3" \
     "matplotlib==3.5.1" \
     "opencv-contrib-python-headless==4.11.0.86"

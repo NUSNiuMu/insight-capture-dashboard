@@ -447,8 +447,6 @@ class DashboardNode(LiveAlignmentMixin, Node):
 
 class DashboardWindow(QtWidgets.QMainWindow):
     BG = "#0f1720"
-    TEXT = "#e9eef4"
-    MUTED = "#8fa3b8"
 
     def __init__(self, node: DashboardNode, executor: MultiThreadedExecutor) -> None:
         super().__init__()
