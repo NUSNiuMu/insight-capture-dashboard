@@ -493,8 +493,9 @@ class LiveAlignmentMixin:
 
     def _dashboard_transform_from_optical(self, optical_transform: np.ndarray) -> np.ndarray:
         rotation_map = self._optical_to_dashboard_rotation()
+        rotation = rotation_map @ optical_transform[:3, :3] @ rotation_map.T
         translation = rotation_map @ optical_transform[:3, 3]
-        return matrix_to_transform(np.eye(3, dtype=np.float64), translation)
+        return matrix_to_transform(rotation, translation)
 
     @staticmethod
     def _rotation_about_display_z(yaw_deg: float) -> np.ndarray:
