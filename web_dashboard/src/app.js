@@ -1162,6 +1162,7 @@ async function applyPoseUpdate(payload) {
     node.position.copyFromFloats(scenePosition.x, scenePosition.y, scenePosition.z);
     node.rotationQuaternion.copyFromFloats(sceneQuaternion.x, sceneQuaternion.y, sceneQuaternion.z, sceneQuaternion.w);
     await ensurePoseVisual(pose, node);
+    applyGripperOpening(pose, node);
     updateTrailFromPose(pose);
     if (legend) {
       const row = legend.querySelector(`[data-legend-role="${CSS.escape(pose.role)}"] .legend-meta`);
@@ -1468,7 +1469,11 @@ async function ensurePoseVisual(pose, node) {
       );
     }
     const container = await modelPromises.get(key);
-    const instantiated = container.instantiateModelsToScene(() => `${pose.name}-instance`);
+    // Babylon's instantiateModelsToScene renames EVERY node (not just roots) via this
+    // callback, discarding original names unless the source name is folded back in —
+    // findGripperFingerNodes below depends on recovering the original glTF node names
+    // (e.g. "left_finger_holder") to find the animatable finger nodes.
+    const instantiated = container.instantiateModelsToScene((sourceName) => `${pose.name}-instance-${sourceName}`);
     const rootNode = new BABYLON.TransformNode(`${pose.name}-visual`, scene);
     rootNode.parent = node;
     const scaleMultiplier = (pose.role === "head" || pose.role === "left_hand" || pose.role === "right_hand") ? 0.2 : 1.0;
@@ -1494,6 +1499,7 @@ async function ensurePoseVisual(pose, node) {
       mesh.visibility = 1.0;
       mesh.isPickable = false;
     });
+    node.metadata.gripperFingers = findGripperFingerNodes(instantiated.rootNodes, pose.name);
     if (modelStatus) {
       modelStatus.textContent = `Models: loaded ${modelPath}`;
     }
@@ -1574,6 +1580,47 @@ function centerModelContentOnOrigin(contentNode, meshes) {
   const localFromWorld = contentNode.getWorldMatrix().clone().invert();
   const centerLocal = BABYLON.Vector3.TransformCoordinates(centerWorld, localFromWorld);
   contentNode.position.subtractInPlace(centerLocal);
+}
+
+// Visual-only travel distance (model-local meters) for each gripper finger
+// node along its own local X axis; not a physical measurement, just tuned to
+// look right. Left/right move symmetrically apart when opening.
+const GRIPPER_FINGER_MAX_TRAVEL_M = 0.025;
+
+function findGripperFingerNodes(rootNodes, poseName) {
+  let left = null;
+  let right = null;
+  const leftName = `${poseName}-instance-left_finger_holder`;
+  const rightName = `${poseName}-instance-right_finger_holder`;
+  rootNodes.forEach((root) => {
+    root.getDescendants(false).concat([root]).forEach((node) => {
+      if (node.name === leftName) left = node;
+      if (node.name === rightName) right = node;
+    });
+  });
+  if (!left || !right) {
+    return null;
+  }
+  return {
+    left,
+    right,
+    leftRestPosition: left.position.clone(),
+    rightRestPosition: right.position.clone(),
+  };
+}
+
+function applyGripperOpening(pose, node) {
+  const fingers = node.metadata && node.metadata.gripperFingers;
+  if (!fingers) {
+    return;
+  }
+  const opening = Number(pose.gripper_opening);
+  if (!Number.isFinite(opening)) {
+    return; // hold last-applied pose rather than snapping to a default
+  }
+  const closeAmount = (1.0 - Math.min(1, Math.max(0, opening))) * GRIPPER_FINGER_MAX_TRAVEL_M;
+  fingers.left.position.copyFrom(fingers.leftRestPosition).addInPlaceFromFloats(closeAmount, 0, 0);
+  fingers.right.position.copyFrom(fingers.rightRestPosition).addInPlaceFromFloats(-closeAmount, 0, 0);
 }
 
 function collectInstantiatedMeshes(rootNodes) {

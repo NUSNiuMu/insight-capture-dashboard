@@ -44,6 +44,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     RosImage = None
 
 from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
+from gripper_tracking import GripperTrackingMixin
 from live_alignment import LiveAlignmentMixin
 from post_processing import (
     OptimizationManager,
@@ -139,7 +140,7 @@ class CameraFrame:
     version: int
 
 
-class PoseBridgeNode(LiveAlignmentMixin, Node):
+class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
     def __init__(
         self,
         config_path: Path,
@@ -218,6 +219,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
         self.live_alignment_solution_lock = threading.Lock()
         self.ros_callback_group = ReentrantCallbackGroup()
         self.dashboard_subscriptions = []
+        self._configure_gripper_tracking()
         self._initialize_live_alignment_state()
         if self.world_to_reference:
             self.get_logger().info("Loaded persisted live alignment state for web dashboard startup")
@@ -363,6 +365,10 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                     return
             if alignment_cb is not None:
                 alignment_cb(msg)
+            if camera_name in self.gripper_tracking_cameras:
+                gripper_image = self._decode_calibration_message(topic_type, msg)
+                if gripper_image is not None:
+                    self._process_gripper_image(camera_name, gripper_image)
             frame = self._encode_dashboard_frame(camera_name, topic_type, msg)
             if frame is None:
                 return
@@ -547,6 +553,7 @@ class PoseBridgeNode(LiveAlignmentMixin, Node):
                         "avatar_scale": pose.avatar_scale,
                         "avatar_rotation_deg_xyz": [float(value) for value in pose.avatar_rotation_deg_xyz],
                         "avatar_offset_xyz": [float(value) for value in pose.avatar_offset_xyz],
+                        "gripper_opening": self.gripper_opening_percent(pose.name),
                     }
                 )
         return {
