@@ -1582,7 +1582,7 @@ function centerModelContentOnOrigin(contentNode, meshes) {
   contentNode.position.subtractInPlace(centerLocal);
 }
 
-const GRIPPER_FINGER_TOUCH_CLEARANCE_M = 0.01;
+const GRIPPER_FINGER_TOUCH_CLEARANCE_M = 0.011;
 
 function findGripperFingerNodes(rootNodes, poseName) {
   let left = null;
