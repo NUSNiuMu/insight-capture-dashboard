@@ -42,8 +42,10 @@ services:
       # requires it yet, but the toolkit is cheap to have mounted).
       - /usr/local/cuda:/usr/local/cuda:ro
 
-      # SSH keys for rosbag remote sync (optional; remove if not using sync)
-      - /home/seeed/.ssh:/root/.ssh:ro
+      # SSH keys for rosbag remote sync (optional; remove if not using sync).
+      # ${HOME} resolves from the shell that runs `docker compose`, not a
+      # hardcoded username, so this works regardless of who's deploying.
+      - ${HOME}/.ssh:/root/.ssh:ro
 
     restart: unless-stopped
 

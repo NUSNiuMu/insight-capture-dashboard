@@ -9,7 +9,11 @@
 
   // ── Container runtime flags ──────────────────────────────────────────────
   // --network=host : ROS2 DDS multicast; also avoids Jetson iptables raw table issue
-  // --runtime=nvidia: CUDA access for COLMAP
+  // --runtime=nvidia: general CUDA/GPU acceleration
+  // deploy/lite: no COLMAP mounts (custom sm_87 binary + matching libceres +
+  // the separate looper-vio-colmap-handoff repo) -- those are tied to the
+  // original Jetson's custom build and aren't portable. The /optimization
+  // dashboard page won't work here; everything else is unaffected.
   "runArgs": [
     "--network=host",
     "--runtime=nvidia",
@@ -20,16 +24,12 @@
     "--shm-size=1g",
     "--env=NVIDIA_VISIBLE_DEVICES=all",
     "--env=NVIDIA_DRIVER_CAPABILITIES=compute,utility",
-    // looper-vio-colmap must live at ../looper-vio-colmap-handoff relative to workspace
-    "--volume=/home/seeed/workspaces/looper-vio-colmap-handoff:/workspaces/looper-vio-colmap-handoff:ro",
-    // COLMAP binary (custom sm_87 build) + its non-apt library
-    "--volume=/usr/local/bin/colmap:/usr/local/bin/colmap:ro",
-    "--volume=/lib/libceres.so.2:/lib/libceres.so.2:ro",
-    "--volume=/lib/libceres.so.2.0.0:/lib/libceres.so.2.0.0:ro",
-    // CUDA runtime libraries (libcudart etc. needed by COLMAP)
+    // CUDA runtime libraries (kept for general GPU acceleration)
     "--volume=/usr/local/cuda:/usr/local/cuda:ro",
-    // SSH keys for rosbag remote sync (optional)
-    "--volume=/home/seeed/.ssh:/root/.ssh:ro"
+    // SSH keys for rosbag remote sync (optional). ${localEnv:HOME} resolves
+    // from whoever's host account VS Code is running as -- not a hardcoded
+    // username, so this isn't tied to one specific machine/user.
+    "--volume=${localEnv:HOME}/.ssh:/root/.ssh:ro"
   ],
 
   // Workspace inside container mirrors host path so Python relative imports resolve
@@ -44,7 +44,7 @@
     // ROS2 Python packages (equivalent to sourcing setup.bash)
     "PYTHONPATH": "/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/local/lib/python3.10/dist-packages",
     "AMENT_PREFIX_PATH": "/opt/ros/humble",
-    // COLMAP host-mounted libraries
+    // CUDA runtime libraries
     "LD_LIBRARY_PATH": "/lib:/lib/aarch64-linux-gnu:/usr/local/cuda/lib64:/opt/ros/humble/lib"
   },
 
