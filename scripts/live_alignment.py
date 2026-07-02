@@ -121,10 +121,16 @@ class LiveAlignmentMixin:
         self.live_alignment_dictionary_name = dictionary_name
         self.live_alignment_aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
         self.live_alignment_detector = None
+        detector_params = cv2.aruco.DetectorParameters()
+        # Default is CORNER_REFINE_NONE (coarse polygon-approximation corners).
+        # AprilTag's own refinement is tuned for this exact marker family and
+        # meaningfully tightens corner localization, which is the dominant
+        # error source in the board pose estimate below.
+        detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG
         if hasattr(cv2.aruco, "ArucoDetector"):
             self.live_alignment_detector = cv2.aruco.ArucoDetector(
                 self.live_alignment_aruco_dict,
-                cv2.aruco.DetectorParameters(),
+                detector_params,
             )
 
         board_rows = int(calibration_config.get("board_rows", 6))
@@ -1029,6 +1035,17 @@ class LiveAlignmentMixin:
         if encoding in ("mono8", "8uc1"):
             gray = data.reshape((msg.height, msg.width))
             return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        if encoding == "nv12" and msg.width > 0:
+            # Some drivers report msg.height as the full Y+UV buffer height
+            # rather than the displayed luma height, so derive the real
+            # buffer shape from the data length instead of trusting msg.height.
+            total_rows, remainder = divmod(data.size, msg.width)
+            if remainder == 0 and total_rows > 0 and total_rows % 3 == 0:
+                yuv = data.reshape((total_rows, msg.width))
+                return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
+            if remainder == 0 and total_rows > 0:
+                gray = data.reshape((total_rows, msg.width))
+                return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         return None
 
     def alignment_status_text(self) -> str:

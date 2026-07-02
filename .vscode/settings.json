@@ -1,0 +1,27 @@
+{
+  "files.watcherExclude": {
+    "**/rosbags/**": true,
+    "**/runs/**": true,
+    "**/bags/**": true,
+    "**/data/**": true,
+    "**/outputs/**": true,
+    "**/__pycache__/**": true
+  },
+  "files.exclude": {
+    "**/__pycache__": true
+  },
+  "search.exclude": {
+    "**/rosbags/**": true,
+    "**/runs/**": true,
+    "**/bags/**": true,
+    "**/data/**": true,
+    "**/outputs/**": true
+  },
+  "python.analysis.exclude": [
+    "**/rosbags/**",
+    "**/runs/**",
+    "**/bags/**",
+    "**/data/**",
+    "**/outputs/**"
+  ]
+}

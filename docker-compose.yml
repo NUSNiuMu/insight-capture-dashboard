@@ -13,6 +13,13 @@ services:
     # ── NVIDIA Container Runtime for CUDA (required by COLMAP) ──────────────
     runtime: nvidia
 
+    # Docker's 64MB default /dev/shm is too small for QtWebEngine's Chromium
+    # GPU process (open_web_3d_right.sh / open_monitor_dashboard.sh): its
+    # command-buffer ring allocation fails silently and the WebGL canvas
+    # never renders, both with real GPU (context-loss loop) and swiftshader
+    # (AllocateRingBuffer failures).
+    shm_size: '1gb'
+
     environment:
       - ROS_DOMAIN_ID=20           # Must match devices; override in .env if needed
       - NVIDIA_VISIBLE_DEVICES=all

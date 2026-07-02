@@ -1,21 +1,66 @@
 #!/usr/bin/env bash
-# Reboot all three Looper camera devices in parallel and wait for them to come back online.
+# Discover Looper camera devices on any 169.254.0.0/16 link, reboot them in
+# parallel, and wait for them to come back online.
+#
+# Camera IPs are not hardcoded because the network segment (the "n" in
+# 169.254.n.1) can be changed at any time via `looper_cli.py network set
+# --segment n`. Instead, each camera connects to this host over its own
+# dedicated point-to-point link (one interface per camera, see `ip addr`),
+# so devices are discovered by looking at which interfaces currently carry a
+# 169.254.x.y address and deriving the camera's IP from the project's
+# master/slave convention (device == <prefix>.1, host == <prefix>.2 — see
+# looper_cli/README.md "network set").
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI="python3 ${SCRIPT_DIR}/../looper_cli/looper_cli.py"
 
-DEVICES=(
-    "http://169.254.30.1"
-    "http://169.254.40.1"
-    "http://169.254.50.1"
-)
-
-WAIT_TIMEOUT=120   # seconds to wait for each device to come back
-PING_INTERVAL=3    # seconds between ping attempts
+DISCOVERY_TIMEOUT=40   # seconds to wait for at least one camera interface to appear
+DISCOVERY_INTERVAL=2   # seconds between discovery attempts
+WAIT_TIMEOUT=120        # seconds to wait for each device to come back
+PING_INTERVAL=3         # seconds between ping attempts
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+# Print one "http://<ip>" per camera currently reachable on a 169.254.x.x
+# link, derived from local interface addresses (not a brute-force /16 scan,
+# which is both slow and unreliable across a container network namespace).
+discover_devices() {
+    local line iface cidr ip prefix last device_ip
+    ip -4 -o addr show up 2>/dev/null | while read -r line; do
+        iface="$(awk '{print $2}' <<< "${line}")"
+        [[ "${iface}" == "lo" || "${iface}" == docker* ]] && continue
+        cidr="$(awk '{print $4}' <<< "${line}")"
+        ip="${cidr%%/*}"
+        [[ "${ip}" == 169.254.* ]] || continue
+        prefix="${ip%.*}"
+        last="${ip##*.}"
+        if [[ "${last}" == "1" ]]; then
+            device_ip="${prefix}.2"
+        else
+            device_ip="${prefix}.1"
+        fi
+        echo "http://${device_ip}"
+    done | sort -u
+}
+
+log "Discovering cameras on 169.254.0.0/16 links..."
+DEVICES=()
+deadline=$(( $(date +%s) + DISCOVERY_TIMEOUT ))
+while (( $(date +%s) < deadline )); do
+    mapfile -t DEVICES < <(discover_devices)
+    (( ${#DEVICES[@]} > 0 )) && break
+    sleep "${DISCOVERY_INTERVAL}"
+done
+
+if (( ${#DEVICES[@]} == 0 )); then
+    log "ERROR: No cameras found on any 169.254.x.x interface within ${DISCOVERY_TIMEOUT}s."
+    log "Check that camera USB/Ethernet links are connected, and that 'ip' works in this environment."
+    exit 1
+fi
+
+log "Found ${#DEVICES[@]} camera(s): ${DEVICES[*]}"
 
 wait_for_device() {
     local url="$1"
@@ -32,18 +77,6 @@ wait_for_device() {
     log "WARNING: ${host} did not respond within ${WAIT_TIMEOUT}s"
     return 1
 }
-
-# Wait for all network interfaces carrying 169.254.x.x to be up before starting
-log "Checking network readiness..."
-for url in "${DEVICES[@]}"; do
-    host="${url#http://}"
-    for i in $(seq 1 20); do
-        if ip route get "${host}" &>/dev/null; then
-            break
-        fi
-        sleep 2
-    done
-done
 
 # Send reboot command to all devices in parallel
 log "Sending reboot command to all cameras..."

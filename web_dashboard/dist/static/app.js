@@ -1149,9 +1149,14 @@ async function applyPoseUpdate(payload) {
     bindTrailToggles();
   }
 
-  for (const pose of poses) {
+  // Fire all poses' model loads concurrently instead of a sequential
+  // `for...await`: without this, a slow first-time model fetch (e.g. the
+  // ~14MB Iron Man helmet) blocked position/trail updates for the *other*
+  // cameras until it finished, since the loop couldn't reach their
+  // iteration until the previous await resolved.
+  await Promise.all(poses.map(async (pose) => {
     const node = ensurePoseNode(pose);
-    if (!node) continue;
+    if (!node) return;
     if (!node.position) node.position = new BABYLON.Vector3(0, 0, 0);
     if (!node.rotationQuaternion) node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
     const position = Array.isArray(pose.position) ? pose.position : [0, 0, 0];
@@ -1168,7 +1173,7 @@ async function applyPoseUpdate(payload) {
       const row = legend.querySelector(`[data-legend-role="${CSS.escape(pose.role)}"] .legend-meta`);
       if (row) row.textContent = pose.visible ? pose.name : `${pose.name} hidden`;
     }
-  }
+  }));
 }
 
 function ensurePoseNode(pose) {

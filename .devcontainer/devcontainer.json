@@ -13,6 +13,11 @@
   "runArgs": [
     "--network=host",
     "--runtime=nvidia",
+    // Docker's 64MB default /dev/shm breaks QtWebEngine's Chromium GPU
+    // process (open_web_3d_right.sh / open_monitor_dashboard.sh) — its
+    // command-buffer ring allocation fails and the WebGL canvas never
+    // renders, with real GPU or swiftshader alike.
+    "--shm-size=1g",
     "--env=NVIDIA_VISIBLE_DEVICES=all",
     "--env=NVIDIA_DRIVER_CAPABILITIES=compute,utility",
     // looper-vio-colmap must live at ../looper-vio-colmap-handoff relative to workspace

@@ -104,6 +104,12 @@ def build_dashboard_config(config: Dict) -> Dict:
                 "column": int(camera.get("dashboard_column", 0)),
                 "column_span": int(camera.get("dashboard_column_span", 1)),
                 "row_span": int(camera.get("dashboard_row_span", 1)),
+                # Per-camera override for which stream live_alignment detects
+                # AprilTags on. Falls back to session_alignment.calibration.image_stream
+                # when unset — needed once the fleet mixes camera types (e.g. a
+                # mono/IR camera with no color stream alongside an RGB-only one),
+                # since they can't all share a single global stream name.
+                "alignment_image_stream": camera.get("alignment_image_stream"),
             }
         )
 

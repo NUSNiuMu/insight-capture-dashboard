@@ -127,6 +127,7 @@ class CameraSpec:
     column: int
     column_span: int
     row_span: int
+    alignment_image_stream: Optional[str] = None
 
 
 @dataclass
@@ -183,6 +184,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
                 column=int(item.get("column", 0)),
                 column_span=int(item.get("column_span", 1)),
                 row_span=int(item.get("row_span", 1)),
+                alignment_image_stream=item.get("alignment_image_stream") or None,
             )
             for item in config.get("cameras", [])
         ]
@@ -254,12 +256,15 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
             self.dashboard_subscriptions.append(sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
 
+    def _alignment_stream_for(self, camera: "CameraSpec") -> str:
+        return camera.alignment_image_stream or self.live_alignment_image_stream
+
     def _create_dashboard_image_subscriptions(self) -> None:
         image_qos = make_image_qos(reliability=self.image_qos_reliability)
         for camera in self.cameras:
             namespace = camera.namespace
             align_topic = (
-                image_topic(namespace, self.live_alignment_image_stream)
+                image_topic(namespace, self._alignment_stream_for(camera))
                 if self.live_alignment_available
                 else None
             )
@@ -282,9 +287,10 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
         for camera in self.cameras:
             camera_name = camera.name
             namespace = camera.namespace
-            calib_topic = image_topic(namespace, self.live_alignment_image_stream)
-            calib_info_topic = camera_info_topic(namespace, self.live_alignment_image_stream)
-            calib_type = IMAGE_STREAMS[self.live_alignment_image_stream]["type"]
+            alignment_stream = self._alignment_stream_for(camera)
+            calib_topic = image_topic(namespace, alignment_stream)
+            calib_info_topic = camera_info_topic(namespace, alignment_stream)
+            calib_type = IMAGE_STREAMS[alignment_stream]["type"]
             self.live_alignment_topic_by_camera[camera_name] = calib_topic
 
             # Avoid duplicate subscription: if the alignment stream is the same topic
@@ -1311,7 +1317,13 @@ class WebDashboardServer:
             raise web.HTTPForbidden(text="path outside allowed roots")
         if not candidate.is_file():
             raise web.HTTPNotFound(text="asset not found")
-        return web.FileResponse(candidate)
+        # Only ever serves avatar_model .glb/.gltf files (see model_asset_url),
+        # which can be several MB — let the browser cache them across page
+        # navigations (each dashboard page, incl. /3d, is a separate full
+        # page load, so without this every visit re-downloads the model).
+        response = web.FileResponse(candidate)
+        response.headers["Cache-Control"] = "public, max-age=3600"
+        return response
 
 
 def parse_args() -> argparse.Namespace:
