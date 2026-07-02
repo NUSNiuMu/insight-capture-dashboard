@@ -162,7 +162,7 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 | `required_samples` | `12` | 攒够这么多"合格"样本才输出结果 |
 | `max_translation_std_m`/`max_rotation_std_deg` | `0.04`/`2.5` | 离群点过滤阈值，单帧偏离共识中心超过这个值就丢弃 |
 | `image_stream` | `color_compressed` | 全局默认标定流，可被相机自己的 `alignment_image_stream` 覆盖 |
-| `alignment_image_scale` | `1.0` | 检测前对图像缩放，可以调大（如 `2.0`/`3.0`）放大后再检测，见下方排查经验 |
+| `alignment_image_scale` | `1.0` | 检测前对图像的缩放系数，可调大以放大后再检测 |
 
 流程：
 
@@ -188,13 +188,13 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 
 详细诊断日志默认写到 `/tmp/insight_live_alignment.log`，可用 `INSIGHT_ALIGNMENT_LOG` 环境变量改路径。
 
-### 排查经验（混合机队 / 检测不到板子时）
+### 标定排查要点
 
-- **确认板子真的在视野里**：可以直接拉 `http://<host>:8765/api/cameras/<name>/frame` 看当前实际画面，比猜靠谱
-- **marker 在画面里的像素大小很关键**：太小（几十像素）容易检测不到或不稳，优先靠近拍摄而不是软件放大（`alignment_image_scale` 放大是插值出来的，不如真实分辨率）
-- **角点细化算法**：代码里用的是 `CORNER_REFINE_SUBPIX`。曾经试过 `CORNER_REFINE_APRILTAG`（理论上更准），但在实测的低分辨率黑白画面上直接检测不到任何 marker（0/36），而 `SUBPIX`/默认 `NONE` 都能正常检测——marker 像素密度不够时不要用 `CORNER_REFINE_APRILTAG`
-- **IR/黑白相机下确认标定板对比度**：部分打印材料在近红外下对比度会下降，实拍看一眼黑白格子是否还清晰
-- **NV12 编码**：黑白/IR 相机的 topic 如果编码是 `nv12`（不是 `mono8`），`live_alignment.py` 的 `_decode_calibration_message` 已经处理这个分支，正常不需要改代码，遇到解码失败可以先确认 `encoding` 字段是不是真的是 `"nv12"`
+- 确认板子在视野内：`http://<host>:8765/api/cameras/<name>/frame` 可查看该相机当前实际画面
+- marker 成像像素尺寸建议不低于约 60px；分辨率不足时优先缩短拍摄距离，而非依赖 `alignment_image_scale` 放大
+- 角点细化方法固定为 `CORNER_REFINE_SUBPIX`（见 `live_alignment.py`），低分辨率画面下不使用 `CORNER_REFINE_APRILTAG`
+- IR/黑白相机需确认标定板在对应波段下仍有清晰的黑白对比度
+- 黑白/IR 相机 topic 若编码为 `nv12`，`_decode_calibration_message` 已支持该分支，无需额外处理
 
 ## 保留的脚本
 
