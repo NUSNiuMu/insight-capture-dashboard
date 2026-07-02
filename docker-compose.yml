@@ -1,3 +1,10 @@
+# deploy/lite branch: stripped of the COLMAP-specific host mounts (custom
+# sm_87 binary, matching libceres, the separate looper-vio-colmap-handoff
+# repo) so this compose file only needs a plain JetPack Jetson to run —
+# no per-device custom-compiled binaries required. The /optimization
+# dashboard page (which shells out to COLMAP) won't work here; everything
+# else (live view, 3D trajectory, recording, calibration) is unaffected.
+# CUDA/runtime: nvidia are kept for other GPU acceleration.
 services:
   insight-dashboard:
     build:
@@ -10,7 +17,7 @@ services:
     # ── ROS2 requires host network for DDS multicast ─────────────────────────
     network_mode: host
 
-    # ── NVIDIA Container Runtime for CUDA (required by COLMAP) ──────────────
+    # ── NVIDIA Container Runtime for CUDA acceleration ───────────────────────
     runtime: nvidia
 
     # Docker's 64MB default /dev/shm is too small for QtWebEngine's Chromium
@@ -31,19 +38,8 @@ services:
       # ── Source code (live-mounted; no rebuild needed for code changes) ─────
       - .:/workspaces/insight_capture
 
-      # ── looper-vio-colmap pipeline (path must stay at ../looper-vio-colmap-handoff
-      #    relative to insight_capture, matching what multi_camera_dashboard_web.py expects)
-      - /home/seeed/workspaces/looper-vio-colmap-handoff:/workspaces/looper-vio-colmap-handoff:ro
-
-      # ── COLMAP binary (custom-built with CUDA sm_87 for Jetson Orin) ───────
-      # The binary links against host CUDA libs; mounting keeps everything consistent.
-      - /usr/local/bin/colmap:/usr/local/bin/colmap:ro
-
-      # COLMAP custom libraries not in standard apt (built alongside COLMAP):
-      - /lib/libceres.so.2:/lib/libceres.so.2:ro
-      - /lib/libceres.so.2.0.0:/lib/libceres.so.2.0.0:ro
-
-      # CUDA runtime (COLMAP needs libcudart, libcufft, etc.)
+      # CUDA runtime (kept for GPU acceleration; nothing on this branch
+      # requires it yet, but the toolkit is cheap to have mounted).
       - /usr/local/cuda:/usr/local/cuda:ro
 
       # SSH keys for rosbag remote sync (optional; remove if not using sync)
@@ -52,7 +48,7 @@ services:
     restart: unless-stopped
 
     # ── Resource limits ──────────────────────────────────────────────────────
-    # COLMAP can spike to 100% on all 6 cores; leave some headroom for ROS2
+    # Leave some CPU headroom for ROS2 regardless of what else runs.
     deploy:
       resources:
         limits:
