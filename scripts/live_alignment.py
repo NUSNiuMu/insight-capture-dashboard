@@ -58,9 +58,13 @@ class LiveAlignmentMixin:
         self.live_alignment_detection_max_age_ns = int(
             float(calibration_config.get("detection_max_age_ms", 500.0)) * 1_000_000
         )
+        # Uncapped above 1.0: mono/IR streams can have markers only ~40-50px
+        # wide at native resolution (too small for reliable quad extraction),
+        # and upscaling before detection measurably recovers detections in
+        # that case (verified against real insight3 footage).
         self.live_alignment_image_scale = max(
             0.1,
-            min(1.0, float(calibration_config.get("alignment_image_scale", 1.0))),
+            float(calibration_config.get("alignment_image_scale", 1.0)),
         )
         self.live_alignment_processing_hz = max(
             0.5,
@@ -123,10 +127,15 @@ class LiveAlignmentMixin:
         self.live_alignment_detector = None
         detector_params = cv2.aruco.DetectorParameters()
         # Default is CORNER_REFINE_NONE (coarse polygon-approximation corners).
-        # AprilTag's own refinement is tuned for this exact marker family and
-        # meaningfully tightens corner localization, which is the dominant
-        # error source in the board pose estimate below.
-        detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_APRILTAG
+        # CORNER_REFINE_APRILTAG gives the best corners on clean/high-res
+        # images but was verified (against real insight3 mono footage where
+        # markers are only ~40-50px wide) to detect *zero* markers where NONE
+        # and SUBPIX both still work — its internal refinement apparently
+        # needs more pixels-per-module than this fleet's cameras provide.
+        # SUBPIX is the safer middle ground: still meaningfully better than
+        # NONE on well-resolved images, without APRILTAG's total failure mode
+        # on marginal-resolution ones.
+        detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
         if hasattr(cv2.aruco, "ArucoDetector"):
             self.live_alignment_detector = cv2.aruco.ArucoDetector(
                 self.live_alignment_aruco_dict,
