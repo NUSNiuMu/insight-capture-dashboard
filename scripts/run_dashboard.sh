@@ -44,6 +44,24 @@ until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
 done
 log "Backend is up."
 
+# /healthz only proves the HTTP server is listening -- ROS2 discovery still
+# needs a few seconds to actually start receiving camera/pose data after
+# that. Launching --jetson (or opening the page) before real data is
+# flowing showed an empty 3D view / no image stream even though everything
+# was otherwise fine a few seconds later. Wait here instead of leaving that
+# race to whoever's watching the screen.
+log "Waiting for at least one camera to report live data..."
+data_deadline=$(( $(date +%s) + 30 ))
+until curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(not c.get("stale", True) for c in d.get("cameras", [])) else 1)' \
+        2>/dev/null; do
+    if (( $(date +%s) > data_deadline )); then
+        log "WARNING: no camera reported live data within 30s -- continuing anyway (check cameras/network if this is unexpected)."
+        break
+    fi
+    sleep 1
+done
+
 if [[ "${mode}" == "--jetson" ]]; then
     log "Launching on-device kiosk window (inside the container)..."
     export DISPLAY="${DISPLAY:-:0}"
