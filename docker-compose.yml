@@ -30,7 +30,7 @@ services:
     environment:
       - ROS_DOMAIN_ID=20           # Must match devices; override in .env if needed
       - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
       # For `run_dashboard.sh --jetson` (docker exec ... open_web_3d_right.sh):
       # PyQt5/QtWebEngine only exist inside this image, not necessarily on a
       # fresh host, so the kiosk window has to run via `docker exec`, which
