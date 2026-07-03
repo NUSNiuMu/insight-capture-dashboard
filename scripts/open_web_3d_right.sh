@@ -2,7 +2,6 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ $# -ge 1 ]]; then
   URL="$1"
 else
@@ -14,22 +13,26 @@ export XAUTHORITY="${XAUTHORITY:-${HOME}/.Xauthority}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR}/bus}"
 export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"
-export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
-export QTWEBENGINE_DISABLE_SANDBOX="${QTWEBENGINE_DISABLE_SANDBOX:-1}"
 unset WAYLAND_DISPLAY
 
-PYQT_PLUGIN_PATH="$(python3 - <<'PY'
-from PyQt5.QtCore import QLibraryInfo
-print(QLibraryInfo.location(QLibraryInfo.PluginsPath))
-PY
-)"
-if [[ -n "${PYQT_PLUGIN_PATH}" ]]; then
-  export QT_QPA_PLATFORM_PLUGIN_PATH="${PYQT_PLUGIN_PATH}"
+# The kiosk browser is vendored into the image at a fixed location (see
+# Dockerfile's PLAYWRIGHT_BROWSERS_PATH) rather than a bundled revision
+# folder name, so resolve the actual binary path at run time.
+CHROME_BIN="$(find "${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}" -maxdepth 3 -type f -name chrome -path '*/chrome-linux/chrome' 2>/dev/null | head -1)"
+if [[ -z "${CHROME_BIN}" ]]; then
+  echo "Kiosk Chromium binary not found under ${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers} -- rebuild the image (docker compose build)." >&2
+  exit 1
 fi
 
-exec python3 "${SCRIPT_DIR}/web_3d_window.py" \
-  --url "${URL}" \
-  --x 0 \
-  --y 0 \
-  --width 1920 \
-  --height 1080
+# --kiosk: true fullscreen, no window chrome, matches the previous PyQt5
+# window's full-1920x1080 geometry without needing explicit --window-size
+# (kiosk mode fills whatever display it's given). --no-sandbox is required
+# because this runs as root in the container; the container boundary is the
+# actual sandbox here, same trust model as the code it replaces.
+exec "${CHROME_BIN}" \
+  --kiosk \
+  --no-sandbox \
+  --no-first-run \
+  --disable-session-crashed-bubble \
+  --disable-infobars \
+  "${URL}"

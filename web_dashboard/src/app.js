@@ -1279,7 +1279,13 @@ function ensureCameraPanel(camera) {
   `;
   const img = panel.querySelector(".camera-frame");
   img.addEventListener("load", () => {
+    const state = cameraPollState.get(camera.name);
+    if (state) state.loading = false;
     recordDisplayedFrame(camera.name);
+  });
+  img.addEventListener("error", () => {
+    const state = cameraPollState.get(camera.name);
+    if (state) state.loading = false;
   });
   const toggle = panel.querySelector("[data-camera-toggle]");
   toggle.addEventListener("click", () => {
@@ -1301,7 +1307,8 @@ function ensureCameraPanel(camera) {
     version: -1,
     aspectInitialized: false,
     backendFps: 0,
-    displayFrameTimes: []
+    displayFrameTimes: [],
+    loading: false
   });
   return panel;
 }
@@ -1343,10 +1350,34 @@ function updateCameraStream(panel, camera) {
   ) {
     return;
   }
+  if (pollState.loading) {
+    // A decode is already in flight -- the next poll tick will pick up
+    // whatever is newest once it finishes.
+    return;
+  }
   pollState.frameUrl = camera.frame_url;
   pollState.version = version;
+  pollState.loading = true;
   cameraPollState.set(camera.name, pollState);
-  img.src = `${camera.frame_url}?v=${version}&ts=${Date.now()}`;
+
+  // Assigning straight to the visible <img>'s src repaints it before the
+  // new image finishes decoding, showing a blank/white frame in the gap
+  // (this device's compositor makes that gap visible as a flash). Decoding
+  // off-DOM first means the visible swap below is a same-URL cache hit that
+  // paints already-decoded pixels immediately.
+  const url = `${camera.frame_url}?v=${version}&ts=${Date.now()}`;
+  const preload = new Image();
+  preload.src = url;
+  const clearLoading = () => {
+    const state = cameraPollState.get(camera.name);
+    if (state) state.loading = false;
+  };
+  if (typeof preload.decode === "function") {
+    preload.decode().then(() => { img.src = url; }).catch(clearLoading);
+  } else {
+    preload.addEventListener("load", () => { img.src = url; });
+    preload.addEventListener("error", clearLoading);
+  }
 }
 
 function updateCameraFps(cameraName, fps) {
