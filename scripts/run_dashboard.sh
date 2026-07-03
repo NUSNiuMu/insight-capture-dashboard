@@ -41,8 +41,15 @@ done
 log "Backend is up."
 
 if [[ "${mode}" == "--jetson" ]]; then
-    log "Launching on-device kiosk window..."
-    exec "${SCRIPT_DIR}/open_web_3d_right.sh"
+    log "Launching on-device kiosk window (inside the container)..."
+    # PyQt5/QtWebEngine only exist inside the image, not necessarily on a
+    # fresh host, so this runs via `docker exec` rather than directly here.
+    # -e DISPLAY overrides whatever was baked in at `docker compose up`
+    # time, in case this shell's X session differs (e.g. it was started
+    # over SSH without X, and you're now running --jetson from a local
+    # desktop session instead).
+    exec docker exec -it -e DISPLAY="${DISPLAY:-:0}" insight-dashboard \
+        /workspaces/insight_capture/scripts/open_web_3d_right.sh
 fi
 
 host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"

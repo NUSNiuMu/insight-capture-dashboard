@@ -31,6 +31,11 @@ services:
       - ROS_DOMAIN_ID=20           # Must match devices; override in .env if needed
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # For `run_dashboard.sh --jetson` (docker exec ... open_web_3d_right.sh):
+      # PyQt5/QtWebEngine only exist inside this image, not necessarily on a
+      # fresh host, so the kiosk window has to run via `docker exec`, which
+      # needs DISPLAY + the X11 socket below to reach the host's X server.
+      - DISPLAY=${DISPLAY:-:0}
       # Uncomment to override default port:
       # - DASHBOARD_PORT=8765
 
@@ -41,6 +46,11 @@ services:
       # CUDA runtime (kept for GPU acceleration; nothing on this branch
       # requires it yet, but the toolkit is cheap to have mounted).
       - /usr/local/cuda:/usr/local/cuda:ro
+
+      # X11 socket for the on-device kiosk window (--jetson). Plain `docker
+      # compose` doesn't get VS Code Dev Containers' automatic X11
+      # forwarding, so this has to be explicit here.
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
       # SSH keys for rosbag remote sync (optional; remove if not using sync).
       # ${HOME} resolves from the shell that runs `docker compose`, not a
