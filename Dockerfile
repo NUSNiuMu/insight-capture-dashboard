@@ -97,6 +97,24 @@ RUN pip3 install --no-cache-dir \
     "aiohttp==3.13.3" \
     "opencv-contrib-python-headless==4.11.0.86"
 
+# ── Kiosk browser (scripts/open_web_3d_right.sh) ────────────────────────────
+# The on-device kiosk previously used PyQt5's QWebEngineView, which bundles
+# Chromium 87 (Nov 2020, frozen since). That old build's GPU compositor has
+# a bug on this Tegra GPU/driver combo: under high-frequency, large texture
+# uploads (the live camera feed panels) it presents a blank/white compositor
+# frame -- visible as a flicker, worse the busier the page. Confirmed absent
+# on a current Chromium build on the same hardware. Vendored here via
+# Playwright rather than the host's snap/apt chromium-browser: both of those
+# route through snap-confine, which was found broken (missing file
+# capabilities) on at least one deployed Jetson -- vendoring into the image
+# sidesteps the host package manager entirely and keeps the browser version
+# pinned and reproducible across machines.
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+RUN pip3 install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    "playwright==1.61.0" \
+    && python3 -m playwright install --with-deps chromium
+
 # ── Entrypoint: sources ROS2 and sets library paths ─────────────────────────
 COPY scripts/docker_entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

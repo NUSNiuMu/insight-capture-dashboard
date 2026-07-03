@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# No longer used by scripts/open_web_3d_right.sh (default kiosk launch) --
+# its bundled Chromium 87 has a GPU-compositor flicker bug on Tegra under
+# heavy image traffic that a current Chromium build doesn't have. Kept
+# around in case a QtWebEngine-based kiosk is ever needed again.
 
 import argparse
 import os
