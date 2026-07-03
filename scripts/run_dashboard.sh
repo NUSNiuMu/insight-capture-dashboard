@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Start (or ensure running) the Insight dashboard backend via docker compose,
-# then either stay in the foreground tailing logs for remote/laptop viewing
-# over an SSH tunnel (default) or launch the on-device PyQt5 kiosk window
-# (--jetson). Both modes stop the backend cleanly on Ctrl-C.
+# then stay in the foreground so Ctrl-C can stop it cleanly. Default mode
+# waits quietly (no log spam); --logs follows the backend logs instead;
+# --jetson launches the on-device PyQt5 kiosk window.
 #
 # Usage:
-#   ./scripts/run_dashboard.sh            # backend only; view from your own
-#                                          # laptop over an SSH tunnel;
-#                                          # Ctrl-C stops the backend
+#   ./scripts/run_dashboard.sh            # quiet; Ctrl-C stops the backend
+#   ./scripts/run_dashboard.sh --logs     # same, but follows backend logs
 #   ./scripts/run_dashboard.sh --jetson   # also pull up the local kiosk
 #                                          # window (only if a monitor is
 #                                          # attached to this machine);
@@ -24,8 +23,8 @@ PORT="${DASHBOARD_PORT:-8765}"
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
 mode="${1:-}"
-if [[ -n "${mode}" && "${mode}" != "--jetson" ]]; then
-    echo "Usage: $0 [--jetson]" >&2
+if [[ -n "${mode}" && "${mode}" != "--jetson" && "${mode}" != "--logs" ]]; then
+    echo "Usage: $0 [--jetson|--logs]" >&2
     exit 1
 fi
 
@@ -72,13 +71,23 @@ From your own laptop, open an SSH tunnel and browse locally:
   ssh -L ${PORT}:localhost:${PORT} $(whoami)@${host_ip:-<this-jetson-ip>}
   then open http://localhost:${PORT}/ in your browser
 
-(Pass --jetson instead to launch the on-device kiosk window here.)
+(Pass --jetson to launch the on-device kiosk window here, or --logs to
+follow backend logs instead of running quietly.)
 
-Following backend logs below. Press Ctrl-C to stop the backend.
+Press Ctrl-C to stop the backend.
 EOF
 
-# Stay in the foreground (tailing logs) so Ctrl-C has something to interrupt
-# and actually tears the backend down, instead of `up -d` leaving it running
-# detached with no way to stop it from this script.
+# Stay in the foreground so Ctrl-C has something to interrupt and actually
+# tears the backend down, instead of `up -d` leaving it running detached
+# with no way to stop it from this script. The blocking command runs
+# backgrounded + `wait`ed rather than plain foreground: bash only runs traps
+# between commands, and a foreground external command can otherwise delay
+# signal handling until *it* exits (which "sleep infinity" never does).
 trap 'echo; log "Ctrl-C received, stopping backend (docker compose down)..."; docker compose down; exit 0' INT TERM
-docker compose logs -f
+
+if [[ "${mode}" == "--logs" ]]; then
+    docker compose logs -f &
+else
+    sleep infinity &
+fi
+wait $!
