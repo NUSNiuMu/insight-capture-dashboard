@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import threading
 import time
+import traceback
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -1341,6 +1342,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _run_executor(executor: "MultiThreadedExecutor", node: "PoseBridgeNode") -> None:
+    # executor.spin() runs in a daemon thread: if it raises (observed in the
+    # wild as rclpy's RCLError "failed to initialize wait set" on a startup
+    # race), the exception is otherwise silently swallowed -- the process
+    # keeps running, the HTTP server keeps answering healthz, but every ROS
+    # callback (pose/image/camera_info) is dead forever with no visible
+    # signal that anything is wrong. Exit hard so `restart: unless-stopped`
+    # actually gets a chance to recover instead of leaving a zombie backend.
+    try:
+        executor.spin()
+    except Exception:
+        node.get_logger().fatal(
+            "ROS executor thread crashed; exiting so the container restarts.\n"
+            + traceback.format_exc()
+        )
+        os._exit(1)
+
+
 def main() -> None:
     args = parse_args()
     config_path = Path(args.config).resolve()
@@ -1410,7 +1429,9 @@ def main() -> None:
         node.start_live_alignment()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
-    spin_thread = threading.Thread(target=executor.spin, daemon=True, name="ros_executor")
+    spin_thread = threading.Thread(
+        target=_run_executor, args=(executor, node), daemon=True, name="ros_executor"
+    )
     spin_thread.start()
 
     web_root = Path(args.web_root) if args.web_root else None
