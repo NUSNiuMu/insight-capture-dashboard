@@ -6,6 +6,7 @@ import os
 import signal
 import threading
 import time
+import traceback
 from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
@@ -445,6 +446,23 @@ class DashboardNode(LiveAlignmentMixin, Node):
         return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
 
 
+def _run_executor(executor: MultiThreadedExecutor, node: "DashboardNode") -> None:
+    # Same failure mode as the web dashboard's executor thread: spin() runs
+    # in a daemon thread with no exception handling, so if rclpy raises
+    # (observed as RCLError "failed to initialize wait set" on a startup
+    # race) the thread dies silently -- the Qt window keeps showing, but
+    # every pose/image callback is dead forever with no visible sign
+    # anything broke. Exit hard so the failure is at least visible instead
+    # of a window that just never updates.
+    try:
+        executor.spin()
+    except Exception:
+        node.get_logger().fatal(
+            "ROS executor thread crashed; exiting.\n" + traceback.format_exc()
+        )
+        os._exit(1)
+
+
 class DashboardWindow(QtWidgets.QMainWindow):
     BG = "#0f1720"
 
@@ -465,7 +483,9 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.image_display_fps: Dict[str, float] = {camera.name: 0.0 for camera in self.node.cameras}
         self.image_timers: Dict[str, QtCore.QTimer] = {}
         self.alignment_state_timer: Optional[QtCore.QTimer] = None
-        self.spin_thread = threading.Thread(target=self.executor.spin, daemon=True)
+        self.spin_thread = threading.Thread(
+            target=_run_executor, args=(self.executor, self.node), daemon=True
+        )
         self._build_ui()
         self._setup_timers()
 
