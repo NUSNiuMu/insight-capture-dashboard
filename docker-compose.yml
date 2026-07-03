@@ -24,8 +24,10 @@ services:
     # GPU process (open_web_3d_right.sh / open_monitor_dashboard.sh): its
     # command-buffer ring allocation fails silently and the WebGL canvas
     # never renders, both with real GPU (context-loss loop) and swiftshader
-    # (AllocateRingBuffer failures).
-    shm_size: '1gb'
+    # (AllocateRingBuffer failures). tmpfs, so this only costs memory if
+    # actually used -- bump further if still flaky, bounded by host RAM
+    # (`free -h`).
+    shm_size: '2gb'
 
     environment:
       - ROS_DOMAIN_ID=20           # Must match devices; override in .env if needed
