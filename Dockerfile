@@ -115,6 +115,15 @@ RUN pip3 install --no-cache-dir \
     "playwright==1.61.0" \
     && python3 -m playwright install --with-deps chromium
 
+# ── Interactive shells: source ROS2 for plain `docker exec -it ... bash` ────
+# docker_entrypoint.sh only wraps the container's own CMD; a `docker exec`
+# shell attaches directly to bash and skips it, so `ros2 ...` fails with
+# import errors (PATH has the binary, but PYTHONPATH/AMENT_PREFIX_PATH from
+# setup.bash are missing). Mirrors devcontainer.json's postCreateCommand,
+# which only fixes this for VS Code's own terminals, not a bare exec.
+RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc \
+    && echo 'export LD_LIBRARY_PATH=/lib:/lib/aarch64-linux-gnu:/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> /root/.bashrc
+
 # ── Entrypoint: sources ROS2 and sets library paths ─────────────────────────
 COPY scripts/docker_entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
