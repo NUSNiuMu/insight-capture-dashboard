@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
-# Start (or ensure running) the Insight dashboard backend via docker compose,
-# then stay in the foreground so Ctrl-C can stop it cleanly. Default mode
-# waits quietly (no log spam); --logs follows the backend logs instead;
-# --jetson launches the on-device PyQt5 kiosk window.
+# Start (or ensure running) the Insight dashboard backend, then stay in the
+# foreground so Ctrl-C can stop it cleanly. Default mode waits quietly (no
+# log spam); --logs follows the backend logs instead; --jetson launches the
+# on-device PyQt5 kiosk window.
+#
+# Run from the host, this manages the container's whole lifecycle via
+# docker compose. Run from inside the container (e.g. already `docker exec`'d
+# in, or a devcontainer shell), it skips compose entirely and just waits on
+# the backend that's already running, launching the kiosk directly in-process
+# -- Ctrl-C only stops what this script started, not the backend.
 #
 # Usage:
 #   ./scripts/run_dashboard.sh            # quiet; Ctrl-C stops the backend
@@ -12,7 +18,8 @@
 #                                          # attached to this machine);
 #                                          # Ctrl-C closes the kiosk window
 #                                          # (backend keeps running --
-#                                          # `docker compose down` to stop it)
+#                                          # `docker compose down` to stop it,
+#                                          # from the host)
 
 set -euo pipefail
 
@@ -22,16 +29,32 @@ PORT="${DASHBOARD_PORT:-8765}"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
+# Standard Docker marker file -- present in every container, regardless of
+# how it was started (compose, devcontainer, plain `docker run`).
+in_container=false
+[[ -f /.dockerenv ]] && in_container=true
+
 mode="${1:-}"
 if [[ -n "${mode}" && "${mode}" != "--jetson" && "${mode}" != "--logs" ]]; then
     echo "Usage: $0 [--jetson|--logs]" >&2
     exit 1
 fi
 
+if [[ "${in_container}" == "true" && "${mode}" == "--logs" ]]; then
+    echo "--logs reads the container's own stdout via 'docker compose logs'," >&2
+    echo "which only works from the host (no docker CLI in this image). Run" >&2
+    echo "'docker compose logs -f' from the host instead." >&2
+    exit 1
+fi
+
 cd "${ROOT_DIR}"
 
-log "Starting dashboard backend via docker compose..."
-docker compose up -d
+if [[ "${in_container}" == "true" ]]; then
+    log "Already inside the container -- skipping docker compose."
+else
+    log "Starting dashboard backend via docker compose..."
+    docker compose up -d
+fi
 
 log "Waiting for backend to become healthy on :${PORT}..."
 deadline=$(( $(date +%s) + 60 ))
@@ -63,8 +86,16 @@ until curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
 done
 
 if [[ "${mode}" == "--jetson" ]]; then
-    log "Launching on-device kiosk window (inside the container)..."
+    log "Launching on-device kiosk window..."
     export DISPLAY="${DISPLAY:-:0}"
+    if [[ "${in_container}" == "true" ]]; then
+        # Already inside the image that has PyQt5/QtWebEngine -- run the
+        # kiosk directly instead of hopping back out through `docker exec`.
+        # xhost (host-side X access control) isn't installed in this image
+        # and isn't needed here: if you can already reach this shell with a
+        # working DISPLAY, the host already granted access.
+        exec "${SCRIPT_DIR}/open_web_3d_right.sh"
+    fi
     # The container connects to the host's X server as root, which the X
     # server's access control will reject by default unless the host
     # explicitly allows it. Harmless no-op if xhost isn't installed or
@@ -92,16 +123,27 @@ From your own laptop, open an SSH tunnel and browse locally:
 (Pass --jetson to launch the on-device kiosk window here, or --logs to
 follow backend logs instead of running quietly.)
 
-Press Ctrl-C to stop the backend.
 EOF
+if [[ "${in_container}" == "true" ]]; then
+    echo "Press Ctrl-C to stop watching (backend keeps running)."
+else
+    echo "Press Ctrl-C to stop the backend."
+fi
 
-# Stay in the foreground so Ctrl-C has something to interrupt and actually
-# tears the backend down, instead of `up -d` leaving it running detached
-# with no way to stop it from this script. The blocking command runs
-# backgrounded + `wait`ed rather than plain foreground: bash only runs traps
-# between commands, and a foreground external command can otherwise delay
-# signal handling until *it* exits (which "sleep infinity" never does).
-trap 'echo; log "Ctrl-C received, stopping backend (docker compose down)..."; docker compose down; exit 0' INT TERM
+# Stay in the foreground so Ctrl-C has something to interrupt. On the host
+# this actually tears the backend down, instead of `up -d` leaving it running
+# detached with no way to stop it from this script; inside the container
+# there's no compose to tear down (and it keeps running the image's own main
+# process either way), so Ctrl-C here just stops watching. The blocking
+# command runs backgrounded + `wait`ed rather than plain foreground: bash
+# only runs traps between commands, and a foreground external command can
+# otherwise delay signal handling until *it* exits (which "sleep infinity"
+# never does).
+if [[ "${in_container}" == "true" ]]; then
+    trap 'echo; log "Ctrl-C received, exiting (backend keeps running)."; exit 0' INT TERM
+else
+    trap 'echo; log "Ctrl-C received, stopping backend (docker compose down)..."; docker compose down; exit 0' INT TERM
+fi
 
 if [[ "${mode}" == "--logs" ]]; then
     docker compose logs -f &
