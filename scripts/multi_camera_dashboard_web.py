@@ -14,7 +14,7 @@ import traceback
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Deque, Dict, List, Optional, Set, Tuple
+from typing import Deque, Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import quote
 
 import numpy as np
@@ -57,6 +57,7 @@ from camera_setup import (
 )
 from gripper_tracking import GripperTrackingMixin
 from hand_overlay import HandOverlayMixin
+from inprocess_bag_writer import InProcessBagWriter
 import perf_tracker
 from perf_tracker import track
 from live_alignment import LiveAlignmentMixin
@@ -270,6 +271,24 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self.live_alignment_solution_lock = threading.Lock()
         self.ros_callback_group = ReentrantCallbackGroup()
         self.dashboard_subscriptions = []
+        # Recording feeds off this node's own image subscriptions instead of
+        # a second `ros2 bag record` reader -- see inprocess_bag_writer.py
+        # for why a second reader on the same image topic causes drops.
+        # Keyed by output path (one writer/thread per camera, see
+        # start_image_recording) so cameras don't serialize behind each
+        # other on a single writer thread.
+        self._recording_writers: Dict[str, InProcessBagWriter] = {}
+        self._recording_writer_by_topic: Dict[str, InProcessBagWriter] = {}
+        self._recording_writer_lock = threading.Lock()
+        # Latest-frame handoff from the (near-zero-cost) image subscription
+        # callbacks to the per-camera worker threads that do the heavy
+        # per-frame work (gripper detect, alignment, display encode). Plain
+        # dict item set/pop is atomic under the GIL -- no lock needed for a
+        # single-producer single-consumer latest-value slot.
+        self._pending_frames: Dict[str, object] = {}
+        self._pending_frame_events: Dict[str, threading.Event] = {
+            camera.name: threading.Event() for camera in self.cameras
+        }
         self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
         self._configure_hand_overlay()
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
@@ -312,7 +331,12 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         return camera.alignment_image_stream or self.live_alignment_image_stream
 
     def _create_dashboard_image_subscriptions(self) -> None:
-        image_qos = make_image_qos(reliability=self.image_qos_reliability)
+        # depth>1 matters once recording feeds off this subscription: with
+        # KEEP_LAST depth=1, any executor scheduling hiccup overwrites the
+        # not-yet-delivered frame and the recording loses it, even under
+        # RELIABLE (reliability guarantees delivery into the history, not
+        # that history won't be overwritten). 5 * ~510KB per camera is cheap.
+        image_qos = make_image_qos(depth=5, reliability=self.image_qos_reliability)
         for camera in self.cameras:
             namespace = camera.namespace
             align_topic = (
@@ -330,6 +354,12 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 callback_group=self.ros_callback_group,
             )
             self.dashboard_subscriptions.append(sub)
+            threading.Thread(
+                target=self._frame_worker_loop,
+                args=(camera.name, camera.topic_type, also_alignment),
+                daemon=True,
+                name=f"frame_worker_{camera.name}",
+            ).start()
             self.get_logger().info(f"Images: {camera.name} <- {camera.topic} type={camera.topic_type}")
 
     def _create_hand_overlay_subscriptions(self) -> None:
@@ -447,28 +477,95 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
 
         return callback
 
-    def _make_dashboard_image_callback(self, camera_name: str, topic_type: str, also_alignment: bool = False):
-        alignment_cb = self._make_live_alignment_image_callback(camera_name, topic_type) if also_alignment else None
+    def start_image_recording(self, topic_output_paths: Dict[str, str]) -> None:
+        """topic_output_paths maps each image topic to its own bag output
+        path -- one InProcessBagWriter (and background thread) per distinct
+        path, so e.g. insight3_a's and insight3_b's large uncompressed
+        streams don't serialize behind each other on a single writer thread
+        (measured: sharing one writer capped both around 13-16Hz instead of
+        their ~20Hz native rate, while insight9_a's much smaller compressed
+        stream alone kept up fine)."""
+        with self._recording_writer_lock:
+            if self._recording_writers:
+                raise RuntimeError("Image recording writer is already running.")
+            writers_by_path: Dict[str, InProcessBagWriter] = {}
+            writer_by_topic: Dict[str, InProcessBagWriter] = {}
+            for topic, output_path in topic_output_paths.items():
+                writer = writers_by_path.get(output_path)
+                if writer is None:
+                    writer = InProcessBagWriter(output_path)
+                    writers_by_path[output_path] = writer
+                writer_by_topic[topic] = writer
+            self._recording_writers = writers_by_path
+            self._recording_writer_by_topic = writer_by_topic
 
+    def stop_image_recording(self) -> Dict[str, object]:
+        with self._recording_writer_lock:
+            writers = self._recording_writers
+            self._recording_writers = {}
+            self._recording_writer_by_topic = {}
+        dropped = 0
+        for writer in writers.values():
+            writer.close()
+            dropped += writer.dropped_count
+        return {"dropped": dropped}
+
+    def _feed_recording_writer(self, topic: str, msg: object) -> None:
+        writer = self._recording_writer_by_topic.get(topic)
+        if writer is None:
+            return
+        writer.write(topic, msg, self.get_clock().now().nanoseconds)
+
+    def _make_dashboard_image_callback(self, camera_name: str, topic_type: str, also_alignment: bool = False):
+        camera_topic = next(c.topic for c in self.cameras if c.name == camera_name)
+        event = self._pending_frame_events[camera_name]
+
+        # The subscription callback must stay near-zero cost: anything heavy
+        # here (gripper ArUco detection alone was measured at 35-48% of a
+        # core per camera) pushes per-frame handling past the 50ms frame
+        # period, the DDS receive queue overflows, and messages are dropped
+        # before recording ever sees them. So this only feeds the recording
+        # writer (a queue put) and stashes the latest message for the
+        # per-camera worker thread, which does gripper/alignment/encode at
+        # whatever rate it can manage -- skipping display frames is fine,
+        # losing recorded frames is not.
         def callback(msg) -> None:
             if self._playback_mode:
                 stamp_ns = self._stamp_to_ns(msg.header.stamp)
                 if not self._in_bag_range(stamp_ns):
                     return
-            if alignment_cb is not None:
-                alignment_cb(msg)
-            if camera_name in self.gripper_tracking_cameras:
-                gripper_image = self._decode_calibration_message(topic_type, msg)
-                if gripper_image is not None:
-                    self._process_gripper_image(camera_name, gripper_image)
-            frame = self._encode_dashboard_frame(camera_name, topic_type, msg)
-            if frame is None:
-                return
-            with self.camera_frame_lock:
-                self.latest_camera_frames[camera_name] = frame
-                self.camera_frame_times[camera_name].append(frame.received_monotonic)
+            else:
+                self._feed_recording_writer(camera_topic, msg)
+            self._pending_frames[camera_name] = msg
+            event.set()
 
         return callback
+
+    def _frame_worker_loop(self, camera_name: str, topic_type: str, also_alignment: bool) -> None:
+        alignment_cb = self._make_live_alignment_image_callback(camera_name, topic_type) if also_alignment else None
+        event = self._pending_frame_events[camera_name]
+        while rclpy is not None and rclpy.ok():
+            if not event.wait(timeout=1.0):
+                continue
+            event.clear()
+            msg = self._pending_frames.pop(camera_name, None)
+            if msg is None:
+                continue
+            try:
+                if alignment_cb is not None:
+                    alignment_cb(msg)
+                if camera_name in self.gripper_tracking_cameras:
+                    gripper_image = self._decode_calibration_message(topic_type, msg)
+                    if gripper_image is not None:
+                        self._process_gripper_image(camera_name, gripper_image)
+                frame = self._encode_dashboard_frame(camera_name, topic_type, msg)
+                if frame is None:
+                    continue
+                with self.camera_frame_lock:
+                    self.latest_camera_frames[camera_name] = frame
+                    self.camera_frame_times[camera_name].append(frame.received_monotonic)
+            except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the worker
+                self.get_logger().warning(f"frame worker {camera_name}: {exc}")
 
     def _encode_dashboard_frame(self, camera_name: str, topic_type: str, msg: object) -> Optional[CameraFrame]:
         stamp_ns = self._stamp_to_ns(msg.header.stamp)
@@ -1690,17 +1787,6 @@ def main() -> None:
 
     configured_record_topics = post_processing_config.get("record_topics") or []
     default_record_topics = configured_record_topics if configured_record_topics else build_default_topics(raw_config)
-    recording_manager = RecordingManager(
-        raw_config=raw_config,
-        ros_domain_id=ros_domain_id,
-        rosbag_root=rosbag_root,
-        max_cache_size=int(post_processing_config.get("max_cache_size", 2147483648)),
-        default_topics=default_record_topics,
-        host_sync_dir=host_rosbag_sync_root,
-        host_sync_ssh_target=str(host_rosbag_sync_ssh_target or "").strip(),
-        sync_to_host_on_stop=bool(post_processing_config.get("sync_rosbag_to_host", False)),
-        publisher_checker=None,
-    )
 
     rclpy.init(args=None)
     enable_alignment_stream = not args.fake_pose
@@ -1711,6 +1797,21 @@ def main() -> None:
         enable_alignment_stream=enable_alignment_stream,
     )
     node.get_logger().info(f"View mode={args.view_mode} alignment_stream={enable_alignment_stream}")
+
+    recording_manager = RecordingManager(
+        raw_config=raw_config,
+        ros_domain_id=ros_domain_id,
+        rosbag_root=rosbag_root,
+        max_cache_size=int(post_processing_config.get("max_cache_size", 2147483648)),
+        default_topics=default_record_topics,
+        host_sync_dir=host_rosbag_sync_root,
+        host_sync_ssh_target=str(host_rosbag_sync_ssh_target or "").strip(),
+        sync_to_host_on_stop=bool(post_processing_config.get("sync_rosbag_to_host", False)),
+        publisher_checker=None,
+        image_topics=[camera.topic for camera in node.cameras],
+        start_image_recording=node.start_image_recording,
+        stop_image_recording=node.stop_image_recording,
+    )
     if args.start_alignment and node.live_alignment_available and not args.fake_pose:
         node.start_live_alignment()
     executor = MultiThreadedExecutor()
