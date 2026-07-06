@@ -31,6 +31,12 @@ services:
 
     environment:
       - ROS_DOMAIN_ID=20           # Must match devices; override in .env if needed
+      # Base image defaults to Etc/UTC. Without this, rosbag names
+      # (insight_record_YYYYMMDD_HHMMSS, from time.strftime -> localtime)
+      # and container log timestamps are 8h behind actual wall-clock time
+      # on a China-based host, which reads as "wrong" until you remember
+      # the offset. tzdata is already in the image (see Dockerfile).
+      - TZ=Asia/Shanghai
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
       # For `run_dashboard.sh --jetson` (docker exec ... open_web_3d_right.sh):
@@ -62,8 +68,11 @@ services:
     restart: unless-stopped
 
     # ── Resource limits ──────────────────────────────────────────────────────
-    # Leave some CPU headroom for ROS2 regardless of what else runs.
+    # This host has exactly 6 cores. Leave a thin 0.2-core reservation for the
+    # host OS/sshd/dockerd -- not for ROS2's sake (that runs in here), but so
+    # a runaway process *inside* this container (rosbag record, a leftover
+    # test browser, anything) can't fully starve the host and lock out SSH.
     deploy:
       resources:
         limits:
-          cpus: '5.5'
+          cpus: '5.8'

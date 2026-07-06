@@ -61,6 +61,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-sensor-msgs \
     ros-humble-geometry-msgs \
     ros-humble-rosidl-runtime-py \
+    # Detection2DArray for the insight9_a hand-landmark overlay (Settings page)
+    ros-humble-vision-msgs \
     # COLMAP runtime dependencies (matches host Ubuntu 22.04 packages)
     libboost-program-options1.74.0 \
     libboost-filesystem1.74.0 \
