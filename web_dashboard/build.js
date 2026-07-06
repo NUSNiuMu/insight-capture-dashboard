@@ -41,6 +41,7 @@ copyFile(path.join(srcDir, "bags.html"), path.join(distDir, "bags.html"));
 copyFile(path.join(srcDir, "recording.html"), path.join(distDir, "recording.html"));
 copyFile(path.join(srcDir, "scoring.html"), path.join(distDir, "scoring.html"));
 copyFile(path.join(srcDir, "optimization.html"), path.join(distDir, "optimization.html"));
+copyFile(path.join(srcDir, "settings.html"), path.join(distDir, "settings.html"));
 copyFile(path.join(srcDir, "app.js"), path.join(staticDir, "app.js"));
 copyFile(path.join(srcDir, "styles.css"), path.join(staticDir, "styles.css"));
 

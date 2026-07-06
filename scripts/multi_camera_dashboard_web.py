@@ -30,6 +30,7 @@ try:
     from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
     from sensor_msgs.msg import CameraInfo
     from sensor_msgs.msg import CompressedImage, Image as RosImage
+    from vision_msgs.msg import Detection2DArray
 except Exception:  # pragma: no cover - fake mode can run without ROS imports
     rclpy = None
     PoseStamped = None
@@ -43,9 +44,21 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     CameraInfo = None
     CompressedImage = None
     RosImage = None
+    Detection2DArray = None
 
-from camera_setup import IMAGE_STREAMS, build_dashboard_config, camera_info_topic, image_topic, load_setup
+from camera_setup import (
+    AVAILABLE_AVATAR_MODELS,
+    IMAGE_STREAMS,
+    avatar_model_defaults,
+    build_dashboard_config,
+    camera_info_topic,
+    image_topic,
+    load_setup,
+)
 from gripper_tracking import GripperTrackingMixin
+from hand_overlay import HandOverlayMixin
+import perf_tracker
+from perf_tracker import track
 from live_alignment import LiveAlignmentMixin
 from post_processing import (
     OptimizationManager,
@@ -78,6 +91,41 @@ def _read_tum_points(path: Path, max_points: int = 2000) -> list:
         return points
     step = len(points) / max_points
     return [points[int(i * step)] for i in range(max_points)]
+
+
+def read_system_load() -> Dict[str, object]:
+    """Host-wide load average (not container-scoped -- /proc/loadavg isn't
+    namespaced) plus this container's own cgroup v2 CPU quota, so the UI can
+    show "how close to the ceiling are we" rather than a raw core count that
+    doesn't mean much once the container is itself capped below the host's
+    physical cores (see docker-compose.yml's `cpus:` limit).
+    """
+    load_1min = load_5min = None
+    try:
+        with open("/proc/loadavg") as f:
+            parts = f.read().split()
+        load_1min, load_5min = float(parts[0]), float(parts[1])
+    except (OSError, ValueError, IndexError):
+        pass
+
+    cpu_quota_cores = None
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as f:
+            quota_str, period_str = f.read().split()
+        if quota_str != "max":
+            cpu_quota_cores = int(quota_str) / int(period_str)
+    except (OSError, ValueError):
+        pass
+
+    cpu_count = os.cpu_count() or 1
+    budget = cpu_quota_cores or cpu_count
+    return {
+        "load_1min": load_1min,
+        "load_5min": load_5min,
+        "cpu_count": cpu_count,
+        "cpu_quota_cores": cpu_quota_cores,
+        "load_ratio": (load_1min / budget) if load_1min is not None else None,
+    }
 
 
 def make_qos(depth: int = 10) -> QoSProfile:
@@ -142,7 +190,7 @@ class CameraFrame:
     version: int
 
 
-class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
+class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin, Node):
     def __init__(
         self,
         config_path: Path,
@@ -223,6 +271,8 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
         self.ros_callback_group = ReentrantCallbackGroup()
         self.dashboard_subscriptions = []
         self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
+        self._configure_hand_overlay()
+        self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
         self._initialize_live_alignment_state()
         if self.world_to_reference:
             self.get_logger().info("Loaded persisted live alignment state for web dashboard startup")
@@ -233,6 +283,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
         else:
             self._create_pose_subscriptions()
             self._create_dashboard_image_subscriptions()
+            self._create_hand_overlay_subscriptions()
             if self.live_alignment_available:
                 self._create_alignment_subscriptions()
 
@@ -280,6 +331,40 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
             )
             self.dashboard_subscriptions.append(sub)
             self.get_logger().info(f"Images: {camera.name} <- {camera.topic} type={camera.topic_type}")
+
+    def _create_hand_overlay_subscriptions(self) -> None:
+        if Detection2DArray is None:
+            return
+        # Subscribed for every camera, not just insight9_a: hand detection is
+        # entirely device-side (HandEngine), so whether a camera actually
+        # publishes these topics is data-driven -- hand_overlay_available
+        # only flips true once a message actually arrives (see hand_overlay.py).
+        hand_qos = make_image_qos(depth=5, reliability="best_effort")
+        for camera in self.cameras:
+            namespace = camera.namespace
+            hand_topic = f"/{namespace}/camera/hand"
+            keypoints_topic = f"/{namespace}/camera/hand_keypoints"
+            box_sub = self.create_subscription(
+                Detection2DArray,
+                hand_topic,
+                lambda msg, name=camera.name: self._on_hand_boxes(name, msg),
+                hand_qos,
+                callback_group=self.ros_callback_group,
+            )
+            kp_sub = self.create_subscription(
+                Detection2DArray,
+                keypoints_topic,
+                lambda msg, name=camera.name: self._on_hand_keypoints(name, msg),
+                hand_qos,
+                callback_group=self.ros_callback_group,
+            )
+            self.dashboard_subscriptions.extend([box_sub, kp_sub])
+
+    def _log_perf_summary(self) -> None:
+        snapshot = perf_tracker.snapshot_and_reset()
+        if not snapshot["percent_of_one_core"]:
+            return
+        self.get_logger().info(perf_tracker.format_summary(snapshot))
 
     def _create_alignment_subscriptions(self) -> None:
         if not self.live_alignment_available:
@@ -393,6 +478,15 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
             self.camera_frame_versions[camera_name] = version
         if topic_type == "compressed":
             data = bytes(msg.data)
+            if camera_name in self.hand_overlay_enabled:
+                # Decode/draw/re-encode -- same per-frame cost the reference
+                # PC tool (visualize_hand_landmarks.py) pays to bake the
+                # skeleton into the pixels it displays/records. Only paid by
+                # cameras with the Settings toggle on; everyone else keeps
+                # the cheap passthrough (no decode) below.
+                composited = self.compose_hand_overlay_jpeg(camera_name, data)
+                if composited is not None:
+                    data = composited
             width, height = self._jpeg_dimensions(data)
             return CameraFrame(
                 data=data,
@@ -406,7 +500,8 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
         image = self._decode_calibration_message(topic_type, msg)
         if image is None:
             return None
-        ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+        with track(f"image_encode:{camera_name}"):
+            ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
         if not ok:
             return None
         height, width = image.shape[:2]
@@ -639,6 +734,45 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, Node):
             return None
         return f"/asset?path={quote(avatar_model, safe='')}"
 
+    def build_settings_payload(self) -> Dict[str, object]:
+        hand_cameras = set(getattr(self, "gripper_calibrations", {}).keys())
+        poses = []
+        for pose in self.poses:
+            model_name = Path(pose.avatar_model).name if pose.avatar_model else None
+            entry = {
+                "name": pose.name,
+                "role": pose.teleop_role,
+                "avatar_model": model_name,
+            }
+            if pose.name in hand_cameras:
+                entry["gripper_tracking_available"] = True
+                entry["gripper_tracking_enabled"] = pose.name in self.gripper_tracking_cameras
+            if pose.name in getattr(self, "hand_overlay_available", set()):
+                entry["hand_overlay_available"] = True
+                entry["hand_overlay_enabled"] = pose.name in self.hand_overlay_enabled
+            poses.append(entry)
+        return {
+            "poses": poses,
+            "available_models": AVAILABLE_AVATAR_MODELS,
+        }
+
+    def set_pose_avatar_model(self, pose_name: str, model_file: str) -> PoseSpec:
+        pose = next((p for p in self.poses if p.name == pose_name), None)
+        if pose is None:
+            raise ValueError(f"Unknown camera/pose '{pose_name}'")
+        allowed = {entry["file"] for entry in AVAILABLE_AVATAR_MODELS}
+        if model_file not in allowed:
+            raise ValueError(f"'{model_file}' is not one of the available models")
+        defaults = avatar_model_defaults(model_file)
+        # In-memory only, like the rest of Settings -- resets to cameras.json's
+        # configured value on the next process restart rather than persisting,
+        # since nothing else here writes back to the JSON config files.
+        pose.avatar_model = f"assets/models/{model_file}"
+        pose.avatar_scale = float(defaults.get("avatar_scale", 1.0))
+        pose.avatar_rotation_deg_xyz = tuple(defaults.get("avatar_rotation_deg_xyz", [0.0, 0.0, 0.0]))
+        pose.avatar_offset_xyz = (0.0, 0.0, 0.0)
+        return pose
+
     @staticmethod
     def _stamp_to_ns(stamp) -> int:
         return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
@@ -795,6 +929,26 @@ class ScoringManager:
         return found
 
 
+# Settings-page-editable subsets of config/board_calibration.json and
+# config/post_processing.json. Both files are only read once at process
+# startup (camera_setup.load_setup / post_processing.load_post_processing_config),
+# so writes here take effect only after a restart -- see
+# WebDashboardServer._handle_settings_restart.
+_BOARD_CALIBRATION_FIELDS: Dict[str, type] = {
+    "marker_length_m": float,
+    "marker_separation_m": float,
+    "board_rows": int,
+    "board_cols": int,
+    "max_translation_std_m": float,
+    "max_rotation_std_deg": float,
+}
+_ROSBAG_SYNC_FIELDS: Dict[str, type] = {
+    "sync_rosbag_to_host": bool,
+    "host_rosbag_sync_dir": str,
+    "host_rosbag_sync_ssh_target": str,
+}
+
+
 class WebDashboardServer:
     def __init__(
         self,
@@ -876,6 +1030,16 @@ class WebDashboardServer:
         app.router.add_get("/api/optimization/status", self._handle_optimization_status)
         app.router.add_get("/api/optimization/trajectories", self._handle_optimization_trajectories)
         app.router.add_get("/api/optimization/runs", self._handle_optimization_runs)
+        app.router.add_get("/api/settings", self._handle_settings_get)
+        app.router.add_post("/api/settings/avatar-model", self._handle_settings_avatar_model)
+        app.router.add_post("/api/settings/gripper-tracking", self._handle_settings_gripper_tracking)
+        app.router.add_get("/api/settings/board-calibration", self._handle_settings_board_calibration_get)
+        app.router.add_post("/api/settings/board-calibration", self._handle_settings_board_calibration_post)
+        app.router.add_get("/api/settings/rosbag-sync", self._handle_settings_rosbag_sync_get)
+        app.router.add_post("/api/settings/rosbag-sync", self._handle_settings_rosbag_sync_post)
+        app.router.add_post("/api/settings/restart-backend", self._handle_settings_restart)
+        app.router.add_post("/api/settings/hand-overlay", self._handle_settings_hand_overlay)
+        app.router.add_get("/api/cameras/{camera_name}/hand", self._handle_camera_hand_overlay)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
             app.router.add_get("/", self._handle_index)
@@ -886,6 +1050,7 @@ class WebDashboardServer:
             app.router.add_get("/recording", self._handle_recording_page)
             app.router.add_get("/scoring", self._handle_scoring_page)
             app.router.add_get("/optimization", self._handle_optimization_page)
+            app.router.add_get("/settings", self._handle_settings_page)
             static_root = self.web_root / "static"
             if static_root.exists():
                 app.router.add_static("/static/", str(static_root), show_index=False)
@@ -1011,6 +1176,122 @@ class WebDashboardServer:
         }
         return web.Response(body=frame.data, content_type=frame.mime_type, headers=headers)
 
+    async def _handle_camera_hand_overlay(self, request: web.Request) -> web.Response:
+        camera_name = request.match_info.get("camera_name", "")
+        if camera_name not in self.node.hand_overlay_available:
+            raise web.HTTPNotFound(text="no hand-landmark data for this camera")
+        if camera_name not in self.node.hand_overlay_enabled:
+            return web.json_response({"camera": camera_name, "enabled": False, "hands": []})
+        payload = self.node.hand_overlay_payload(camera_name) or {
+            "camera": camera_name,
+            "hands": [],
+            "stale": True,
+        }
+        payload["enabled"] = True
+        return web.json_response(payload)
+
+    async def _handle_settings_hand_overlay(self, request: web.Request) -> web.Response:
+        payload = await self._read_json_body(request)
+        name = str(payload.get("name", "")).strip()
+        if not name or "enabled" not in payload:
+            raise ValueError("Fields 'name' and 'enabled' are required.")
+        self.node.set_hand_overlay_enabled(name, bool(payload.get("enabled")))
+        return web.json_response(self.node.build_settings_payload())
+
+    async def _handle_settings_get(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.node.build_settings_payload())
+
+    @staticmethod
+    async def _read_json_body(request: web.Request) -> dict:
+        if not request.can_read_body:
+            return {}
+        try:
+            payload = await request.json()
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON body: {exc}") from exc
+        if payload is None:
+            return {}
+        if not isinstance(payload, dict):
+            raise ValueError("Request body must be a JSON object.")
+        return payload
+
+    async def _handle_settings_avatar_model(self, request: web.Request) -> web.Response:
+        payload = await self._read_json_body(request)
+        name = str(payload.get("name", "")).strip()
+        model = str(payload.get("model", "")).strip()
+        if not name or not model:
+            raise ValueError("Fields 'name' and 'model' are required.")
+        self.node.set_pose_avatar_model(name, model)
+        return web.json_response(self.node.build_settings_payload())
+
+    async def _handle_settings_gripper_tracking(self, request: web.Request) -> web.Response:
+        payload = await self._read_json_body(request)
+        name = str(payload.get("name", "")).strip()
+        if not name or "enabled" not in payload:
+            raise ValueError("Fields 'name' and 'enabled' are required.")
+        self.node.set_gripper_tracking_enabled(name, bool(payload.get("enabled")))
+        return web.json_response(self.node.build_settings_payload())
+
+    def _read_config_json(self, filename: str) -> Dict[str, object]:
+        path = self.project_root / "config" / filename
+        if not path.is_file():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def _write_config_fields(
+        self, filename: str, fields: Dict[str, type], payload: Dict[str, object]
+    ) -> Dict[str, object]:
+        data = self._read_config_json(filename)
+        for key, kind in fields.items():
+            if key not in payload:
+                continue
+            raw_value = payload[key]
+            try:
+                value = kind(raw_value) if kind is not bool else bool(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"'{key}' must be a valid {kind.__name__}") from exc
+            if kind in (float, int) and value <= 0:
+                raise ValueError(f"'{key}' must be a positive number")
+            data[key] = value
+        path = self.project_root / "config" / filename
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return {key: data.get(key) for key in fields}
+
+    async def _handle_settings_board_calibration_get(self, _request: web.Request) -> web.Response:
+        data = self._read_config_json("board_calibration.json")
+        return web.json_response(
+            {"values": {key: data.get(key) for key in _BOARD_CALIBRATION_FIELDS}, "restart_required": True}
+        )
+
+    async def _handle_settings_board_calibration_post(self, request: web.Request) -> web.Response:
+        payload = await self._read_json_body(request)
+        values = self._write_config_fields("board_calibration.json", _BOARD_CALIBRATION_FIELDS, payload)
+        return web.json_response({"values": values, "restart_required": True})
+
+    async def _handle_settings_rosbag_sync_get(self, _request: web.Request) -> web.Response:
+        data = self._read_config_json("post_processing.json")
+        return web.json_response(
+            {"values": {key: data.get(key) for key in _ROSBAG_SYNC_FIELDS}, "restart_required": True}
+        )
+
+    async def _handle_settings_rosbag_sync_post(self, request: web.Request) -> web.Response:
+        payload = await self._read_json_body(request)
+        values = self._write_config_fields("post_processing.json", _ROSBAG_SYNC_FIELDS, payload)
+        return web.json_response({"values": values, "restart_required": True})
+
+    async def _handle_settings_restart(self, _request: web.Request) -> web.Response:
+        self.node.get_logger().info(
+            "Settings: restart requested from the web UI; exiting so "
+            "'restart: unless-stopped' brings the backend back up with reloaded config."
+        )
+
+        def _delayed_exit() -> None:
+            time.sleep(0.5)
+            os._exit(0)
+
+        threading.Thread(target=_delayed_exit, daemon=True).start()
+        return web.json_response({"ok": True, "message": "Restarting backend..."})
+
     async def _handle_image_capabilities(self, _request: web.Request) -> web.Response:
         return web.json_response(self._build_image_capabilities())
 
@@ -1101,7 +1382,9 @@ class WebDashboardServer:
         return detected
 
     async def _handle_recording_status(self, _request: web.Request) -> web.Response:
-        return web.json_response(self.recording_manager.status())
+        payload = self.recording_manager.status()
+        payload["system_load"] = read_system_load()
+        return web.json_response(payload)
 
     async def _handle_recording_topics(self, _request: web.Request) -> web.Response:
         return web.json_response(self.recording_manager.current_topic_catalog(refresh=True))
@@ -1297,6 +1580,9 @@ class WebDashboardServer:
 
     async def _handle_optimization_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "optimization.html")
+
+    async def _handle_settings_page(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.web_root / "settings.html")
 
     async def _handle_asset(self, request: web.Request) -> web.StreamResponse:
         raw_path = request.query.get("path", "").strip()

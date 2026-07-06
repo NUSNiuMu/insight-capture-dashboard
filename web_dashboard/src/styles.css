@@ -567,6 +567,39 @@ h1 {
   gap: 14px;
 }
 
+.recording-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.system-load-pill {
+  font-family: monospace;
+  font-size: 12px;
+  border-radius: 999px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.system-load-ok {
+  color: #5ad7a2;
+  border-color: rgba(90, 215, 162, 0.4);
+}
+
+.system-load-warning {
+  color: #ffc857;
+  border-color: rgba(255, 200, 87, 0.45);
+}
+
+.system-load-critical {
+  color: #ff8b7e;
+  border-color: rgba(255, 139, 126, 0.5);
+  background: rgba(255, 139, 126, 0.08);
+}
+
 .recording-panel h2 {
   margin: 0;
   font-size: 22px;
@@ -1073,4 +1106,135 @@ h1 {
   overflow-y: auto;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.settings-page-panel {
+  width: min(1000px, 100%);
+  max-width: none;
+}
+
+.settings-camera-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.settings-camera-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 14px 16px;
+}
+
+.settings-camera-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-camera-head h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text);
+}
+
+.settings-role-pill {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.settings-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.settings-model-select {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.85rem;
+  min-width: 220px;
+}
+
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.settings-toggle-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: #5ad7a2;
+}
+
+.settings-restart-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: min(1000px, 100%);
+  margin: 0 auto 16px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: rgba(255, 200, 87, 0.12);
+  border: 1px solid rgba(255, 200, 87, 0.35);
+  color: #ffd98f;
+  font-size: 13px;
+}
+
+.settings-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(200px, 1fr));
+  gap: 12px 16px;
+  margin-top: 12px;
+}
+
+.settings-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.settings-form-field-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-text-input {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.85rem;
+  outline: none;
+}
+
+.settings-text-input:focus {
+  border-color: #5ad7a2;
+}
+
+#board-calibration-panel .recording-button,
+#rosbag-sync-panel .recording-button {
+  margin-top: 14px;
 }

@@ -20,12 +20,16 @@
           <a href="/bags">Bags</a>
           <a href="/scoring">Scoring</a>
           <a href="/optimization">Optimization</a>
+          <a href="/settings">Settings</a>
         </div>
       </div>
       <div class="recording-page-panel recording-panel" id="recording-panel">
         <p class="eyebrow">ROS 2 Rosbag</p>
         <div class="recording-panel-row">
-          <h2 id="recording-status">Recording idle</h2>
+          <div class="recording-title-row">
+            <h2 id="recording-status">Recording idle</h2>
+            <span id="system-load-pill" class="system-load-pill" title="1-minute load average vs. this container's CPU quota">-- load</span>
+          </div>
           <div class="recording-actions">
             <input type="text" id="recording-bag-name" class="recording-bag-name-input" placeholder="Bag name (default: insight_record_YYYYMMDD_HHMMSS)" autocomplete="off" spellcheck="false">
             <button type="button" id="refresh-record-topics-button" class="recording-button recording-button-secondary">Refresh Topics</button>

@@ -22,6 +22,8 @@ from typing import Dict, Optional, Tuple
 import cv2
 import numpy as np
 
+from perf_tracker import track
+
 # Stock UMI gripper sticker IDs (cv2.aruco.DICT_4X4_50), confirmed against the
 # physical rig: left finger = 1, right finger = 0.
 LEFT_MARKER_ID = 1
@@ -141,7 +143,8 @@ class GripperTrackingMixin:
     def _process_gripper_image(self, camera_name: str, image_bgr: np.ndarray) -> None:
         if camera_name not in self.gripper_tracking_cameras or self.gripper_detector is None:
             return
-        result = self.gripper_detector.detect(image_bgr)
+        with track(f"gripper_detect:{camera_name}"):
+            result = self.gripper_detector.detect(image_bgr)
         self.gripper_latest_result[camera_name] = result
         if result.distance_px is None:
             return
@@ -149,6 +152,19 @@ class GripperTrackingMixin:
         opening = calib.normalize(result.distance_px)
         if opening is not None:
             self.gripper_last_opening[camera_name] = opening
+
+    def set_gripper_tracking_enabled(self, camera_name: str, enabled: bool) -> None:
+        # self.gripper_calibrations is fixed at _configure_gripper_tracking time
+        # (one entry per hand camera) and never shrinks, so its keys are the
+        # authoritative "this camera can track a gripper" set; membership in
+        # gripper_tracking_cameras is the live on/off switch checked per-frame
+        # by _process_gripper_image and by the caller in multi_camera_dashboard_web.py.
+        if camera_name not in self.gripper_calibrations:
+            raise ValueError(f"'{camera_name}' is not a hand camera with gripper tracking configured")
+        if enabled:
+            self.gripper_tracking_cameras.add(camera_name)
+        else:
+            self.gripper_tracking_cameras.discard(camera_name)
 
     def gripper_opening_percent(self, camera_name: str) -> Optional[float]:
         """Returns 0 (closed) .. 1 (open), or None if never detected / not a hand camera.

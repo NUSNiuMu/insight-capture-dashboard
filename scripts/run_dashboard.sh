@@ -2,24 +2,33 @@
 # Start (or ensure running) the Insight dashboard backend, then stay in the
 # foreground so Ctrl-C can stop it cleanly. Default mode waits quietly (no
 # log spam); --logs follows the backend logs instead; --jetson launches the
-# on-device PyQt5 kiosk window.
+# on-device PyQt5 kiosk window. The two flags combine (--jetson --logs): the
+# kiosk launches in the background and the backend logs (including the
+# perf_tracker CPU breakdown, see scripts/perf_tracker.py) stream in this
+# same terminal.
 #
 # Run from the host, this manages the container's whole lifecycle via
 # docker compose. Run from inside the container (e.g. already `docker exec`'d
 # in, or a devcontainer shell), it skips compose entirely and just waits on
 # the backend that's already running, launching the kiosk directly in-process
-# -- Ctrl-C only stops what this script started, not the backend.
+# -- Ctrl-C only stops what this script started, not the backend. --logs
+# isn't available in-container (no docker CLI to read the container's own
+# stdout from inside itself).
 #
 # Usage:
-#   ./scripts/run_dashboard.sh            # quiet; Ctrl-C stops the backend
-#   ./scripts/run_dashboard.sh --logs     # same, but follows backend logs
-#   ./scripts/run_dashboard.sh --jetson   # also pull up the local kiosk
-#                                          # window (only if a monitor is
-#                                          # attached to this machine);
-#                                          # Ctrl-C closes the kiosk window
-#                                          # (backend keeps running --
-#                                          # `docker compose down` to stop it,
-#                                          # from the host)
+#   ./scripts/run_dashboard.sh                    # quiet; Ctrl-C stops the backend
+#   ./scripts/run_dashboard.sh --logs             # same, but follows backend logs
+#   ./scripts/run_dashboard.sh --jetson           # also pull up the local kiosk
+#                                                  # window (only if a monitor is
+#                                                  # attached to this machine);
+#                                                  # Ctrl-C closes the kiosk window
+#                                                  # (backend keeps running --
+#                                                  # `docker compose down` to stop it,
+#                                                  # from the host)
+#   ./scripts/run_dashboard.sh --jetson --logs    # both: kiosk runs in the
+#                                                  # background, backend logs
+#                                                  # stream here; Ctrl-C stops
+#                                                  # both (and the backend)
 
 set -euo pipefail
 
@@ -34,13 +43,20 @@ log() { echo "[$(date '+%H:%M:%S')] $*"; }
 in_container=false
 [[ -f /.dockerenv ]] && in_container=true
 
-mode="${1:-}"
-if [[ -n "${mode}" && "${mode}" != "--jetson" && "${mode}" != "--logs" ]]; then
-    echo "Usage: $0 [--jetson|--logs]" >&2
-    exit 1
-fi
+jetson_mode=false
+logs_mode=false
+for arg in "$@"; do
+    case "${arg}" in
+        --jetson) jetson_mode=true ;;
+        --logs) logs_mode=true ;;
+        *)
+            echo "Usage: $0 [--jetson] [--logs]" >&2
+            exit 1
+            ;;
+    esac
+done
 
-if [[ "${in_container}" == "true" && "${mode}" == "--logs" ]]; then
+if [[ "${in_container}" == "true" && "${logs_mode}" == "true" ]]; then
     echo "--logs reads the container's own stdout via 'docker compose logs'," >&2
     echo "which only works from the host (no docker CLI in this image). Run" >&2
     echo "'docker compose logs -f' from the host instead." >&2
@@ -85,7 +101,7 @@ until curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
     sleep 1
 done
 
-if [[ "${mode}" == "--jetson" ]]; then
+if [[ "${jetson_mode}" == "true" ]]; then
     log "Launching on-device kiosk window..."
     export DISPLAY="${DISPLAY:-:0}"
     if [[ "${in_container}" == "true" ]]; then
@@ -94,6 +110,8 @@ if [[ "${mode}" == "--jetson" ]]; then
         # xhost (host-side X access control) isn't installed in this image
         # and isn't needed here: if you can already reach this shell with a
         # working DISPLAY, the host already granted access.
+        # --logs was already rejected in-container above, so this is always
+        # the last thing this script does when in_container.
         exec "${SCRIPT_DIR}/open_web_3d_right.sh"
     fi
     # The container connects to the host's X server as root, which the X
@@ -107,8 +125,17 @@ if [[ "${mode}" == "--jetson" ]]; then
     # time, in case this shell's X session differs (e.g. it was started
     # over SSH without X, and you're now running --jetson from a local
     # desktop session instead).
-    exec docker exec -it -e DISPLAY="${DISPLAY}" insight-dashboard \
-        /workspaces/insight_capture/scripts/open_web_3d_right.sh
+    if [[ "${logs_mode}" == "true" ]]; then
+        # Can't exec here -- need control back to fall through to the log
+        # tail below. -d (detached) instead of -it: the kiosk is a GUI app
+        # talking to DISPLAY, not this terminal, so it doesn't need a tty.
+        docker exec -d -e DISPLAY="${DISPLAY}" insight-dashboard \
+            /workspaces/insight_capture/scripts/open_web_3d_right.sh
+        log "Kiosk launched in the background; following backend logs below."
+    else
+        exec docker exec -it -e DISPLAY="${DISPLAY}" insight-dashboard \
+            /workspaces/insight_capture/scripts/open_web_3d_right.sh
+    fi
 fi
 
 host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -120,8 +147,9 @@ From your own laptop, open an SSH tunnel and browse locally:
   ssh -L ${PORT}:localhost:${PORT} $(whoami)@${host_ip:-<this-jetson-ip>}
   then open http://localhost:${PORT}/ in your browser
 
-(Pass --jetson to launch the on-device kiosk window here, or --logs to
-follow backend logs instead of running quietly.)
+(Pass --jetson to launch the on-device kiosk window here, --logs to follow
+backend logs -- including the perf_tracker CPU breakdown -- instead of
+running quietly, or both together.)
 
 EOF
 if [[ "${in_container}" == "true" ]]; then
@@ -145,7 +173,7 @@ else
     trap 'echo; log "Ctrl-C received, stopping backend (docker compose down)..."; docker compose down; exit 0' INT TERM
 fi
 
-if [[ "${mode}" == "--logs" ]]; then
+if [[ "${logs_mode}" == "true" ]]; then
     docker compose logs -f &
 else
     sleep infinity &
