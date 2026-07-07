@@ -3,10 +3,13 @@
 import argparse
 import asyncio
 import contextlib
+import fcntl
 import json
 import math
 import os
 import shutil
+import socket
+import struct
 import subprocess
 import threading
 import time
@@ -305,6 +308,11 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self._create_hand_overlay_subscriptions()
             if self.live_alignment_available:
                 self._create_alignment_subscriptions()
+            threading.Thread(
+                target=self._stale_participant_watchdog_loop,
+                daemon=True,
+                name="stale_dds_watchdog",
+            ).start()
 
         if self.live_alignment_available:
             self.live_alignment_timer = self.create_timer(
@@ -442,6 +450,98 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self.get_logger().info(
                 f"Alignment: {camera_name} image={calib_topic} info={calib_info_topic} type={calib_type}"
             )
+
+    def _any_ros_data_received(self) -> bool:
+        # GIL-atomic dict reads; values only ever go None->frame / 0.0->t
+        # before the first user-triggered reset, so no locks needed for a
+        # boolean "has anything ever arrived".
+        return any(frame is not None for frame in self.latest_camera_frames.values()) or any(
+            t > 0.0 for t in self.last_pose_received_time.values()
+        )
+
+    @staticmethod
+    def _camera_link_up() -> bool:
+        # A 169.254.x.x address on any non-loopback/docker interface is a
+        # camera's point-to-point USB-ethernet link (see
+        # scripts/reboot_cameras.sh) -- i.e. a camera is physically
+        # connected, whether or not its ROS stack is publishing yet. Pure
+        # ioctls (microseconds) rather than shelling out to `ip`, so the
+        # watchdog poll is effectively free.
+        try:
+            names = os.listdir("/sys/class/net")
+        except OSError:
+            return False
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            for name in names:
+                if name == "lo" or name.startswith("docker"):
+                    continue
+                try:
+                    packed = fcntl.ioctl(
+                        sock.fileno(),
+                        0x8915,  # SIOCGIFADDR
+                        struct.pack("256s", name.encode()[:15]),
+                    )
+                except OSError:
+                    continue  # interface has no IPv4 address
+                if socket.inet_ntoa(packed[20:24]).startswith("169.254."):
+                    return True
+        finally:
+            sock.close()
+        return False
+
+    def _stale_participant_watchdog_loop(self) -> None:
+        # Fast DDS enumerates network interfaces only at participant
+        # creation. This container auto-starts at host boot (restart:
+        # unless-stopped), usually before the per-camera USB-ethernet links
+        # exist, so the participant advertises unicast locators the cameras
+        # can't route to and never receives a single message. That state
+        # does NOT self-heal (observed fully stale >15min while a fresh
+        # `ros2 topic list` in the same container saw every topic
+        # instantly); the only fix is recreating the participant, i.e.
+        # restarting this process. run_dashboard.sh has the same check, but
+        # only runs when someone invokes the script -- this covers headless
+        # boots too.
+        #
+        # Exit condition (deliberately conservative so it can never fire
+        # during normal operation): this process has NEVER received any ROS
+        # message, yet a camera link has been up continuously for 60s. The
+        # grace period rides out a freshly plugged camera still booting its
+        # own ROS stack (~30-60s); the never-received-anything condition
+        # means recording or live use can't be interrupted -- there is
+        # nothing flowing to interrupt. The thread retires for good on the
+        # first message, so its steady-state cost is zero.
+        link_grace_sec = 60.0
+        poll_sec = 5.0
+        link_up_since: Optional[float] = None
+        while True:
+            time.sleep(poll_sec)
+            if self._any_ros_data_received():
+                return
+            if not self._camera_link_up():
+                link_up_since = None
+                continue
+            now = time.monotonic()
+            if link_up_since is None:
+                link_up_since = now
+                continue
+            if now - link_up_since < link_grace_sec:
+                continue
+            if os.path.exists("/.dockerenv"):
+                self.get_logger().error(
+                    "Camera link up for 60s but no ROS data ever received -- DDS participant "
+                    "likely predates the camera links. Exiting so the container restart policy "
+                    "recreates the participant with the links present."
+                )
+                os._exit(1)
+            # Outside docker there is no restart policy to catch the exit;
+            # warn instead, and re-arm so the warning repeats every grace
+            # period rather than spamming every poll.
+            self.get_logger().warning(
+                "Camera link up for 60s but no ROS data ever received -- DDS participant "
+                "likely predates the camera links. Restart this process to recover."
+            )
+            link_up_since = now
 
     def _in_bag_range(self, stamp_ns: int) -> bool:
         r = self._bag_time_range

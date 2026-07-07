@@ -72,15 +72,33 @@ else
     docker compose up -d
 fi
 
+wait_for_backend_health() {
+    local deadline=$(( $(date +%s) + 60 ))
+    until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
+        if (( $(date +%s) > deadline )); then
+            log "ERROR: backend did not come up within 60s. Check: docker compose logs -f"
+            exit 1
+        fi
+        sleep 1
+    done
+}
+
+# At least one up interface carrying a 169.254.x.x address -- the per-camera
+# point-to-point USB-ethernet links (see scripts/reboot_cameras.sh). Present
+# means a camera is physically connected, whether or not data is flowing yet.
+camera_links_present() {
+    ip -4 -o addr show up 2>/dev/null \
+        | awk '$2 != "lo" && $2 !~ /^docker/ && $4 ~ /^169\.254\./ {found=1} END {exit !found}'
+}
+
+any_camera_live() {
+    curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(not c.get("stale", True) for c in d.get("cameras", [])) else 1)' \
+        2>/dev/null
+}
+
 log "Waiting for backend to become healthy on :${PORT}..."
-deadline=$(( $(date +%s) + 60 ))
-until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
-    if (( $(date +%s) > deadline )); then
-        log "ERROR: backend did not come up within 60s. Check: docker compose logs -f"
-        exit 1
-    fi
-    sleep 1
-done
+wait_for_backend_health
 log "Backend is up."
 
 # /healthz only proves the HTTP server is listening -- ROS2 discovery still
@@ -91,11 +109,31 @@ log "Backend is up."
 # race to whoever's watching the screen.
 log "Waiting for at least one camera to report live data..."
 data_deadline=$(( $(date +%s) + 30 ))
-until curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
-        | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(not c.get("stale", True) for c in d.get("cameras", [])) else 1)' \
-        2>/dev/null; do
-    if (( $(date +%s) > data_deadline )); then
-        log "WARNING: no camera reported live data within 30s -- continuing anyway (check cameras/network if this is unexpected)."
+stale_restart_at=$(( $(date +%s) + 10 ))
+restarted_for_stale_dds=false
+until any_camera_live; do
+    now=$(date +%s)
+    # Fast DDS enumerates network interfaces only when the participant is
+    # created. The container auto-starts at host boot (restart:
+    # unless-stopped), usually *before* the per-camera USB-ethernet links
+    # exist, so the backend advertises unicast locators the cameras can't
+    # route to (the WiFi IP instead of 169.254.x.2) and never receives a
+    # single message. This does NOT self-heal: observed fully stale >15min
+    # while a fresh `ros2 topic list` inside the same container saw every
+    # topic instantly. Camera links up + still stale after 10s is exactly
+    # that state, so restart the backend once -- the recreated participant
+    # binds the now-present links and goes live within seconds.
+    if [[ "${restarted_for_stale_dds}" == "false" && "${in_container}" == "false" ]] \
+            && (( now >= stale_restart_at )) && camera_links_present; then
+        log "Camera links are up but no data after 10s -- backend likely started before the camera links existed (stale DDS participant). Restarting backend once..."
+        docker compose restart
+        restarted_for_stale_dds=true
+        wait_for_backend_health
+        data_deadline=$(( $(date +%s) + 30 ))
+        continue
+    fi
+    if (( now > data_deadline )); then
+        log "WARNING: no camera reported live data within the wait window -- continuing anyway (check cameras/network if this is unexpected)."
         break
     fi
     sleep 1
