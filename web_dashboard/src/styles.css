@@ -938,6 +938,13 @@ h1 {
   transform-origin: center center;
 }
 
+/* No frame ever received (src removed by updateCameraStream): an src-less
+   <img> still renders its alt text in Chromium -- hide it so the panel
+   shows only the stale badge instead of stray text/broken glyphs. */
+.camera-frame:not([src]) {
+  visibility: hidden;
+}
+
 .camera-overlay {
   position: absolute;
   right: 12px;
@@ -1111,11 +1118,22 @@ h1 {
 .settings-page-panel {
   width: min(1000px, 100%);
   max-width: none;
+  box-sizing: border-box;
+  /* Real card container, centered like the restart banner: previously these
+     sections had no background of their own, so panel boundaries blurred
+     together and the Save buttons appeared to float on the page background. */
+  margin: 0 auto 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px 20px;
 }
 
 .settings-camera-list {
-  display: flex;
-  flex-direction: column;
+  /* One column per camera on wide screens instead of a full-width row per
+     camera (each card only holds three short rows of controls). */
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px;
   margin-top: 14px;
 }
@@ -1151,10 +1169,12 @@ h1 {
 }
 
 .settings-field {
+  /* Label above control: cards are ~320px wide in the grid, too narrow for
+     label + 220px select side by side. */
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   margin-top: 12px;
   font-size: 13px;
   color: var(--muted);
@@ -1167,7 +1187,9 @@ h1 {
   background: var(--panel);
   color: var(--text);
   font-size: 0.85rem;
-  min-width: 220px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .settings-toggle-row {
@@ -1220,7 +1242,11 @@ h1 {
   grid-column: 1 / -1;
 }
 
-.settings-text-input {
+/* .field-input: the scoring page's text inputs -- previously unstyled
+   (the class had no rule at all), so they rendered as bare browser
+   defaults out of step with every other page. */
+.settings-text-input,
+.field-input {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 8px 12px;
@@ -1228,9 +1254,15 @@ h1 {
   color: var(--text);
   font-size: 0.85rem;
   outline: none;
+  box-sizing: border-box;
 }
 
-.settings-text-input:focus {
+.field-input {
+  width: min(320px, 100%);
+}
+
+.settings-text-input:focus,
+.field-input:focus {
   border-color: #5ad7a2;
 }
 

@@ -259,7 +259,12 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
 
         self._playback_mode: bool = False
         self._bag_time_range: Optional[Tuple[int, int]] = None
-        self.raw_traces: Dict[str, List[Tuple[float, float, float]]] = {pose.name: [] for pose in self.poses}
+        # Bounded deque: append is O(1) and old points fall off automatically.
+        # A plain list needed an O(max_points) slice-delete per pose message,
+        # which at 100Hz x 3 poses was ~300 full-list shifts per second.
+        self.raw_traces: Dict[str, Deque[Tuple[float, float, float]]] = {
+            pose.name: deque(maxlen=self.max_points) for pose in self.poses
+        }
         self.latest_pose: Dict[str, Optional[Tuple[float, float, float]]] = {pose.name: None for pose in self.poses}
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
@@ -654,11 +659,20 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             try:
                 if alignment_cb is not None:
                     alignment_cb(msg)
+                # Decode once and share: the display path and the gripper
+                # detector both work on the same pixels (the detector accepts
+                # 2-D grayscale directly and converts BGR itself otherwise),
+                # so a second full decode of the identical message is waste.
+                display_image = None if topic_type == "compressed" else self._decode_display_image(msg)
                 if camera_name in self.gripper_tracking_cameras:
-                    gripper_image = self._decode_calibration_message(topic_type, msg)
+                    gripper_image = (
+                        display_image
+                        if display_image is not None
+                        else self._decode_calibration_message(topic_type, msg)
+                    )
                     if gripper_image is not None:
                         self._process_gripper_image(camera_name, gripper_image)
-                frame = self._encode_dashboard_frame(camera_name, topic_type, msg)
+                frame = self._encode_dashboard_frame(camera_name, topic_type, msg, display_image)
                 if frame is None:
                     continue
                 with self.camera_frame_lock:
@@ -667,7 +681,13 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the worker
                 self.get_logger().warning(f"frame worker {camera_name}: {exc}")
 
-    def _encode_dashboard_frame(self, camera_name: str, topic_type: str, msg: object) -> Optional[CameraFrame]:
+    def _encode_dashboard_frame(
+        self,
+        camera_name: str,
+        topic_type: str,
+        msg: object,
+        decoded_image: Optional[np.ndarray] = None,
+    ) -> Optional[CameraFrame]:
         stamp_ns = self._stamp_to_ns(msg.header.stamp)
         received_monotonic = time.monotonic()
         with self.camera_frame_lock:
@@ -694,7 +714,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 height=height,
                 version=version,
             )
-        image = self._decode_calibration_message(topic_type, msg)
+        image = decoded_image if decoded_image is not None else self._decode_display_image(msg)
         if image is None:
             return None
         with track(f"image_encode:{camera_name}"):
@@ -711,6 +731,31 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             height=int(height),
             version=version,
         )
+
+    def _decode_display_image(self, msg: object) -> Optional[np.ndarray]:
+        # Display-only decode for raw (non-compressed) streams. Mono/IR
+        # sources stay single-channel so the JPEG below is encoded luma-only:
+        # the previous GRAY2BGR / NV12->BGR conversion tripled the memory
+        # traffic and made imencode compress three channels of identical
+        # data (image_encode measured ~15% of a core per insight3 camera).
+        # Browsers render grayscale JPEG natively. Anything genuinely color
+        # falls through to the shared full decoder.
+        if isinstance(msg, RosImage) and msg.width > 0:
+            encoding = msg.encoding.lower()
+            if encoding in ("mono8", "8uc1"):
+                data = np.frombuffer(msg.data, dtype=np.uint8)
+                return data.reshape((msg.height, msg.width))
+            if encoding == "nv12":
+                data = np.frombuffer(msg.data, dtype=np.uint8)
+                total_rows, remainder = divmod(data.size, msg.width)
+                if remainder == 0 and total_rows > 0:
+                    # NV12 = luma plane (h rows) + interleaved UV (h/2 rows);
+                    # the luma plane alone IS the grayscale image. Mirrors
+                    # _decode_calibration_message's buffer-derived shape
+                    # handling for drivers that misreport msg.height.
+                    luma_rows = total_rows * 2 // 3 if total_rows % 3 == 0 else total_rows
+                    return data[: luma_rows * msg.width].reshape((luma_rows, msg.width))
+        return self._decode_calibration_message("image", msg)
 
     @staticmethod
     def _jpeg_dimensions(data: bytes) -> Tuple[int, int]:
@@ -779,10 +824,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self.latest_pose_sample[pose_name] = pose_sample
             self.latest_pose[pose_name] = self._transform_pose_point(pose_name, pose_sample.position)
             self.last_pose_received_time[pose_name] = time.monotonic()
-            raw_trace = self.raw_traces[pose_name]
-            raw_trace.append(pose_sample.position)
-            if len(raw_trace) > self.max_points:
-                del raw_trace[: len(raw_trace) - self.max_points]
+            self.raw_traces[pose_name].append(pose_sample.position)
 
     def clear_traces(self) -> None:
         with self.pose_lock:
@@ -1184,6 +1226,7 @@ class WebDashboardServer:
             pipeline_script=_pipeline_script,
         )
         self._clients: Set[web.WebSocketResponse] = set()
+        self._image_capabilities_cache: Optional[Dict[str, object]] = None
         self._loop = asyncio.new_event_loop()
         self._thread: Optional[threading.Thread] = None
         self._started = threading.Event()
@@ -1490,7 +1533,13 @@ class WebDashboardServer:
         return web.json_response({"ok": True, "message": "Restarting backend..."})
 
     async def _handle_image_capabilities(self, _request: web.Request) -> web.Response:
-        return web.json_response(self._build_image_capabilities())
+        # Installed GStreamer elements can't change without a restart, and
+        # probing them shells out to gst-inspect-1.0 up to 10 times (2s
+        # timeout each) -- cache for the process lifetime so only the first
+        # Images-page visit pays that.
+        if self._image_capabilities_cache is None:
+            self._image_capabilities_cache = self._build_image_capabilities()
+        return web.json_response(self._image_capabilities_cache)
 
     def _build_image_capabilities(self) -> Dict[str, object]:
         elements = self._detect_gstreamer_elements(

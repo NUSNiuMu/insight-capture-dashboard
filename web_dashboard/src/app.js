@@ -1463,9 +1463,23 @@ function startCameraPolling() {
   }
   pollCameraMetadata();
   window.setInterval(pollCameraMetadata, CAMERA_POLL_INTERVAL_MS);
+  // Catch up immediately when the tab becomes visible again (the poll below
+  // no-ops while hidden, so without this the first update after returning
+  // could lag by up to one interval).
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      pollCameraMetadata();
+    }
+  });
 }
 
 async function pollCameraMetadata() {
+  // A hidden tab keeps its timers (throttled to ~1Hz by the browser) but
+  // nobody can see the panels -- skip the fetch/DOM work entirely and let
+  // the visibilitychange handler refresh the moment the tab returns.
+  if (document.hidden) {
+    return;
+  }
   try {
     const response = await fetch(`/api/cameras?ts=${Date.now()}`, { cache: "no-store" });
     if (!response.ok) {
@@ -1488,6 +1502,11 @@ async function pollCameraMetadata() {
 
 async function applyPoseUpdate(payload) {
   if (!enable3d || !scene) {
+    return;
+  }
+  // Every payload carries the full trace, so skipped updates self-heal on
+  // the first message after the tab becomes visible again.
+  if (document.hidden) {
     return;
   }
   const poses = payload.poses || [];
@@ -1713,6 +1732,14 @@ function updateCameraStream(panel, camera) {
   pollState.frameUrl = camera.frame_url;
   pollState.version = version;
   cameraPollState.set(camera.name, pollState);
+  if (!camera.visible || version <= 0) {
+    // No frame has ever arrived (camera unplugged/not publishing): the
+    // frame endpoint would 404 and the <img> would render the browser's
+    // broken-image glyph. An src-less <img> renders nothing; the panel's
+    // stale badge already tells the story.
+    img.removeAttribute("src");
+    return;
+  }
   img.src = `${camera.frame_url}?v=${version}&ts=${Date.now()}`;
 }
 
