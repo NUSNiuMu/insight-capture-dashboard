@@ -2,6 +2,10 @@
 
 实时查看多路相机图像、显示多路 VIO 轨迹，并在 dashboard 内做在线相对位姿标定（AprilTag board）。
 
+> **部署 / 日常操作 / 故障排查请看 [docs/USAGE.md](docs/USAGE.md)**（一键启动
+> `./scripts/setup_host.sh`、录制后数据完整性检查 `scripts/check_bag.py`、
+> 常见问题诊断树）。本 README 侧重功能与配置参考。
+
 保留两条 dashboard 主线：
 
 - **Qt 版**（`multi_camera_dashboard_qt.py`）：原生窗口，直接接显示器用
