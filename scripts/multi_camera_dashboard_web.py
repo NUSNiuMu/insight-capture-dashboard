@@ -58,6 +58,7 @@ from camera_setup import (
     image_topic,
     load_setup,
 )
+from check_bag import analyze_bag
 from gripper_tracking import GripperTrackingMixin
 from hand_overlay import HandOverlayMixin
 from hw_jpeg import HwJpegCodec
@@ -1279,6 +1280,7 @@ class WebDashboardServer:
         app.router.add_post("/api/recording/sync", self._handle_recording_sync)
         app.router.add_get("/api/rosbags", self._handle_rosbag_list)
         app.router.add_delete("/api/rosbags/{bag_name}", self._handle_rosbag_delete)
+        app.router.add_post("/api/integrity/run", self._handle_integrity_run)
         app.router.add_post("/api/scoring/run", self._handle_scoring_run)
         app.router.add_get("/api/scoring/status", self._handle_scoring_status)
         app.router.add_post("/api/playback/start", self._handle_playback_start)
@@ -1713,6 +1715,30 @@ class WebDashboardServer:
             return web.json_response({"error": "Bag not found."}, status=404)
         shutil.rmtree(bag_path)
         return web.json_response({"status": "deleted", "bag_name": bag_name})
+
+    async def _handle_integrity_run(self, request: web.Request) -> web.Response:
+        payload = await self._read_json_body(request)
+        bag_name = str(payload.get("bag_name", "")).strip()
+        if not bag_name or "/" in bag_name or bag_name in (".", ".."):
+            return web.json_response({"error": "Invalid bag name."}, status=400)
+        bag_path = (self.recording_manager.rosbag_root / bag_name).resolve()
+        if not bag_path.is_relative_to(self.recording_manager.rosbag_root.resolve()):
+            return web.json_response({"error": "Access denied."}, status=403)
+        if not bag_path.exists():
+            return web.json_response({"error": "Bag not found."}, status=404)
+        loop = asyncio.get_event_loop()
+        try:
+            # Full-table sqlite scan, a few seconds for a GB-scale bag --
+            # off the event loop so camera polling doesn't stutter.
+            report = await loop.run_in_executor(None, analyze_bag, bag_path)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=422)
+        # Persisted next to scores/optimized so list_rosbags can surface a
+        # per-bag integrity badge without re-scanning gigabytes per listing.
+        integrity_dir = self.results_root / "integrity"
+        integrity_dir.mkdir(parents=True, exist_ok=True)
+        (integrity_dir / f"{bag_name}.json").write_text(json.dumps(report, indent=2))
+        return web.json_response({"type": "integrity_report", **report})
 
     async def _handle_scoring_run(self, request: web.Request) -> web.Response:
         if request.can_read_body:

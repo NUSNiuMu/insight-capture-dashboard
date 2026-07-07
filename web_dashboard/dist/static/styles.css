@@ -310,6 +310,11 @@ body[data-dashboard-view="full"] .shell {
   background: #93c883;
 }
 
+.bag-badge.is-bad {
+  color: #2b1111;
+  background: #e08585;
+}
+
 .bag-row-actions {
   display: flex;
   align-items: center;

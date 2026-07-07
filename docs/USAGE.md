@@ -60,8 +60,8 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 | `/` 或 `/3d` | 3D VIO 轨迹 + 在线标定按钮 |
 | `/images` | 三路相机实时画面 |
 | `/recording` | rosbag 录制：topic 发现、勾选、开始/停止 |
-| `/bags` | 本地录制列表：大小/时长/状态，可删除 |
-| `/scoring` | 轨迹评分 |
+| `/bags` | 本地录制列表：大小/时长/完整性/评分/优化状态，可删除 |
+| `/scoring` | 轨迹评分 + 录制完整性验证 |
 | `/settings` | 手部叠加、夹爪追踪、标定参数、图像管线诊断、重启后端 |
 
 ### 3.1 标准采集流程
@@ -70,14 +70,18 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 2. `/recording` → `Refresh Topics` → 勾选要录的 topic（支持按相机整组勾选）→ `Start`；
 3. 采集完成 → `Stop`；
 4. **立刻校验数据完整性**（约 10 秒出结论）：
+   打开 `/scoring` 页，选中刚录的 bag，点 **Verify Integrity**。
+   结果面板逐 topic 给出 `实收条数 / 实测频率 / 丢失% / 最大断口位置`，
+   顶部绿色 **Complete** 即数据完整；红色 **Incomplete** 时按 §6.3 排查。
+   验证结果会持久保存，`/bags` 列表中该 bag 会带上绿色 `complete` /
+   红色 `incomplete` 徽章（未验证过的显示灰色 `unverified`）。
+
+命令行等价方式（脚本化/无浏览器时）：
 
 ```bash
-docker exec insight-dashboard python3 scripts/check_bag.py
+docker exec insight-dashboard python3 scripts/check_bag.py                # 最新一份
+docker exec insight-dashboard python3 scripts/check_bag.py rosbags/<目录名>
 ```
-
-输出对每个 topic 给出 `实收条数 / 实测频率 / 估计缺失% / 最大断口位置`；
-最后一行 `RESULT: OK` 即数据完整，`FAIL` 时按 §6.3 排查。
-默认检查最新一份录制；指定某份：在命令末尾加 `rosbags/<目录名>`。
 
 ### 3.2 磁盘管理
 
@@ -153,7 +157,8 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 
 ### 6.3 录制掉帧 / 数据不完整
 
-**症状**：`check_bag.py` 报 FAIL。
+**症状**：`/scoring` 页 Verify Integrity 显示红色 Incomplete（或 `/bags`
+列表出现红色 `incomplete` 徽章、命令行 `check_bag.py` 报 FAIL）。
 
 按 FAIL 的模式判断：
 

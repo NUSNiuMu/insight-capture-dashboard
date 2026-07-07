@@ -37,10 +37,18 @@
         <label class="field-label" for="scoring-ref-cov">Reference covariance <span class="page-copy">(covariance trace = score 100, default 1e-3)</span></label>
         <input id="scoring-ref-cov" class="field-input" type="text" placeholder="1e-3" autocomplete="off">
 
-        <button id="run-scoring-button" type="button" class="recording-button">Run Scoring</button>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <button id="run-scoring-button" type="button" class="recording-button">Run Scoring</button>
+          <button id="verify-integrity-button" type="button" class="recording-button">Verify Integrity</button>
+        </div>
 
         <p class="eyebrow" id="scoring-status-eyebrow" hidden>Status</p>
         <p id="scoring-status" class="page-copy" hidden></p>
+
+        <div id="integrity-result" hidden>
+          <p class="eyebrow">Integrity</p>
+          <div id="integrity-result-body"></div>
+        </div>
 
         <div id="scoring-result" hidden>
           <p class="eyebrow">Result</p>

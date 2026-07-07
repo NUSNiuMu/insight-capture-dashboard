@@ -45,6 +45,9 @@ const optimizationLogEl = document.getElementById("optimization-log");
 const optimizationResultPanel = document.getElementById("optimization-result-panel");
 const optimizationLogLink = document.getElementById("optimization-log-link");
 const runScoringButton = document.getElementById("run-scoring-button");
+const verifyIntegrityButton = document.getElementById("verify-integrity-button");
+const integrityResultEl = document.getElementById("integrity-result");
+const integrityResultBody = document.getElementById("integrity-result-body");
 const scoringTopicInput = document.getElementById("scoring-topic");
 const scoringRefCovInput = document.getElementById("scoring-ref-cov");
 const scoringStatusEyebrow = document.getElementById("scoring-status-eyebrow");
@@ -201,6 +204,11 @@ if (refreshBagsButton) {
 if (runScoringButton) {
   runScoringButton.addEventListener("click", () => {
     void runScoring();
+  });
+}
+if (verifyIntegrityButton) {
+  verifyIntegrityButton.addEventListener("click", () => {
+    void runIntegrityCheck();
   });
 }
 if (refreshImageCapabilitiesButton) {
@@ -999,6 +1007,9 @@ function renderBagList(bags) {
         <span>${Number(bag.topic_count || 0)} topics</span>
       </div>
       <div class="bag-badges">
+        <span class="bag-badge ${bag.integrity === true ? "is-ok" : bag.integrity === false ? "is-bad" : ""}">${
+          bag.integrity === true ? "complete" : bag.integrity === false ? "incomplete" : "unverified"
+        }</span>
         <span class="bag-badge ${bag.scored ? "is-ok" : ""}">${bag.scored ? "scored" : "unscored"}</span>
         <span class="bag-badge ${bag.optimized ? "is-ok" : ""}">${bag.optimized ? "optimized" : "not optimized"}</span>
       </div>
@@ -2272,6 +2283,83 @@ async function runScoring() {
       runScoringButton.disabled = false;
     }
   }
+}
+
+async function runIntegrityCheck() {
+  const bagSelect = document.getElementById("scoring-bag-select");
+  const bagName = bagSelect ? bagSelect.value : "";
+  if (!bagName) {
+    setScoringStatus("Select a rosbag first.");
+    return;
+  }
+  if (verifyIntegrityButton) {
+    verifyIntegrityButton.disabled = true;
+  }
+  hideIntegrityResult();
+  setScoringStatus(`Verifying integrity of ${bagName}... (a few seconds)`);
+  try {
+    const response = await fetch("/api/integrity/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bag_name: bagName }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      setScoringStatus(`Integrity error: ${payload.error || response.statusText}`);
+      return;
+    }
+    setScoringStatus(payload.ok
+      ? `Integrity OK: ${bagName} — all topics complete`
+      : `Integrity FAILED: ${bagName} — ${payload.failed_topics.length} topic(s) with frame loss`);
+    renderIntegrityResult(payload);
+    void refreshRosbags(); // update the Bags-page badge data
+  } catch (error) {
+    setScoringStatus(`Integrity error: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    if (verifyIntegrityButton) {
+      verifyIntegrityButton.disabled = false;
+    }
+  }
+}
+
+function hideIntegrityResult() {
+  if (integrityResultEl) {
+    integrityResultEl.hidden = true;
+  }
+}
+
+function renderIntegrityResult(report) {
+  if (!integrityResultEl || !integrityResultBody) {
+    return;
+  }
+  const okColor = "#57d67c";
+  const badColor = "#ff5a5a";
+  const topics = Array.isArray(report.topics) ? report.topics : [];
+  const rows = topics.map((topic) => {
+    const color = topic.ok ? okColor : badColor;
+    const detail = topic.error
+      ? escapeHtml(topic.error)
+      : `${Number(topic.msgs).toLocaleString()} msgs · ${topic.avg_hz}/${topic.nominal_hz}Hz · loss ${topic.loss_pct}%`
+        + (topic.worst_gaps && topic.worst_gaps.length ? ` · worst ${escapeHtml(topic.worst_gaps.join(", "))}` : "");
+    return `
+      <tr>
+        <td style="padding:4px 10px 4px 0;font-family:monospace;font-size:0.78rem;white-space:nowrap">${escapeHtml(topic.name || "")}</td>
+        <td style="padding:4px 10px 4px 0;color:${color};font-weight:600">${topic.ok ? "ok" : "FAIL"}</td>
+        <td style="padding:4px 0;color:var(--muted);font-size:0.8rem">${detail}</td>
+      </tr>`;
+  }).join("");
+  const headline = report.ok
+    ? `<strong style="color:${okColor}">Complete</strong> — no frame loss above ${report.max_loss_pct}% on any topic`
+    : `<strong style="color:${badColor}">Incomplete</strong> — frame loss on: ${escapeHtml((report.failed_topics || []).join(", "))}`
+      + ` <span style="color:var(--muted)">(triage: USAGE.md §录制掉帧)</span>`;
+  integrityResultBody.innerHTML = `
+    <div style="padding:12px 16px;border-radius:8px;background:var(--panel);border:1px solid var(--line)">
+      <div style="margin-bottom:8px;font-size:0.95rem">${headline}</div>
+      <div style="overflow-x:auto">
+        <table style="border-collapse:collapse;width:100%">${rows}</table>
+      </div>
+    </div>`;
+  integrityResultEl.hidden = false;
 }
 
 async function pollScoringStatus() {

@@ -17,10 +17,13 @@ best-effort image samples (fix: /etc/sysctl.d/99-dds-rx-buffers.conf,
 written by scripts/setup_host.sh). camera_info (tiny, RELIABLE) arriving
 complete while images dropped ruled the cameras themselves out.
 
-Usage:
-  python3 scripts/check_bag.py                      # newest bag in rosbags/
-  python3 scripts/check_bag.py rosbags/<bag_dir>    # specific bag
-  python3 scripts/check_bag.py --max-loss 1.0 ...   # exit 1 above this %
+Used two ways:
+  - CLI (host or `docker exec`):
+      python3 scripts/check_bag.py                      # newest bag in rosbags/
+      python3 scripts/check_bag.py rosbags/<bag_dir>    # specific bag
+      python3 scripts/check_bag.py --max-loss 1.0 ...   # exit 1 above this %
+  - imported by the dashboard backend (analyze_bag) for the Scoring page's
+    "Verify Integrity" button and the Bags page integrity badge.
 
 Exit code: 0 = every checked topic within --max-loss, 1 = drops found,
 2 = bag unreadable. Suitable for scripting after important recordings.
@@ -33,7 +36,9 @@ import glob
 import sqlite3
 import struct
 import sys
+import time
 from pathlib import Path
+from typing import Dict, List, Optional
 
 # Expected publish rate by topic-name fragment; extend when new sensors
 # join the fleet. None = skip rate analysis (event-style topics).
@@ -47,8 +52,14 @@ NOMINAL_HZ = [
     ("tf_static", None),
 ]
 
+DEFAULT_MAX_LOSS_PCT = 0.5
+# Subscriptions settling right after recording start produce harmless gaps;
+# ignoring the first seconds keeps the loss threshold sensitive to real
+# mid-recording loss instead.
+DEFAULT_WARMUP_S = 2.0
 
-def nominal_for(topic: str) -> float:
+
+def nominal_for(topic: str) -> Optional[float]:
     for fragment, hz in NOMINAL_HZ:
         if fragment in topic:
             if fragment == "camera_info":
@@ -74,79 +85,120 @@ def gap_stats(ts, nominal_hz):
     ]
 
 
-def find_db(bag_arg):
-    root = Path(__file__).resolve().parents[1]
-    if bag_arg:
-        bag_dir = Path(bag_arg)
-    else:
-        bags = sorted(
-            (p for p in (root / "rosbags").iterdir()
-             if p.is_dir() and not p.name.startswith("_")),
-            key=lambda p: p.name,
-        )
-        if not bags:
-            sys.exit("no bags found under rosbags/")
-        bag_dir = bags[-1]
+def analyze_bag(
+    bag_dir: Path,
+    max_loss_pct: float = DEFAULT_MAX_LOSS_PCT,
+    warmup_s: float = DEFAULT_WARMUP_S,
+) -> Dict[str, object]:
+    """Analyze one bag directory; returns a JSON-serializable report.
+
+    Raises ValueError when the bag has no readable .db3 file.
+    """
+    bag_dir = Path(bag_dir)
     db3 = sorted(glob.glob(str(bag_dir / "*.db3")))
     if not db3:
-        print(f"ERROR: no .db3 file in {bag_dir}", file=sys.stderr)
-        sys.exit(2)
-    return bag_dir, db3[0]
+        raise ValueError(f"no .db3 file in {bag_dir}")
+    try:
+        conn = sqlite3.connect(f"file:{db3[0]}?mode=ro", uri=True)
+        topic_names = dict(conn.execute("SELECT id, name FROM topics"))
+    except sqlite3.Error as exc:
+        raise ValueError(f"cannot read {db3[0]}: {exc}") from exc
+
+    topics: List[Dict[str, object]] = []
+    with conn:
+        for tid, name in sorted(topic_names.items(), key=lambda kv: kv[1]):
+            nominal = nominal_for(name)
+            if nominal is None:
+                continue
+            rows = conn.execute(
+                "SELECT timestamp, data FROM messages WHERE topic_id=? ORDER BY timestamp",
+                (tid,),
+            ).fetchall()
+            if len(rows) < 2:
+                topics.append({
+                    "name": name, "ok": False, "msgs": len(rows),
+                    "error": f"only {len(rows)} message(s)",
+                })
+                continue
+            recv = [r[0] for r in rows]
+            stamps = [header_stamp_ns(r[1]) for r in rows]
+            span = (recv[-1] - recv[0]) / 1e9
+            avg_hz = (len(recv) - 1) / span if span > 0 else 0.0
+            cutoff = stamps[0] + int(warmup_s * 1e9)
+            settled = [t for t in stamps if t >= cutoff] or stamps
+            missing, events, worst = gap_stats(settled, nominal)
+            loss_pct = missing / (len(rows) + missing) * 100 if missing else 0.0
+            topics.append({
+                "name": name,
+                "ok": loss_pct <= max_loss_pct,
+                "msgs": len(rows),
+                "avg_hz": round(avg_hz, 2),
+                "nominal_hz": nominal,
+                "missing": missing,
+                "loss_pct": round(loss_pct, 2),
+                "gap_events": events,
+                "worst_gaps": worst,
+            })
+
+    failed = [t["name"] for t in topics if not t["ok"]]
+    return {
+        "bag": bag_dir.name,
+        "path": str(bag_dir),
+        "ok": bool(topics) and not failed,
+        "failed_topics": failed,
+        "topics": topics,
+        "max_loss_pct": max_loss_pct,
+        "warmup_s": warmup_s,
+        "checked_at_epoch_s": time.time(),
+    }
+
+
+def find_bag(bag_arg: Optional[str]) -> Path:
+    root = Path(__file__).resolve().parents[1]
+    if bag_arg:
+        return Path(bag_arg)
+    bags = sorted(
+        (p for p in (root / "rosbags").iterdir()
+         if p.is_dir() and not p.name.startswith("_")),
+        key=lambda p: p.name,
+    )
+    if not bags:
+        sys.exit("no bags found under rosbags/")
+    return bags[-1]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("bag", nargs="?", help="bag directory (default: newest under rosbags/)")
-    parser.add_argument("--max-loss", type=float, default=0.5,
-                        help="max tolerated header-stamp loss %% per topic (default 0.5)")
-    parser.add_argument("--warmup", type=float, default=2.0,
-                        help="seconds to ignore at each topic's start (default 2.0) -- "
-                             "subscriptions settling right after recording start produce "
-                             "harmless gaps that would otherwise mask real mid-recording loss")
+    parser.add_argument("--max-loss", type=float, default=DEFAULT_MAX_LOSS_PCT,
+                        help=f"max tolerated header-stamp loss %% per topic (default {DEFAULT_MAX_LOSS_PCT})")
+    parser.add_argument("--warmup", type=float, default=DEFAULT_WARMUP_S,
+                        help=f"seconds to ignore at each topic's start (default {DEFAULT_WARMUP_S})")
     args = parser.parse_args()
 
-    bag_dir, db_path = find_db(args.bag)
+    bag_dir = find_bag(args.bag)
     print(f"bag: {bag_dir}\n")
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        topics = dict(conn.execute("SELECT id, name FROM topics"))
-    except sqlite3.Error as exc:
-        print(f"ERROR: cannot read {db_path}: {exc}", file=sys.stderr)
+        report = analyze_bag(bag_dir, max_loss_pct=args.max_loss, warmup_s=args.warmup)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
 
-    failed = []
-    for tid, name in sorted(topics.items(), key=lambda kv: kv[1]):
-        nominal = nominal_for(name)
-        if nominal is None:
+    for topic in report["topics"]:
+        verdict = "ok  " if topic["ok"] else "FAIL"
+        print(f"{verdict}  {topic['name']}")
+        if "error" in topic:
+            print(f"      {topic['error']}")
             continue
-        rows = conn.execute(
-            "SELECT timestamp, data FROM messages WHERE topic_id=? ORDER BY timestamp",
-            (tid,),
-        ).fetchall()
-        if len(rows) < 2:
-            print(f"FAIL  {name}: only {len(rows)} message(s)")
-            failed.append(name)
-            continue
-        recv = [r[0] for r in rows]
-        stamps = [header_stamp_ns(r[1]) for r in rows]
-        span = (recv[-1] - recv[0]) / 1e9
-        avg_hz = (len(recv) - 1) / span if span > 0 else 0.0
-        cutoff = stamps[0] + int(args.warmup * 1e9)
-        settled = [t for t in stamps if t >= cutoff] or stamps
-        missing, events, worst = gap_stats(settled, nominal)
-        loss_pct = missing / (len(rows) + missing) * 100 if missing else 0.0
-        ok = loss_pct <= args.max_loss
-        verdict = "ok  " if ok else "FAIL"
-        print(f"{verdict}  {name}")
-        print(f"      msgs={len(rows)} avg={avg_hz:.2f}Hz (nominal {nominal:g})"
-              f" missing={missing} ({loss_pct:.1f}%) gap_events={events}"
-              + (f" worst={worst}" if worst else ""))
-        if not ok:
-            failed.append(name)
+        line = (f"      msgs={topic['msgs']} avg={topic['avg_hz']}Hz (nominal {topic['nominal_hz']:g})"
+                f" missing={topic['missing']} ({topic['loss_pct']}%) gap_events={topic['gap_events']}")
+        if topic["worst_gaps"]:
+            line += f" worst={topic['worst_gaps']}"
+        print(line)
 
     print()
-    if failed:
-        print(f"RESULT: FAIL -- {len(failed)} topic(s) above {args.max_loss}% loss.")
+    if not report["ok"]:
+        print(f"RESULT: FAIL -- {len(report['failed_topics'])} topic(s) above {args.max_loss}% loss.")
         print("Triage: docs/USAGE.md §常见问题 · 录制掉帧")
         sys.exit(1)
     print(f"RESULT: OK -- all checked topics within {args.max_loss}% loss.")

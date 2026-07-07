@@ -114,6 +114,16 @@ def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object
         )
         scored = _result_exists(results_root, "scores", bag_dir.name) or _result_exists(results_root, "scoring", bag_dir.name)
         optimized = _result_exists(results_root, "optimized", bag_dir.name) or _result_exists(results_root, "optimization", bag_dir.name)
+        # Unlike labeled/scored, mere file existence isn't enough here: the
+        # persisted report (written by /api/integrity/run) says pass or
+        # fail, and the badge must show which. None = never checked.
+        integrity: Optional[bool] = None
+        integrity_path = results_root / "integrity" / f"{bag_dir.name}.json"
+        if integrity_path.exists():
+            try:
+                integrity = bool(json.loads(integrity_path.read_text()).get("ok"))
+            except (OSError, ValueError, AttributeError):
+                integrity = None
         entries.append(
             {
                 "name": bag_dir.name,
@@ -127,6 +137,7 @@ def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object
                 "labeled": labeled,
                 "scored": scored,
                 "optimized": optimized,
+                "integrity": integrity,
                 "label": (
                     f"{'labeled' if labeled else 'unlabeled'} / "
                     f"{'scored' if scored else 'unscored'} / "
