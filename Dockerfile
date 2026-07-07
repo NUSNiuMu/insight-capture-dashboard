@@ -117,6 +117,23 @@ RUN pip3 install --no-cache-dir \
     "playwright==1.61.0" \
     && python3 -m playwright install --with-deps chromium
 
+# ── GStreamer core + PyGObject for the NVJPEG hardware JPEG path ────────────
+# scripts/hw_jpeg.py drives nvjpegenc/nvjpegdec through GStreamer. The NVIDIA
+# plugin .so files themselves (libgstnvjpeg.so, libgstnvvidconv.so, ...) are
+# NOT baked in -- the nvidia container runtime injects them from the host per
+# /etc/nvidia-container-runtime/host-files-for-container.d/drivers.csv -- but
+# they need the GStreamer framework and Python bindings present to load into.
+# gstreamer1.0-tools also provides gst-inspect-1.0, which the Settings page's
+# /api/images/capabilities probe shells out to. Kept as its own layer (not in
+# the apt layer at the top) so the cached playwright/pip layers don't rebuild.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    python3-gi \
+    gir1.2-gst-plugins-base-1.0 \
+    && rm -rf /var/lib/apt/lists/*
+
 # ── Interactive shells: source ROS2 for plain `docker exec -it ... bash` ────
 # docker_entrypoint.sh only wraps the container's own CMD; a `docker exec`
 # shell attaches directly to bash and skips it, so `ros2 ...` fails with

@@ -60,6 +60,7 @@ from camera_setup import (
 )
 from gripper_tracking import GripperTrackingMixin
 from hand_overlay import HandOverlayMixin
+from hw_jpeg import HwJpegCodec
 from inprocess_bag_writer import InProcessBagWriter
 import perf_tracker
 from perf_tracker import track
@@ -299,6 +300,10 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         }
         self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
         self._configure_hand_overlay()
+        # NVJPEG hardware encode for raw NV12/mono8 display frames and the
+        # hand-overlay decode/re-encode; None on non-Jetson hosts, and every
+        # call site keeps its cv2 path as fallback (see hw_jpeg.py).
+        self._hw_jpeg = HwJpegCodec.create(log=self.get_logger().info)
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
         self._initialize_live_alignment_state()
         if self.world_to_reference:
@@ -663,7 +668,17 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 # detector both work on the same pixels (the detector accepts
                 # 2-D grayscale directly and converts BGR itself otherwise),
                 # so a second full decode of the identical message is waste.
-                display_image = None if topic_type == "compressed" else self._decode_display_image(msg)
+                # When NVJPEG will encode the raw NV12/mono8 bytes directly
+                # and no gripper detector needs BGR pixels, skip the CPU
+                # decode entirely -- nvvidconv does the color conversion in
+                # hardware on the way into the encoder.
+                display_image = None
+                if topic_type != "compressed" and (
+                    camera_name in self.gripper_tracking_cameras
+                    or self._hw_jpeg is None
+                    or not self._hw_jpeg.can_encode_ros_image(camera_name, msg)
+                ):
+                    display_image = self._decode_display_image(msg)
                 if camera_name in self.gripper_tracking_cameras:
                     gripper_image = (
                         display_image
@@ -714,6 +729,20 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 height=height,
                 version=version,
             )
+        if self._hw_jpeg is not None:
+            with track(f"image_encode_hw:{camera_name}"):
+                hw_result = self._hw_jpeg.encode_ros_image(camera_name, msg, quality=82)
+            if hw_result is not None:
+                data, width, height = hw_result
+                return CameraFrame(
+                    data=data,
+                    stamp_ns=stamp_ns,
+                    received_monotonic=received_monotonic,
+                    mime_type="image/jpeg",
+                    width=width,
+                    height=height,
+                    version=version,
+                )
         image = decoded_image if decoded_image is not None else self._decode_display_image(msg)
         if image is None:
             return None
@@ -1540,6 +1569,7 @@ class WebDashboardServer:
                 "nvv4l2h264enc",
                 "nvv4l2h265enc",
                 "nvv4l2decoder",
+                "nvjpegenc",
                 "nvjpegdec",
                 "nvvidconv",
                 "openh264enc",
@@ -1558,18 +1588,22 @@ class WebDashboardServer:
             if elements.get(candidate):
                 software_encoder = candidate
                 break
-        active_path = "webrtc-hardware-h264" if hardware_encoder else "jpeg-preview"
-        if has_webrtc and not hardware_encoder and software_encoder:
-            active_path = "webrtc-software-low-latency-planned"
+        # What the display path actually runs today (JPEG frames over HTTP);
+        # the H.264/webrtc entries above are readiness reporting for the
+        # planned WebRTC transport, not an active pipeline.
+        hw_jpeg = getattr(self.node, "_hw_jpeg", None)
+        active_path = "jpeg-hardware-nvjpeg" if hw_jpeg is not None else "jpeg-software"
         notes = []
+        if hw_jpeg is not None:
+            notes.append("Display frames are encoded on the NVJPEG hardware engine (nvjpegenc).")
+        else:
+            notes.append("Display frames are encoded in software (cv2); NVJPEG path unavailable.")
         if hardware_encoder:
-            notes.append(f"Hardware encoder available: {hardware_encoder}.")
+            notes.append(f"Hardware video encoder available for a future WebRTC path: {hardware_encoder}.")
         else:
             notes.append("No Jetson hardware H.264/H.265 encoder detected on this device.")
-        if elements.get("nvjpegdec") or elements.get("nvvidconv"):
-            notes.append("NVIDIA decode/convert elements are available for the pre-encode path.")
         if has_webrtc:
-            notes.append("WebRTC transport dependencies are present.")
+            notes.append("WebRTC transport dependencies are present (not yet wired up).")
         else:
             notes.append("WebRTC transport is incomplete; install gstreamer1.0-nice if nice is missing.")
         return {
@@ -1586,6 +1620,7 @@ class WebDashboardServer:
                 "nvv4l2decoder": bool(elements.get("nvv4l2decoder")),
                 "nvvidconv": bool(elements.get("nvvidconv")),
             },
+            "hw_jpeg": {"active": hw_jpeg is not None, **(hw_jpeg.status() if hw_jpeg is not None else {})},
             "active_path": active_path,
             "cameras": [
                 {

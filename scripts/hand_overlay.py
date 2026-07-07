@@ -225,6 +225,18 @@ class HandOverlayMixin:
         payload = self.hand_overlay_payload(camera_name)
         if not payload or payload["stale"] or not payload["hands"]:
             return None
+        # NVJPEG path: decode to BGRx, draw in place (cv2 primitives accept 4
+        # channels), re-encode -- both JPEG passes on the hardware engine.
+        # Any None along the way falls through to the cv2 path below.
+        hw_jpeg = getattr(self, "_hw_jpeg", None)
+        if hw_jpeg is not None:
+            with track(f"hand_overlay_draw_hw:{camera_name}"):
+                image = hw_jpeg.decode_jpeg_bgrx(camera_name, jpeg_bytes)
+                if image is not None:
+                    draw_hands_on_frame(image, payload["hands"])
+                    encoded = hw_jpeg.encode_bgrx(camera_name, image, quality=90)
+                    if encoded is not None:
+                        return encoded
         with track(f"hand_overlay_draw:{camera_name}"):
             arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
             image = cv2.imdecode(arr, cv2.IMREAD_COLOR)

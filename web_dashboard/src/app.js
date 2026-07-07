@@ -1100,22 +1100,22 @@ function renderImageCapabilities(payload) {
   const hardwareEncoder = payload && payload.hardware_encoder;
   const softwareEncoder = payload && payload.software_encoder;
   const activePath = (payload && payload.active_path) || "unknown";
+  const hwJpegActive = Boolean(payload && payload.hw_jpeg && payload.hw_jpeg.active);
   if (imageCapabilityStatus) {
-    if (hardwareEncoder) {
-      imageCapabilityStatus.textContent = `WebRTC hardware path ready: ${hardwareEncoder}`;
-    } else if (payload && payload.webrtc_ready && softwareEncoder) {
-      imageCapabilityStatus.textContent = `WebRTC transport ready · encoder fallback: ${softwareEncoder}`;
+    if (hwJpegActive) {
+      imageCapabilityStatus.textContent = "Display path: hardware JPEG encode (NVJPEG engine)";
     } else {
-      imageCapabilityStatus.textContent = `Preview path active · ${activePath}`;
+      imageCapabilityStatus.textContent = `Display path: software JPEG (cv2) · ${activePath}`;
     }
   }
   if (imageCapabilityList) {
     const rows = [
-      ["WebRTC", Boolean(payload && payload.webrtc_ready), "webrtcbin + nice"],
-      ["Hardware H.264", Boolean(elements.nvv4l2h264enc), "nvv4l2h264enc"],
-      ["Hardware H.265", Boolean(elements.nvv4l2h265enc), "nvv4l2h265enc"],
+      ["NVJPEG display encode", hwJpegActive, "nvjpegenc, in use"],
       ["NVIDIA JPEG decode", Boolean(elements.nvjpegdec), "nvjpegdec"],
       ["NVIDIA color convert", Boolean(elements.nvvidconv), "nvvidconv"],
+      ["WebRTC (planned)", Boolean(payload && payload.webrtc_ready), "webrtcbin + nice"],
+      ["Hardware H.264", Boolean(elements.nvv4l2h264enc), "nvv4l2h264enc"],
+      ["Hardware H.265", Boolean(elements.nvv4l2h265enc), "nvv4l2h265enc"],
       ["Software fallback", Boolean(softwareEncoder), softwareEncoder || "none"]
     ];
     imageCapabilityList.innerHTML = rows.map(([label, ok, detail]) => `
