@@ -733,28 +733,19 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         )
 
     def _decode_display_image(self, msg: object) -> Optional[np.ndarray]:
-        # Display-only decode for raw (non-compressed) streams. Mono/IR
-        # sources stay single-channel so the JPEG below is encoded luma-only:
-        # the previous GRAY2BGR / NV12->BGR conversion tripled the memory
-        # traffic and made imencode compress three channels of identical
-        # data (image_encode measured ~15% of a core per insight3 camera).
-        # Browsers render grayscale JPEG natively. Anything genuinely color
-        # falls through to the shared full decoder.
+        # Display-only decode for raw (non-compressed) streams. mono8/8uc1
+        # is genuinely single-channel at the format level (no chroma exists
+        # to discard), so that shortcut stays. NV12 previously took the same
+        # Y-plane-only shortcut on the assumption its chroma was always
+        # neutral -- live insight3_b samples confirmed real per-frame U/V
+        # content, so that assumption doesn't hold in general. Route it
+        # through the shared full YUV->BGR decoder instead so no color data
+        # is silently dropped.
         if isinstance(msg, RosImage) and msg.width > 0:
             encoding = msg.encoding.lower()
             if encoding in ("mono8", "8uc1"):
                 data = np.frombuffer(msg.data, dtype=np.uint8)
                 return data.reshape((msg.height, msg.width))
-            if encoding == "nv12":
-                data = np.frombuffer(msg.data, dtype=np.uint8)
-                total_rows, remainder = divmod(data.size, msg.width)
-                if remainder == 0 and total_rows > 0:
-                    # NV12 = luma plane (h rows) + interleaved UV (h/2 rows);
-                    # the luma plane alone IS the grayscale image. Mirrors
-                    # _decode_calibration_message's buffer-derived shape
-                    # handling for drivers that misreport msg.height.
-                    luma_rows = total_rows * 2 // 3 if total_rows % 3 == 0 else total_rows
-                    return data[: luma_rows * msg.width].reshape((luma_rows, msg.width))
         return self._decode_calibration_message("image", msg)
 
     @staticmethod
