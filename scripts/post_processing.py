@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable, Deque, Dict, List, Optional, Sequence, Set, Tuple
 
 from camera_setup import camera_base, camera_info_topic, enabled_cameras, image_topic
+from perf_tracker import track
 
 try:
     import yaml
@@ -341,6 +342,22 @@ def discover_live_topics(
     return build_recording_topic_catalog(raw_config, filtered, build_default_topics(raw_config))
 
 
+def _topic_group(topic: str) -> str:
+    """Group a topic by its ROS namespace (first path segment) -- this is
+    how recording is split into one `ros2 bag record` process per camera:
+    /insight3_a/camera/imu -> "insight3_a"; /tf_static -> "tf_static".
+
+    A single `ros2 bag record` handling all cameras' topics at once was
+    measured to drop the large image messages under load (each camera's
+    high-rate IMU crowding out the recorder's ability to service the bigger,
+    less frequent image callbacks in time) even though CPU and disk
+    throughput both had headroom -- three independent processes each only
+    have to keep up with one camera's own topics, which is well within the
+    proven-fine workload of two cameras sharing a single recorder.
+    """
+    return topic.strip("/").split("/", 1)[0]
+
+
 class RecordingManager:
     def __init__(
         self,
@@ -353,6 +370,9 @@ class RecordingManager:
         host_sync_ssh_target: str = "",
         sync_to_host_on_stop: bool = False,
         publisher_checker: Optional[Callable[[str], bool]] = None,
+        image_topics: Optional[Sequence[str]] = None,
+        start_image_recording: Optional[Callable[[Dict[str, str]], None]] = None,
+        stop_image_recording: Optional[Callable[[], Dict[str, object]]] = None,
     ) -> None:
         self.raw_config = raw_config
         self.ros_domain_id = int(ros_domain_id)
@@ -364,14 +384,30 @@ class RecordingManager:
         self.host_sync_ssh_target = str(host_sync_ssh_target or "").strip()
         self.sync_to_host_on_stop = bool(sync_to_host_on_stop)
         self.publisher_checker = publisher_checker
-        self.process: Optional[subprocess.Popen] = None
+        # Image topics are routed to the dashboard's own already-open
+        # subscription instead of a second `ros2 bag record` reader -- see
+        # inprocess_bag_writer.py for why a second reader on these topics
+        # causes drops. Falls back to the normal subprocess path (grouped in
+        # with everything else) if no node is wired in, e.g. under test.
+        self._image_topics: Set[str] = set(_normalize_topics(image_topics or []))
+        self._start_image_recording = start_image_recording
+        self._stop_image_recording = stop_image_recording
+        self._image_writer_active = False
+        # One `ros2 bag record` per camera (see _topic_group) instead of one
+        # process for every selected topic -- keyed by group name so start/
+        # stop/status can address them individually.
+        self.processes: Dict[str, subprocess.Popen] = {}
+        self._staging_dir: Optional[Path] = None
         self.output_path: Optional[str] = None
         self.started_at: Optional[float] = None
         self.current_topics: List[str] = []
         self.topic_catalog = build_recording_topic_catalog(raw_config, [], self.default_topics)
-        self._output_lines: Deque[str] = deque(maxlen=120)
-        self._stdout_thread: Optional[threading.Thread] = None
+        self._output_lines: Deque[str] = deque(maxlen=200)
+        self._stdout_threads: List[threading.Thread] = []
         self._lock = threading.Lock()
+        self._merge_thread: Optional[threading.Thread] = None
+        self.merge_state: str = "idle"  # idle | merging | done | error
+        self.merge_error: Optional[str] = None
         self._last_topic_refresh_monotonic: float = 0.0
         self.last_sync_status: Dict[str, object] = {
             "state": "idle",
@@ -382,13 +418,11 @@ class RecordingManager:
         }
 
     def _cleanup_if_exited_unlocked(self) -> None:
-        if self.process is None:
-            return
-        if self.process.poll() is None:
-            return
-        self.process = None
+        self.processes = {
+            group: process for group, process in self.processes.items() if process.poll() is None
+        }
 
-    def _drain_stdout(self, process: subprocess.Popen) -> None:
+    def _drain_stdout(self, label: str, process: subprocess.Popen) -> None:
         stream = process.stdout
         if stream is None:
             return
@@ -396,7 +430,7 @@ class RecordingManager:
             for line in iter(stream.readline, ""):
                 if not line:
                     break
-                self._output_lines.append(line.rstrip())
+                self._output_lines.append(f"[{label}] {line.rstrip()}")
         finally:
             with contextlib_suppress():
                 stream.close()
@@ -436,8 +470,10 @@ class RecordingManager:
             raise ValueError("No topics selected for recording.")
         with self._lock:
             self._cleanup_if_exited_unlocked()
-            if self.process is not None and self.process.poll() is None:
+            if self.processes or self._image_writer_active:
                 raise RuntimeError("Recording is already running.")
+            if self.merge_state == "merging":
+                raise RuntimeError("Still merging the previous recording -- wait for it to finish.")
 
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             if bag_name:
@@ -446,31 +482,75 @@ class RecordingManager:
             else:
                 name = f"insight_record_{timestamp}"
             output_path = self.rosbag_root / name
+            staging_dir = self.rosbag_root / "_staging" / name
+            staging_dir.mkdir(parents=True, exist_ok=True)
+
+            if self._start_image_recording is not None:
+                image_topics = [t for t in selected_topics if t in self._image_topics]
+                other_topics = [t for t in selected_topics if t not in self._image_topics]
+            else:
+                image_topics = []
+                other_topics = list(selected_topics)
+
+            groups: Dict[str, List[str]] = {}
+            for topic in other_topics:
+                groups.setdefault(_topic_group(topic), []).append(topic)
+
+            image_writer_active = False
+            if image_topics:
+                # One writer/thread per camera group (mirrors the per-camera
+                # `ros2 bag record` split above) -- a single shared writer
+                # was measured to bottleneck the large uncompressed streams
+                # behind each other (~13-16Hz instead of ~20Hz native).
+                topic_output_paths = {
+                    topic: str(staging_dir / f"_images_{_topic_group(topic)}") for topic in image_topics
+                }
+                self._start_image_recording(topic_output_paths)
+                image_writer_active = True
+
             env = os.environ.copy()
             env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
-            cmd = [
-                "ros2",
-                "bag",
-                "record",
-                "--output",
-                str(output_path),
-                "--max-cache-size",
-                str(self.max_cache_size),
-                *selected_topics,
-            ]
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                start_new_session=True,
-                env=env,
-            )
-            self.process = process
+            processes: Dict[str, subprocess.Popen] = {}
+            stdout_threads: List[threading.Thread] = []
+            for group, group_topics in groups.items():
+                cmd = [
+                    "ros2",
+                    "bag",
+                    "record",
+                    "--output",
+                    str(staging_dir / group),
+                    "--max-cache-size",
+                    str(self.max_cache_size),
+                    *group_topics,
+                ]
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    start_new_session=True,
+                    env=env,
+                )
+                processes[group] = process
+                thread = threading.Thread(
+                    target=self._drain_stdout,
+                    args=(group, process),
+                    daemon=True,
+                    name=f"rosbag_record_stdout_{group}",
+                )
+                thread.start()
+                stdout_threads.append(thread)
+
+            self.processes = processes
+            self._stdout_threads = stdout_threads
+            self._staging_dir = staging_dir
+            self._image_writer_active = image_writer_active
             self.output_path = str(output_path)
             self.started_at = time.time()
             self.current_topics = list(selected_topics)
             self._output_lines.clear()
+            self.merge_state = "idle"
+            self.merge_error = None
             self.last_sync_status = {
                 "state": "idle",
                 "message": "Host sync idle",
@@ -478,44 +558,120 @@ class RecordingManager:
                 "target_path": None,
                 "finished_at": None,
             }
-            self._stdout_thread = threading.Thread(
-                target=self._drain_stdout,
-                args=(process,),
-                daemon=True,
-                name="rosbag_record_stdout",
-            )
-            self._stdout_thread.start()
         return self.status()
 
     def stop(self, timeout_sec: float = 8.0) -> Dict[str, object]:
-        process: Optional[subprocess.Popen] = None
         with self._lock:
             self._cleanup_if_exited_unlocked()
-            process = self.process
-            if process is None or process.poll() is not None:
-                self.process = None
+            processes = dict(self.processes)
+            staging_dir = self._staging_dir
+            output_path = self.output_path
+            image_writer_active = self._image_writer_active
+            self._image_writer_active = False
+            if not processes and not image_writer_active:
                 return self.status()
 
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGINT)
-        except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=max(float(timeout_sec), 0.1))
-        except subprocess.TimeoutExpired:
+        if image_writer_active and self._stop_image_recording is not None:
             try:
-                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                result = self._stop_image_recording()
+                dropped = int(result.get("dropped", 0)) if result else 0
+                if dropped:
+                    self._output_lines.append(f"[_images] WARNING: dropped {dropped} message(s) (writer queue full)")
+            except Exception as exc:  # noqa: BLE001 - surfaced via output log, not fatal to stop()
+                self._output_lines.append(f"[_images] ERROR stopping writer: {exc}")
+
+        # Signal every per-camera recorder up front (not one-at-a-time) so
+        # their shutdown/flush windows overlap instead of serializing the
+        # wait across N processes.
+        for process in processes.values():
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGINT)
             except ProcessLookupError:
                 pass
-            with contextlib_suppress(subprocess.TimeoutExpired):
-                process.wait(timeout=3.0)
+        deadline = time.monotonic() + max(float(timeout_sec), 0.1)
+        still_running = []
+        for process in processes.values():
+            remaining = max(deadline - time.monotonic(), 0.0)
+            try:
+                process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                still_running.append(process)
+        if still_running:
+            for process in still_running:
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            for process in still_running:
+                with contextlib_suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=3.0)
 
         with self._lock:
-            self.process = None
-            output_path = self.output_path
-        if output_path and self.sync_to_host_on_stop:
-            self.sync_recording_to_host(output_path)
+            self.processes = {}
+            self.merge_state = "merging"
+            self.merge_error = None
+
+        self._merge_thread = threading.Thread(
+            target=self._merge_worker,
+            args=(staging_dir, Path(output_path) if output_path else None),
+            daemon=True,
+            name="rosbag_merge",
+        )
+        self._merge_thread.start()
         return self.status()
+
+    def _merge_worker(self, staging_dir: Optional[Path], output_path: Optional[Path]) -> None:
+        try:
+            if staging_dir is None or output_path is None:
+                raise RuntimeError("Missing staging directory or output path.")
+            part_bags = sorted(
+                p for p in staging_dir.iterdir() if p.is_dir() and (p / "metadata.yaml").is_file()
+            )
+            missing = sorted(
+                p.name for p in staging_dir.iterdir() if p.is_dir() and not (p / "metadata.yaml").is_file()
+            )
+            if missing:
+                self._output_lines.append(
+                    f"[merge] WARNING: no data recorded for group(s) {', '.join(missing)} -- skipping"
+                )
+            if not part_bags:
+                raise RuntimeError("No per-camera bags contained any data; nothing to merge.")
+
+            with track("rosbag_merge"):
+                self._convert_merge(part_bags, output_path)
+
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            with self._lock:
+                self.merge_state = "done"
+            self._output_lines.append(f"[merge] Combined {len(part_bags)} recorder(s) into {output_path}")
+            if self.sync_to_host_on_stop:
+                self.sync_recording_to_host(str(output_path))
+        except Exception as exc:  # noqa: BLE001 - surfaced via merge_error, not crashing the thread
+            with self._lock:
+                self.merge_state = "error"
+                self.merge_error = str(exc)
+            self._output_lines.append(f"[merge] ERROR: {exc} (raw per-camera bags kept at {staging_dir})")
+
+    def _convert_merge(self, part_bags: Sequence[Path], output_path: Path) -> None:
+        if output_path.exists():
+            shutil.rmtree(output_path)
+        config_path = output_path.parent / f".{output_path.name}.convert.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            yaml.safe_dump({"output_bags": [{"uri": str(output_path), "storage_id": "sqlite3", "all": True}]})
+            if yaml is not None
+            else f'output_bags:\n  - uri: "{output_path}"\n    storage_id: sqlite3\n    all: true\n'
+        )
+        cmd = ["ros2", "bag", "convert"]
+        for bag in part_bags:
+            cmd += ["-i", str(bag)]
+        cmd += ["-o", str(config_path)]
+        env = os.environ.copy()
+        env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        config_path.unlink(missing_ok=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ros2 bag convert failed (exit {result.returncode}): {result.stdout[-2000:]}")
 
     def _build_sync_target_path(self, source_path: Path) -> Path:
         assert self.host_sync_dir is not None
@@ -650,19 +806,21 @@ class RecordingManager:
     def status(self) -> Dict[str, object]:
         with self._lock:
             self._cleanup_if_exited_unlocked()
-            process = self.process
             catalog = self.topic_catalog
             output_lines = list(self._output_lines)
-            recording = bool(process is not None and process.poll() is None)
-            pid = process.pid if recording else None
+            recording = bool(self.processes) or self._image_writer_active
+            pids = {group: process.pid for group, process in self.processes.items()}
             return {
                 "recording": recording,
-                "pid": pid,
+                "pid": next(iter(pids.values())) if pids else None,
+                "pids": pids,
                 "output_path": self.output_path,
                 "started_at": self.started_at,
                 "topics": list(self.current_topics),
                 "topic_catalog": catalog,
                 "recent_output": output_lines,
+                "merge_state": self.merge_state,
+                "merge_error": self.merge_error,
                 "host_sync_dir": None if self.host_sync_dir is None else str(self.host_sync_dir),
                 "host_sync_ssh_target": self.host_sync_ssh_target or None,
                 "sync_to_host_on_stop": self.sync_to_host_on_stop,
@@ -735,7 +893,7 @@ class PlaybackManager:
         with self._lock:
             with recording_manager._lock:
                 recording_manager._cleanup_if_exited_unlocked()
-                if recording_manager.process is not None and recording_manager.process.poll() is None:
+                if recording_manager.processes:
                     raise RuntimeError("Cannot start playback while recording is active.")
             self._reap_unlocked()
             if self._process is not None:

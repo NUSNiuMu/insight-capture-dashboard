@@ -224,9 +224,9 @@ class LiveAlignmentMixin:
         return transform_point(transform, point)
 
     def transformed_trace(self, pose_name: str) -> List[Tuple[float, float, float]]:
-        raw_trace = self.raw_traces[pose_name]
-        if not self.session_alignment_enabled:
-            return list(raw_trace)
+        raw_trace = list(self.raw_traces[pose_name])
+        if not self.session_alignment_enabled or not raw_trace:
+            return raw_trace
         lock = getattr(self, "live_alignment_solution_lock", None)
         if lock is None:
             transform = self.world_to_reference.get(pose_name)
@@ -234,8 +234,13 @@ class LiveAlignmentMixin:
             with lock:
                 transform = self.world_to_reference.get(pose_name)
         if transform is None:
-            return list(raw_trace)
-        return [transform_point(transform, point) for point in raw_trace]
+            return raw_trace
+        # One vectorized (N,3) pass instead of a per-point 4x4 matmul + fresh
+        # 4-vector allocation: this runs per websocket broadcast tick (20Hz x
+        # 3 poses x up to 300 points), which measured ~18k matmuls/sec.
+        points = np.asarray(raw_trace, dtype=np.float64)
+        mapped = points @ transform[:3, :3].T + transform[:3, 3]
+        return mapped.tolist()
 
     def transformed_pose_sample(self, pose_name: str):
         latest_pose_sample = getattr(self, "latest_pose_sample", {}).get(pose_name)
@@ -321,11 +326,16 @@ class LiveAlignmentMixin:
         self.live_alignment_target_camera = None
         if self.live_alignment_reset_traces_on_lock:
             for pose in self.poses:
-                raw_trace = self.raw_traces.get(pose.name, [])
+                raw_trace = self.raw_traces.get(pose.name)
                 if not raw_trace:
                     continue
-                self.raw_traces[pose.name] = [raw_trace[-1]]
-                self.latest_pose[pose.name] = self._transform_pose_point(pose.name, raw_trace[-1])
+                last_point = raw_trace[-1]
+                # In-place clear+append keeps the container (a bounded deque
+                # owned by the dashboard node) rather than replacing it with
+                # a plain unbounded list.
+                raw_trace.clear()
+                raw_trace.append(last_point)
+                self.latest_pose[pose.name] = self._transform_pose_point(pose.name, last_point)
         self._persist_alignment_state()
         self._log_live_alignment_status(force=True)
 

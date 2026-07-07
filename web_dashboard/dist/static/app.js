@@ -14,6 +14,7 @@ const alignmentMeta = document.getElementById("alignment-meta");
 const alignmentToggle = document.getElementById("alignment-toggle");
 const recordingPanel = document.getElementById("recording-panel");
 const recordingStatus = document.getElementById("recording-status");
+const systemLoadPill = document.getElementById("system-load-pill");
 const startRecordingButton = document.getElementById("start-recording-button");
 const stopRecordingButton = document.getElementById("stop-recording-button");
 const syncRecordingButton = document.getElementById("sync-recording-button");
@@ -54,6 +55,16 @@ const imageCapabilityStatus = document.getElementById("image-capability-status")
 const imageCapabilityList = document.getElementById("image-capability-list");
 const imagePipelineNotes = document.getElementById("image-pipeline-notes");
 const refreshImageCapabilitiesButton = document.getElementById("refresh-image-capabilities-button");
+const settingsPanel = document.getElementById("settings-panel");
+const settingsStatus = document.getElementById("settings-status");
+const settingsCameraList = document.getElementById("settings-camera-list");
+const settingsRestartBanner = document.getElementById("settings-restart-banner");
+const settingsRestartMessage = document.getElementById("settings-restart-message");
+const settingsRestartButton = document.getElementById("settings-restart-button");
+const boardCalibrationStatus = document.getElementById("board-calibration-status");
+const boardCalibrationSaveButton = document.getElementById("board-calibration-save-button");
+const rosbagSyncStatus = document.getElementById("rosbag-sync-status");
+const rosbagSyncSaveButton = document.getElementById("rosbag-sync-save-button");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#79c47b", primitive: "sphere", modelColor: "#b99572" },
@@ -132,6 +143,30 @@ if (bagList || document.querySelector("[data-bag-select]")) {
 }
 if (runScoringButton) {
   void pollScoringStatus();
+}
+if (settingsPanel) {
+  void refreshSettings();
+}
+if (boardCalibrationStatus) {
+  void refreshBoardCalibration();
+}
+if (boardCalibrationSaveButton) {
+  boardCalibrationSaveButton.addEventListener("click", () => {
+    void saveBoardCalibration();
+  });
+}
+if (rosbagSyncStatus) {
+  void refreshRosbagSync();
+}
+if (rosbagSyncSaveButton) {
+  rosbagSyncSaveButton.addEventListener("click", () => {
+    void saveRosbagSync();
+  });
+}
+if (settingsRestartButton) {
+  settingsRestartButton.addEventListener("click", () => {
+    void restartBackend();
+  });
 }
 if (alignmentToggle) {
   alignmentToggle.addEventListener("click", () => {
@@ -732,7 +767,32 @@ function renderRecordingStatus(status) {
   if (status && status.topic_catalog && !recordTopicsInitialized) {
     renderTopicCatalog(status.topic_catalog, { resetSelection: true });
   }
+  renderSystemLoad(status && status.system_load);
   setRecordingBusy(recordingBusy, { active });
+}
+
+function renderSystemLoad(load) {
+  if (!systemLoadPill) {
+    return;
+  }
+  if (!load || load.load_1min === null || load.load_1min === undefined) {
+    systemLoadPill.textContent = "load: unknown";
+    systemLoadPill.className = "system-load-pill";
+    return;
+  }
+  const budget = load.cpu_quota_cores || load.cpu_count;
+  const ratio = typeof load.load_ratio === "number" ? load.load_ratio : load.load_1min / budget;
+  systemLoadPill.textContent = `load ${load.load_1min.toFixed(2)} / ${budget.toFixed(1)} cores`;
+  let level = "ok";
+  if (ratio >= 0.9) {
+    level = "critical";
+  } else if (ratio >= 0.7) {
+    level = "warning";
+  }
+  systemLoadPill.className = `system-load-pill system-load-${level}`;
+  systemLoadPill.title = level === "ok"
+    ? "System has headroom -- recording should keep full frame rate."
+    : "System is near its CPU quota -- recording may drop frames. Close anything non-essential (extra browser tabs, other SSH sessions) before a critical recording.";
 }
 
 function setRecordingBusy(isBusy, { active } = {}) {
@@ -1071,6 +1131,313 @@ function renderImageCapabilities(payload) {
   }
 }
 
+async function refreshSettings() {
+  if (!settingsPanel) {
+    return null;
+  }
+  try {
+    const response = await fetch("/api/settings", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to load settings.");
+    }
+    renderSettings(payload);
+    setSettingsStatus(`${payload.poses.length} camera(s) configured.`);
+    return payload;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSettingsStatus(`Failed to load settings: ${message}`);
+    return null;
+  }
+}
+
+function setSettingsStatus(message) {
+  if (settingsStatus) {
+    settingsStatus.textContent = message;
+  }
+}
+
+function renderSettings(payload) {
+  if (!settingsCameraList) {
+    return;
+  }
+  const poses = Array.isArray(payload && payload.poses) ? payload.poses : [];
+  const models = Array.isArray(payload && payload.available_models) ? payload.available_models : [];
+  settingsCameraList.innerHTML = poses.map((pose) => {
+    const roleLabel = (ROLE_STYLE[pose.role] && ROLE_STYLE[pose.role].label) || pose.role;
+    const modelOptions = models.map((model) => {
+      const selected = model.file === pose.avatar_model ? " selected" : "";
+      return `<option value="${escapeHtml(model.file)}"${selected}>${escapeHtml(model.label)}</option>`;
+    }).join("");
+    const gripperRow = pose.gripper_tracking_available ? `
+      <label class="settings-toggle-row">
+        <input type="checkbox" class="settings-gripper-toggle" data-camera="${escapeHtml(pose.name)}" ${pose.gripper_tracking_enabled ? "checked" : ""}>
+        <span>Gripper tracking</span>
+      </label>
+    ` : "";
+    const handOverlayRow = pose.hand_overlay_available ? `
+      <label class="settings-toggle-row">
+        <input type="checkbox" class="settings-hand-overlay-toggle" data-camera="${escapeHtml(pose.name)}" ${pose.hand_overlay_enabled ? "checked" : ""}>
+        <span>Hand landmark overlay</span>
+      </label>
+    ` : "";
+    return `
+      <article class="settings-camera-card">
+        <div class="settings-camera-head">
+          <h3>${escapeHtml(pose.name)}</h3>
+          <span class="settings-role-pill">${escapeHtml(roleLabel)}</span>
+        </div>
+        <label class="settings-field">
+          <span>Avatar model</span>
+          <select class="settings-model-select" data-camera="${escapeHtml(pose.name)}">${modelOptions}</select>
+        </label>
+        ${gripperRow}
+        ${handOverlayRow}
+      </article>
+    `;
+  }).join("");
+
+  settingsCameraList.querySelectorAll(".settings-model-select").forEach((select) => {
+    select.addEventListener("change", () => {
+      void setPoseAvatarModel(select.dataset.camera, select.value);
+    });
+  });
+  settingsCameraList.querySelectorAll(".settings-gripper-toggle").forEach((toggle) => {
+    toggle.addEventListener("change", () => {
+      void setGripperTrackingEnabled(toggle.dataset.camera, toggle.checked);
+    });
+  });
+  settingsCameraList.querySelectorAll(".settings-hand-overlay-toggle").forEach((toggle) => {
+    toggle.addEventListener("change", () => {
+      void setHandOverlayEnabled(toggle.dataset.camera, toggle.checked);
+    });
+  });
+}
+
+async function setHandOverlayEnabled(name, enabled) {
+  setSettingsStatus(`Updating ${name}...`);
+  try {
+    const response = await fetch("/api/settings/hand-overlay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, enabled })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to update hand overlay.");
+    }
+    renderSettings(payload);
+    setSettingsStatus(`${name}: hand overlay ${enabled ? "enabled" : "disabled"}.`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSettingsStatus(`Failed to update ${name}: ${message}`);
+  }
+}
+
+async function setPoseAvatarModel(name, model) {
+  setSettingsStatus(`Updating ${name}...`);
+  try {
+    const response = await fetch("/api/settings/avatar-model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, model })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to update avatar model.");
+    }
+    renderSettings(payload);
+    setSettingsStatus(`${name}: avatar model updated.`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSettingsStatus(`Failed to update ${name}: ${message}`);
+  }
+}
+
+async function setGripperTrackingEnabled(name, enabled) {
+  setSettingsStatus(`Updating ${name}...`);
+  try {
+    const response = await fetch("/api/settings/gripper-tracking", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, enabled })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to update gripper tracking.");
+    }
+    renderSettings(payload);
+    setSettingsStatus(`${name}: gripper tracking ${enabled ? "enabled" : "disabled"}.`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSettingsStatus(`Failed to update ${name}: ${message}`);
+  }
+}
+
+function showRestartBanner(message) {
+  if (!settingsRestartBanner) {
+    return;
+  }
+  if (settingsRestartMessage) {
+    settingsRestartMessage.textContent = message || "Saved. Restart the backend to apply.";
+  }
+  settingsRestartBanner.hidden = false;
+}
+
+async function restartBackend() {
+  if (!settingsRestartButton) {
+    return;
+  }
+  settingsRestartButton.disabled = true;
+  if (settingsRestartMessage) {
+    settingsRestartMessage.textContent = "Restarting backend...";
+  }
+  try {
+    await fetch("/api/settings/restart-backend", { method: "POST" });
+  } catch (_error) {
+    // Expected: the process exits before the response finishes.
+  }
+  const deadline = Date.now() + 30000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    try {
+      const response = await fetch("/healthz", { cache: "no-store" });
+      if (response.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch (_error) {
+      // Backend still down; keep polling.
+    }
+  }
+  if (settingsRestartMessage) {
+    settingsRestartMessage.textContent = "Backend did not come back within 30s -- check it manually.";
+  }
+  settingsRestartButton.disabled = false;
+}
+
+async function refreshBoardCalibration() {
+  if (!boardCalibrationStatus) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/settings/board-calibration", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to load board calibration.");
+    }
+    const values = payload.values || {};
+    setInputValue("bc-marker-length", values.marker_length_m);
+    setInputValue("bc-marker-separation", values.marker_separation_m);
+    setInputValue("bc-board-rows", values.board_rows);
+    setInputValue("bc-board-cols", values.board_cols);
+    setInputValue("bc-max-translation-std", values.max_translation_std_m);
+    setInputValue("bc-max-rotation-std", values.max_rotation_std_deg);
+    boardCalibrationStatus.textContent = "Loaded from config/board_calibration.json.";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    boardCalibrationStatus.textContent = `Failed to load: ${message}`;
+  }
+}
+
+async function saveBoardCalibration() {
+  if (!boardCalibrationSaveButton) {
+    return;
+  }
+  boardCalibrationSaveButton.disabled = true;
+  try {
+    const body = {
+      marker_length_m: Number(getInputValue("bc-marker-length")),
+      marker_separation_m: Number(getInputValue("bc-marker-separation")),
+      board_rows: Number(getInputValue("bc-board-rows")),
+      board_cols: Number(getInputValue("bc-board-cols")),
+      max_translation_std_m: Number(getInputValue("bc-max-translation-std")),
+      max_rotation_std_deg: Number(getInputValue("bc-max-rotation-std"))
+    };
+    const response = await fetch("/api/settings/board-calibration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to save board calibration.");
+    }
+    boardCalibrationStatus.textContent = "Saved to config/board_calibration.json.";
+    showRestartBanner("Board calibration saved -- restart the backend to apply.");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    boardCalibrationStatus.textContent = `Failed to save: ${message}`;
+  } finally {
+    boardCalibrationSaveButton.disabled = false;
+  }
+}
+
+async function refreshRosbagSync() {
+  if (!rosbagSyncStatus) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/settings/rosbag-sync", { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to load rosbag sync settings.");
+    }
+    const values = payload.values || {};
+    const syncCheckbox = document.getElementById("rs-sync-enabled");
+    if (syncCheckbox) syncCheckbox.checked = Boolean(values.sync_rosbag_to_host);
+    setInputValue("rs-sync-dir", values.host_rosbag_sync_dir || "");
+    setInputValue("rs-sync-ssh-target", values.host_rosbag_sync_ssh_target || "");
+    rosbagSyncStatus.textContent = "Loaded from config/post_processing.json.";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    rosbagSyncStatus.textContent = `Failed to load: ${message}`;
+  }
+}
+
+async function saveRosbagSync() {
+  if (!rosbagSyncSaveButton) {
+    return;
+  }
+  rosbagSyncSaveButton.disabled = true;
+  try {
+    const syncCheckbox = document.getElementById("rs-sync-enabled");
+    const body = {
+      sync_rosbag_to_host: syncCheckbox ? syncCheckbox.checked : false,
+      host_rosbag_sync_dir: getInputValue("rs-sync-dir"),
+      host_rosbag_sync_ssh_target: getInputValue("rs-sync-ssh-target")
+    };
+    const response = await fetch("/api/settings/rosbag-sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to save rosbag sync settings.");
+    }
+    rosbagSyncStatus.textContent = "Saved to config/post_processing.json.";
+    showRestartBanner("Rosbag sync settings saved -- restart the backend to apply.");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    rosbagSyncStatus.textContent = `Failed to save: ${message}`;
+  } finally {
+    rosbagSyncSaveButton.disabled = false;
+  }
+}
+
+function setInputValue(id, value) {
+  const el = document.getElementById(id);
+  if (el && value !== undefined && value !== null) {
+    el.value = value;
+  }
+}
+
+function getInputValue(id) {
+  const el = document.getElementById(id);
+  return el ? el.value : "";
+}
+
 function setImageCapabilityStatus(message) {
   if (imageCapabilityStatus) {
     imageCapabilityStatus.textContent = message;
@@ -1096,9 +1463,23 @@ function startCameraPolling() {
   }
   pollCameraMetadata();
   window.setInterval(pollCameraMetadata, CAMERA_POLL_INTERVAL_MS);
+  // Catch up immediately when the tab becomes visible again (the poll below
+  // no-ops while hidden, so without this the first update after returning
+  // could lag by up to one interval).
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      pollCameraMetadata();
+    }
+  });
 }
 
 async function pollCameraMetadata() {
+  // A hidden tab keeps its timers (throttled to ~1Hz by the browser) but
+  // nobody can see the panels -- skip the fetch/DOM work entirely and let
+  // the visibilitychange handler refresh the moment the tab returns.
+  if (document.hidden) {
+    return;
+  }
   try {
     const response = await fetch(`/api/cameras?ts=${Date.now()}`, { cache: "no-store" });
     if (!response.ok) {
@@ -1121,6 +1502,11 @@ async function pollCameraMetadata() {
 
 async function applyPoseUpdate(payload) {
   if (!enable3d || !scene) {
+    return;
+  }
+  // Every payload carries the full trace, so skipped updates self-heal on
+  // the first message after the tab becomes visible again.
+  if (document.hidden) {
     return;
   }
   const poses = payload.poses || [];
@@ -1346,6 +1732,14 @@ function updateCameraStream(panel, camera) {
   pollState.frameUrl = camera.frame_url;
   pollState.version = version;
   cameraPollState.set(camera.name, pollState);
+  if (!camera.visible || version <= 0) {
+    // No frame has ever arrived (camera unplugged/not publishing): the
+    // frame endpoint would 404 and the <img> would render the browser's
+    // broken-image glyph. An src-less <img> renders nothing; the panel's
+    // stale badge already tells the story.
+    img.removeAttribute("src");
+    return;
+  }
   img.src = `${camera.frame_url}?v=${version}&ts=${Date.now()}`;
 }
 

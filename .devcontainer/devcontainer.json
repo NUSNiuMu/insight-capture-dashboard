@@ -39,6 +39,9 @@
   // ── Environment variables ────────────────────────────────────────────────
   "remoteEnv": {
     "ROS_DOMAIN_ID": "20",
+    // Base image defaults to Etc/UTC -- without this, rosbag names and log
+    // timestamps read 8h behind actual wall-clock time on a China-based host.
+    "TZ": "Asia/Shanghai",
     "ROS_DISTRO": "humble",
     "ROS_VERSION": "2",
     // ROS2 Python packages (equivalent to sourcing setup.bash)

@@ -44,6 +44,20 @@ def avatar_model_defaults(avatar_model) -> Dict:
     return AVATAR_MODEL_DEFAULTS.get(Path(avatar_model).name, {})
 
 
+# Curated subset of assets/models/*.glb offered as choices in the dashboard's
+# Settings page. Limited to filenames with an AVATAR_MODEL_DEFAULTS entry:
+# without a tuned scale/rotation a model renders at scale=1.0 with no
+# rotation, which looks wrong out of the box (assets/models/ also has
+# glove.glb and iron-man_helmet_mk3.glb, left out until someone tunes and
+# adds defaults for them above).
+AVAILABLE_AVATAR_MODELS = [
+    {"file": "vis_assembly.glb", "label": "Vis Assembly (hand)"},
+    {"file": "MaleBaseModel_BravFG.glb", "label": "Male Base Model"},
+    {"file": "ArmBaseModel_BravFG.glb", "label": "Arm Base Model"},
+    {"file": "iron-man_helmet_mk3_clean.glb", "label": "Iron Man Helmet (head)"},
+]
+
+
 def load_setup(config_path: Path) -> Dict:
     config_path = Path(config_path)
     with config_path.open("r", encoding="utf-8") as f:
