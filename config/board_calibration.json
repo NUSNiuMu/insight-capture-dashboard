@@ -10,7 +10,7 @@
   "stability_window": 20,
   "max_translation_std_m": 0.04,
   "max_rotation_std_deg": 2.5,
-  "min_detected_tags": 12,
+  "min_detected_tags": 8,
   "max_group_span_ms": 90.0,
   "pending_image_limit": 3,
   "pending_max_age_ms": 200.0,

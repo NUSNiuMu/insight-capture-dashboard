@@ -114,13 +114,19 @@ class GripperTrackingMixin:
         # teleop_role lives on PoseSpec, not CameraSpec — but pose.name == camera.name
         # (both built from the same camera_setup.build_dashboard_config entries), so
         # this set of names is directly usable to key camera-frame callbacks.
-        self.gripper_tracking_cameras = {
+        hand_camera_names = {
             pose.name for pose in self.poses if getattr(pose, "teleop_role", None) in ("left_hand", "right_hand")
         }
-        self.gripper_detector = GripperMarkerDetector() if self.gripper_tracking_cameras else None
+        # gripper_calibrations' keys are the fixed "this camera can track a
+        # gripper" set (never shrinks); gripper_tracking_cameras is the live
+        # on/off switch, checked per-frame by _process_gripper_image and
+        # toggled by set_gripper_tracking_enabled. Starts empty -- off by
+        # default until the user opts in per camera via the Settings page.
+        self.gripper_tracking_cameras: set = set()
+        self.gripper_detector = GripperMarkerDetector() if hand_camera_names else None
         self.gripper_calibration_path = Path(calibration_path)
         self.gripper_calibrations: Dict[str, GripperCalibration] = {
-            name: GripperCalibration() for name in self.gripper_tracking_cameras
+            name: GripperCalibration() for name in hand_camera_names
         }
         self._load_gripper_calibration()
         self.gripper_latest_result: Dict[str, GripperDetectionResult] = {}
