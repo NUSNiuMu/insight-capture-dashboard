@@ -67,6 +67,21 @@ cd "${ROOT_DIR}"
 
 if [[ "${in_container}" == "true" ]]; then
     log "Already inside the container -- skipping docker compose."
+elif [[ -n "$(docker compose ps --status running --services 2>/dev/null)" ]]; then
+    # Already running: restart for a guaranteed-clean launch (picks up any
+    # git-pulled code, clears whatever state accumulated) -- unless a
+    # recording is in flight, in which case restarting would kill it.
+    recording_in_progress=false
+    if curl -sf "http://localhost:${PORT}/api/recording/status" 2>/dev/null \
+            | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("recording") else 1)' 2>/dev/null; then
+        recording_in_progress=true
+    fi
+    if [[ "${recording_in_progress}" == "true" ]]; then
+        log "Backend is already running with a recording in progress -- not restarting (would kill it). Using the running backend as-is."
+    else
+        log "Backend is already running -- restarting for a clean launch..."
+        docker compose restart
+    fi
 else
     log "Starting dashboard backend via docker compose..."
     docker compose up -d
