@@ -2,9 +2,11 @@
 
 实时查看多路相机图像、显示多路 VIO 轨迹，并在 dashboard 内做在线相对位姿标定（AprilTag board）。
 
-> **部署 / 日常操作 / 故障排查请看 [docs/USAGE.md](docs/USAGE.md)**（一键启动
-> `./scripts/setup_host.sh`、录制后数据完整性检查 `scripts/check_bag.py`、
-> 常见问题诊断树）。本 README 侧重功能与配置参考。
+> **交付给客户的使用手册在 [docs/USAGE.md](docs/USAGE.md)**（日常操作、采集
+> 流程、故障排查诊断树；不含安装——环境由我们出厂配置好）。
+> 内部装机用 `./scripts/setup_host.sh`（幂等：runtime 检查 + DDS 缓冲 sysctl +
+> 构建 + 启动）；录制后数据完整性检查用 `scripts/check_bag.py`。
+> 本 README 侧重功能与配置参考。
 
 保留两条 dashboard 主线：
 

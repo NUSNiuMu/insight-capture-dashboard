@@ -1,8 +1,8 @@
-# Insight Capture Dashboard — 使用与运维手册
+# Insight Capture Dashboard — 使用手册
 
-> 适用分支：`deploy/jetson-nx`（Orin NX，含 NVJPEG 硬件编码）。
-> `deploy/lite`（Orin Nano，无硬件编码）除"硬件加速"一节外全部通用。
-> 功能细节（标定参数、avatar 配置等）见 [README.md](../README.md)，本文侧重**部署、日常操作、故障排查**。
+> 设备出厂前已完成全部环境配置（Docker、NVIDIA 运行时、内核参数、软件安装），
+> 本手册不含安装步骤，只覆盖**日常使用、数据采集与故障排查**。
+> 软件升级方式见 §5；开发者功能参考见仓库 [README.md](../README.md)。
 
 ---
 
@@ -11,296 +11,244 @@
 多路 Insight 相机的实时监控与数据采集系统：
 
 ```
-Insight 相机 ×3 ──USB 网口(169.254.x.x 点对点)──> Jetson Orin NX
-                                                    │
-                              docker 容器 (host network, restart: unless-stopped)
-                              ├─ ROS2 订阅：图像 / IMU / VIO pose
-                              ├─ NVJPEG 硬件 JPEG 编码（显示路径）
-                              ├─ 进程内 rosbag 录制（不丢录制帧的关键设计）
-                              └─ aiohttp Web 服务 :8765
-                                                    │
-                     浏览器（本机 kiosk / SSH 隧道远程） http://localhost:8765
+Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器──> 浏览器
+                                │                          http://<设备IP>:8765
+                                ├─ 实时画面 / 3D VIO 轨迹
+                                ├─ rosbag 数据录制
+                                └─ 在线标定 / 评分
 ```
 
-| 组件 | 说明 |
-|---|---|
-| 后端 | `scripts/multi_camera_dashboard_web.py`，容器内常驻 |
-| 前端 | `web_dashboard/dist/`，Babylon.js，改源码后需 `node build.js` 或手动同步 |
-| 配置 | `config/cameras.json`（唯一常改入口），`config/board_calibration.json` |
-| 数据 | `rosbags/`（录制输出），`outputs/`（评分等结果） |
+- 服务随开机自启（断电重启后自动恢复），正常情况下**无需任何手动启动操作**；
+- 每台相机独占一个 USB 网口（`169.254.x.x` 段），插拔顺序不影响使用；
+- 所有数据（录制、标定、配置）保存在设备的 `rosbags/`、`config/`、`outputs/`
+  目录，软件升级不会触碰它们。
 
 ---
 
-## 2. 环境要求
+## 2. 启动与访问
 
-| 项 | 要求 | 自检命令 |
-|---|---|---|
-| 硬件 | Jetson Orin NX（Nano 用 `deploy/lite`） | `cat /etc/nv_tegra_release` |
-| 系统 | JetPack 6.x（L4T R36+） | 同上 |
-| Docker | 含 NVIDIA container runtime | `docker info \| grep -i runtimes` |
-| 内核参数 | UDP 接收缓冲 ≥64MB（见 §3） | `sysctl net.core.rmem_max` |
-| 相机 | 每台独占一个 USB 网口，`169.254.x.x/24` | `ip -4 -br addr \| grep 169.254` |
-| ROS 域 | `ROS_DOMAIN_ID=20`（与相机一致） | `config/cameras.json` |
+### 2.1 一键启动
+
+服务开机自启，通常直接访问即可。需要手动确认/重启时：
+
+```bash
+./scripts/run_dashboard.sh             # 启动或确认后端在跑；Ctrl-C 停止
+./scripts/run_dashboard.sh --jetson    # 同时在设备屏幕上打开全屏看板（接显示器时）
+./scripts/run_dashboard.sh --logs      # 同时跟随后端日志
+```
+
+脚本自带健康检查与自愈：等待服务就绪、等待相机出数据；若检测到"相机网口
+已连接但迟迟无数据"（开机时序问题）会自动重启一次后端。可随时重复执行。
+
+停止服务：前台 Ctrl-C，或 `docker compose down`（在部署目录下执行）。
+
+### 2.2 浏览器访问
+
+- 同一局域网：`http://<设备IP>:8765/`
+- 或 SSH 隧道（不依赖局域网可达）：
+  ```bash
+  ssh -L 8765:localhost:8765 <用户名>@<设备IP>
+  # 然后浏览器打开 http://localhost:8765/
+  ```
 
 ---
 
-## 3. 一键启动
-
-### 3.1 全新机器首次部署（一条命令）
-
-```bash
-git clone -b deploy/jetson-nx git@github.com:NUSNiuMu/insight-capture-dashboard.git insight_capture
-cd insight_capture
-./scripts/setup_host.sh        # 需要 sudo 密码
-```
-
-`setup_host.sh` 幂等（可反复执行），依次完成：
-
-1. 检查 docker + NVIDIA runtime（硬件编码依赖 runtime 注入的 GStreamer 插件）；
-2. 写入 `/etc/sysctl.d/99-dds-rx-buffers.conf`——**必做**，否则录制会静默丢
-   10-24% 图像帧（内核默认 208KB UDP 缓冲装不下 510KB 的单帧图像样本）；
-3. `docker compose build`（首次约 2GB 下载，之后有缓存）；
-4. 转入 `run_dashboard.sh` 启动。
-
-> **刷机后必须重跑一次**：sysctl 文件在宿主机上，重刷 JetPack 会丢。
-
-### 3.2 日常启动
-
-```bash
-./scripts/run_dashboard.sh             # 启动/确保运行，打印远程访问方式
-./scripts/run_dashboard.sh --jetson    # 额外拉起本机全屏 kiosk（接显示器时）
-./scripts/run_dashboard.sh --logs      # 同时跟随后端日志（含 CPU 分解）
-```
-
-脚本自带健康检查与自愈：等待 `/healthz`、等待至少一路相机出数据；若"相机
-网口在但 10 秒无数据"会自动重启一次后端（DDS participant 早于相机网口创建
-的经典竞态）。容器 `restart: unless-stopped`——断电重启、SSH 断开都会自动拉起。
-
-停止：前台 Ctrl-C，或 `docker compose down`。
-
-### 3.3 远程访问（推荐，不暴露端口）
-
-```bash
-# 在自己电脑上：
-ssh -L 8765:localhost:8765 nvidia@<jetson-ip>
-# 浏览器打开 http://localhost:8765/
-```
-
----
-
-## 4. 页面与日常操作
+## 3. 页面与日常操作
 
 | 路径 | 用途 |
 |---|---|
 | `/` 或 `/3d` | 3D VIO 轨迹 + 在线标定按钮 |
-| `/images` | 三路相机实时画面（当前为 JPEG 轮询显示，约 10fps 上限，见 §7.7） |
-| `/recording` | rosbag 录制：topic 发现、勾选、开始/停止、同步到主机 |
-| `/bags` | 本地 bag 列表：大小/时长/评分状态 |
+| `/images` | 三路相机实时画面 |
+| `/recording` | rosbag 录制：topic 发现、勾选、开始/停止 |
+| `/bags` | 本地录制列表：大小/时长/状态，可删除 |
 | `/scoring` | 轨迹评分 |
-| `/settings` | 手部叠加开关、夹爪追踪、标定参数、**图像管线能力诊断**、重启后端 |
+| `/settings` | 手部叠加、夹爪追踪、标定参数、图像管线诊断、重启后端 |
 
-### 4.1 标准采集流程
+### 3.1 标准采集流程
 
-1. `./scripts/run_dashboard.sh`，确认 `/images` 三路画面都是活的（面板无 stale 标记）；
-2. `/recording` → `Refresh Topics` → 勾选（支持按相机整组勾选）→ `Start`；
+1. 打开 `/images`，确认三路画面都在动（面板无 stale 灰标）；
+2. `/recording` → `Refresh Topics` → 勾选要录的 topic（支持按相机整组勾选）→ `Start`；
 3. 采集完成 → `Stop`；
-4. **立刻校验数据完整性**（30 秒内出结论）：
+4. **立刻校验数据完整性**（约 10 秒出结论）：
 
 ```bash
-python3 scripts/check_bag.py            # 检查最新一份 bag，退出码 0=完整
-python3 scripts/check_bag.py rosbags/insight_record_20260707_173821   # 指定 bag
+docker exec insight-dashboard python3 scripts/check_bag.py
 ```
 
-输出对每个 topic 给出 `实收条数 / 实测频率 / 估计缺失% / 最大断口位置`，
-任一 topic 缺失超过 0.5%（默认阈值，`--max-loss` 可调）即 FAIL 并给出排查入口。
-录制开始后前 2 秒的订阅预热断口默认忽略（`--warmup`）。
+输出对每个 topic 给出 `实收条数 / 实测频率 / 估计缺失% / 最大断口位置`；
+最后一行 `RESULT: OK` 即数据完整，`FAIL` 时按 §6.3 排查。
+默认检查最新一份录制；指定某份：在命令末尾加 `rosbags/<目录名>`。
 
-### 4.2 API 速查
+### 3.2 磁盘管理
 
+三路全录约 **1.2GB/分钟**，录制前确认空间：
+
+```bash
+df -h /                              # 剩余空间
+du -sh rosbags/* | sort -h | tail    # 各录制占用
 ```
-GET  /healthz                        存活探针
-GET  /api/cameras                    相机列表 + fps/分辨率/stale
-GET  /api/cameras/<name>/frame       该相机当前帧 JPEG
-GET  /api/images/capabilities        编码管线诊断（硬件路径是否生效）
-GET  /api/recording/status           录制状态
-POST /api/recording/start|stop       录制控制（start 可带 {"topics": [...]}）
-GET  /api/rosbags                    bag 列表
-GET  /api/alignment                  标定状态
-```
+
+删除：`/bags` 页面操作，或直接删除 `rosbags/` 下对应目录（确认已拷贝/不需要后）。
 
 ---
 
-## 5. 硬件加速（deploy/jetson-nx 专有）
+## 4. 在线标定（多相机轨迹对齐）
 
-显示路径的 JPEG 编码跑在 Orin NX 的 NVJPEG 专用引擎上（`scripts/hw_jpeg.py`），
-不占 CPU、不占 GPU（CUDA），实测比软件编码省 4-5.6 倍 CPU 时间。
+操作入口在 `/3d` 页右上角 `Start / Stop Alignment`。流程与参数详见仓库
+[README.md](../README.md) 的"在线轨迹标定"一节，操作要点：
 
-- 生效确认：`/settings` 页 Image capabilities 显示
-  **"Display path: hardware JPEG encode (NVJPEG engine)"**，
-  或 `curl -s localhost:8765/api/images/capabilities | python3 -m json.tool`
-  中 `active_path = "jpeg-hardware-nvjpeg"`、`hw_jpeg.active = true`；
-- 失效不致命：任何环节失败自动回落 cv2 软件编码，画面照常，只是 CPU 变高
-  （排查见 §7.6）；
-- 手部叠加开启时的解码/重编码同样走硬件。
+1. 让每台待标定相机稳定看到同一块 AprilTag 标定板几秒（无需多台同时看到）；
+2. 页面状态从 `samples n/12` 攒满后自动进入 `tracking`；
+3. 全部标完点 `Stop Alignment`，结果保留并持续用于轨迹显示。
 
----
-
-## 6. 版本与分支
-
-| 分支 | 目标设备 | 差异 |
-|---|---|---|
-| `deploy/jetson-nx` | Orin NX | 含 NVJPEG 硬件编码 + 容器内 GStreamer 依赖 |
-| `deploy/lite` | Orin Nano | 无硬件编码，无 COLMAP 依赖 |
-| `main` | 开发机 Jetson | 含 COLMAP/optimization 的宿主机挂载 |
-
-升级：`git pull` 后重跑 `./scripts/run_dashboard.sh` 即可（代码 live-mount，
-改了 `Dockerfile` 才需要 `docker compose build`）。客户离线部署用
-`scripts/build_release.sh` + `deploy/` 目录的镜像包流程。
+标定不收敛时：确认板子确实在该相机视野内且成像足够大
+（`http://<设备IP>:8765/api/cameras/<相机名>/frame` 可直接查看该相机当前画面）。
 
 ---
 
-## 7. 常见问题排查
+## 5. 软件升级
 
-> 通用三板斧，任何异常先跑：
+升级只需要一个新的镜像压缩包（`insight-dashboard-vX.Y.Z.tar.gz`），
+在部署目录执行：
+
+```bash
+./update.sh insight-dashboard-vX.Y.Z.tar.gz
+```
+
+录制数据、标定结果、配置全部保留。回滚：把部署目录 `.env` 里的版本号改回
+上一个已加载的版本，`docker compose up -d` 即可。
+
+---
+
+## 6. 常见问题排查
+
+> 任何异常先跑通用三板斧：
 > ```bash
-> docker ps                                    # 容器活着吗
-> curl -s localhost:8765/healthz               # HTTP 活着吗
-> docker logs insight-dashboard --since 10m | grep -iE "error|warn" | tail
+> docker ps | grep insight                     # 1. 容器活着吗（STATUS 应为 Up）
+> curl -s localhost:8765/healthz               # 2. 服务活着吗（应返回 ok）
+> docker logs insight-dashboard --since 10m 2>&1 | grep -iE "error|warn" | tail
 > ```
 
-### 7.1 页面打不开
+### 6.1 页面打不开
 
-| 检查 | 命令 | 处理 |
+| 检查 | 命令/方法 | 处理 |
 |---|---|---|
-| 容器没起 | `docker ps -a \| grep insight` | `./scripts/run_dashboard.sh`；看 `docker logs` 找崩溃原因 |
-| 端口不对 | `docker exec insight-dashboard printenv DASHBOARD_PORT` | 默认 8765；compose 里改过要同步隧道命令 |
-| 远程访问没建隧道 | — | 见 §3.3；后端只监听本机，不建隧道连不上属预期 |
+| 容器没起来 | `docker ps -a \| grep insight` | `./scripts/run_dashboard.sh`；仍失败看 `docker logs insight-dashboard` |
+| 网络不可达 | 能否 `ping <设备IP>` | 检查设备联网，或改用 SSH 隧道（§2.2） |
+| 浏览器缓存 | 强制刷新 Ctrl+Shift+R | — |
 
-### 7.2 相机画面黑/stale（最常见）
+### 6.2 相机画面黑 / 灰标 stale（最常见）
 
-**症状**：`/images` 面板灰掉或标 stale，`/api/cameras` 里 `stale: true`。
+按顺序排查，命中即止：
 
-按顺序排查：
+1. **物理链路**：`ip -4 -br addr | grep 169.254` —— 每台在线相机应对应一行。
+   缺行 → 检查该相机 USB 线和供电，或执行 `./scripts/reboot_cameras.sh`
+   （开发机；客户机可直接给相机断电重启）；
+2. **开机时序问题**（开机后所有相机一直无数据的典型原因）：
+   `docker restart insight-dashboard`，30 秒内应恢复。
+   说明：服务比相机网口先启动时会绑不上相机链路且不自愈；启动脚本和后端
+   看门狗已自动处理绝大多数情况，手动重启是兜底；
+3. **单路无数据、其余正常**：该相机自身问题，断电重启该相机；
+4. 以上无效：收集 §7 诊断信息报障。
 
-1. **物理链路**：`ip -4 -br addr | grep 169.254` —— 每台在线相机应有一个
-   `169.254.x.2/24` 接口。没有 → 查 USB 线/相机供电，或
-   `./scripts/reboot_cameras.sh`；
-2. **DDS 竞态（开机后一直没数据的典型原因）**：容器随开机自启，常早于相机
-   网口出现，DDS participant 绑不到相机链路且**不会自愈**。
-   处理：`docker restart insight-dashboard`。
-   注：`run_dashboard.sh` 启动时和后端内置 watchdog（链路在但 60 秒零消息
-   时自动退出重启）都已自动化这一步，手动重启是兜底；
-3. **域号不匹配**：相机和 dashboard 必须同 `ROS_DOMAIN_ID`（当前 20）。
-   验证：`docker exec insight-dashboard bash -ic "ros2 topic list" | head`；
-4. **单路没数据、其余正常**：基本是那台相机自身问题（供电/自身 ROS 栈），
-   重启该相机。
+### 6.3 录制掉帧 / 数据不完整
 
-### 7.3 录制掉帧 / 数据不完整
+**症状**：`check_bag.py` 报 FAIL。
 
-**症状**：`check_bag.py` FAIL；图像 topic 实测帧率低于标称；下游算法报数据断口。
+按 FAIL 的模式判断：
 
-```bash
-python3 scripts/check_bag.py rosbags/<bag>     # 先量化：哪个 topic、丢多少、断口在哪
-```
-
-诊断树：
-
-1. **只有图像丢、camera_info/IMU 完整** → DDS/UDP 接收侧丢包（大样本 vs 小缓冲）。
-   检查内核参数是否被重置（刷机后会丢）：
+1. **只有 image topic 丢、camera_info/IMU 完整** → 内核 UDP 接收缓冲被重置
+   （常见于系统重刷后）。验证与恢复：
    ```bash
-   sysctl net.core.rmem_max        # 必须是 67108864，若是 212992 → 重跑 ./scripts/setup_host.sh
+   sysctl net.core.rmem_max          # 正常应为 67108864；若为 212992 即命中
    ```
-   2026-07-07 实测：默认 208KB 缓冲下三路图像丢 10-24%，修复后 0%；
-2. **所有 topic 在同一时间窗一起断** → 接收端系统级事件，看当时 CPU：
-   `docker stats insight-dashboard`，排查是否有评分/优化任务、kiosk 浏览器抢核；
-3. **某台相机自己的 topic 集体断（含它的 IMU/VIO）** → 相机侧停顿，
-   与本机无关（曾观察到 insight3_b 的 VIO 单次中断 2.5s），复现则联系相机侧排查；
-4. **日志出现 writer 队列丢帧** → 磁盘写入跟不上，查 §7.5 磁盘。
+   恢复（一次性，重启后保持）：
+   ```bash
+   sudo tee /etc/sysctl.d/99-dds-rx-buffers.conf >/dev/null <<'EOF'
+   net.core.rmem_max = 67108864
+   net.core.rmem_default = 67108864
+   net.ipv4.ipfrag_high_thresh = 134217728
+   EOF
+   sudo sysctl -p /etc/sysctl.d/99-dds-rx-buffers.conf
+   docker restart insight-dashboard
+   ```
+   然后重录一段用 `check_bag.py` 复验（此问题实测丢帧 10-24%，修复后为 0）；
+2. **所有 topic 在同一时间段一起断** → 录制期间设备被其他任务抢占，
+   `docker stats insight-dashboard` 观察 CPU；录制时避免同时跑评分/优化任务；
+3. **某台相机自己的全部 topic（含 IMU/VIO）同时断** → 相机侧停顿，
+   与主机无关；复现请记录相机名与时间点后报障；
+4. **磁盘写满**：见 §3.2。
 
-> 设计背景：录制在订阅回调内直接入队（进程内 writer），回调近零成本，
-> 所以"到达即录上"；丢帧几乎总是发生在**到达之前**（网络/DDS 层）。
+### 6.4 录制无法开始 / 停止异常
 
-### 7.4 录不上 / 录制启动失败
+- 先看状态：`curl -s localhost:8765/api/recording/status`；
+- `Start` 无反应：点一次 `Refresh Topics` 再试（相机刚重启过时 topic 列表会过期）；
+- 注意：录制进行中**不要**执行 `docker restart`，会中断录制。
+  `run_dashboard.sh` 已内置保护（检测到录制中不重启），手动 docker 命令没有。
 
-- `/api/recording/status` 看 `recording` 与 `output_path`；
-- topic 勾选后 Start 无反应 → `Refresh Topics` 重新发现（相机刚重启过时
-  topic 列表会过期）；
-- 注意：`run_dashboard.sh` 检测到录制进行中不会重启后端，但手动
-  `docker restart` **会杀掉录制**，操作前先看状态。
+### 6.5 画面卡顿 / 帧率低
 
-### 7.5 磁盘满
+- 显示帧率上限约 10fps 属当前设计（录制数据不受影响，bag 里是相机原生帧率）；
+- 明显低于 10fps：先看 `curl -s localhost:8765/api/cameras` 中各路 `fps`
+  是否为 20/30 —— 是则换浏览器/关闭其他标签页；否则按 §6.2 查相机链路。
 
-```bash
-df -h /                                  # 916MB/45s ≈ 1.2GB/min，三路全录很快
-du -sh rosbags/* | sort -h | tail       # 找大文件
-```
+### 6.6 CPU 占用异常高（硬件编码回退）
 
-删除：`/bags` 页面删，或 `curl -X DELETE localhost:8765/api/rosbags/<bag_name>`，
-或直接 `rm -rf rosbags/<bag_name>`（确认已同步/不需要后）。
-
-### 7.6 硬件编码没生效（CPU 异常高）
-
-**症状**：`/settings` 显示 "Display path: software JPEG (cv2)"，或
-`docker stats` 里 CPU 明显高于正常值（正常三路 ~100% 单核上下）。
+正常三路相机约占一个核（`docker stats insight-dashboard` 的 CPU% ≈100%）。
+明显偏高时检查硬件编码是否在用：
 
 ```bash
 curl -s localhost:8765/api/images/capabilities | python3 -m json.tool
 ```
 
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| `gstreamer.available: false` | 镜像缺 GStreamer（分支/镜像不对） | 确认在 `deploy/jetson-nx` 分支并 `docker compose build` |
-| `elements.nvjpegenc: false` | NVIDIA runtime 没注入插件 | `docker inspect insight-dashboard \| grep Runtime` 应为 nvidia；查 `/etc/nvidia-container-runtime/host-files-for-container.d/drivers.csv` 里有 `libgstnvjpeg.so` |
-| `hw_jpeg.disabled` 有条目 | 管线连续失败已自动禁用 | `docker logs insight-dashboard \| grep hw_jpeg` 看具体报错，`docker restart insight-dashboard` 重试 |
-| 在 Nano 上 | Nano 无此硬件 | 属预期，用 `deploy/lite` |
+`active_path` 应为 `jpeg-hardware-nvjpeg`（`/settings` 页也有同样的诊断卡片）。
 
-### 7.7 画面卡顿 / 帧率低
+| 现象 | 处理 |
+|---|---|
+| `hw_jpeg.disabled` 里有条目 | `docker logs insight-dashboard \| grep hw_jpeg` 看原因，`docker restart insight-dashboard` 重试 |
+| `elements.nvjpegenc: false` | NVIDIA 运行时未注入插件：`docker inspect insight-dashboard --format '{{.HostConfig.Runtime}}'` 应为 `nvidia`；仍异常则报障 |
+| 设备为 Orin Nano | 无此硬件，软件编码属预期 |
 
-- 前端显示上限约 **10fps**（100ms 轮询设计），后端实际 20fps——这是当前
-  传输方案的已知上限，不是故障；高帧率显示方案（WebRTC + 硬件 H.264）在
-  规划中；
-- 低于 10fps 时：`/api/cameras` 看后端 `fps` 是否满 20/30 → 满则查浏览器
-  端（换 Chrome/关其他标签页）；不满则按 §7.2/§7.3 查链路。
+即使回退软件编码，功能不受影响，只是 CPU 变高。
 
-### 7.8 手部叠加骨架闪烁
+### 6.7 手部叠加骨架闪烁
 
-已知现象，三个来源：检测偶发丢手时该帧不叠加（骨架闪断）；骨架取最新
-检测结果、未与图像帧做时间戳配对（快速移动时跳动）；显示链路抽帧。
-硬件编码已降低单帧成本缓解第三条；前两条的修复（骨架保持窗口 + 时间戳
-配对）在待办中。不影响录制数据——叠加只发生在显示路径，bag 里是原始图。
+已知现象（检测偶发丢手 + 骨架未与图像帧做时间戳配对），**不影响录制数据**
+——叠加只作用于显示画面，bag 里保存的是原始图像。
 
-### 7.9 在线标定不收敛
+### 6.8 屏幕看板（--jetson）白屏
 
-见 [README.md](../README.md) "标定排查要点"。速查：
-`curl localhost:8765/api/cameras/<name>/frame -o /tmp/f.jpg` 确认板子在视野内
-且 marker 成像 ≥60px；诊断日志 `/tmp/insight_live_alignment.log`（容器内）。
+- 先用其他电脑的浏览器访问同一地址：能打开说明后端正常，只是本机窗口问题；
+- SSH 登录执行时需指定显示器：`DISPLAY=:0 ./scripts/run_dashboard.sh --jetson`；
+- 仍白屏：`docker restart insight-dashboard` 后重试。
 
-### 7.10 时间/时区问题
+### 6.9 时间不对（录制目录名/日志时间差 8 小时）
 
-bag 名与日志用 `TZ=Asia/Shanghai`（compose 里设定）。若 bag 名时间差 8 小时,
-检查 compose 环境变量是否被改动。相机与主机时间不同步会影响多机数据对齐，
-录制前确认 `date` 与相机侧一致。
-
-### 7.11 kiosk 白屏/不显示（--jetson）
-
-- `echo $DISPLAY`（本地桌面会话通常 `:0`），SSH 登录的 shell 需
-  `DISPLAY=:0 ./scripts/run_dashboard.sh --jetson`；
-- compose 的 `shm_size: 2gb` 是 Chromium GPU 进程的硬需求，别删；
-- kiosk 只是个浏览器，白屏先用远程浏览器访问同一地址排除后端问题。
+设备时区应为 `Asia/Shanghai`（容器内已配置）。若目录名时间不对，检查设备
+系统时间 `date`；多机采集前确认各设备时间一致（影响数据对齐）。
 
 ---
 
-## 8. 排查信息收集（报障时请附带）
+## 7. 报障信息收集
+
+报障时执行以下命令，把生成的文件发给我们：
 
 ```bash
 {
-  date; git -C ~/insight_capture branch --show-current; git -C ~/insight_capture log -1 --oneline
+  date
   cat /etc/nv_tegra_release | head -1
   sysctl net.core.rmem_max
   docker ps -a | grep insight
+  ip -4 -br addr | grep 169.254
   curl -s localhost:8765/api/images/capabilities
   curl -s localhost:8765/api/cameras
-  ip -4 -br addr | grep 169.254
   docker logs insight-dashboard --since 30m 2>&1 | tail -100
 } > /tmp/insight_diag_$(date +%Y%m%d_%H%M%S).txt 2>&1
+ls /tmp/insight_diag_*.txt
+```
+
+若问题与某次录制有关，同时附上该 bag 的检查结果：
+
+```bash
+docker exec insight-dashboard python3 scripts/check_bag.py rosbags/<目录名> > /tmp/insight_bag_check.txt
 ```
