@@ -1,13 +1,90 @@
 # Insight Capture — Web Dashboard
 #
 # Base: ROS2 Humble on Ubuntu 22.04 (arm64, matches Jetson Orin JetPack 6.x)
-# COLMAP is NOT baked in — it's mounted from the host at runtime because it
-# was custom-compiled with CUDA sm_87 for Jetson Orin (see docker-compose.yml).
+# jetson-nx only (no Nano support on this branch): COLMAP 3.9.1 is compiled
+# from source with CUDA sm_87 in the "colmap-builder" stage below and baked
+# into the final image, so the built image is fully self-contained -- no
+# per-device custom-compiled binaries or host mounts required. See the
+# stage's own comments for why 3.9.1 (not the newer 4.x) and why OpenBLAS
+# (not COLMAP's default Intel MKL, which has no ARM64 build).
 #
 # Build context is the insight_capture project directory:
 #   docker build -t insight-dashboard .
 # Or use docker-compose (recommended):
 #   docker compose up --build
+
+# ── Stage: COLMAP 3.9.1, CUDA sm_87 (Jetson Orin) ───────────────────────────
+# Built in its own stage (not the final image) so a rebuild triggered by an
+# application-code change doesn't recompile COLMAP -- this layer only
+# invalidates when this stage's own instructions change. Expect this stage
+# alone to take on the order of an hour on-device the first time; cached
+# afterward like any other Docker layer.
+FROM ros:humble-ros-base-jammy AS colmap-builder
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/|g' /etc/apt/sources.list
+
+# NVIDIA's own arm64 CUDA apt repo (same one already configured on the host
+# at /etc/apt/sources.list.d/cuda-ubuntu2204-arm64.list) -- gives this build
+# stage `nvcc` without needing the host's CUDA toolkit mounted in, and
+# without needing an NVIDIA L4T/CUDA base image. This is NOT Ubuntu's own
+# `nvidia-cuda-toolkit` apt package (that one needs a gcc-10 workaround on
+# 22.04, documented in COLMAP's install docs) -- NVIDIA's official 12.6
+# toolkit builds cleanly against jammy's default gcc-11.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget \
+    && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/arm64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && rm cuda-keyring_1.1-1_all.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends cuda-toolkit-12-6 \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/usr/local/cuda-12.6/bin:${PATH}"
+
+# COLMAP 3.9.1's own documented Ubuntu build deps (doc/install.rst in the
+# colmap/colmap repo) -- every package here resolves on this host's arm64
+# apt (verified with `apt-cache policy` before committing to this version;
+# see the discussion in the commit message for why 3.9.1 over the current
+# 4.x, which pulls in Qt6/OpenImageIO/ONNX/FAISS/PoseLib via FetchContent --
+# untested territory on ARM64 and unneeded for this pipeline's plain
+# feature_extractor/sequential_matcher/mapper usage).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git cmake ninja-build build-essential \
+    libboost-program-options-dev libboost-filesystem-dev libboost-graph-dev libboost-system-dev \
+    libeigen3-dev libflann-dev libfreeimage-dev libmetis-dev \
+    libgoogle-glog-dev libgtest-dev libsqlite3-dev libglew-dev \
+    qtbase5-dev libqt5opengl5-dev \
+    libcgal-dev libceres-dev \
+    # COLMAP's CMake defaults to Intel MKL (-DBLA_VENDOR=Intel10_64lp), which
+    # has no ARM64 build. OpenBLAS is COLMAP's own documented alternative --
+    # the OpenMP variant specifically, per install.rst's warning about a
+    # known OpenBLAS/OpenMP interaction otherwise.
+    libopenblas-openmp-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# CMAKE_CUDA_ARCHITECTURES=87 (not "all"/"all-major"): this branch only ever
+# targets Orin NX's Ampere sm_87, so there's no reason to pay for compiling
+# and shipping kernels for every other architecture. GUI_ENABLED=OFF: this
+# dashboard only ever shells out to `colmap feature_extractor` /
+# `sequential_matcher` / `mapper` (see scripts/post_processing.py), so the
+# Qt GUI binary is dead weight -- skipping it cuts real build time.
+RUN git clone --branch 3.9.1 --depth 1 https://github.com/colmap/colmap.git /colmap-src \
+    && mkdir /colmap-src/build \
+    && cd /colmap-src/build \
+    && cmake .. -GNinja \
+        -DCUDA_ENABLED=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=87 \
+        -DGUI_ENABLED=OFF \
+        -DBLA_VENDOR=OpenBLAS \
+        -DCMAKE_INSTALL_PREFIX=/colmap-install \
+    # -j2, not ninja's default of one job per core: this device has 6 cores
+    # but only ~7.4GB RAM, and COLMAP's heavier translation units (Ceres/
+    # CGAL-templated .cc, CUDA .cu) can each need 1-2GB+ -- unbounded
+    # parallelism was observed swap-thrashing to near-zero free memory
+    # during the actual on-device build. Slower, but doesn't risk the OOM
+    # killer taking out the build (or something else on the host) partway
+    # through a ~176-object compile.
+    && ninja -j2 \
+    && ninja install
 
 FROM ros:humble-ros-base-jammy
 
@@ -29,31 +106,15 @@ RUN sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.tuna.tsinghu
     && sed -i 's|http://packages.ros.org/ros2/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu|g; s|^Types: deb deb-src|Types: deb|' /etc/apt/sources.list.d/ros2.sources
 
 # ── System & ROS2 packages ──────────────────────────────────────────────────
-# NOTE: README.md documents running the PyQt5 kiosk scripts
-# (multi_camera_dashboard_qt.py / web_3d_window.py via open_monitor_dashboard.sh
-# / open_web_3d_right.sh) from *inside* this container (VS Code Dev Containers
-# forwards DISPLAY/X11 automatically on Linux hosts even though it's not in
-# docker-compose.yml/devcontainer.json). So PyQt5/QtWebEngine stay here despite
-# the container's own CMD being the headless aiohttp dashboard.
+# PyQt5/QtWebEngine and their X11 helper libs are gone: the legacy Qt scripts
+# (multi_camera_dashboard_qt.py / web_3d_window.py / open_monitor_dashboard.sh)
+# have no callers on this branch — the on-device kiosk is the vendored
+# Playwright Chromium below, whose runtime libs come from
+# `playwright install --with-deps`, not from this list.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Python build tools
     python3-pip \
     python3-numpy \
-    # Qt dashboard / frameless WebEngine window support
-    python3-pyqt5 \
-    python3-pyqt5.qtwebengine \
-    libatk-bridge2.0-0 \
-    libasound2 \
-    libgbm1 \
-    libgl1 \
-    libgtk-3-0 \
-    libnss3 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxkbcommon-x11-0 \
-    libxrandr2 \
-    libxcb-cursor0 \
-    libxcb-xinerama0 \
     # ROS2 bag I/O and message types
     ros-humble-rosbag2 \
     ros-humble-rosbag2-py \
@@ -63,9 +124,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rosidl-runtime-py \
     # Detection2DArray for the insight9_a hand-landmark overlay (Settings page)
     ros-humble-vision-msgs \
-    # COLMAP runtime dependencies (matches host Ubuntu 22.04 packages)
+    # COLMAP runtime dependencies for the binary baked in by the
+    # colmap-builder stage above (shared libs only, no -dev headers)
     libboost-program-options1.74.0 \
     libboost-filesystem1.74.0 \
+    libflann1.9 \
     libmetis5 \
     libgoogle-glog0v5 \
     libglew2.2 \
@@ -73,6 +136,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     liblz4-1 \
     libceres2 \
     libfreeimage3 \
+    libopenblas0-openmp \
+    libgomp1 \
     # rsync & ssh for rosbag remote sync feature
     rsync \
     openssh-client \
@@ -86,18 +151,76 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
+# ── CUDA runtime for the baked-in COLMAP binary ─────────────────────────────
+# Only the runtime libs (libcudart, libcublas, libcufft, ...), not the full
+# toolkit with nvcc/headers -- that's the colmap-builder stage's job, and
+# keeping it out of the final image saves real space. Kept separate from the
+# COLMAP runtime-lib apt block above since it's a different repo/keyring.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget \
+    && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/arm64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && rm cuda-keyring_1.1-1_all.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends cuda-cudart-12-6 libcublas-12-6 libcufft-12-6 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── COLMAP binary, baked in from the colmap-builder stage ───────────────────
+COPY --from=colmap-builder /colmap-install/bin/colmap /usr/local/bin/colmap
+COPY --from=colmap-builder /colmap-install/share/colmap /usr/local/share/colmap
+
+# ── looper-vio-colmap-handoff: the optimization pipeline COLMAP feeds into ──
+# Sibling of /workspaces/insight_capture, not a subdirectory -- that's the
+# path scripts/multi_camera_dashboard_web.py expects (Path(__file__)
+# .resolve().parents[2] / "looper-vio-colmap-handoff") and it's outside this
+# repo's own git history, so cloning it here (pinned to a commit for
+# reproducibility) rather than vendoring it as tracked files.
+RUN git clone https://github.com/howardat666/looper-vio-colmap-handoff.git /workspaces/looper-vio-colmap-handoff \
+    && git -C /workspaces/looper-vio-colmap-handoff checkout e4267cf181f1db89ca3c5a88d3f0e91e4a80658b
+
+# Two local patches on top of the pinned commit (upstream, not ours to fix
+# directly -- re-check both against any future commit bump):
+#
+# 1. run_colmap_from_images.py passes --FeatureExtraction.use_gpu /
+#    --FeatureMatching.use_gpu / --FeatureMatching.guided_matching, which
+#    COLMAP 3.9.1 rejects outright ("unrecognised option") -- every GPU-path
+#    option actually lives under --SiftExtraction.*/--SiftMatching.* (see
+#    `colmap feature_extractor -h` / `colmap sequential_matcher -h`).
+#    Verified live against a real bag on 2026-07-08: this is the only naming
+#    mismatch across the whole script (mapper's own flags are unaffected).
+#
+# 2. Wrap the local colmap invocation in `stdbuf -oL -eL`: COLMAP's own C++
+#    stdio block-buffers (4KB) instead of line-buffering once stdout isn't a
+#    TTY, which it never is here -- it's piped through
+#    run_pipeline_from_rosbag.py's subprocess.Popen up to
+#    OptimizationManager._monitor(). Without this, the Optimization page's
+#    live log and progress bar sit frozen for tens of seconds and then jump
+#    in bursts as each buffer flushes, instead of updating line-by-line.
+RUN cd /workspaces/looper-vio-colmap-handoff && \
+    sed -i \
+        -e 's/"--FeatureExtraction\.use_gpu"/"--SiftExtraction.use_gpu"/' \
+        -e 's/"--FeatureMatching\.use_gpu"/"--SiftMatching.use_gpu"/' \
+        -e 's/"--FeatureMatching\.guided_matching"/"--SiftMatching.guided_matching"/' \
+        -e 's/return \[args\.colmap_bin, \*colmap_args\]/return ["stdbuf", "-oL", "-eL", args.colmap_bin, *colmap_args]/' \
+        scripts/run_colmap_from_images.py && \
+    grep -q "SiftExtraction.use_gpu" scripts/run_colmap_from_images.py && \
+    grep -q "SiftMatching.guided_matching" scripts/run_colmap_from_images.py && \
+    grep -q 'stdbuf", "-oL", "-eL", args.colmap_bin' scripts/run_colmap_from_images.py
+
 # ── Python packages not available as apt ────────────────────────────────────
 # opencv-contrib-python-headless (not apt's python3-opencv): the Ubuntu 22.04 apt
 # build is OpenCV 4.5.4, whose cv2.aruco fails to detect DICT_APRILTAG_36h11 markers
 # that the same code detects fine on the host (OpenCV 4.11 via pip) — see
 # live_alignment.py. Headless avoids the GTK/X11 shared-lib deps of the full wheel;
 # nothing here calls cv2.imshow/highgui.
-# (matplotlib was removed — nothing under scripts/ imports it; ~93MB of dead
-# weight with its fonttools/pillow/kiwisolver deps.)
+# matplotlib: only looper-vio-colmap-handoff's plot_trajectories.py needs it
+# (run_pipeline_from_rosbag.py's --make-plots, currently always "false" from
+# post_processing.py -- installed anyway so flipping that flag doesn't
+# surface an ImportError from a separate subprocess).
 RUN pip3 install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "aiohttp==3.13.3" \
-    "opencv-contrib-python-headless==4.11.0.86"
+    "opencv-contrib-python-headless==4.11.0.86" \
+    "matplotlib"
 
 # ── Kiosk browser (scripts/open_web_3d_right.sh) ────────────────────────────
 # The on-device kiosk previously used PyQt5's QWebEngineView, which bundles
@@ -146,6 +269,15 @@ RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc \
 # ── Entrypoint: sources ROS2 and sets library paths ─────────────────────────
 COPY scripts/docker_entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# ── Application code (baked in for image-tarball releases) ──────────────────
+# Customer deployments (deploy/docker-compose.yml) run this baked copy and
+# mount only the data dirs (config/, rosbags/, outputs/, runs/) from the host.
+# The dev compose file at the repo root still live-mounts the whole repo over
+# this path, shadowing it, so dev iteration is unaffected. Kept as the last
+# layer: code-only changes rebuild in seconds, everything above stays cached.
+# .dockerignore keeps runtime data, .git, and release/ tarballs out.
+COPY . /workspaces/insight_capture
 
 # ── Working directory matches docker-compose source mount path
 WORKDIR /workspaces/insight_capture

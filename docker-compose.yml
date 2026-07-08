@@ -1,10 +1,8 @@
-# deploy/lite branch: stripped of the COLMAP-specific host mounts (custom
-# sm_87 binary, matching libceres, the separate looper-vio-colmap-handoff
-# repo) so this compose file only needs a plain JetPack Jetson to run —
-# no per-device custom-compiled binaries required. The /optimization
-# dashboard page (which shells out to COLMAP) won't work here; everything
-# else (live view, 3D trajectory, recording, calibration) is unaffected.
-# CUDA/runtime: nvidia are kept for other GPU acceleration.
+# jetson-nx branch: COLMAP (CUDA sm_87, for Orin NX) and the
+# looper-vio-colmap-handoff pipeline it feeds are compiled/cloned into the
+# image itself (see Dockerfile's colmap-builder stage) -- no host mounts,
+# no per-device custom-compiled binaries. /optimization works out of the
+# box after `docker compose build`. This branch does not support Nano.
 services:
   insight-dashboard:
     build:
@@ -49,11 +47,14 @@ services:
 
     volumes:
       # ── Source code (live-mounted; no rebuild needed for code changes) ─────
+      # /workspaces/looper-vio-colmap-handoff (a sibling, not under this
+      # path) and the COLMAP binary are baked into the image, not part of
+      # this mount, so this doesn't shadow either of them. NOTE: do NOT add
+      # a /usr/local/cuda host mount here -- COLMAP is linked against the
+      # CUDA runtime baked into the image (Dockerfile), and bind-mounting
+      # the host's own CUDA over it would shadow that with whatever happens
+      # to be on this specific host, silently breaking on any other device.
       - .:/workspaces/insight_capture
-
-      # CUDA runtime (kept for GPU acceleration; nothing on this branch
-      # requires it yet, but the toolkit is cheap to have mounted).
-      - /usr/local/cuda:/usr/local/cuda:ro
 
       # X11 socket for the on-device kiosk window (--jetson). Plain `docker
       # compose` doesn't get VS Code Dev Containers' automatic X11

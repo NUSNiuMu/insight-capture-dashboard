@@ -1,0 +1,70 @@
+# Customer deployment compose file — runs the code BAKED INTO the image
+# (no git checkout, no source mount). Ships to customers inside the deploy
+# bundle produced by scripts/build_release.sh; upgrades are delivered as
+# `docker save` image tarballs applied with ./update.sh.
+#
+# INSIGHT_VERSION comes from the .env file next to this compose file, which
+# update.sh writes after each `docker load`. Rollback = point .env back at a
+# previously loaded tag and `docker compose up -d`.
+#
+# Differences from the repo-root dev compose (keep the two in sync when
+# changing runtime settings!): no `build:` section, no whole-repo source
+# mount — only the data directories the app reads/writes are bind-mounted,
+# so replacing the image never touches customer data.
+services:
+  insight-dashboard:
+    image: insight-dashboard:${INSIGHT_VERSION:?Run ./update.sh <image-tarball> first to load an image and set the version}
+    container_name: insight-dashboard
+
+    # ── ROS2 requires host network for DDS multicast ─────────────────────────
+    network_mode: host
+
+    # ── NVIDIA Container Runtime for CUDA acceleration ───────────────────────
+    runtime: nvidia
+
+    # Docker's 64MB default /dev/shm is too small for the kiosk browser's
+    # Chromium GPU process — see the dev compose for the full story.
+    shm_size: '2gb'
+
+    environment:
+      - ROS_DOMAIN_ID=20           # Must match devices; override in .env if needed
+      # Rosbag names and log timestamps use localtime; without this they'd be
+      # 8h behind wall clock on a China-based host (base image is Etc/UTC).
+      - TZ=Asia/Shanghai
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
+      # For the on-device kiosk window (run_dashboard.sh --jetson via docker exec)
+      - DISPLAY=${DISPLAY:-:0}
+      # Uncomment to override default port:
+      # - DASHBOARD_PORT=8765
+
+    volumes:
+      # ── Data directories only (the code lives inside the image) ───────────
+      # These persist across image upgrades. update.sh seeds config/ from the
+      # image on first install; the app writes calibration/settings back here.
+      - ./config:/workspaces/insight_capture/config
+      - ./rosbags:/workspaces/insight_capture/rosbags
+      - ./outputs:/workspaces/insight_capture/outputs
+      - ./runs:/workspaces/insight_capture/runs
+
+      # No /usr/local/cuda host mount: COLMAP and its CUDA runtime are baked
+      # into the image (jetson-nx branch). Bind-mounting the host's own CUDA
+      # here would shadow that with whatever this specific customer device
+      # happens to have installed -- exactly the per-device fragility this
+      # branch exists to avoid.
+
+      # X11 socket for the on-device kiosk window (--jetson)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+      # SSH keys for rosbag remote sync (optional; remove if not using sync)
+      - ${HOME}/.ssh:/root/.ssh:ro
+
+    restart: unless-stopped
+
+    # ── Resource limits ──────────────────────────────────────────────────────
+    # Leave a thin reservation for the host OS/sshd/dockerd so a runaway
+    # process inside the container can't starve the host and lock out SSH.
+    deploy:
+      resources:
+        limits:
+          cpus: '5.8'

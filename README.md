@@ -113,7 +113,7 @@ python3 scripts/multi_camera_dashboard_web.py &
 - `/images`：图片页骨架，实时看图具体传输方案待定（见下）
 - `/bags`：本地 rosbag 列表页，路径/大小/时长/label/scoring/optimization 状态
 - `/scoring`：轨迹评分页骨架
-- `/optimization`：轨迹优化页骨架，后端会调用 COLMAP（`deploy/lite` 分支不含这个依赖，见下方"部署"）
+- `/optimization`：COLMAP 轨迹优化页（本分支 `deploy/jetson-nx` 的镜像自带 CUDA sm_87 编译的 COLMAP 3.9.1，开箱即用，见下方"部署"）
 
 3D 页面右上角 `Start Alignment / Stop Alignment` 按钮：不需要命令行参数，随时可以开始/停止标定，适合左边看 RGB、右边控制标定。
 
@@ -224,21 +224,30 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 
 ## 部署
 
-### 本机 / 当前 Jetson（`main`、`web-dashboard-pages` 等分支）
+### 本分支（`deploy/jetson-nx`）：Orin NX，全功能自包含
 
-`docker-compose.yml` 会挂载这台机器上自定义编译的 COLMAP 二进制、配套 `libceres` 库、以及独立的 `looper-vio-colmap-handoff` 仓库（`/optimization` 页面需要），这些都是跟当前这台 Jetson 的编译环境绑定的。
-
-### 部署到新 Jetson（`deploy/lite` 分支）
-
-如果新机器不需要 `/optimization`（COLMAP 轨迹优化）功能，用这个分支——不含上述任何自定义编译依赖，只需要一台装好 JetPack 的 Jetson：
+COLMAP（3.9.1，CUDA sm_87，GUI 关闭）和 `looper-vio-colmap-handoff` 流水线在
+`docker compose build` 时编译/克隆进镜像（见 Dockerfile 的 `colmap-builder`
+阶段），不需要任何宿主机挂载或每台设备手工编译——`/optimization` 开箱即用。
+只支持 Orin NX（sm_87 单架构编译），不支持 Nano。
 
 ```bash
-git clone -b deploy/lite git@github.com:NUSNiuMu/insight-capture-dashboard.git insight_capture
+git clone -b deploy/jetson-nx git@github.com:NUSNiuMu/insight-capture-dashboard.git insight_capture
 cd insight_capture
-docker compose build
-./scripts/run_dashboard.sh
+./scripts/setup_host.sh    # 幂等：runtime 检查 + DDS 缓冲 sysctl + 相机开机重启 unit + build + 启动
 ```
 
-`deploy/lite` 相比主线去掉了 COLMAP 专属的 host 挂载，CUDA/`runtime: nvidia` 保留供其它 GPU 加速使用；SSH key 挂载路径用 `${HOME}`（docker-compose）/`${localEnv:HOME}`（devcontainer.json）动态解析，不写死用户名。
+首次 build 会在设备上编译 COLMAP（约 20-40 分钟，之后有 Docker 缓存）。
+批量部署不要每台都编译：在一台机器上 `./scripts/build_release.sh vX.Y.Z`
+打出镜像包，其余设备 `./update.sh` 导入即可（见 deploy/README.md）。
+
+`looper-vio-colmap-handoff` 钉在固定 commit 上，其上打了两个本地补丁
+（COLMAP 3.9.1 的 GPU 参数名、stdbuf 行缓冲让网页日志实时刷新），升级
+该仓库 commit 时需要复核补丁是否仍然适用（见 Dockerfile 内注释）。
+
+### 旧分支参考
+
+- `deploy/lite`：无 COLMAP 依赖的轻量分支（曾用于 Nano），`/optimization` 不可用；
+- `main` / `web-dashboard-pages`：依赖开发机上手工编译的 COLMAP 宿主机挂载，已被本分支的镜像内编译方案取代。
 
 部署到新机器后，`config/cameras.json`、`config/board_calibration.json`、`config/alignment/live_alignment_state.json` 都是跟**当前这批相机**绑定的配置/状态，换了相机需要重新走一遍标定，不是复制过去就能直接用。
