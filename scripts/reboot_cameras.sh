@@ -16,9 +16,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI="python3 ${SCRIPT_DIR}/../looper_cli/looper_cli.py"
 
-DISCOVERY_TIMEOUT=40   # seconds to wait for at least one camera interface to appear
+# Env-overridable: the boot-time systemd unit (scripts/systemd/
+# insight-camera-reboot.service) sets a longer discovery window, since USB
+# interface enumeration right after boot can outlast the interactive default.
+DISCOVERY_TIMEOUT="${INSIGHT_DISCOVERY_TIMEOUT:-40}"   # seconds to wait for at least one camera interface to appear
 DISCOVERY_INTERVAL=2   # seconds between discovery attempts
-WAIT_TIMEOUT=120        # seconds to wait for each device to come back
+WAIT_TIMEOUT="${INSIGHT_CAMERA_WAIT_TIMEOUT:-120}"      # seconds to wait for each device to come back
 PING_INTERVAL=3         # seconds between ping attempts
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }

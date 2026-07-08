@@ -10,8 +10,11 @@
 #      this, best-effort image samples (~510KB each) overflow the kernel's
 #      208KB default UDP receive buffer and recordings silently lose
 #      10-24% of image frames (verified 2026-07-07, see docs/USAGE.md)
-#   3. docker compose build
-#   4. ./scripts/run_dashboard.sh  (skipped with --no-start)
+#   3. install + enable the boot-time camera reboot unit (cameras boot
+#      faster than the Jetson and come up with stale DDS participants;
+#      see scripts/systemd/insight-camera-reboot.service)
+#   4. docker compose build
+#   5. ./scripts/run_dashboard.sh  (skipped with --no-start)
 #
 # Usage:
 #   ./scripts/setup_host.sh              # full setup + start
@@ -74,13 +77,31 @@ EOF
     log "sysctl buffers: applied + persisted"
 fi
 
-# ── 3. build the dashboard image ────────────────────────────────────────────
+# ── 3. boot-time camera reboot unit ─────────────────────────────────────────
+# Cameras power on with the Jetson but boot faster, so their DDS participants
+# bind before the Jetson's USB links exist and never recover -- see the
+# comment header in scripts/systemd/insight-camera-reboot.service.
+UNIT_SRC="${SCRIPT_DIR}/systemd/insight-camera-reboot.service"
+UNIT_DST=/etc/systemd/system/insight-camera-reboot.service
+if [[ -f "${UNIT_SRC}" ]]; then
+    if ! cmp -s "${UNIT_SRC}" "${UNIT_DST}" 2>/dev/null; then
+        log "installing boot-time camera reboot unit..."
+        sudo cp "${UNIT_SRC}" "${UNIT_DST}"
+        sudo systemctl daemon-reload
+    fi
+    sudo systemctl enable insight-camera-reboot.service >/dev/null 2>&1
+    log "camera boot-reboot unit: enabled"
+else
+    log "WARNING: ${UNIT_SRC} missing; skipping boot-time camera reboot setup."
+fi
+
+# ── 4. build the dashboard image ────────────────────────────────────────────
 log "building the dashboard image (first build downloads ~2GB, later runs are cached)..."
 cd "${ROOT_DIR}"
 docker compose build
 log "image build: OK"
 
-# ── 4. start ────────────────────────────────────────────────────────────────
+# ── 5. start ────────────────────────────────────────────────────────────────
 if [[ "${no_start}" == "true" ]]; then
     log "setup complete (--no-start). Launch later with: ./scripts/run_dashboard.sh"
     exit 0

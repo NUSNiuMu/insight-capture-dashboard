@@ -19,6 +19,8 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 ```
 
 - 服务随开机自启（断电重启后自动恢复），正常情况下**无需任何手动启动操作**；
+- 设备与相机一起上电时，系统会在开机后**自动重启一次所有相机**（相机比主机
+  先启动完成会处于错误的网络状态，属预期行为）——从上电到画面就绪约 2-3 分钟；
 - 每台相机独占一个 USB 网口（`169.254.x.x` 段），插拔顺序不影响使用；
 - 所有数据（录制、标定、配置）保存在设备的 `rosbags/`、`config/`、`outputs/`
   目录，软件升级不会触碰它们。
@@ -79,7 +81,7 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 命令行等价方式（脚本化/无浏览器时）：
 
 ```bash
-docker exec insight-dashboard python3 scripts/check_bag.py                # 最新一份
+docker exec insight-dashboard python3 scripts/check_bag.py                # 最新一份就可以
 docker exec insight-dashboard python3 scripts/check_bag.py rosbags/<目录名>
 ```
 

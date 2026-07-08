@@ -1,0 +1,48 @@
+# Reboot the Insight cameras once per Jetson boot.
+#
+# Why: the cameras and the Jetson power on together, and the cameras finish
+# booting first -- before the Jetson's USB-ethernet gadget links exist. A
+# camera's DDS participant enumerates network interfaces only at startup, so
+# it comes up advertising locators on a link that isn't there yet and never
+# recovers on its own (the exact mirror of the host-side stale-participant
+# problem documented in multi_camera_dashboard_web.py's watchdog). Rebooting
+# the cameras once the Jetson's links are up puts them in a clean state.
+#
+# After the cameras come back, the dashboard container is restarted too, so
+# its own DDS participant rebinds with cameras already reachable -- live data
+# flows immediately instead of waiting for the in-process 60s watchdog.
+#
+# Install (done automatically by scripts/setup_host.sh):
+#   sudo cp scripts/systemd/insight-camera-reboot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable insight-camera-reboot.service
+#
+# Watch a boot run: journalctl -u insight-camera-reboot -b
+
+[Unit]
+Description=Reboot Insight cameras once after boot (cameras boot before the Jetson's USB links exist)
+# docker.service ordering keeps the post-reboot container restart meaningful;
+# the camera links themselves are USB devices, not network.target-managed, so
+# the script's own discovery polling does the actual waiting.
+After=docker.service network.target
+Wants=docker.service
+
+[Service]
+Type=oneshot
+User=nvidia
+Group=nvidia
+WorkingDirectory=/home/nvidia/insight-capture-dashboard
+# Boot-time USB enumeration can be slower than an interactive run; give
+# discovery a wider window than the script's 40s interactive default.
+Environment=INSIGHT_DISCOVERY_TIMEOUT=120
+ExecStart=/home/nvidia/insight-capture-dashboard/scripts/reboot_cameras.sh
+# Fresh DDS participant now that cameras are back; '-' tolerates the container
+# not existing yet (first boot before any `docker compose up`).
+ExecStartPost=-/usr/bin/docker restart insight-dashboard
+# discovery (<=120s) + reboot + come-back wait (<=120s/camera, parallel pings
+# but serial waits) + container restart, with margin.
+TimeoutStartSec=600
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
