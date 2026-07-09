@@ -556,6 +556,18 @@ class LiveAlignmentMixin:
         inlier_idx = inlier_idx.reshape(-1)
         obj_in = obj[inlier_idx]
         img_in = img[inlier_idx]
+        # Planar boards have a two-fold pose ambiguity; the iterative solver
+        # returns only one branch and at oblique view angles it frequently
+        # lands in the wrong one (verified by Monte-Carlo sweep: >50% flipped
+        # poses at 55deg tilt, and the flipped pose still passes the
+        # reprojection gate). IPPE returns BOTH branches, so re-solve on the
+        # RANSAC inliers with IPPE, pick the branch by residual, and drop the
+        # frame entirely when the two branches are rotationally distinct yet
+        # fit equally well (genuinely ambiguous view).
+        resolved = self._disambiguate_planar_pose(obj_in, img_in, camera_matrix, dist_coeffs)
+        if resolved is None:
+            return None
+        rvec, tvec = resolved
         try:
             rvec, tvec = cv2.solvePnPRefineLM(obj_in, img_in, camera_matrix, dist_coeffs, rvec, tvec)
         except cv2.error:
@@ -564,6 +576,47 @@ class LiveAlignmentMixin:
         residuals = projected.reshape(-1, 2) - img_in
         rms_px = float(np.sqrt(np.mean(np.sum(residuals * residuals, axis=1))))
         return rvec, tvec, rms_px
+
+    def _disambiguate_planar_pose(
+        self,
+        obj_in: np.ndarray,
+        img_in: np.ndarray,
+        camera_matrix: np.ndarray,
+        dist_coeffs: np.ndarray,
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """Pick the correct branch of the planar two-fold pose ambiguity.
+
+        Returns (rvec, tvec) of the better IPPE branch, or None when the view
+        is genuinely ambiguous (both branches fit within the reprojection gate
+        but disagree in rotation) so the caller skips the frame.
+        """
+        try:
+            solution_count, rvecs, tvecs, errors = cv2.solvePnPGeneric(
+                obj_in.reshape(-1, 1, 3),
+                img_in.reshape(-1, 1, 2),
+                camera_matrix,
+                dist_coeffs,
+                flags=cv2.SOLVEPNP_IPPE,
+            )
+        except cv2.error:
+            solution_count = 0
+        if not solution_count:
+            return None
+        errors = np.asarray(errors, dtype=np.float64).reshape(-1)[:solution_count]
+        order = np.argsort(errors)
+        best = int(order[0])
+        if solution_count > 1:
+            second = int(order[1])
+            rotation_best, _ = cv2.Rodrigues(rvecs[best])
+            rotation_second, _ = cv2.Rodrigues(rvecs[second])
+            trace = float(np.trace(rotation_best @ rotation_second.T))
+            cos_theta = max(-1.0, min(1.0, (trace - 1.0) * 0.5))
+            branch_gap_deg = math.degrees(math.acos(cos_theta))
+            gate = self.live_alignment_max_reprojection_error_px
+            ratio = errors[second] / max(errors[best], 1e-9)
+            if branch_gap_deg > 20.0 and errors[second] <= gate and ratio < 1.4:
+                return None
+        return rvecs[best], tvecs[best]
 
     def _solve_board_pose_legacy(
         self,
