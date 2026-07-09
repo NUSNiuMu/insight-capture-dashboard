@@ -93,24 +93,8 @@ class LiveAlignmentMixin:
         ).lower()
         if self.live_alignment_anchor_rotation_mode not in {"none", "yaw", "full"}:
             self.live_alignment_anchor_rotation_mode = "yaw"
-        # Per-frame detection quality gate: RMS reprojection error (px) of the
-        # RANSAC-inlier board corners. Frames above this are dropped before
-        # they ever become anchor candidates.
-        self.live_alignment_max_reprojection_error_px = float(
-            calibration_config.get("max_reprojection_error_px", 2.0)
-        )
-        # Anchor-candidate gates. These replace the old max_translation_std_m /
-        # max_rotation_std_deg board-pose-scatter gates: board->camera scatter
-        # conflates camera motion with noise (forcing a stay-still calibration),
-        # whereas the anchor is constant under motion, so its spread measures
-        # actual solution quality. Used both as the MAD inlier floor and as a
-        # hard RMS ceiling below which a solution may be published.
-        self.live_alignment_anchor_max_translation_std_m = float(
-            calibration_config.get("anchor_max_translation_std_m", 0.05)
-        )
-        self.live_alignment_anchor_max_rotation_std_deg = float(
-            calibration_config.get("anchor_max_rotation_std_deg", 3.0)
-        )
+        self.live_alignment_max_translation_err_m = float(calibration_config.get("max_translation_std_m", 0.25))
+        self.live_alignment_max_rotation_err_deg = float(calibration_config.get("max_rotation_std_deg", 6.0))
         self.live_alignment_last_status = "live alignment idle"
         self.live_alignment_last_signature: Optional[Tuple[int, ...]] = None
         self.live_alignment_visible_cameras: int = 0
@@ -216,8 +200,7 @@ class LiveAlignmentMixin:
         self.live_alignment_detection_buffer: Dict[str, List[DetectionSample]] = {
             camera.name: [] for camera in self.cameras
         }
-        # Per camera: (stamp_ns, board_to_camera, display_transform, anchor_candidate or None)
-        self.live_alignment_samples_by_camera: Dict[str, List[Tuple[int, np.ndarray, np.ndarray, Optional[np.ndarray]]]] = {
+        self.live_alignment_samples_by_camera: Dict[str, List[np.ndarray]] = {
             camera.name: [] for camera in self.cameras
         }
         self.live_alignment_target_camera = None
@@ -462,18 +445,50 @@ class LiveAlignmentMixin:
                     tags=self.live_alignment_last_tag_count[camera_name],
                 )
                 return True
-        pose_result = self._solve_board_pose(corners, ids, detection_camera_matrix, dist_coeffs)
-        if pose_result is None:
+        try:
+            estimate = cv2.aruco.estimatePoseBoard(
+                corners,
+                ids,
+                self.live_alignment_board,
+                detection_camera_matrix,
+                dist_coeffs,
+                None,
+                None,
+            )
+        except TypeError:
+            estimate = cv2.aruco.estimatePoseBoard(
+                corners,
+                ids,
+                self.live_alignment_board,
+                detection_camera_matrix,
+                dist_coeffs,
+            )
+        except cv2.error:
+            estimate = cv2.aruco.estimatePoseBoard(
+                corners,
+                ids,
+                self.live_alignment_board,
+                detection_camera_matrix,
+                dist_coeffs,
+                None,
+                None,
+            )
+        retval = None
+        if isinstance(estimate, tuple):
+            if len(estimate) == 3:
+                retval, rvec, tvec = estimate
+            else:
+                _, rvec, tvec = estimate
+                retval = 0 if rvec is None or tvec is None else len(ids)
+        else:
+            retval = int(estimate)
+            rvec = None
+            tvec = None
+        num_markers = int(retval or 0)
+        if retval is None or float(retval) <= 0.0 or rvec is None or tvec is None:
             self.live_alignment_latest_detection[camera_name] = None
             self._set_alignment_debug(camera_name, stage="pose_board_failed")
             return True
-        rvec, tvec, reproj_rms_px = pose_result
-        if reproj_rms_px is not None:
-            self._set_alignment_debug(camera_name, reproj_px=f"{reproj_rms_px:.2f}")
-            if reproj_rms_px > self.live_alignment_max_reprojection_error_px:
-                self.live_alignment_latest_detection[camera_name] = None
-                self._set_alignment_debug(camera_name, stage="reproj_high")
-                return True
         rotation, _ = cv2.Rodrigues(rvec)
         t_camera_board_corner = matrix_to_transform(rotation, tvec.reshape(3))
         t_camera_board = t_camera_board_corner @ self.live_alignment_board_center_offset
@@ -489,86 +504,6 @@ class LiveAlignmentMixin:
         )
         self._update_live_alignment_solution(camera_name)
         return True
-
-    def _solve_board_pose(
-        self,
-        corners,
-        ids,
-        camera_matrix: np.ndarray,
-        dist_coeffs: np.ndarray,
-    ) -> Optional[Tuple[np.ndarray, np.ndarray, Optional[float]]]:
-        """Solve board->camera pose. Returns (rvec, tvec, rms_reproj_px or None).
-
-        RANSAC over the matched board corners (a single mis-detected tag no
-        longer skews the whole solution), LM refinement on the inliers, and an
-        RMS reprojection error the caller gates on. Falls back to
-        estimatePoseBoard (no reprojection metric) on OpenCV builds without
-        GridBoard.matchImagePoints.
-        """
-        board = self.live_alignment_board
-        if not hasattr(board, "matchImagePoints"):
-            return self._solve_board_pose_legacy(corners, ids, camera_matrix, dist_coeffs)
-        obj_points, img_points = board.matchImagePoints(corners, ids)
-        if obj_points is None or img_points is None or len(obj_points) < 8:
-            return None
-        obj = np.ascontiguousarray(obj_points.reshape(-1, 3), dtype=np.float64)
-        img = np.ascontiguousarray(img_points.reshape(-1, 2), dtype=np.float64)
-        try:
-            ok, rvec, tvec, inlier_idx = cv2.solvePnPRansac(
-                obj,
-                img,
-                camera_matrix,
-                dist_coeffs,
-                reprojectionError=self.live_alignment_max_reprojection_error_px,
-                flags=cv2.SOLVEPNP_ITERATIVE,
-            )
-        except cv2.error:
-            return None
-        # Half the corners of the min tag count may be RANSAC-rejected before
-        # the frame itself is considered unusable (4 corners per tag).
-        min_corner_inliers = 2 * self.live_alignment_min_detected_tags
-        if not ok or rvec is None or tvec is None or inlier_idx is None or len(inlier_idx) < min_corner_inliers:
-            return None
-        inlier_idx = inlier_idx.reshape(-1)
-        obj_in = obj[inlier_idx]
-        img_in = img[inlier_idx]
-        try:
-            rvec, tvec = cv2.solvePnPRefineLM(obj_in, img_in, camera_matrix, dist_coeffs, rvec, tvec)
-        except cv2.error:
-            pass
-        projected, _ = cv2.projectPoints(obj_in, rvec, tvec, camera_matrix, dist_coeffs)
-        residuals = projected.reshape(-1, 2) - img_in
-        rms_px = float(np.sqrt(np.mean(np.sum(residuals * residuals, axis=1))))
-        return rvec, tvec, rms_px
-
-    def _solve_board_pose_legacy(
-        self,
-        corners,
-        ids,
-        camera_matrix: np.ndarray,
-        dist_coeffs: np.ndarray,
-    ) -> Optional[Tuple[np.ndarray, np.ndarray, Optional[float]]]:
-        try:
-            estimate = cv2.aruco.estimatePoseBoard(
-                corners, ids, self.live_alignment_board, camera_matrix, dist_coeffs, None, None
-            )
-        except TypeError:
-            estimate = cv2.aruco.estimatePoseBoard(
-                corners, ids, self.live_alignment_board, camera_matrix, dist_coeffs
-            )
-        except cv2.error:
-            return None
-        if isinstance(estimate, tuple):
-            if len(estimate) == 3:
-                retval, rvec, tvec = estimate
-            else:
-                _, rvec, tvec = estimate
-                retval = 0 if rvec is None or tvec is None else len(ids)
-        else:
-            return None
-        if retval is None or float(retval) <= 0.0 or rvec is None or tvec is None:
-            return None
-        return rvec, tvec, None
 
     @staticmethod
     def _optical_to_dashboard_rotation() -> np.ndarray:
@@ -677,10 +612,9 @@ class LiveAlignmentMixin:
     ) -> Optional[np.ndarray]:
         pose_sample = self._find_dashboard_pose_sample(camera_name, stamp_ns)
         if pose_sample is None:
-            # No emit here: this now runs once per detection frame (~5Hz), and
-            # a camera with no VIO yet would flood the log. The per-second
-            # summary and the "waiting pose" status carry the signal instead.
-            self._set_alignment_debug(camera_name, stage="anchor_missing_pose")
+            self._emit_alignment_log(
+                f"dashboard anchor missing pose for {camera_name} at stamp={stamp_ns}"
+            )
             return None
         pose_transform = pose_sample.as_transform()
         if self.live_alignment_anchor_rotation_mode == "none":
@@ -776,79 +710,32 @@ class LiveAlignmentMixin:
             self.live_alignment_target_camera = camera_name
             self.live_alignment_samples_by_camera[camera_name] = []
             self.live_alignment_inlier_counts[camera_name] = 0
+        samples = self.live_alignment_samples_by_camera[camera_name]
+        samples.append(detection.marker_transform)
+        if len(samples) > self.live_alignment_window:
+            del samples[: len(samples) - self.live_alignment_window]
+        inliers = self._inlier_transforms(samples)
+        self.live_alignment_inlier_counts[camera_name] = len(inliers)
+        if len(inliers) < self.live_alignment_required_samples:
+            self.live_alignment_last_status = "collecting"
+            self._log_live_alignment_status()
+            return
+        averaged_board_to_camera = average_transforms(inliers[-self.live_alignment_required_samples :])
+        if averaged_board_to_camera is None:
+            return
 
-        # Per-sample anchoring: pair THIS detection with the VIO pose
-        # interpolated at THIS detection's stamp, yielding one anchor candidate
-        # per frame. The anchor is (ideally) constant even while the camera
-        # moves, so gating and averaging happen on anchor candidates rather
-        # than on board->camera poses -- the old board-pose scatter gate
-        # conflated camera motion with noise (forcing a stay-still
-        # calibration), and the old single-VIO-sample anchoring baked that one
-        # instant's VIO noise into the whole session.
-        board_to_camera = detection.marker_transform
-        base_transform = self._dashboard_transform_from_optical(board_to_camera)
+        base_transform = self._dashboard_transform_from_optical(averaged_board_to_camera)
         dashboard_yaw_deg = self._dashboard_horizontal_yaw_deg_from_transforms({camera_name: base_transform})
         display_transform = self._apply_dashboard_horizontal_yaw(
             {camera_name: base_transform},
             dashboard_yaw_deg,
         )[camera_name]
         display_transform = self._canonicalize_display_transforms({camera_name: display_transform})[camera_name]
-        anchor_candidate = self._build_dashboard_world_anchor(camera_name, detection.stamp_ns, display_transform)
-
-        samples = self.live_alignment_samples_by_camera[camera_name]
-        samples.append((detection.stamp_ns, board_to_camera, display_transform, anchor_candidate))
-        if len(samples) > self.live_alignment_window:
-            del samples[: len(samples) - self.live_alignment_window]
-
-        anchored = [item for item in samples if item[3] is not None]
-        if not anchored:
+        anchor_transform = self._build_dashboard_world_anchor(camera_name, detection.stamp_ns, display_transform)
+        if anchor_transform is None:
             self.live_alignment_last_status = "waiting-pose"
             self._log_live_alignment_status()
             return
-
-        anchor_list = [item[3] for item in anchored]
-        inlier_indices = self._inlier_transform_indices(
-            anchor_list,
-            self.live_alignment_anchor_max_translation_std_m,
-            self.live_alignment_anchor_max_rotation_std_deg,
-        )
-        self.live_alignment_inlier_counts[camera_name] = len(inlier_indices)
-        if len(inlier_indices) < self.live_alignment_required_samples:
-            self.live_alignment_last_status = "collecting"
-            self._log_live_alignment_status()
-            return
-
-        selected = inlier_indices[-self.live_alignment_required_samples :]
-        selected_anchors = [anchor_list[index] for index in selected]
-        anchor_transform = average_transforms(selected_anchors)
-        if anchor_transform is None:
-            return
-
-        # Hard spread ceiling: the MAD filter adapts its threshold to the
-        # data, so a uniformly-noisy window still yields "inliers". RMS
-        # deviation from the averaged anchor is the real quality number --
-        # refuse to publish a solution above the configured ceiling.
-        deviations = [self._pose_delta_metrics(anchor_transform, anchor) for anchor in selected_anchors]
-        anchor_translation_rms_m = float(np.sqrt(np.mean([d[0] ** 2 for d in deviations])))
-        anchor_rotation_rms_deg = float(np.sqrt(np.mean([d[1] ** 2 for d in deviations])))
-        quality_text = f"{anchor_translation_rms_m * 1000.0:.1f}mm/{anchor_rotation_rms_deg:.2f}deg"
-        self._set_alignment_debug(camera_name, anchor_rms=quality_text)
-        if (
-            anchor_translation_rms_m > self.live_alignment_anchor_max_translation_std_m
-            or anchor_rotation_rms_deg > self.live_alignment_anchor_max_rotation_std_deg
-        ):
-            self.live_alignment_last_status = "unstable"
-            self._log_live_alignment_status()
-            return
-
-        # Averaged board/display transforms of the same selected samples, for
-        # logging and the result txt (display only -- the anchor is what
-        # matters).
-        averaged_board_to_camera = average_transforms([anchored[index][1] for index in selected])
-        averaged_display = average_transforms([anchored[index][2] for index in selected])
-        if averaged_board_to_camera is None or averaged_display is None:
-            return
-        display_transform = averaged_display
 
         lock = getattr(self, "live_alignment_solution_lock", None)
         if lock is None:
@@ -868,7 +755,6 @@ class LiveAlignmentMixin:
             {camera_name: averaged_board_to_camera},
             {camera_name: display_transform},
             {camera_name: anchor_transform},
-            anchor_quality={camera_name: quality_text},
         )
         self._refresh_transformed_poses()
         self.live_alignment_last_status = "tracking"
@@ -877,8 +763,7 @@ class LiveAlignmentMixin:
         display_translation = display_transform[:3, 3]
         anchor_translation = anchor_transform[:3, 3]
         self._emit_alignment_log(
-            f"CALIBRATED {camera_name} | samples={len(selected_anchors)}/{len(anchor_list)} "
-            f"anchor_rms={quality_text} "
+            f"CALIBRATED {camera_name} | samples={len(inliers)} "
             f"board_to_camera=({raw_translation[0]:.3f}, {raw_translation[1]:.3f}, {raw_translation[2]:.3f})m "
             f"dashboard_position=({display_translation[0]:.3f}, {display_translation[1]:.3f}, {display_translation[2]:.3f})m "
             f"vio_to_board_anchor=({anchor_translation[0]:.3f}, {anchor_translation[1]:.3f}, {anchor_translation[2]:.3f})m"
@@ -895,40 +780,31 @@ class LiveAlignmentMixin:
             if raw_trace:
                 self.latest_pose[pose.name] = self._transform_pose_point(pose.name, raw_trace[-1])
 
-    def _inlier_transform_indices(
-        self,
-        transforms: List[np.ndarray],
-        translation_floor_m: float,
-        rotation_floor_deg: float,
-    ) -> List[int]:
+    def _inlier_transforms(self, transforms: List[np.ndarray]) -> List[np.ndarray]:
         if len(transforms) < 3:
-            return list(range(len(transforms)))
+            return list(transforms)
         consensus_center = average_transforms(transforms)
         if consensus_center is None:
             return []
-        errors = [self._pose_delta_metrics(consensus_center, transform) for transform in transforms]
+        errors = [self._transform_delta_metrics(consensus_center, transform) for transform in transforms]
         translation_errors = np.array([item[0] for item in errors], dtype=np.float64)
         rotation_errors = np.array([item[1] for item in errors], dtype=np.float64)
         translation_median = float(np.median(translation_errors))
         rotation_median = float(np.median(rotation_errors))
         translation_mad = float(np.median(np.abs(translation_errors - translation_median)))
         rotation_mad = float(np.median(np.abs(rotation_errors - rotation_median)))
-        translation_gate = max(translation_floor_m, translation_median + 3.0 * max(translation_mad, 1e-4))
-        rotation_gate = max(rotation_floor_deg, rotation_median + 3.0 * max(rotation_mad, 0.05))
+        translation_gate = max(self.live_alignment_max_translation_err_m, translation_median + 3.0 * max(translation_mad, 1e-4))
+        rotation_gate = max(self.live_alignment_max_rotation_err_deg, rotation_median + 3.0 * max(rotation_mad, 0.05))
         return [
-            index
-            for index, (translation_error, rotation_error) in enumerate(errors)
+            transform
+            for transform, (translation_error, rotation_error) in zip(transforms, errors)
             if translation_error <= translation_gate and rotation_error <= rotation_gate
         ]
 
-    @staticmethod
-    def _pose_delta_metrics(reference: np.ndarray, candidate: np.ndarray) -> Tuple[float, float]:
-        # Direct translation distance + rotation angle. NOT the twist-style
-        # delta (ref @ inv(cand)): for anchor transforms with metre-scale
-        # translations that mixes rotation error into the translation metric
-        # (1 deg of yaw at |t|=2m reads as ~3.5cm of translation).
-        translation_norm_m = float(np.linalg.norm(reference[:3, 3] - candidate[:3, 3]))
-        trace = float(np.trace(reference[:3, :3] @ candidate[:3, :3].T))
+    def _transform_delta_metrics(self, reference: np.ndarray, candidate: np.ndarray) -> Tuple[float, float]:
+        delta = reference @ invert_transform(candidate)
+        translation_norm_m = float(np.linalg.norm(delta[:3, 3]))
+        trace = float(np.trace(delta[:3, :3]))
         cos_theta = max(-1.0, min(1.0, (trace - 1.0) * 0.5))
         rotation_angle_deg = math.degrees(math.acos(cos_theta))
         return translation_norm_m, rotation_angle_deg
@@ -1035,7 +911,6 @@ class LiveAlignmentMixin:
         raw_transforms: Dict[str, np.ndarray],
         display_camera_transforms: Dict[str, np.ndarray],
         trajectory_anchor_transforms: Dict[str, np.ndarray],
-        anchor_quality: Optional[Dict[str, str]] = None,
     ) -> None:
         try:
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1071,9 +946,6 @@ class LiveAlignmentMixin:
                 lines.append(
                     f"anchor_xyz_m=({anchor_translation[0]:.6f}, {anchor_translation[1]:.6f}, {anchor_translation[2]:.6f})"
                 )
-                quality = (anchor_quality or {}).get(camera.name)
-                if quality:
-                    lines.append(f"anchor_rms={quality}")
                 lines.append("")
             self.live_alignment_result_txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         except Exception as exc:
@@ -1209,8 +1081,6 @@ class LiveAlignmentMixin:
                 return f"Alignment ON | samples {done}/{self.live_alignment_required_samples}"
             if self.live_alignment_last_status == "tracking":
                 return "Alignment ON | tracking"
-            if self.live_alignment_last_status == "unstable":
-                return "Alignment ON | unstable (anchor spread too high)"
             return "Alignment ON"
         if not self.world_to_reference:
             return "Alignment OFF"
