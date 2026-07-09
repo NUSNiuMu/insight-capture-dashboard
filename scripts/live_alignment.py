@@ -176,44 +176,20 @@ class LiveAlignmentMixin:
             ),
         )
         if hasattr(cv2.aruco, "GridBoard"):
-            grid_board = cv2.aruco.GridBoard(
+            self.live_alignment_board = cv2.aruco.GridBoard(
                 (board_cols, board_rows),
                 marker_length_m,
                 marker_separation_m,
                 self.live_alignment_aruco_dict,
             )
         else:
-            grid_board = cv2.aruco.GridBoard_create(
+            self.live_alignment_board = cv2.aruco.GridBoard_create(
                 board_cols,
                 board_rows,
                 marker_length_m,
                 marker_separation_m,
                 self.live_alignment_aruco_dict,
             )
-        # The physical board in this fleet has its ids running RIGHT-TO-LEFT
-        # within each row (relative to the tags' own orientation), i.e. a
-        # row-mirrored version of what GridBoard assumes. A mirrored id layout
-        # cannot be fit by any rigid pose, so with the standard board every
-        # solver "converges" to a garbage pose (~110px reprojection residual,
-        # verified against a live insight7_b frame on 2026-07-09) -- which is
-        # what the old, gate-less estimatePoseBoard silently produced.
-        board_id_layout = str(calibration_config.get("board_id_layout", "standard")).lower()
-        if board_id_layout == "row_mirrored" and hasattr(grid_board, "getObjPoints"):
-            grid_obj = grid_board.getObjPoints()
-            marker_count = board_rows * board_cols
-            mirrored = [
-                grid_obj[(index // board_cols) * board_cols + (board_cols - 1 - index % board_cols)]
-                for index in range(marker_count)
-            ]
-            self.live_alignment_board = cv2.aruco.Board(
-                mirrored,
-                self.live_alignment_aruco_dict,
-                np.arange(marker_count).astype(np.int32),
-            )
-        else:
-            if board_id_layout not in ("standard", "row_mirrored"):
-                print(f"[alignment] unknown board_id_layout '{board_id_layout}', using standard", flush=True)
-            self.live_alignment_board = grid_board
 
     def _initialize_live_alignment_state(self) -> None:
         self.live_alignment_camera_matrix: Dict[str, Optional[np.ndarray]] = {
