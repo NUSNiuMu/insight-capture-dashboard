@@ -104,6 +104,16 @@ let optimizationBusy = false;
 let optimizationPollTimer = null;
 const keptPoints = new Map();
 
+// The backend pushes pose_update at ~20Hz; if the socket goes quiet for far
+// longer than that without onclose/onerror ever firing -- observed after a
+// backend restart, where the client's TCP connection can go half-open and
+// just stop delivering without a close frame -- the 3D view freezes forever
+// with no visible sign anything is wrong. Track the last message and force a
+// reconnect if the "open" socket has gone stale.
+const POSE_STREAM_STALE_MS = 4000;
+let activeWs = null;
+let lastPoseMessageAt = 0;
+
 const CAMERA_FPS_WINDOW_MS = 1500;
 const CAMERA_POLL_INTERVAL_MS = 100;
 const DEFAULT_TRAIL_ENABLED = {
@@ -330,6 +340,8 @@ function connect() {
     modelStatus.textContent = "Connecting pose stream...";
   }
   const ws = new WebSocket(wsUrl);
+  activeWs = ws;
+  lastPoseMessageAt = Date.now();
 
   ws.onopen = () => {
     if (modelStatus) {
@@ -338,6 +350,7 @@ function connect() {
   };
 
   ws.onmessage = (event) => {
+    lastPoseMessageAt = Date.now();
     const payload = JSON.parse(event.data);
     if (payload.alignment) {
       renderAlignment(payload.alignment);
@@ -355,12 +368,24 @@ function connect() {
   };
 
   ws.onclose = () => {
+    if (activeWs === ws) {
+      activeWs = null;
+    }
     if (modelStatus) {
       modelStatus.textContent = "Pose stream disconnected, retrying...";
     }
     window.setTimeout(connect, 1000);
   };
 }
+
+window.setInterval(() => {
+  if (!activeWs || activeWs.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  if (Date.now() - lastPoseMessageAt > POSE_STREAM_STALE_MS) {
+    activeWs.close();
+  }
+}, 1000);
 
 async function fetchAlignmentStatus() {
   if (!alignmentPanel) {
