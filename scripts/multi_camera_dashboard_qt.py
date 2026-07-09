@@ -475,6 +475,12 @@ class DashboardWindow(QtWidgets.QMainWindow):
         self.resize(980, 920)
         self.setMinimumSize(860, 820)
         self.setWindowFlag(QtCore.Qt.FramelessWindowHint, True)
+        # Bypass the WM entirely -- Mutter/GNOME Shell otherwise smart-places
+        # and clamps ordinary top-level windows inside _NET_WORKAREA (i.e.
+        # excluding its top bar and the Ubuntu Dock), so _snap_to_left_half's
+        # requested (0, 0, 960, 1080) lands at (70, 27, 960, 1053) instead --
+        # visibly not a clean half of the physical screen.
+        self.setWindowFlag(QtCore.Qt.X11BypassWindowManagerHint, True)
         self.window_drag_active = False
         self.window_drag_offset = QtCore.QPoint()
         self.last_image_versions: Dict[str, int] = {camera.name: -1 for camera in self.node.cameras}
