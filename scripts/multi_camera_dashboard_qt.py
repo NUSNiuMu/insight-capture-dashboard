@@ -32,6 +32,7 @@ os.environ["QT_QPA_PLATFORM"] = os.environ.get("QT_QPA_PLATFORM", "xcb")
 os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = QLibraryInfo.location(QLibraryInfo.PluginsPath)
 os.environ.pop("QT_PLUGIN_PATH", None)
 
+import cv2
 import numpy as np
 
 
@@ -401,6 +402,22 @@ class DashboardNode(LiveAlignmentMixin, Node):
         channels = channels_by_encoding.get(encoding)
         if channels is None:
             channels = max(msg.step // max(msg.width, 1), 1)
+        if encoding == "nv12":
+            # NV12 carries a full-height Y plane plus a half-height interleaved
+            # UV plane. The generic step-based fallback below reads only the Y
+            # rows and shows the stream as grayscale, silently dropping real
+            # chroma (same bug the web dashboard fixed in 8fc6556 -- this is
+            # the Qt-side port of that fix). Some drivers report msg.height as
+            # the luma height while the buffer holds 1.5x rows, so derive the
+            # true row count from the data length instead of trusting height.
+            total_rows, remainder = divmod(data.size, msg.width)
+            if remainder == 0 and total_rows > 0 and total_rows % 3 == 0:
+                yuv = data.reshape((total_rows, msg.width))
+                return np.ascontiguousarray(cv2.cvtColor(yuv, cv2.COLOR_YUV2RGB_NV12))
+            if remainder == 0 and total_rows > 0:
+                gray = data.reshape((total_rows, msg.width))
+                return np.ascontiguousarray(np.repeat(gray[:, :, None], 3, axis=2))
+            return None
         if msg.step <= 0 or data.size < msg.step * msg.height:
             return None
         row_bytes = msg.step
