@@ -868,8 +868,16 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                     position = [0.0, 0.0, 0.0]
                     quaternion = [0.0, 0.0, 0.0, 1.0]
                 else:
-                    position = [float(value) for value in transformed.position]
-                    quaternion = [float(value) for value in transformed.orientation_xyzw]
+                    # Rounded to 0.01mm (position) / 1e-5 (quaternion, unitless) --
+                    # this stream broadcasts at ~20Hz with a full trace history
+                    # (up to max_points) resent every tick, so untruncated
+                    # float64 repr (~17 sig figs) was bloating each message to
+                    # ~60KB and both server-side json.dumps and client-side
+                    # parse/render of that at 20Hz was the actual source of
+                    # the trajectory lag -- far beyond what this visualization
+                    # needs precision-wise.
+                    position = [round(float(value), 5) for value in transformed.position]
+                    quaternion = [round(float(value), 5) for value in transformed.orientation_xyzw]
                 poses.append(
                     {
                         "name": pose.name,
@@ -878,7 +886,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                         "position": position,
                         "quaternion_xyzw": quaternion,
                         "trace": [
-                            [float(sample[0]), float(sample[1]), float(sample[2])]
+                            [round(float(sample[0]), 4), round(float(sample[1]), 4), round(float(sample[2]), 4)]
                             for sample in self.transformed_trace(pose.name)
                         ],
                         "avatar_model": pose.avatar_model,
