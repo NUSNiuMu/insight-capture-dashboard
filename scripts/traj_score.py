@@ -23,11 +23,14 @@ blips):
                - transient runs (<= 2 frames): bounded nuisance penalty,
                  1.5 pts each, capped at 5 total. A lone blip cannot
                  tank an otherwise good recording.
-               - sustained runs (>= 3 frames): 12 pts per 1% of the
-                 recording spent in them, uncapped -- temporally
-                 correlated pose corruption poisons behaviour-cloning
-                 labels, so it must not hide behind a cap. Any run
-                 longer than 1 s additionally caps the score at 40
+               - sustained runs (>= 3 frames): 35 pts per second of
+                 bad time, uncapped -- temporally correlated pose
+                 corruption poisons behaviour-cloning labels, so it
+                 must not hide behind a cap. The penalty is absolute
+                 (per second, not per fraction of the recording): the
+                 damage a corrupted segment does to training data does
+                 not shrink because the bag happens to be longer. Any
+                 run longer than 1 s additionally caps the score at 40
                  (episode-level consumption: that segment invalidates
                  the whole demonstration).
 
@@ -64,7 +67,7 @@ SPIKE_FACTOR = 8.0            # spike threshold = SPIKE_FACTOR * median trace
 TRANSIENT_MAX_FRAMES = 2      # runs at most this long count as transient
 TRANSIENT_PENALTY_EACH = 1.5
 TRANSIENT_PENALTY_CAP = 5.0
-SUSTAINED_PENALTY_PER_PCT = 12.0
+SUSTAINED_PENALTY_PER_S = 35.0
 EPISODE_BAD_RUN_CAP_S = 1.0   # sustained run longer than this caps the score
 EPISODE_CAP_SCORE = 40.0
 
@@ -147,8 +150,8 @@ def compute_stats(stamps_s: list, traces: list, cal_median_l: float, cal_sigma_l
         TRANSIENT_PENALTY_EACH * len(transient_runs),
     )
     sustained_frames = sum(sustained_runs)
-    sustained_frac = sustained_frames / n
-    sustained_penalty = SUSTAINED_PENALTY_PER_PCT * sustained_frac * 100.0
+    sustained_seconds = sustained_frames * frame_dt
+    sustained_penalty = SUSTAINED_PENALTY_PER_S * sustained_seconds
     longest_bad_run_s = max(sustained_runs, default=0) * frame_dt
 
     score = max(0.0, min(100.0, base - transient_penalty - sustained_penalty))
@@ -171,7 +174,7 @@ def compute_stats(stamps_s: list, traces: list, cal_median_l: float, cal_sigma_l
         "transient_run_count": len(transient_runs),
         "transient_penalty": round(transient_penalty, 2),
         "bad_run_count": len(sustained_runs),
-        "bad_run_seconds": round(sustained_frames * frame_dt, 3),
+        "bad_run_seconds": round(sustained_seconds, 3),
         "longest_bad_run_s": round(longest_bad_run_s, 3),
         "sustained_penalty": round(sustained_penalty, 2),
         "usable_fraction": round(1.0 - bad_frames / n, 4),
