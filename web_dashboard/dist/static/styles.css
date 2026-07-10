@@ -150,6 +150,7 @@ body[data-dashboard-view="full"] .shell {
   font-size: 14px;
 }
 
+.recording-page-links a[aria-current="page"],
 .page-nav a[aria-current="page"] {
   color: var(--text);
 }
