@@ -4,8 +4,15 @@
 # rosbag2's sqlite defaults trade durability for speed (journal_mode=MEMORY,
 # synchronous=OFF): a power cut mid-recording leaves the whole .db3
 # "database disk image is malformed" (observed 2026-07-10, recoverable only
-# via sqlite3 .recover). WAL + synchronous=NORMAL survives power loss --
-# at most the last unsynced transactions are lost -- and WAL writes are
-# faster than a rollback journal for this append-only workload.
+# via sqlite3 .recover). WAL fixes that structurally: every WAL frame is
+# checksummed, so after a power cut sqlite just discards the torn tail and
+# the database opens clean.
+#
+# synchronous stays OFF on purpose: NORMAL's checkpoint fsyncs stalled the
+# image writers for seconds at a time on this disk (measured 2026-07-10:
+# 32-54% image loss with 12s gaps at nominal load vs 0% with OFF), and the
+# bounded per-camera write queues turn any stall directly into dropped
+# frames. Cost of OFF: a power cut can also lose whatever the OS hadn't
+# flushed (a few seconds), on top of the torn WAL tail.
 write:
-  pragmas: ["journal_mode = WAL", "synchronous = NORMAL"]
+  pragmas: ["journal_mode = WAL", "synchronous = OFF"]
