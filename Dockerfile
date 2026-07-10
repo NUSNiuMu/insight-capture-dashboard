@@ -251,8 +251,10 @@ RUN pip3 install --no-cache-dir \
 # the apt layer at the top) so the cached playwright/pip layers don't rebuild.
 # plugins-bad (webrtcbin/dtls/srtp/h264parse) + nice (ICE) serve the WebRTC
 # camera streams in scripts/webrtc_stream.py; the H.264 encoder itself is the
-# host-injected nvv4l2h264enc.
+# host-injected nvv4l2h264enc. sqlite3 (the CLI) is the .recover salvage tool
+# for power-cut-corrupted recordings (post_processing.py orphan recovery).
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    sqlite3 \
     gstreamer1.0-tools \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \

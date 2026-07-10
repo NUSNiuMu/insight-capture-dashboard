@@ -71,6 +71,7 @@ from post_processing import (
     OptimizationManager,
     PlaybackManager,
     RecordingManager,
+    STORAGE_CONFIG_PATH,
     build_default_topics,
     list_rosbags,
     load_post_processing_config,
@@ -609,7 +610,10 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             for topic, output_path in topic_output_paths.items():
                 writer = writers_by_path.get(output_path)
                 if writer is None:
-                    writer = InProcessBagWriter(output_path)
+                    writer = InProcessBagWriter(
+                        output_path,
+                        storage_config_uri=str(STORAGE_CONFIG_PATH) if STORAGE_CONFIG_PATH.is_file() else "",
+                    )
                     writers_by_path[output_path] = writer
                 writer_by_topic[topic] = writer
             self._recording_writers = writers_by_path
@@ -2078,6 +2082,9 @@ def main() -> None:
         start_image_recording=node.start_image_recording,
         stop_image_recording=node.stop_image_recording,
     )
+    # Adopt recordings orphaned in rosbags/_staging/ by a power cut or crash
+    # (reindex/salvage + merge into a normal bag, in the background).
+    recording_manager.start_orphan_recovery()
     if args.start_alignment and node.live_alignment_available and not args.fake_pose:
         node.start_live_alignment()
     executor = MultiThreadedExecutor()

@@ -34,7 +34,14 @@ class InProcessBagWriter:
     callback thread that calls write() never blocks on disk I/O.
     """
 
-    def __init__(self, output_path: str, storage_id: str = "sqlite3", max_queue: int = 128) -> None:
+    def __init__(
+        self,
+        output_path: str,
+        storage_id: str = "sqlite3",
+        max_queue: int = 128,
+        storage_config_uri: str = "",
+    ) -> None:
+        self._storage_config_uri = storage_config_uri
         self._queue: "queue.Queue[object]" = queue.Queue(maxsize=max_queue)
         self._topics_created: Set[str] = set()
         self._dropped = 0
@@ -67,8 +74,11 @@ class InProcessBagWriter:
     def _run(self, output_path: str, storage_id: str) -> None:
         try:
             writer = rosbag2_py.SequentialWriter()
+            storage_options = rosbag2_py.StorageOptions(uri=output_path, storage_id=storage_id)
+            if self._storage_config_uri:
+                storage_options.storage_config_uri = self._storage_config_uri
             writer.open(
-                rosbag2_py.StorageOptions(uri=output_path, storage_id=storage_id),
+                storage_options,
                 rosbag2_py.ConverterOptions("", ""),
             )
         except Exception as exc:  # noqa: BLE001 - surfaced to the constructor via _open_error
