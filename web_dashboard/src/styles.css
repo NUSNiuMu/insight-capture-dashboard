@@ -118,23 +118,12 @@ body[data-dashboard-view="full"] .shell {
   max-width: 720px;
 }
 
-.recording-page-links {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 14px;
-  padding-top: 6px;
-  text-align: right;
-}
-
-.recording-page-links a,
 .footer-link,
 .page-nav a {
   color: var(--accent);
   text-decoration: none;
 }
 
-.recording-page-links a:hover,
 .footer-link:hover,
 .page-nav a:hover {
   text-decoration: underline;
@@ -150,7 +139,6 @@ body[data-dashboard-view="full"] .shell {
   font-size: 14px;
 }
 
-.recording-page-links a[aria-current="page"],
 .page-nav a[aria-current="page"] {
   color: var(--text);
 }
@@ -1014,8 +1002,7 @@ h1 {
   }
 
   .camera-page-meta,
-  .page-nav,
-  .recording-page-links {
+  .page-nav {
     justify-content: flex-start;
     text-align: left;
   }
