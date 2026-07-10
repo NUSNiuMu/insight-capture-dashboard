@@ -561,8 +561,20 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             link_up_since = now
 
     def _in_bag_range(self, stamp_ns: int) -> bool:
+        # Insight cameras stamp headers from the device boot clock (minutes
+        # since power-on, not epoch), so those stamps carry no date and can
+        # never match the bag metadata's epoch-based range -- comparing them
+        # dropped every replayed frame and froze the panels for the whole
+        # playback. A stamp before ~2001 is boot-relative: let it through
+        # (live and replayed frames may interleave while both are flowing,
+        # which beats showing nothing). Same reasoning when the bag has no
+        # readable time range at all.
+        if stamp_ns < 946_684_800 * 1_000_000_000:  # before 2000: uptime, not a date
+            return True
         r = self._bag_time_range
-        return r is not None and r[0] <= stamp_ns <= r[1]
+        if r is None:
+            return True
+        return r[0] <= stamp_ns <= r[1]
 
     def _make_pose_callback(self, pose_name: str):
         def callback(msg: PoseStamped) -> None:
