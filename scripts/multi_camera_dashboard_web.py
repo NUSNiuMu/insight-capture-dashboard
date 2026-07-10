@@ -63,6 +63,7 @@ from gripper_tracking import GripperTrackingMixin
 from hand_overlay import HandOverlayMixin
 from hw_jpeg import HwJpegCodec
 from inprocess_bag_writer import InProcessBagWriter
+from webrtc_stream import WebRtcStreams
 import perf_tracker
 from perf_tracker import track
 from live_alignment import LiveAlignmentMixin
@@ -305,6 +306,10 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # hand-overlay decode/re-encode; None on non-Jetson hosts, and every
         # call site keeps its cv2 path as fallback (see hw_jpeg.py).
         self._hw_jpeg = HwJpegCodec.create(log=self.get_logger().info)
+        # Hardware H.264 WebRTC streams for the camera panels; None when the
+        # GStreamer WebRTC stack is unavailable, and the frontend keeps its
+        # polling path as fallback either way (see webrtc_stream.py).
+        self.webrtc_streams = WebRtcStreams.create(log=self.get_logger().info)
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
         self._initialize_live_alignment_state()
         if self.world_to_reference:
@@ -694,6 +699,8 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 with self.camera_frame_lock:
                     self.latest_camera_frames[camera_name] = frame
                     self.camera_frame_times[camera_name].append(frame.received_monotonic)
+                if self.webrtc_streams is not None:
+                    self.webrtc_streams.push_ros_frame(camera_name, topic_type, msg, frame)
             except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the worker
                 self.get_logger().warning(f"frame worker {camera_name}: {exc}")
 
@@ -980,6 +987,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                         "height": 0 if frame is None else frame.height,
                         "version": 0 if frame is None else frame.version,
                         "frame_url": f"/api/cameras/{quote(camera.name, safe='')}/frame",
+                        "webrtc_available": self.webrtc_streams is not None,
                         "rotation_deg": camera.rotation_deg,
                         "row": camera.row,
                         "column": camera.column,
@@ -1270,6 +1278,7 @@ class WebDashboardServer:
         asyncio.set_event_loop(self._loop)
         app = web.Application(middlewares=[self._json_error_middleware])
         app.router.add_get("/ws", self._handle_ws)
+        app.router.add_get("/ws/webrtc", self._handle_webrtc_ws)
         app.router.add_get("/healthz", self._handle_healthz)
         app.router.add_get("/api/alignment", self._handle_alignment_snapshot)
         app.router.add_post("/api/alignment/start", self._handle_alignment_start)
@@ -1376,6 +1385,46 @@ class WebDashboardServer:
         async for _message in ws:
             pass
         self._clients.discard(ws)
+        return ws
+
+    async def _handle_webrtc_ws(self, request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse(heartbeat=20.0)
+        await ws.prepare(request)
+        camera_name = request.query.get("camera", "")
+        streams = self.node.webrtc_streams
+        spec = next((c for c in self.node.cameras if c.name == camera_name), None)
+        if streams is None or spec is None:
+            await ws.send_json({"type": "webrtc_unavailable"})
+            await ws.close()
+            return ws
+        loop = asyncio.get_running_loop()
+
+        def send_signal(payload: Dict) -> None:
+            # Offer/ICE callbacks land on GStreamer threads; hop back onto
+            # the server loop for the websocket write.
+            try:
+                asyncio.run_coroutine_threadsafe(ws.send_json(payload), loop)
+            except RuntimeError:
+                pass  # loop shutting down; the session is about to close too
+
+        session = streams.create_session(camera_name, spec.topic_type, send_signal)
+        try:
+            async for message in ws:
+                if message.type != web.WSMsgType.TEXT:
+                    continue
+                try:
+                    data = json.loads(message.data)
+                except json.JSONDecodeError:
+                    continue
+                kind = data.get("type")
+                if kind == "answer":
+                    session.set_remote_answer(str(data.get("sdp", "")))
+                elif kind == "ice" and data.get("candidate"):
+                    session.add_ice_candidate(
+                        int(data.get("sdpMLineIndex") or 0), str(data["candidate"])
+                    )
+        finally:
+            streams.close_session(session)
         return ws
 
     async def _handle_healthz(self, _request: web.Request) -> web.Response:
@@ -1945,6 +1994,22 @@ def _run_executor(executor: "MultiThreadedExecutor", node: "PoseBridgeNode") -> 
 
 
 def main() -> None:
+    # Crash forensics: docker's stdout capture loses the final unflushed
+    # buffer on os._exit/segfault, so post-mortems from `docker logs` are
+    # unreliable. Dump native crashes and every thread's stack on
+    # SIGINT/SIGTERM to a host-mounted file instead (chain=True keeps
+    # rclpy's own signal handling intact).
+    import faulthandler
+    import signal
+
+    crash_log_path = Path(__file__).resolve().parents[1] / "outputs" / "backend_crash.log"
+    crash_log_path.parent.mkdir(parents=True, exist_ok=True)
+    crash_log = open(crash_log_path, "a", buffering=1)
+    crash_log.write(f"--- backend start pid={os.getpid()} time={time.time():.0f} ---\n")
+    faulthandler.enable(file=crash_log, all_threads=True)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        faulthandler.register(sig, file=crash_log, all_threads=True, chain=True)
+
     args = parse_args()
     config_path = Path(args.config).resolve()
     raw_config = load_setup(config_path)

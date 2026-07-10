@@ -112,6 +112,15 @@ let lastPoseMessageAt = 0;
 
 const CAMERA_FPS_WINDOW_MS = 1500;
 const CAMERA_POLL_INTERVAL_MS = 50;
+// WebRTC display path: H.264 from the backend's hardware encoder, decoded
+// natively by the browser. The polling <img> path stays as the fallback --
+// a browser without H.264 (the vendored kiosk Chromium) or a failed
+// connection just never switches over. Retries back off per attempt and
+// give up after WEBRTC_MAX_ATTEMPTS until the page reloads.
+const WEBRTC_RETRY_DELAY_MS = 5000;
+const WEBRTC_MAX_ATTEMPTS = 5;
+const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 8000;
+const cameraWebRtc = new Map();
 const DEFAULT_TRAIL_ENABLED = {
   head: true,
   left_hand: true,
@@ -1471,9 +1480,11 @@ function renderCameraPanels(cameras, isPlayback = false) {
     }
     updateCameraStream(panel, camera);
     updateCameraFps(camera.name, Number(camera.fps || 0));
+    maybeStartCameraWebRtc(camera, panel);
     });
   for (const [name, panel] of cameraPanels.entries()) {
     if (!seen.has(name)) {
+      stopCameraWebRtc(name);
       panel.remove();
       cameraPanels.delete(name);
       cameraPollState.delete(name);
@@ -1501,13 +1512,14 @@ function ensureCameraPanel(camera) {
     </div>
     <div class="camera-body">
       <img class="camera-frame" alt="${escapeHtml(camera.label || camera.name)}">
+      <video class="camera-frame camera-video" autoplay muted playsinline style="display:none"></video>
       <div class="camera-overlay">
         <span class="camera-fps" data-camera-fps>-- fps</span>
         <span data-camera-status>waiting</span>
       </div>
     </div>
   `;
-  const img = panel.querySelector(".camera-frame");
+  const img = panel.querySelector("img.camera-frame");
   img.addEventListener("load", () => {
     recordDisplayedFrame(camera.name);
   });
@@ -1563,7 +1575,14 @@ function updateCameraPanelLayout(panel, index) {
 }
 
 function updateCameraStream(panel, camera) {
-  const img = panel.querySelector(".camera-frame");
+  const rtcState = cameraWebRtc.get(camera.name);
+  if (rtcState && rtcState.active) {
+    // Frames arrive over the WebRTC <video>; skip the per-frame HTTP GET
+    // entirely. If the connection drops, scheduleWebRtcRetry() clears
+    // `active` and this path resumes on the next poll tick.
+    return;
+  }
+  const img = panel.querySelector("img.camera-frame");
   const pollState = cameraPollState.get(camera.name) || { frameUrl: "", version: -1 };
   const version = Number(camera.version || 0);
   if (
@@ -1585,6 +1604,174 @@ function updateCameraStream(panel, camera) {
     return;
   }
   img.src = `${camera.frame_url}?v=${version}&ts=${Date.now()}`;
+}
+
+function maybeStartCameraWebRtc(camera, panel) {
+  if (!window.RTCPeerConnection || !camera.webrtc_available) {
+    return;
+  }
+  if (!camera.visible || camera.stale) {
+    // No frames flowing; dialing now would just burn retry attempts
+    // waiting on a first frame that cannot arrive.
+    return;
+  }
+  const state = cameraWebRtc.get(camera.name);
+  if (state && (state.pc || state.retryTimer || state.unavailable || state.attempts >= WEBRTC_MAX_ATTEMPTS)) {
+    return;
+  }
+  startCameraWebRtc(camera.name, panel);
+}
+
+function startCameraWebRtc(cameraName, panel) {
+  const video = panel.querySelector(".camera-video");
+  const img = panel.querySelector("img.camera-frame");
+  const previous = cameraWebRtc.get(cameraName);
+  const state = {
+    pc: null,
+    ws: null,
+    active: false,
+    attempts: (previous ? previous.attempts : 0) + 1,
+    retryTimer: null,
+    unavailable: Boolean(previous && previous.unavailable)
+  };
+  cameraWebRtc.set(cameraName, state);
+  const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${wsProtocol}://${location.host}/ws/webrtc?camera=${encodeURIComponent(cameraName)}`);
+  const pc = new RTCPeerConnection();
+  state.ws = ws;
+  state.pc = pc;
+  // Every failure signal funnels here; the state.pc === pc guard makes the
+  // late duplicates (onerror then onclose, a stale watchdog) no-ops.
+  const fail = () => {
+    if (cameraWebRtc.get(cameraName) === state && state.pc === pc) {
+      scheduleWebRtcRetry(cameraName, panel);
+    }
+  };
+  const watchdog = window.setTimeout(fail, WEBRTC_FIRST_FRAME_TIMEOUT_MS);
+  pc.ontrack = (event) => {
+    video.srcObject = event.streams[0];
+  };
+  pc.onicecandidate = (event) => {
+    if (event.candidate && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: "ice",
+        candidate: event.candidate.candidate,
+        sdpMLineIndex: event.candidate.sdpMLineIndex
+      }));
+    }
+  };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+      fail();
+    }
+  };
+  ws.onmessage = async (event) => {
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (message.type === "offer") {
+      try {
+        await pc.setRemoteDescription({ type: "offer", sdp: message.sdp });
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
+      } catch {
+        // Typically: this browser has no H.264 receiver (vendored kiosk
+        // Chromium). Polling keeps the panel alive.
+        fail();
+      }
+    } else if (message.type === "ice" && message.candidate) {
+      try {
+        await pc.addIceCandidate({ candidate: message.candidate, sdpMLineIndex: message.sdpMLineIndex });
+      } catch {
+        // Candidates racing a teardown are harmless.
+      }
+    } else if (message.type === "webrtc_unavailable") {
+      state.unavailable = true;
+      fail();
+    }
+  };
+  ws.onerror = fail;
+  ws.onclose = fail;
+  const onVideoFrame = () => {
+    if (cameraWebRtc.get(cameraName) !== state || state.pc !== pc) {
+      return;
+    }
+    if (!state.active) {
+      state.active = true;
+      state.attempts = 0;
+      window.clearTimeout(watchdog);
+      video.style.display = "";
+      img.style.display = "none";
+      img.removeAttribute("src");
+    }
+    recordDisplayedFrame(cameraName);
+    video.requestVideoFrameCallback(onVideoFrame);
+  };
+  if (video.requestVideoFrameCallback) {
+    video.requestVideoFrameCallback(onVideoFrame);
+  } else {
+    // No rVFC (old Firefox): activate on playback start; the fps badge
+    // then reflects backend fps only.
+    video.addEventListener("playing", onVideoFrame, { once: true });
+  }
+}
+
+function scheduleWebRtcRetry(cameraName, panel) {
+  const state = cameraWebRtc.get(cameraName);
+  if (!state || state.retryTimer) {
+    return;
+  }
+  const wasActive = state.active;
+  state.active = false;
+  try { if (state.pc) state.pc.close(); } catch {}
+  try { if (state.ws) state.ws.close(); } catch {}
+  state.pc = null;
+  state.ws = null;
+  const video = panel.querySelector(".camera-video");
+  const img = panel.querySelector("img.camera-frame");
+  if (video) {
+    video.style.display = "none";
+    video.srcObject = null;
+  }
+  if (img) {
+    img.style.display = "";
+  }
+  if (wasActive) {
+    const pollState = cameraPollState.get(cameraName);
+    if (pollState) {
+      // Force the next poll tick to re-issue the frame URL even if the
+      // version has not moved since the WebRTC path took over.
+      pollState.version = -1;
+    }
+  }
+  if (state.unavailable || state.attempts >= WEBRTC_MAX_ATTEMPTS) {
+    return;
+  }
+  state.retryTimer = window.setTimeout(() => {
+    state.retryTimer = null;
+    const currentPanel = cameraPanels.get(cameraName);
+    if (currentPanel) {
+      startCameraWebRtc(cameraName, currentPanel);
+    }
+  }, WEBRTC_RETRY_DELAY_MS * Math.max(1, state.attempts));
+}
+
+function stopCameraWebRtc(cameraName) {
+  const state = cameraWebRtc.get(cameraName);
+  if (!state) {
+    return;
+  }
+  if (state.retryTimer) {
+    window.clearTimeout(state.retryTimer);
+    state.retryTimer = null;
+  }
+  try { if (state.pc) state.pc.close(); } catch {}
+  try { if (state.ws) state.ws.close(); } catch {}
+  cameraWebRtc.delete(cameraName);
 }
 
 function updateCameraFps(cameraName, fps) {

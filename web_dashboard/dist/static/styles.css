@@ -927,8 +927,10 @@ h1 {
 
 /* No frame ever received (src removed by updateCameraStream): an src-less
    <img> still renders its alt text in Chromium -- hide it so the panel
-   shows only the stale badge instead of stray text/broken glyphs. */
-.camera-frame:not([src]) {
+   shows only the stale badge instead of stray text/broken glyphs. Scoped
+   to img: the WebRTC <video> shares .camera-frame but never has [src]
+   (it plays a srcObject), and its show/hide is driven inline by app.js. */
+img.camera-frame:not([src]) {
   visibility: hidden;
 }
 

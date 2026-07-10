@@ -249,12 +249,18 @@ RUN pip3 install --no-cache-dir \
 # gstreamer1.0-tools also provides gst-inspect-1.0, which the Settings page's
 # /api/images/capabilities probe shells out to. Kept as its own layer (not in
 # the apt layer at the top) so the cached playwright/pip layers don't rebuild.
+# plugins-bad (webrtcbin/dtls/srtp/h264parse) + nice (ICE) serve the WebRTC
+# camera streams in scripts/webrtc_stream.py; the H.264 encoder itself is the
+# host-injected nvv4l2h264enc.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gstreamer1.0-tools \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-nice \
     python3-gi \
     gir1.2-gst-plugins-base-1.0 \
+    gir1.2-gst-plugins-bad-1.0 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Interactive shells: source ROS2 for plain `docker exec -it ... bash` ────
