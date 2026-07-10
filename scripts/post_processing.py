@@ -706,6 +706,8 @@ class RecordingManager:
         if not staging_root.is_dir():
             return
         for staging_dir in sorted(p for p in staging_root.iterdir() if p.is_dir()):
+            if staging_dir.name.endswith(".leftover"):
+                continue  # already partially recovered on an earlier boot
             with self._lock:
                 if self._staging_dir == staging_dir:
                     continue  # active recording, not an orphan
@@ -758,10 +760,13 @@ class RecordingManager:
         if len(good_parts) == len(part_dirs):
             shutil.rmtree(staging_dir, ignore_errors=True)
         else:
-            # Partial salvage: keep the staging dir (it still holds the
-            # unrecoverable parts) but drop the merged ones to free space.
+            # Partial salvage: keep the unrecovered parts for forensics but
+            # drop the merged ones, and mark the dir so the next boot's scan
+            # does not adopt the remainder again (each pass would mint yet
+            # another _recovered_ bag from the same leftovers).
             for part in good_parts:
                 shutil.rmtree(part, ignore_errors=True)
+            staging_dir.rename(staging_dir.with_name(f"{staging_dir.name}.leftover"))
         self._recovery_log(
             f"{staging_dir.name}: recovered {len(good_parts)}/{len(part_dirs)} part bags -> {output_path.name}"
         )
