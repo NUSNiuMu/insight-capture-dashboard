@@ -1,7 +1,7 @@
 {
   "method": "board_center",
   "image_stream": "color_compressed",
-  "marker_length_m": 0.0555,
+  "marker_length_m": 0.055,
   "marker_separation_m": 0.0305,
   "board_id_layout": "row_mirrored",
   "board_rows": 6,
