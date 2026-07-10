@@ -108,7 +108,7 @@ let optimizationPollTimer = null;
 const keptPoints = new Map();
 
 const CAMERA_FPS_WINDOW_MS = 1500;
-const CAMERA_POLL_INTERVAL_MS = 100;
+const CAMERA_POLL_INTERVAL_MS = 50;
 const DEFAULT_TRAIL_ENABLED = {
   head: true,
   left_hand: true,

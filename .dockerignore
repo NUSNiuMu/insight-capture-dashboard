@@ -22,3 +22,10 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Release artifacts (multi-GB image tarballs from scripts/build_release.sh)
+release/
+
+# CAD source for export_gripper_split_from_stl.py (dev tool); the runtime
+# only needs the exported .glb files
+assets/models/*.stl

@@ -48,8 +48,7 @@ def avatar_model_defaults(avatar_model) -> Dict:
 # Settings page. Limited to filenames with an AVATAR_MODEL_DEFAULTS entry:
 # without a tuned scale/rotation a model renders at scale=1.0 with no
 # rotation, which looks wrong out of the box (assets/models/ also has
-# glove.glb and iron-man_helmet_mk3.glb, left out until someone tunes and
-# adds defaults for them above).
+# glove.glb, left out until someone tunes and adds defaults for it above).
 AVAILABLE_AVATAR_MODELS = [
     {"file": "vis_assembly.glb", "label": "Vis Assembly (hand)"},
     {"file": "MaleBaseModel_BravFG.glb", "label": "Male Base Model"},

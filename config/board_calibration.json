@@ -1,7 +1,7 @@
 {
   "method": "board_center",
   "image_stream": "color_compressed",
-  "marker_length_m": 0.055,
+  "marker_length_m": 0.0555,
   "marker_separation_m": 0.0165,
   "board_rows": 6,
   "board_cols": 6,
