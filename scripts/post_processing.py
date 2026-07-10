@@ -85,7 +85,12 @@ def _read_bag_metadata(metadata_path: Path) -> Dict[str, object]:
     if yaml is None or not metadata_path.exists():
         return {}
     try:
-        payload = yaml.safe_load(metadata_path.read_text(encoding="utf-8")) or {}
+        # CSafeLoader (libyaml) parses ~10x faster than the pure-Python
+        # SafeLoader; the bag list re-parses every metadata.yaml per request,
+        # which dominated /api/rosbags latency (~34ms vs ~3ms per bag on
+        # Jetson). Fall back if PyYAML was built without libyaml.
+        loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+        payload = yaml.load(metadata_path.read_text(encoding="utf-8"), Loader=loader) or {}
     except Exception:
         return {}
     info = payload.get("rosbag2_bagfile_information", {})

@@ -34,9 +34,6 @@
         <label class="field-label" for="scoring-topic">Topic <span class="page-copy">(auto-detected if blank - looks for PoseWithCovarianceStamped)</span></label>
         <input id="scoring-topic" class="field-input" type="text" placeholder="/camera/camera/vio_image_cov" autocomplete="off">
 
-        <label class="field-label" for="scoring-ref-cov">Reference covariance <span class="page-copy">(covariance trace = score 100, default 1e-3)</span></label>
-        <input id="scoring-ref-cov" class="field-input" type="text" placeholder="1e-3" autocomplete="off">
-
         <div style="display:flex;gap:12px;flex-wrap:wrap">
           <button id="run-scoring-button" type="button" class="recording-button">Run Scoring</button>
           <button id="verify-integrity-button" type="button" class="recording-button">Verify Integrity</button>

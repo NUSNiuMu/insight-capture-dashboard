@@ -12,7 +12,7 @@
         <div>
           <div class="camera-page-eyebrow">INSIGHT</div>
           <h1>Settings</h1>
-          <p class="page-copy">Camera avatars and gripper tracking apply immediately. Board calibration and rosbag sync are saved to disk but need a backend restart to take effect.</p>
+          <p class="page-copy">Camera avatars and gripper tracking apply immediately.</p>
         </div>
         <nav class="page-nav" aria-label="Dashboard pages">
           <a href="/3d">3D</a>
@@ -36,57 +36,6 @@
         <div id="settings-camera-list" class="settings-camera-list"></div>
       </main>
 
-      <section class="settings-page-panel recording-panel" id="board-calibration-panel">
-        <p class="eyebrow">Board calibration &middot; restart required</p>
-        <p id="board-calibration-status" class="record-topic-status" aria-live="polite">Loading...</p>
-        <div class="settings-form-grid">
-          <label class="settings-form-field">
-            <span>Marker length (m)</span>
-            <input type="number" step="0.001" min="0" id="bc-marker-length" class="settings-text-input">
-          </label>
-          <label class="settings-form-field">
-            <span>Marker separation (m)</span>
-            <input type="number" step="0.001" min="0" id="bc-marker-separation" class="settings-text-input">
-          </label>
-          <label class="settings-form-field">
-            <span>Board rows</span>
-            <input type="number" step="1" min="1" id="bc-board-rows" class="settings-text-input">
-          </label>
-          <label class="settings-form-field">
-            <span>Board columns</span>
-            <input type="number" step="1" min="1" id="bc-board-cols" class="settings-text-input">
-          </label>
-          <label class="settings-form-field">
-            <span>Max translation std (m)</span>
-            <input type="number" step="0.001" min="0" id="bc-max-translation-std" class="settings-text-input">
-          </label>
-          <label class="settings-form-field">
-            <span>Max rotation std (deg)</span>
-            <input type="number" step="0.1" min="0" id="bc-max-rotation-std" class="settings-text-input">
-          </label>
-        </div>
-        <button type="button" id="board-calibration-save-button" class="recording-button">Save</button>
-      </section>
-
-      <section class="settings-page-panel recording-panel" id="rosbag-sync-panel">
-        <p class="eyebrow">Rosbag remote sync &middot; restart required</p>
-        <p id="rosbag-sync-status" class="record-topic-status" aria-live="polite">Loading...</p>
-        <label class="settings-toggle-row">
-          <input type="checkbox" id="rs-sync-enabled">
-          <span>Sync latest rosbag to host on stop</span>
-        </label>
-        <div class="settings-form-grid">
-          <label class="settings-form-field settings-form-field-wide">
-            <span>Host sync directory</span>
-            <input type="text" id="rs-sync-dir" class="settings-text-input" placeholder="/home/user/workspace/insight-capture-dashboard/rosbags">
-          </label>
-          <label class="settings-form-field settings-form-field-wide">
-            <span>Host SSH target</span>
-            <input type="text" id="rs-sync-ssh-target" class="settings-text-input" placeholder="host-alias:/path/to/rosbags">
-          </label>
-        </div>
-        <button type="button" id="rosbag-sync-save-button" class="recording-button">Save</button>
-      </section>
     </div>
     <script type="module" src="/static/app.js"></script>
   </body>

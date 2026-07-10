@@ -17,10 +17,8 @@ const recordingStatus = document.getElementById("recording-status");
 const systemLoadPill = document.getElementById("system-load-pill");
 const startRecordingButton = document.getElementById("start-recording-button");
 const stopRecordingButton = document.getElementById("stop-recording-button");
-const syncRecordingButton = document.getElementById("sync-recording-button");
 const refreshRecordTopicsButton = document.getElementById("refresh-record-topics-button");
 const recordTopicStatus = document.getElementById("record-topic-status");
-const recordSyncStatus = document.getElementById("record-sync-status");
 const recordTopicGroups = document.getElementById("record-topic-groups");
 const recordingOutput = document.getElementById("recording-output");
 const bagList = document.getElementById("bag-list");
@@ -49,7 +47,6 @@ const verifyIntegrityButton = document.getElementById("verify-integrity-button")
 const integrityResultEl = document.getElementById("integrity-result");
 const integrityResultBody = document.getElementById("integrity-result-body");
 const scoringTopicInput = document.getElementById("scoring-topic");
-const scoringRefCovInput = document.getElementById("scoring-ref-cov");
 const scoringStatusEyebrow = document.getElementById("scoring-status-eyebrow");
 const scoringStatusEl = document.getElementById("scoring-status");
 const scoringResultEl = document.getElementById("scoring-result");
@@ -64,10 +61,6 @@ const settingsCameraList = document.getElementById("settings-camera-list");
 const settingsRestartBanner = document.getElementById("settings-restart-banner");
 const settingsRestartMessage = document.getElementById("settings-restart-message");
 const settingsRestartButton = document.getElementById("settings-restart-button");
-const boardCalibrationStatus = document.getElementById("board-calibration-status");
-const boardCalibrationSaveButton = document.getElementById("board-calibration-save-button");
-const rosbagSyncStatus = document.getElementById("rosbag-sync-status");
-const rosbagSyncSaveButton = document.getElementById("rosbag-sync-save-button");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#79c47b", primitive: "sphere", modelColor: "#b99572" },
@@ -106,6 +99,16 @@ let keepTrajectory = false;
 let optimizationBusy = false;
 let optimizationPollTimer = null;
 const keptPoints = new Map();
+
+// The backend pushes pose_update at ~20Hz; if the socket goes quiet for far
+// longer than that without onclose/onerror ever firing -- observed after a
+// backend restart, where the client's TCP connection can go half-open and
+// just stop delivering without a close frame -- the 3D view freezes forever
+// with no visible sign anything is wrong. Track the last message and force a
+// reconnect if the "open" socket has gone stale.
+const POSE_STREAM_STALE_MS = 4000;
+let activeWs = null;
+let lastPoseMessageAt = 0;
 
 const CAMERA_FPS_WINDOW_MS = 1500;
 const CAMERA_POLL_INTERVAL_MS = 50;
@@ -150,22 +153,6 @@ if (runScoringButton) {
 if (settingsPanel) {
   void refreshSettings();
 }
-if (boardCalibrationStatus) {
-  void refreshBoardCalibration();
-}
-if (boardCalibrationSaveButton) {
-  boardCalibrationSaveButton.addEventListener("click", () => {
-    void saveBoardCalibration();
-  });
-}
-if (rosbagSyncStatus) {
-  void refreshRosbagSync();
-}
-if (rosbagSyncSaveButton) {
-  rosbagSyncSaveButton.addEventListener("click", () => {
-    void saveRosbagSync();
-  });
-}
 if (settingsRestartButton) {
   settingsRestartButton.addEventListener("click", () => {
     void restartBackend();
@@ -189,11 +176,6 @@ if (startRecordingButton) {
 if (stopRecordingButton) {
   stopRecordingButton.addEventListener("click", () => {
     void stopRecording();
-  });
-}
-if (syncRecordingButton) {
-  syncRecordingButton.addEventListener("click", () => {
-    void syncRecordingToHost();
   });
 }
 if (refreshBagsButton) {
@@ -338,6 +320,8 @@ function connect() {
     modelStatus.textContent = "Connecting pose stream...";
   }
   const ws = new WebSocket(wsUrl);
+  activeWs = ws;
+  lastPoseMessageAt = Date.now();
 
   ws.onopen = () => {
     if (modelStatus) {
@@ -346,6 +330,7 @@ function connect() {
   };
 
   ws.onmessage = (event) => {
+    lastPoseMessageAt = Date.now();
     const payload = JSON.parse(event.data);
     if (payload.alignment) {
       renderAlignment(payload.alignment);
@@ -363,12 +348,24 @@ function connect() {
   };
 
   ws.onclose = () => {
+    if (activeWs === ws) {
+      activeWs = null;
+    }
     if (modelStatus) {
       modelStatus.textContent = "Pose stream disconnected, retrying...";
     }
     window.setTimeout(connect, 1000);
   };
 }
+
+window.setInterval(() => {
+  if (!activeWs || activeWs.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  if (Date.now() - lastPoseMessageAt > POSE_STREAM_STALE_MS) {
+    activeWs.close();
+  }
+}, 1000);
 
 async function fetchAlignmentStatus() {
   if (!alignmentPanel) {
@@ -702,33 +699,10 @@ async function stopRecording() {
       throw new Error(payload.error || "Failed to stop recording.");
     }
     renderRecordingStatus(payload);
-    const syncMessage = payload && payload.sync_status && payload.sync_status.message;
-    setRecordingOutput(syncMessage ? `Recording stopped. ${syncMessage}` : "Recording stopped.");
+    setRecordingOutput("Recording stopped.");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setRecordingOutput(`Recording stop failed: ${message}`);
-  } finally {
-    setRecordingBusy(false);
-  }
-}
-
-async function syncRecordingToHost() {
-  if (recordingBusy) {
-    return;
-  }
-  setRecordingBusy(true);
-  try {
-    const response = await fetch("/api/recording/sync", { method: "POST" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to sync recording to host.");
-    }
-    renderRecordingStatus(payload);
-    const syncMessage = payload && payload.sync_status && payload.sync_status.message;
-    setRecordingOutput(syncMessage || "Recording synced to host.");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setRecordingOutput(`Recording sync failed: ${message}`);
   } finally {
     setRecordingBusy(false);
   }
@@ -751,23 +725,8 @@ function collectSelectedRecordTopics() {
 function renderRecordingStatus(status) {
   const active = Boolean(status && status.recording);
   const outputPath = (status && status.output_path) || "";
-  const syncStatus = status && status.sync_status;
-  const hostSyncDir = (status && status.host_sync_dir) || "";
-  const hostSyncSshTarget = (status && status.host_sync_ssh_target) || "";
   if (recordingStatus) {
     recordingStatus.textContent = active ? `Recording to ${outputPath}` : "Recording idle";
-  }
-  if (recordSyncStatus) {
-    const hostTargetText = hostSyncSshTarget || hostSyncDir;
-    if (syncStatus && syncStatus.message) {
-      recordSyncStatus.textContent = hostTargetText
-        ? `${syncStatus.message} | host: ${hostTargetText}`
-        : syncStatus.message;
-    } else if (hostTargetText) {
-      recordSyncStatus.textContent = `Host sync ready: ${hostTargetText}`;
-    } else {
-      recordSyncStatus.textContent = "Host sync not configured";
-    }
   }
   if (!active && outputPath && recordingOutput && recordingLogLines.length === 0) {
     setRecordingOutput(`Last output: ${outputPath}`);
@@ -813,10 +772,6 @@ function setRecordingBusy(isBusy, { active } = {}) {
   if (stopRecordingButton) {
     stopRecordingButton.disabled = recordingBusy || !isActive;
     stopRecordingButton.classList.toggle("is-busy", recordingBusy && isActive);
-  }
-  if (syncRecordingButton) {
-    syncRecordingButton.disabled = recordingBusy || isActive;
-    syncRecordingButton.classList.toggle("is-busy", recordingBusy && !isActive);
   }
 }
 
@@ -1325,128 +1280,6 @@ async function restartBackend() {
     settingsRestartMessage.textContent = "Backend did not come back within 30s -- check it manually.";
   }
   settingsRestartButton.disabled = false;
-}
-
-async function refreshBoardCalibration() {
-  if (!boardCalibrationStatus) {
-    return;
-  }
-  try {
-    const response = await fetch("/api/settings/board-calibration", { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to load board calibration.");
-    }
-    const values = payload.values || {};
-    setInputValue("bc-marker-length", values.marker_length_m);
-    setInputValue("bc-marker-separation", values.marker_separation_m);
-    setInputValue("bc-board-rows", values.board_rows);
-    setInputValue("bc-board-cols", values.board_cols);
-    setInputValue("bc-max-translation-std", values.max_translation_std_m);
-    setInputValue("bc-max-rotation-std", values.max_rotation_std_deg);
-    boardCalibrationStatus.textContent = "Loaded from config/board_calibration.json.";
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    boardCalibrationStatus.textContent = `Failed to load: ${message}`;
-  }
-}
-
-async function saveBoardCalibration() {
-  if (!boardCalibrationSaveButton) {
-    return;
-  }
-  boardCalibrationSaveButton.disabled = true;
-  try {
-    const body = {
-      marker_length_m: Number(getInputValue("bc-marker-length")),
-      marker_separation_m: Number(getInputValue("bc-marker-separation")),
-      board_rows: Number(getInputValue("bc-board-rows")),
-      board_cols: Number(getInputValue("bc-board-cols")),
-      max_translation_std_m: Number(getInputValue("bc-max-translation-std")),
-      max_rotation_std_deg: Number(getInputValue("bc-max-rotation-std"))
-    };
-    const response = await fetch("/api/settings/board-calibration", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to save board calibration.");
-    }
-    boardCalibrationStatus.textContent = "Saved to config/board_calibration.json.";
-    showRestartBanner("Board calibration saved -- restart the backend to apply.");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    boardCalibrationStatus.textContent = `Failed to save: ${message}`;
-  } finally {
-    boardCalibrationSaveButton.disabled = false;
-  }
-}
-
-async function refreshRosbagSync() {
-  if (!rosbagSyncStatus) {
-    return;
-  }
-  try {
-    const response = await fetch("/api/settings/rosbag-sync", { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to load rosbag sync settings.");
-    }
-    const values = payload.values || {};
-    const syncCheckbox = document.getElementById("rs-sync-enabled");
-    if (syncCheckbox) syncCheckbox.checked = Boolean(values.sync_rosbag_to_host);
-    setInputValue("rs-sync-dir", values.host_rosbag_sync_dir || "");
-    setInputValue("rs-sync-ssh-target", values.host_rosbag_sync_ssh_target || "");
-    rosbagSyncStatus.textContent = "Loaded from config/post_processing.json.";
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    rosbagSyncStatus.textContent = `Failed to load: ${message}`;
-  }
-}
-
-async function saveRosbagSync() {
-  if (!rosbagSyncSaveButton) {
-    return;
-  }
-  rosbagSyncSaveButton.disabled = true;
-  try {
-    const syncCheckbox = document.getElementById("rs-sync-enabled");
-    const body = {
-      sync_rosbag_to_host: syncCheckbox ? syncCheckbox.checked : false,
-      host_rosbag_sync_dir: getInputValue("rs-sync-dir"),
-      host_rosbag_sync_ssh_target: getInputValue("rs-sync-ssh-target")
-    };
-    const response = await fetch("/api/settings/rosbag-sync", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to save rosbag sync settings.");
-    }
-    rosbagSyncStatus.textContent = "Saved to config/post_processing.json.";
-    showRestartBanner("Rosbag sync settings saved -- restart the backend to apply.");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    rosbagSyncStatus.textContent = `Failed to save: ${message}`;
-  } finally {
-    rosbagSyncSaveButton.disabled = false;
-  }
-}
-
-function setInputValue(id, value) {
-  const el = document.getElementById(id);
-  if (el && value !== undefined && value !== null) {
-    el.value = value;
-  }
-}
-
-function getInputValue(id) {
-  const el = document.getElementById(id);
-  return el ? el.value : "";
 }
 
 function setImageCapabilityStatus(message) {
@@ -2242,8 +2075,6 @@ async function runScoring() {
     return;
   }
   const topic = scoringTopicInput ? scoringTopicInput.value.trim() : "";
-  const refCovRaw = scoringRefCovInput ? scoringRefCovInput.value.trim() : "";
-  const refCov = refCovRaw ? parseFloat(refCovRaw) : undefined;
 
   scoringBusy = true;
   if (runScoringButton) {
@@ -2256,9 +2087,6 @@ async function runScoring() {
     const body = { bag_name: bagName };
     if (topic) {
       body.topic = topic;
-    }
-    if (refCov !== undefined && !isNaN(refCov)) {
-      body.ref_cov = refCov;
     }
     const response = await fetch("/api/scoring/run", {
       method: "POST",
@@ -2437,6 +2265,16 @@ function renderScoringCameraCard(cam) {
       </div>`;
   }
   const color = scoringColor(cam.score || 0);
+  const breakdownRows = [];
+  if (cam.base_score !== undefined) {
+    breakdownRows.push(`<tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Base score</td><td>${escapeHtml(String(cam.base_score))}</td></tr>`);
+    breakdownRows.push(`<tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Transient blips</td><td>${escapeHtml(String(cam.transient_run_count || 0))} (-${escapeHtml(String(cam.transient_penalty || 0))})</td></tr>`);
+    breakdownRows.push(`<tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Sustained bad</td><td>${escapeHtml(String(cam.bad_run_count || 0))} run(s), ${escapeHtml(String(cam.bad_run_seconds || 0))}s (-${escapeHtml(String(cam.sustained_penalty || 0))})</td></tr>`);
+    if (cam.episode_capped) {
+      breakdownRows.push(`<tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Episode cap</td><td style="color:#ff5a5a">bad run &gt; 1s, capped at 40</td></tr>`);
+    }
+    breakdownRows.push(`<tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Usable</td><td>${escapeHtml((100 * (cam.usable_fraction !== undefined ? cam.usable_fraction : 1)).toFixed(1))}%</td></tr>`);
+  }
   return `
     <div style="padding:12px 16px;border-radius:8px;background:var(--panel);border:1px solid var(--line)">
       <div style="font-family:monospace;font-size:0.78rem;color:var(--muted);margin-bottom:8px">${escapeHtml(cam.topic || "")}</div>
@@ -2446,9 +2284,10 @@ function renderScoringCameraCard(cam) {
       </div>
       <table style="border-collapse:collapse;width:100%;font-size:0.82rem">
         <tbody>
-          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Mean trace</td><td>${escapeHtml((cam.mean_trace || 0).toExponential(3))}</td></tr>
+          ${breakdownRows.join("\n          ")}
+          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">p50 trace</td><td>${escapeHtml((cam.p50_trace || 0).toExponential(3))}</td></tr>
+          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">p90 trace</td><td>${escapeHtml((cam.p90_trace || 0).toExponential(3))}</td></tr>
           <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Max trace</td><td>${escapeHtml((cam.max_trace || 0).toExponential(3))}</td></tr>
-          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">p99 trace</td><td>${escapeHtml((cam.p99_trace || 0).toExponential(3))}</td></tr>
         </tbody>
       </table>
     </div>`;
@@ -2479,7 +2318,6 @@ function renderScoringResult(result) {
           <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Max cov trace</td><td>${escapeHtml((result.max_trace || 0).toExponential(4))}</td></tr>
           <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">p90 cov trace</td><td>${escapeHtml((result.p90_trace || 0).toExponential(4))}</td></tr>
           <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">p99 cov trace</td><td>${escapeHtml((result.p99_trace || 0).toExponential(4))}</td></tr>
-          <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Reference cov</td><td>${escapeHtml((result.ref_cov || 0).toExponential(4))}</td></tr>
         </tbody>
       </table>`;
   }
