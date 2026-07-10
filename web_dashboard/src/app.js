@@ -44,7 +44,6 @@ const optimizationResultPanel = document.getElementById("optimization-result-pan
 const optimizationLogLink = document.getElementById("optimization-log-link");
 const runScoringButton = document.getElementById("run-scoring-button");
 const scoringTopicInput = document.getElementById("scoring-topic");
-const scoringRefCovInput = document.getElementById("scoring-ref-cov");
 const scoringStatusEyebrow = document.getElementById("scoring-status-eyebrow");
 const scoringStatusEl = document.getElementById("scoring-status");
 const scoringResultEl = document.getElementById("scoring-result");
@@ -2065,8 +2064,6 @@ async function runScoring() {
     return;
   }
   const topic = scoringTopicInput ? scoringTopicInput.value.trim() : "";
-  const refCovRaw = scoringRefCovInput ? scoringRefCovInput.value.trim() : "";
-  const refCov = refCovRaw ? parseFloat(refCovRaw) : undefined;
 
   scoringBusy = true;
   if (runScoringButton) {
@@ -2079,9 +2076,6 @@ async function runScoring() {
     const body = { bag_name: bagName };
     if (topic) {
       body.topic = topic;
-    }
-    if (refCov !== undefined && !isNaN(refCov)) {
-      body.ref_cov = refCov;
     }
     const response = await fetch("/api/scoring/run", {
       method: "POST",
@@ -2183,6 +2177,16 @@ function renderScoringCameraCard(cam) {
       </div>`;
   }
   const color = scoringColor(cam.score || 0);
+  const breakdownRows = [];
+  if (cam.base_score !== undefined) {
+    breakdownRows.push(`<tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Base score</td><td>${escapeHtml(String(cam.base_score))}</td></tr>`);
+    breakdownRows.push(`<tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Transient blips</td><td>${escapeHtml(String(cam.transient_run_count || 0))} (-${escapeHtml(String(cam.transient_penalty || 0))})</td></tr>`);
+    breakdownRows.push(`<tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Sustained bad</td><td>${escapeHtml(String(cam.bad_run_count || 0))} run(s), ${escapeHtml(String(cam.bad_run_seconds || 0))}s (-${escapeHtml(String(cam.sustained_penalty || 0))})</td></tr>`);
+    if (cam.episode_capped) {
+      breakdownRows.push(`<tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Episode cap</td><td style="color:#ff5a5a">bad run &gt; 1s, capped at 40</td></tr>`);
+    }
+    breakdownRows.push(`<tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Usable</td><td>${escapeHtml((100 * (cam.usable_fraction !== undefined ? cam.usable_fraction : 1)).toFixed(1))}%</td></tr>`);
+  }
   return `
     <div style="padding:12px 16px;border-radius:8px;background:var(--panel);border:1px solid var(--line)">
       <div style="font-family:monospace;font-size:0.78rem;color:var(--muted);margin-bottom:8px">${escapeHtml(cam.topic || "")}</div>
@@ -2192,9 +2196,10 @@ function renderScoringCameraCard(cam) {
       </div>
       <table style="border-collapse:collapse;width:100%;font-size:0.82rem">
         <tbody>
-          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Mean trace</td><td>${escapeHtml((cam.mean_trace || 0).toExponential(3))}</td></tr>
+          ${breakdownRows.join("\n          ")}
+          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">p50 trace</td><td>${escapeHtml((cam.p50_trace || 0).toExponential(3))}</td></tr>
+          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">p90 trace</td><td>${escapeHtml((cam.p90_trace || 0).toExponential(3))}</td></tr>
           <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">Max trace</td><td>${escapeHtml((cam.max_trace || 0).toExponential(3))}</td></tr>
-          <tr><td class="page-copy" style="padding:0.15rem 0.5rem 0.15rem 0">p99 trace</td><td>${escapeHtml((cam.p99_trace || 0).toExponential(3))}</td></tr>
         </tbody>
       </table>
     </div>`;
@@ -2225,7 +2230,6 @@ function renderScoringResult(result) {
           <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Max cov trace</td><td>${escapeHtml((result.max_trace || 0).toExponential(4))}</td></tr>
           <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">p90 cov trace</td><td>${escapeHtml((result.p90_trace || 0).toExponential(4))}</td></tr>
           <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">p99 cov trace</td><td>${escapeHtml((result.p99_trace || 0).toExponential(4))}</td></tr>
-          <tr><td class="page-copy" style="padding:0.2rem 0.5rem 0.2rem 0">Reference cov</td><td>${escapeHtml((result.ref_cov || 0).toExponential(4))}</td></tr>
         </tbody>
       </table>`;
   }

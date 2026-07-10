@@ -1030,7 +1030,6 @@ class _ScoringJob:
     bag_name: str
     bag_path: str
     topic: str          # empty = auto-discover all; non-empty = score only this topic
-    ref_cov: float
     status: str         # "running" | "done" | "error"
     result: Optional[Dict] = None
     error: Optional[str] = None
@@ -1041,7 +1040,6 @@ class _ScoringJob:
 
 class ScoringManager:
     _TRAJ_SCORE = Path(__file__).with_name("traj_score.py")
-    _DEFAULT_REF_COV = 1e-3
 
     def __init__(self, rosbag_root: Path, results_root: Path) -> None:
         self.rosbag_root = rosbag_root
@@ -1069,7 +1067,7 @@ class ScoringManager:
                 payload["finished_at"] = job.finished_at
             return payload
 
-    def run(self, bag_name: str, topic: str = "", ref_cov: float = _DEFAULT_REF_COV) -> bool:
+    def run(self, bag_name: str, topic: str = "") -> bool:
         """Start a new scoring job. Returns False if a job is already running."""
         with self._lock:
             if self._current_job and self._current_job.status == "running":
@@ -1079,7 +1077,6 @@ class ScoringManager:
                 bag_name=bag_name,
                 bag_path=bag_path,
                 topic=topic,
-                ref_cov=ref_cov,
                 status="running",
                 started_at=time.monotonic(),
             )
@@ -1114,7 +1111,6 @@ class ScoringManager:
                     str(self._TRAJ_SCORE),
                     job.bag_path,
                     "--topic", topic,
-                    "--ref-cov", str(job.ref_cov),
                     "--json", str(output_json),
                 ]
                 proc = subprocess.run(
@@ -1701,11 +1697,7 @@ class WebDashboardServer:
         if not bag_name:
             return web.json_response({"error": "bag_name is required"}, status=400)
         topic = str(body.get("topic", "")).strip()
-        try:
-            ref_cov = float(body.get("ref_cov", ScoringManager._DEFAULT_REF_COV))
-        except (TypeError, ValueError):
-            ref_cov = ScoringManager._DEFAULT_REF_COV
-        started = self.scoring_manager.run(bag_name, topic, ref_cov)
+        started = self.scoring_manager.run(bag_name, topic)
         if not started:
             return web.json_response({"error": "A scoring job is already running."}, status=409)
         return web.json_response({"status": "started", "bag_name": bag_name})
