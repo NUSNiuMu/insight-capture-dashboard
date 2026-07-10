@@ -240,6 +240,41 @@ RUN pip3 install --no-cache-dir \
     "playwright==1.61.0" \
     && python3 -m playwright install --with-deps chromium
 
+# ── Kiosk browser, take two: official Firefox (scripts/open_web_3d_right.sh) ─
+# The Playwright Chromium above is no longer used as the on-device kiosk --
+# kept only for headless page verification (screenshots, console-error
+# checks; see CLAUDE.md), since it has no H.264 decoder at all (checked via
+# RTCRtpReceiver.getCapabilities: VP8/VP9/AV1 only), so it can never show
+# the WebRTC camera streams and was permanently stuck on the JPEG-polling
+# fallback path.
+#
+# No vendor ships an arm64 desktop Linux build with H.264 baked in --
+# checked and ruled out Microsoft Edge, Brave, Vivaldi, and the xtradeb PPA
+# (none publish arm64 packages/binaries at all, confirmed via each vendor's
+# own apt/PPA repo metadata). Mozilla is the one still-maintained vendor
+# that ships an official arm64 Linux build, and Firefox bundles Cisco's
+# OpenH264 plugin specifically for WebRTC's H.264 (Cisco pays the patent
+# license for exactly this use case) -- verified via getCapabilities and a
+# real screenshot of the /images page rendering all three camera panels
+# through actual WebRTC decode, no black frames, no flicker.
+#
+# Pinned to a specific release tarball (not the "latest" redirect) so the
+# image is reproducible across builds; bump deliberately, re-verify H.264
+# capability after bumping (Mozilla could in principle drop OpenH264).
+ARG FIREFOX_VERSION=152.0.5
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgtk-3-0 \
+    libx11-xcb1 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/* \
+    && wget -q "https://download-installer.cdn.mozilla.net/pub/firefox/releases/${FIREFOX_VERSION}/linux-aarch64/en-US/firefox-${FIREFOX_VERSION}.tar.xz" -O /tmp/firefox.tar.xz \
+    && tar xf /tmp/firefox.tar.xz -C /opt \
+    && rm /tmp/firefox.tar.xz
+
+# Kiosk profile (see scripts/firefox-kiosk-user.js for what/why). Root's
+# real profile dir is used (not /tmp) so it survives container restarts.
+COPY scripts/firefox-kiosk-user.js /opt/firefox-kiosk-profile/user.js
+
 # ── GStreamer core + PyGObject for the NVJPEG hardware JPEG path ────────────
 # scripts/hw_jpeg.py drives nvjpegenc/nvjpegdec through GStreamer. The NVIDIA
 # plugin .so files themselves (libgstnvjpeg.so, libgstnvvidconv.so, ...) are
