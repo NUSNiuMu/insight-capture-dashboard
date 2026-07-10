@@ -1,4 +1,5 @@
 # Insight Capture Dashboard — 使用手册
+-
 
 > 设备出厂前已完成全部环境配置（Docker、NVIDIA 运行时、内核参数、软件安装），
 > 本手册不含安装步骤，只覆盖**日常使用、数据采集与故障排查**。
@@ -137,8 +138,9 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 ./update.sh insight-dashboard-vX.Y.Z.tar.gz
 ```
 
-录制数据、标定结果、配置全部保留。回滚：把部署目录 `.env` 里的版本号改回
-上一个已加载的版本，`docker compose up -d` 即可。
+录制数据、标定结果、配置全部保留。回滚：`./update.sh --rollback vX.Y.Z`。
+
+完整的升级排查步骤、回滚细节、全新设备部署方式见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
 ---
 

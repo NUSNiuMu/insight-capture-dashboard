@@ -4,6 +4,8 @@
 
 > **交付给客户的使用手册在 [docs/USAGE.md](docs/USAGE.md)**（日常操作、采集
 > 流程、故障排查诊断树；不含安装——环境由我们出厂配置好）。
+> **怎么打包发布镜像 / 给设备升级 / 全新设备怎么部署，见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
+> （开发者打包手册 + 使用者升级手册 + 全新 Jetson 首次部署，两条路径）。
 > 内部装机用 `./scripts/setup_host.sh`（幂等：runtime 检查 + DDS 缓冲 sysctl +
 > 构建 + 启动）；录制后数据完整性检查用 `scripts/check_bag.py`。
 > 本 README 侧重功能与配置参考。
@@ -224,22 +226,15 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 
 ## 部署
 
+打包发布镜像、给设备升级、全新设备首次部署的完整步骤见
+**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**。这里只记本分支特有的技术背景：
+
 ### 本分支（`deploy/jetson-nx`）：Orin NX，全功能自包含
 
 COLMAP（3.9.1，CUDA sm_87，GUI 关闭）和 `looper-vio-colmap-handoff` 流水线在
 `docker compose build` 时编译/克隆进镜像（见 Dockerfile 的 `colmap-builder`
 阶段），不需要任何宿主机挂载或每台设备手工编译——`/optimization` 开箱即用。
 只支持 Orin NX（sm_87 单架构编译），不支持 Nano。
-
-```bash
-git clone -b deploy/jetson-nx git@github.com:NUSNiuMu/insight-capture-dashboard.git insight_capture
-cd insight_capture
-./scripts/setup_host.sh    # 幂等：runtime 检查 + DDS 缓冲 sysctl + 相机开机重启 unit + build + 启动
-```
-
-首次 build 会在设备上编译 COLMAP（约 20-40 分钟，之后有 Docker 缓存）。
-批量部署不要每台都编译：在一台机器上 `./scripts/build_release.sh vX.Y.Z`
-打出镜像包，其余设备 `./update.sh` 导入即可（见 deploy/README.md）。
 
 `looper-vio-colmap-handoff` 钉在固定 commit 上，其上打了两个本地补丁
 （COLMAP 3.9.1 的 GPU 参数名、stdbuf 行缓冲让网页日志实时刷新），升级
