@@ -29,10 +29,26 @@ fi
 # (kiosk mode fills whatever display it's given). --no-sandbox is required
 # because this runs as root in the container; the container boundary is the
 # actual sandbox here, same trust model as the code it replaces.
+#
+# The container has no D-Bus daemon and no Google account, so Chromium's
+# battery/power (UPower), background sync/GCM registration, component
+# updater, and on-device-model download all fail loudly on every launch --
+# harmless (nothing here needs any of them) but noisy. The --disable-*
+# flags stop Chromium from attempting that background work in the first
+# place; stderr is still redirected to a log file for the handful of
+# startup dbus probes those flags don't cover (e.g. UPower device
+# enumeration), so the terminal stays clean without losing the ability to
+# debug a genuine kiosk crash.
+KIOSK_LOG="${INSIGHT_KIOSK_LOG:-/tmp/insight-kiosk-chrome.log}"
 exec "${CHROME_BIN}" \
   --kiosk \
   --no-sandbox \
   --no-first-run \
   --disable-session-crashed-bubble \
   --disable-infobars \
-  "${URL}"
+  --disable-background-networking \
+  --disable-component-update \
+  --disable-sync \
+  --disable-features=OptimizationGuideOnDeviceModel \
+  "${URL}" \
+  >"${KIOSK_LOG}" 2>&1
