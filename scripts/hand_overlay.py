@@ -6,8 +6,9 @@ Detection runs on the camera device itself (HandEngine, e.g. insight9_a
 publishing <namespace>/camera/hand + <namespace>/camera/hand_keypoints as
 vision_msgs/Detection2DArray) -- this module only parses and buffers the two
 topics per camera for the API to serve; no CV work happens on this side.
-Message shape mirrors scripts/visualize_hand_landmarks.py (the PC-side
-OpenCV reference tool this overlay is a browser-side port of):
+Message shape mirrors visualize_hand_landmarks.py (a PC-side OpenCV
+reference tool that lives outside this repo -- not something to look for
+under scripts/; this module is a browser-side port of its drawing logic):
   hand           : one Detection2D per hand, id=handIdx, bbox=tight box,
                    results[].hypothesis.class_id="hand_left"/"hand_right"
   hand_keypoints : one Detection2D per landmark, id="handIdx:kpIdx",
@@ -24,8 +25,8 @@ import numpy as np
 from perf_tracker import track
 
 # MediaPipe 21-point hand skeleton, grouped by finger for coloring -- same
-# topology and colors as FINGER_COLORS/HAND_EDGES in
-# scripts/visualize_hand_landmarks.py (the PC-side OpenCV reference tool).
+# topology and colors as FINGER_COLORS/HAND_EDGES in visualize_hand_landmarks.py
+# (the PC-side OpenCV reference tool, lives outside this repo).
 FINGER_COLORS = {
     "thumb": (0, 0, 255),     # red
     "index": (0, 165, 255),   # orange
@@ -51,6 +52,22 @@ MIN_KEYPOINT_SCORE = 0.3
 # API reports stale=True so the frontend can fade/hide it instead of
 # freezing a stale skeleton on screen.
 HAND_DATA_TIMEOUT_SEC = 2.0
+
+# Matches visualize_hand_landmarks.py's --max-sync-ms default: the maximum
+# |image_stamp - keypoints_stamp| gap for compose_hand_overlay_jpeg to draw
+# the skeleton onto that particular image frame. Deliberately much tighter
+# than HAND_DATA_TIMEOUT_SEC above -- that one answers "has the topic gone
+# dead", this one answers "would drawing this specific keypoints frame onto
+# this specific image frame look visibly misaligned" (HandEngine and the
+# image stream are two independent publishers; a moving hand can drift
+# several pixels within even 100ms). The reference tool solves the same
+# problem by picking whichever buffered image is closest to the keypoints'
+# stamp and printing "kpt out of sync" instead of drawing; the dashboard
+# has no image buffer to pick from (it draws onto whichever frame just
+# arrived), so out-of-sync here means "skip the overlay for this frame"
+# instead -- the plain passthrough JPEG a moment of no overlay, not a
+# visibly wrong one.
+MAX_SYNC_NS = 120_000_000
 
 
 def draw_hands_on_frame(
@@ -226,7 +243,9 @@ class HandOverlayMixin:
             "hands": snapshot.hands,
         }
 
-    def compose_hand_overlay_jpeg(self, camera_name: str, jpeg_bytes: bytes) -> Optional[bytes]:
+    def compose_hand_overlay_jpeg(
+        self, camera_name: str, jpeg_bytes: bytes, image_stamp_ns: int
+    ) -> Optional[bytes]:
         """Decode -> draw -> re-encode, the same per-frame cost the reference
         PC tool pays (cv2.imshow/--record both display the drawn-on copy, not
         the raw stream). Only called when hand_overlay_enabled for this
@@ -235,6 +254,8 @@ class HandOverlayMixin:
         """
         payload = self.hand_overlay_payload(camera_name)
         if not payload or payload["stale"] or not payload["hands"]:
+            return None
+        if abs(image_stamp_ns - payload["stamp_ns"]) > MAX_SYNC_NS:
             return None
         # NVJPEG path: decode to BGRx, draw in place (cv2 primitives accept 4
         # channels), re-encode -- both JPEG passes on the hardware engine.

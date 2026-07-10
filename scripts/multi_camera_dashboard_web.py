@@ -770,7 +770,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 # skeleton into the pixels it displays/records. Only paid by
                 # cameras with the Settings toggle on; everyone else keeps
                 # the cheap passthrough (no decode) below.
-                composited = self.compose_hand_overlay_jpeg(camera_name, data)
+                composited = self.compose_hand_overlay_jpeg(camera_name, data, stamp_ns)
                 if composited is not None:
                     data = composited
             width, height = self._jpeg_dimensions(data)
