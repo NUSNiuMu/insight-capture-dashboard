@@ -1072,7 +1072,12 @@ class PlaybackManager:
         except Exception:
             return None
 
-    def start(self, bag_name: str, recording_manager: "RecordingManager") -> None:
+    def start(
+        self,
+        bag_name: str,
+        recording_manager: "RecordingManager",
+        remap_topics: Optional[Dict[str, str]] = None,
+    ) -> None:
         with self._lock:
             with recording_manager._lock:
                 recording_manager._cleanup_if_exited_unlocked()
@@ -1087,6 +1092,13 @@ class PlaybackManager:
             env = os.environ.copy()
             env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
             cmd = ["ros2", "bag", "play", str(bag_path)]
+            if remap_topics:
+                # rosbag2's own --remap (not a generic `ros2 run` --ros-args
+                # -r): renames recorded topic names on the way out, so a
+                # live publisher still active on the original name never
+                # collides with replayed data on the same subscription --
+                # see bagplay_topic() / the dashboard's shadow subscriptions.
+                cmd += ["--remap"] + [f"{old}:={new}" for old, new in remap_topics.items()]
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,

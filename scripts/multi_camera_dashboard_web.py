@@ -136,6 +136,14 @@ def read_system_load() -> Dict[str, object]:
     }
 
 
+def bagplay_topic(topic: str) -> str:
+    """Where PlaybackManager remaps a live topic to during `ros2 bag play`,
+    so replayed data never shares a topic (and never blends) with a
+    still-connected live publisher. Single source of truth for both the
+    dashboard's shadow subscriptions and the remap args passed to bag play."""
+    return f"/bagplay{topic}"
+
+
 def make_qos(depth: int = 10) -> QoSProfile:
     return QoSProfile(
         reliability=ReliabilityPolicy.RELIABLE,
@@ -262,7 +270,6 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self.reference_camera = self.poses[0].name
 
         self._playback_mode: bool = False
-        self._bag_time_range: Optional[Tuple[int, int]] = None
         # Bounded deque: append is O(1) and old points fall off automatically.
         # A plain list needed an O(max_points) slice-delete per pose message,
         # which at 100Hz x 3 poses was ~300 full-list shifts per second.
@@ -345,11 +352,21 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             sub = self.create_subscription(
                 PoseStamped,
                 pose.topic,
-                self._make_pose_callback(pose.name),
+                self._make_pose_callback(pose.name, is_live=True),
                 pose_qos,
                 callback_group=self.ros_callback_group,
             )
             self.dashboard_subscriptions.append(sub)
+            # See _make_dashboard_image_callback: same live/playback topic
+            # split so replayed trajectories never blend with a live one.
+            playback_sub = self.create_subscription(
+                PoseStamped,
+                bagplay_topic(pose.topic),
+                self._make_pose_callback(pose.name, is_live=False),
+                pose_qos,
+                callback_group=self.ros_callback_group,
+            )
+            self.dashboard_subscriptions.append(playback_sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
 
     def _alignment_stream_for(self, camera: "CameraSpec") -> str:
@@ -379,6 +396,19 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 callback_group=self.ros_callback_group,
             )
             self.dashboard_subscriptions.append(sub)
+            # Playback shadow: PlaybackManager remaps `ros2 bag play` onto
+            # /bagplay/... so replayed frames never share a topic with a
+            # still-connected live camera (see _make_dashboard_image_callback).
+            playback_sub = self.create_subscription(
+                msg_type,
+                bagplay_topic(camera.topic),
+                self._make_dashboard_image_callback(
+                    camera.name, camera.topic_type, also_alignment=also_alignment, is_live=False
+                ),
+                image_qos,
+                callback_group=self.ros_callback_group,
+            )
+            self.dashboard_subscriptions.append(playback_sub)
             threading.Thread(
                 target=self._frame_worker_loop,
                 args=(camera.name, camera.topic_type, also_alignment),
@@ -560,27 +590,11 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             )
             link_up_since = now
 
-    def _in_bag_range(self, stamp_ns: int) -> bool:
-        # Insight cameras stamp headers from the device boot clock (minutes
-        # since power-on, not epoch), so those stamps carry no date and can
-        # never match the bag metadata's epoch-based range -- comparing them
-        # dropped every replayed frame and froze the panels for the whole
-        # playback. A stamp before ~2001 is boot-relative: let it through
-        # (live and replayed frames may interleave while both are flowing,
-        # which beats showing nothing). Same reasoning when the bag has no
-        # readable time range at all.
-        if stamp_ns < 946_684_800 * 1_000_000_000:  # before 2000: uptime, not a date
-            return True
-        r = self._bag_time_range
-        if r is None:
-            return True
-        return r[0] <= stamp_ns <= r[1]
-
-    def _make_pose_callback(self, pose_name: str):
+    def _make_pose_callback(self, pose_name: str, is_live: bool = True):
         def callback(msg: PoseStamped) -> None:
-            stamp_ns = self._stamp_to_ns(msg.header.stamp)
-            if self._playback_mode and not self._in_bag_range(stamp_ns):
+            if is_live == self._playback_mode:
                 return
+            stamp_ns = self._stamp_to_ns(msg.header.stamp)
             pose_sample = PoseSample(
                 stamp_ns=stamp_ns,
                 position=(
@@ -601,6 +615,12 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
 
     def _make_camera_info_callback(self, camera_name: str):
         def callback(msg: CameraInfo) -> None:
+            # Live-only: calibration doesn't change bag-to-bag, and this
+            # feeds live board alignment, not the playback display -- no
+            # shadow /bagplay subscription needed, just stay inert while
+            # viewing a replay.
+            if self._playback_mode:
+                return
             self.live_alignment_camera_matrix[camera_name] = np.array(msg.k, dtype=np.float64).reshape((3, 3))
             self.live_alignment_dist_coeffs[camera_name] = np.array(msg.d, dtype=np.float64).reshape((-1, 1))
 
@@ -648,7 +668,9 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             return
         writer.write(topic, msg, self.get_clock().now().nanoseconds)
 
-    def _make_dashboard_image_callback(self, camera_name: str, topic_type: str, also_alignment: bool = False):
+    def _make_dashboard_image_callback(
+        self, camera_name: str, topic_type: str, also_alignment: bool = False, is_live: bool = True
+    ):
         camera_topic = next(c.topic for c in self.cameras if c.name == camera_name)
         event = self._pending_frame_events[camera_name]
 
@@ -661,12 +683,20 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # per-camera worker thread, which does gripper/alignment/encode at
         # whatever rate it can manage -- skipping display frames is fine,
         # losing recorded frames is not.
+        #
+        # Live and playback are two SEPARATE subscriptions on two different
+        # topics (playback's is remapped to /bagplay/... by PlaybackManager),
+        # both funneling into this same per-camera pending-frame slot. Exactly
+        # one side is ever authoritative: is_live == self._playback_mode means
+        # "wrong source for the current mode" -- a live camera still
+        # connected during playback, or a stray playback message lingering
+        # after playback stopped -- so it's dropped before display, never
+        # blended by timestamp guessing (camera header stamps are boot-
+        # relative, not epoch, so they can't disambiguate the two).
         def callback(msg) -> None:
-            if self._playback_mode:
-                stamp_ns = self._stamp_to_ns(msg.header.stamp)
-                if not self._in_bag_range(stamp_ns):
-                    return
-            else:
+            if is_live == self._playback_mode:
+                return
+            if not self._playback_mode:
                 self._feed_recording_writer(camera_topic, msg)
             self._pending_frames[camera_name] = msg
             event.set()
@@ -831,7 +861,8 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
 
     def _make_live_alignment_image_callback(self, camera_name: str, topic_type: str):
         def callback(msg) -> None:
-            if not self.live_alignment_active:
+            # Live-only, same reasoning as _make_camera_info_callback.
+            if self._playback_mode or not self.live_alignment_active:
                 return
             image = self._decode_calibration_message(topic_type, msg)
             if image is None:
@@ -877,14 +908,13 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             for name in self.last_pose_received_time:
                 self.last_pose_received_time[name] = 0.0
 
-    def set_playback_mode(self, enabled: bool,
-                          bag_time_range: Optional[Tuple[int, int]] = None) -> None:
+    def set_playback_mode(self, enabled: bool) -> None:
+        # Live vs. playback is now decided structurally by which topic a
+        # message arrived on (see bagplay_topic / _make_dashboard_image_callback),
+        # not by comparing header timestamps to the bag's time range -- Insight
+        # camera stamps are boot-relative and can't carry that comparison.
         self._playback_mode = enabled
-        self._bag_time_range = bag_time_range if enabled else None
-        self.get_logger().info(
-            f"Playback mode {'ON' if enabled else 'OFF'}"
-            + (f" range=[{bag_time_range[0]}, {bag_time_range[1]}]" if bag_time_range else "")
-        )
+        self.get_logger().info(f"Playback mode {'ON' if enabled else 'OFF'}")
 
     def _update_fake_pose(self) -> None:
         now = time.monotonic()
@@ -1840,10 +1870,14 @@ class WebDashboardServer:
         bag_name = str(body.get("bag_name", "")).strip()
         if not bag_name:
             return web.json_response({"error": "bag_name is required"}, status=400)
-        time_range = self.playback_manager.get_bag_time_range(bag_name)
-        self.node.set_playback_mode(True, time_range)
+        self.node.set_playback_mode(True)
         self.node.clear_traces()
-        self.playback_manager.start(bag_name, self.recording_manager)
+        # Remap every topic the dashboard displays onto its /bagplay/...
+        # shadow so a still-connected live camera never blends with replay
+        # (see bagplay_topic / _make_dashboard_image_callback).
+        remap_topics = {camera.topic: bagplay_topic(camera.topic) for camera in self.node.cameras}
+        remap_topics.update({pose.topic: bagplay_topic(pose.topic) for pose in self.node.poses})
+        self.playback_manager.start(bag_name, self.recording_manager, remap_topics=remap_topics)
         return web.json_response({"status": "playing", "bag_name": bag_name})
 
     async def _handle_playback_stop(self, _request: web.Request) -> web.Response:

@@ -132,6 +132,15 @@ class HandOverlayMixin:
         self.hand_latest_snapshot: Dict[str, HandOverlaySnapshot] = {}
 
     def _on_hand_boxes(self, camera_name: str, msg) -> None:
+        # Live-only: HandEngine's device-side hand topics aren't remapped
+        # during `ros2 bag play` (see bagplay_topic / PlaybackManager), so a
+        # still-connected live camera would otherwise overlay live hand
+        # landmarks onto replayed video frames. Simpler than giving hand
+        # overlay its own shadow-topic split like images/poses: it's a
+        # visual toggle, not the primary display, so it just goes inert for
+        # the duration of playback instead.
+        if self._playback_mode:
+            return
         # Cheap regardless of the Settings toggle -- this is what makes the
         # "Hand landmark overlay" checkbox appear at all (hand_overlay_available
         # is data-driven, see build_settings_payload). The actual per-message
@@ -143,6 +152,8 @@ class HandOverlayMixin:
         self._hand_latest_boxes[camera_name] = msg
 
     def _on_hand_keypoints(self, camera_name: str, msg) -> None:
+        if self._playback_mode:
+            return
         self.hand_overlay_available.add(camera_name)
         if camera_name not in self.hand_overlay_enabled:
             return
