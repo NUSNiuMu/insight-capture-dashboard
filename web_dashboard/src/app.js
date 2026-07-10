@@ -17,10 +17,8 @@ const recordingStatus = document.getElementById("recording-status");
 const systemLoadPill = document.getElementById("system-load-pill");
 const startRecordingButton = document.getElementById("start-recording-button");
 const stopRecordingButton = document.getElementById("stop-recording-button");
-const syncRecordingButton = document.getElementById("sync-recording-button");
 const refreshRecordTopicsButton = document.getElementById("refresh-record-topics-button");
 const recordTopicStatus = document.getElementById("record-topic-status");
-const recordSyncStatus = document.getElementById("record-sync-status");
 const recordTopicGroups = document.getElementById("record-topic-groups");
 const recordingOutput = document.getElementById("recording-output");
 const bagList = document.getElementById("bag-list");
@@ -61,10 +59,6 @@ const settingsCameraList = document.getElementById("settings-camera-list");
 const settingsRestartBanner = document.getElementById("settings-restart-banner");
 const settingsRestartMessage = document.getElementById("settings-restart-message");
 const settingsRestartButton = document.getElementById("settings-restart-button");
-const boardCalibrationStatus = document.getElementById("board-calibration-status");
-const boardCalibrationSaveButton = document.getElementById("board-calibration-save-button");
-const rosbagSyncStatus = document.getElementById("rosbag-sync-status");
-const rosbagSyncSaveButton = document.getElementById("rosbag-sync-save-button");
 
 const ROLE_STYLE = {
   head: { label: "Head", color: "#79c47b", primitive: "sphere", modelColor: "#b99572" },
@@ -157,22 +151,6 @@ if (runScoringButton) {
 if (settingsPanel) {
   void refreshSettings();
 }
-if (boardCalibrationStatus) {
-  void refreshBoardCalibration();
-}
-if (boardCalibrationSaveButton) {
-  boardCalibrationSaveButton.addEventListener("click", () => {
-    void saveBoardCalibration();
-  });
-}
-if (rosbagSyncStatus) {
-  void refreshRosbagSync();
-}
-if (rosbagSyncSaveButton) {
-  rosbagSyncSaveButton.addEventListener("click", () => {
-    void saveRosbagSync();
-  });
-}
 if (settingsRestartButton) {
   settingsRestartButton.addEventListener("click", () => {
     void restartBackend();
@@ -196,11 +174,6 @@ if (startRecordingButton) {
 if (stopRecordingButton) {
   stopRecordingButton.addEventListener("click", () => {
     void stopRecording();
-  });
-}
-if (syncRecordingButton) {
-  syncRecordingButton.addEventListener("click", () => {
-    void syncRecordingToHost();
   });
 }
 if (refreshBagsButton) {
@@ -719,33 +692,10 @@ async function stopRecording() {
       throw new Error(payload.error || "Failed to stop recording.");
     }
     renderRecordingStatus(payload);
-    const syncMessage = payload && payload.sync_status && payload.sync_status.message;
-    setRecordingOutput(syncMessage ? `Recording stopped. ${syncMessage}` : "Recording stopped.");
+    setRecordingOutput("Recording stopped.");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setRecordingOutput(`Recording stop failed: ${message}`);
-  } finally {
-    setRecordingBusy(false);
-  }
-}
-
-async function syncRecordingToHost() {
-  if (recordingBusy) {
-    return;
-  }
-  setRecordingBusy(true);
-  try {
-    const response = await fetch("/api/recording/sync", { method: "POST" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to sync recording to host.");
-    }
-    renderRecordingStatus(payload);
-    const syncMessage = payload && payload.sync_status && payload.sync_status.message;
-    setRecordingOutput(syncMessage || "Recording synced to host.");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setRecordingOutput(`Recording sync failed: ${message}`);
   } finally {
     setRecordingBusy(false);
   }
@@ -768,23 +718,8 @@ function collectSelectedRecordTopics() {
 function renderRecordingStatus(status) {
   const active = Boolean(status && status.recording);
   const outputPath = (status && status.output_path) || "";
-  const syncStatus = status && status.sync_status;
-  const hostSyncDir = (status && status.host_sync_dir) || "";
-  const hostSyncSshTarget = (status && status.host_sync_ssh_target) || "";
   if (recordingStatus) {
     recordingStatus.textContent = active ? `Recording to ${outputPath}` : "Recording idle";
-  }
-  if (recordSyncStatus) {
-    const hostTargetText = hostSyncSshTarget || hostSyncDir;
-    if (syncStatus && syncStatus.message) {
-      recordSyncStatus.textContent = hostTargetText
-        ? `${syncStatus.message} | host: ${hostTargetText}`
-        : syncStatus.message;
-    } else if (hostTargetText) {
-      recordSyncStatus.textContent = `Host sync ready: ${hostTargetText}`;
-    } else {
-      recordSyncStatus.textContent = "Host sync not configured";
-    }
   }
   if (!active && outputPath && recordingOutput && recordingLogLines.length === 0) {
     setRecordingOutput(`Last output: ${outputPath}`);
@@ -830,10 +765,6 @@ function setRecordingBusy(isBusy, { active } = {}) {
   if (stopRecordingButton) {
     stopRecordingButton.disabled = recordingBusy || !isActive;
     stopRecordingButton.classList.toggle("is-busy", recordingBusy && isActive);
-  }
-  if (syncRecordingButton) {
-    syncRecordingButton.disabled = recordingBusy || isActive;
-    syncRecordingButton.classList.toggle("is-busy", recordingBusy && !isActive);
   }
 }
 
@@ -1339,128 +1270,6 @@ async function restartBackend() {
     settingsRestartMessage.textContent = "Backend did not come back within 30s -- check it manually.";
   }
   settingsRestartButton.disabled = false;
-}
-
-async function refreshBoardCalibration() {
-  if (!boardCalibrationStatus) {
-    return;
-  }
-  try {
-    const response = await fetch("/api/settings/board-calibration", { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to load board calibration.");
-    }
-    const values = payload.values || {};
-    setInputValue("bc-marker-length", values.marker_length_m);
-    setInputValue("bc-marker-separation", values.marker_separation_m);
-    setInputValue("bc-board-rows", values.board_rows);
-    setInputValue("bc-board-cols", values.board_cols);
-    setInputValue("bc-max-translation-std", values.max_translation_std_m);
-    setInputValue("bc-max-rotation-std", values.max_rotation_std_deg);
-    boardCalibrationStatus.textContent = "Loaded from config/board_calibration.json.";
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    boardCalibrationStatus.textContent = `Failed to load: ${message}`;
-  }
-}
-
-async function saveBoardCalibration() {
-  if (!boardCalibrationSaveButton) {
-    return;
-  }
-  boardCalibrationSaveButton.disabled = true;
-  try {
-    const body = {
-      marker_length_m: Number(getInputValue("bc-marker-length")),
-      marker_separation_m: Number(getInputValue("bc-marker-separation")),
-      board_rows: Number(getInputValue("bc-board-rows")),
-      board_cols: Number(getInputValue("bc-board-cols")),
-      max_translation_std_m: Number(getInputValue("bc-max-translation-std")),
-      max_rotation_std_deg: Number(getInputValue("bc-max-rotation-std"))
-    };
-    const response = await fetch("/api/settings/board-calibration", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to save board calibration.");
-    }
-    boardCalibrationStatus.textContent = "Saved to config/board_calibration.json.";
-    showRestartBanner("Board calibration saved -- restart the backend to apply.");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    boardCalibrationStatus.textContent = `Failed to save: ${message}`;
-  } finally {
-    boardCalibrationSaveButton.disabled = false;
-  }
-}
-
-async function refreshRosbagSync() {
-  if (!rosbagSyncStatus) {
-    return;
-  }
-  try {
-    const response = await fetch("/api/settings/rosbag-sync", { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to load rosbag sync settings.");
-    }
-    const values = payload.values || {};
-    const syncCheckbox = document.getElementById("rs-sync-enabled");
-    if (syncCheckbox) syncCheckbox.checked = Boolean(values.sync_rosbag_to_host);
-    setInputValue("rs-sync-dir", values.host_rosbag_sync_dir || "");
-    setInputValue("rs-sync-ssh-target", values.host_rosbag_sync_ssh_target || "");
-    rosbagSyncStatus.textContent = "Loaded from config/post_processing.json.";
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    rosbagSyncStatus.textContent = `Failed to load: ${message}`;
-  }
-}
-
-async function saveRosbagSync() {
-  if (!rosbagSyncSaveButton) {
-    return;
-  }
-  rosbagSyncSaveButton.disabled = true;
-  try {
-    const syncCheckbox = document.getElementById("rs-sync-enabled");
-    const body = {
-      sync_rosbag_to_host: syncCheckbox ? syncCheckbox.checked : false,
-      host_rosbag_sync_dir: getInputValue("rs-sync-dir"),
-      host_rosbag_sync_ssh_target: getInputValue("rs-sync-ssh-target")
-    };
-    const response = await fetch("/api/settings/rosbag-sync", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body)
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to save rosbag sync settings.");
-    }
-    rosbagSyncStatus.textContent = "Saved to config/post_processing.json.";
-    showRestartBanner("Rosbag sync settings saved -- restart the backend to apply.");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    rosbagSyncStatus.textContent = `Failed to save: ${message}`;
-  } finally {
-    rosbagSyncSaveButton.disabled = false;
-  }
-}
-
-function setInputValue(id, value) {
-  const el = document.getElementById(id);
-  if (el && value !== undefined && value !== null) {
-    el.value = value;
-  }
-}
-
-function getInputValue(id) {
-  const el = document.getElementById(id);
-  return el ? el.value : "";
 }
 
 function setImageCapabilityStatus(message) {

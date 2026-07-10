@@ -667,13 +667,6 @@ h1 {
   font-size: 13px;
 }
 
-.record-sync-status {
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 13px;
-  word-break: break-word;
-}
-
 .record-topic-groups {
   display: flex;
   flex-direction: column;
@@ -1192,22 +1185,6 @@ h1 {
   box-sizing: border-box;
 }
 
-.settings-toggle-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 12px;
-  font-size: 13px;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.settings-toggle-row input {
-  width: 16px;
-  height: 16px;
-  accent-color: #5ad7a2;
-}
-
 .settings-restart-banner {
   display: flex;
   align-items: center;
@@ -1266,7 +1243,3 @@ h1 {
   border-color: #5ad7a2;
 }
 
-#board-calibration-panel .recording-button,
-#rosbag-sync-panel .recording-button {
-  margin-top: 14px;
-}
