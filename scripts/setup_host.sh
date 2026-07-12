@@ -6,13 +6,9 @@
 # What it does, in order:
 #   1. sanity-check docker + the NVIDIA container runtime (hardware JPEG
 #      encode needs the runtime's GStreamer plugin injection)
-#   2. write /etc/sysctl.d/99-dds-rx-buffers.conf (needs sudo) -- without
-#      this, best-effort image samples (~510KB each) overflow the kernel's
-#      208KB default UDP receive buffer and recordings silently lose
-#      10-24% of image frames (verified 2026-07-07, see docs/USAGE.md)
-#   3. install + enable the boot-time camera reboot unit (cameras boot
-#      faster than the Jetson and come up with stale DDS participants;
-#      see scripts/systemd/insight-camera-reboot.service)
+#   2/3. sysctl DDS receive buffers + boot-time camera reboot unit + CPU
+#      power mode check -- see scripts/host_setup.sh (shared with the
+#      end-user deploy path, bundled there by build_release.sh)
 #   4. docker compose build
 #   5. ./scripts/run_dashboard.sh  (skipped with --no-start)
 #
@@ -24,7 +20,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SYSCTL_FILE=/etc/sysctl.d/99-dds-rx-buffers.conf
 
 log()  { echo "[setup] $*"; }
 fail() { echo "[setup] ERROR: $*" >&2; exit 1; }
@@ -55,45 +50,10 @@ if ! grep -qs "libgstnvjpeg" /etc/nvidia-container-runtime/host-files-for-contai
     log "         encode will fall back to CPU inside the container (dashboard still works)."
 fi
 
-# ── 2. kernel UDP receive buffers for large DDS image samples ───────────────
-if [[ -f "${SYSCTL_FILE}" ]] \
-        && [[ "$(sysctl -n net.core.rmem_max)" -ge 67108864 ]]; then
-    log "sysctl buffers already configured: OK"
-else
-    log "writing ${SYSCTL_FILE} (sudo password may be prompted)..."
-    sudo tee "${SYSCTL_FILE}" >/dev/null <<'EOF'
-# DDS large-image receive path (insight cameras -> dashboard).
-# A single infra frame is a 510KB best-effort sample; the 208KB kernel
-# default receive buffer overflows under CPU bursts and drops 10-24%
-# of image frames in recordings. FastDDS uses rmem_default for its
-# sockets when no XML override is set, so both values matter.
-# Written by scripts/setup_host.sh -- re-run it after a reflash.
-net.core.rmem_max = 67108864
-net.core.rmem_default = 67108864
-# IP fragment reassembly headroom for the fragmented UDP datagrams.
-net.ipv4.ipfrag_high_thresh = 134217728
-EOF
-    sudo sysctl -p "${SYSCTL_FILE}"
-    log "sysctl buffers: applied + persisted"
-fi
-
-# ── 3. boot-time camera reboot unit ─────────────────────────────────────────
-# Cameras power on with the Jetson but boot faster, so their DDS participants
-# bind before the Jetson's USB links exist and never recover -- see the
-# comment header in scripts/systemd/insight-camera-reboot.service.
-UNIT_SRC="${SCRIPT_DIR}/systemd/insight-camera-reboot.service"
-UNIT_DST=/etc/systemd/system/insight-camera-reboot.service
-if [[ -f "${UNIT_SRC}" ]]; then
-    if ! cmp -s "${UNIT_SRC}" "${UNIT_DST}" 2>/dev/null; then
-        log "installing boot-time camera reboot unit..."
-        sudo cp "${UNIT_SRC}" "${UNIT_DST}"
-        sudo systemctl daemon-reload
-    fi
-    sudo systemctl enable insight-camera-reboot.service >/dev/null 2>&1
-    log "camera boot-reboot unit: enabled"
-else
-    log "WARNING: ${UNIT_SRC} missing; skipping boot-time camera reboot setup."
-fi
+# ── 2/3. sysctl DDS buffers + boot-time camera reboot unit + CPU power mode ──
+# Shared with the end-user path (build_release.sh bundles this same file into
+# the deploy package) so both paths get identical host tuning.
+"${SCRIPT_DIR}/host_setup.sh"
 
 # ── 4. build the dashboard image ────────────────────────────────────────────
 log "building the dashboard image (first build downloads ~2GB, later runs are cached)..."

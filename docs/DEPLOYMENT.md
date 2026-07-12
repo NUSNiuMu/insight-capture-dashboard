@@ -40,10 +40,13 @@ release/insight-dashboard-deploy-v1.2.0.tar.gz   # 部署包；只有首次安�
 
 镜像 tar 通常几 GB（含 COLMAP、CUDA 运行时、Chromium），传输/拷 U 盘预留时间。
 部署包里打包了 `deploy/docker-compose.yml`、`update.sh`、`README.md`、
-`scripts/run_dashboard.sh`——这几个文件本身不大，但**它们的内容来自当前
-分支的 `deploy/` 目录**，改过 `deploy/docker-compose.yml`（比如调 shm_size）
-一定要在改动落地之后的这个分支上重新跑一次 `build_release.sh`，不能沿用
-旧的部署包。
+`scripts/run_dashboard.sh`，以及宿主机一次性调优用的 `scripts/host_setup.sh`
++ `scripts/reboot_cameras.sh` + `scripts/systemd/insight-camera-reboot.service`
++ `looper_cli/`（2026-07-12 补的——在此之前使用者路径完全没有办法应用这几项
+host 层设置，见 §3.2）——这几个文件本身不大，但**它们的内容来自当前
+分支的 `deploy/`、`scripts/`、`looper_cli/` 目录**，改过 `deploy/docker-compose.yml`
+（比如调 shm_size）或 `scripts/host_setup.sh` 一定要在改动落地之后的这个分支上
+重新跑一次 `build_release.sh`，不能沿用旧的部署包。
 
 ### 1.3 版本号约定
 
@@ -130,11 +133,10 @@ cd insight_capture
 `setup_host.sh` 是幂等的一次性宿主机配置，按顺序做：
 
 1. 检查 docker + NVIDIA container runtime 是否就绪（硬件 JPEG/H.264 编解码依赖它注入 GStreamer 插件）；
-2. 写 `/etc/sysctl.d/99-dds-rx-buffers.conf`（需要 sudo）——不做这一步，录制会因内核 UDP
-   接收缓冲区太小丢 10-24% 的图像帧；
-3. 安装并启用开机自动重启相机的 systemd unit（相机比 Jetson 先启动完成，会卡在错误的网络状态）；
-4. `docker compose build`（首次在设备上编译 COLMAP，约 20-40 分钟，只支持 Orin NX，不支持 Nano）；
-5. 拉起 `./scripts/run_dashboard.sh`（可以 `--no-start` 跳过，只做环境准备）。
+2. 调用 `scripts/host_setup.sh`（与使用者路径共用，见 §3.2）：写 `/etc/sysctl.d/99-dds-rx-buffers.conf`、
+   安装并启用开机自动重启相机的 systemd unit、检查 CPU 是否满核在线；
+3. `docker compose build`（首次在设备上编译 COLMAP，约 20-40 分钟，只支持 Orin NX，不支持 Nano）；
+4. 拉起 `./scripts/run_dashboard.sh`（可以 `--no-start` 跳过，只做环境准备）。
 
 批量部署多台设备时不要每台都走这条路径重新编译——在一台机器上按 §1 打包，
 其余设备走下面的使用者路径导入镜像即可，省去每台 20-40 分钟的 COLMAP 编译。
@@ -152,18 +154,34 @@ cat /etc/nv_tegra_release
 # 2. docker 是否已装
 command -v docker || sudo apt update && sudo apt install -y docker.io
 
-# 3. NVIDIA container runtime 是否已注册进 docker（"Runtimes:" 一行里要有 nvidia）
+# 3. docker compose v2 插件是否已装（"docker compose"，不是老的独立 "docker-compose" 命令）
+# docker.io 不带这个插件；Ubuntu jammy 仓库里的包名是 docker-compose-v2（不是
+# Docker 官方文档常提到的 docker-compose-plugin，那个包名在这个仓库源里没有）
+docker compose version || sudo apt install -y docker-compose-v2
+
+# 4. NVIDIA container runtime 是否已注册进 docker（"Runtimes:" 一行里要有 nvidia）
 docker info 2>/dev/null | grep "Runtimes:"
 # 没有就装：
 sudo apt install -y nvidia-container-toolkit && sudo systemctl restart docker
-# JetPack 出厂镜像通常已经带了这个包和 /etc/docker/daemon.json 里的 nvidia 运行时项，
-# 走到这一步要装的情况不多见，遇到了大概率是精简过的出厂镜像或手动裁过包。
+# JetPack 出厂镜像通常已经带了这个包，但即使装了也不代表已经注册进 docker——
+# 见过 apt 装完 nvidia-container-toolkit 之后 docker info 仍然没有 nvidia 这一项，
+# 需要额外一步把它接进 docker 的 runtime 配置：
+sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+# 验证 GPU 能不能真正透传（不只是 runtime 注册上了）：
+docker run --rm --network host --runtime=nvidia --gpus all ubuntu nvidia-smi
 
-# 4. 当前用户在不在 docker 组（不在的话 docker 命令要 sudo 才能跑，run_dashboard.sh 等脚本没加 sudo 会直接报权限错）
+# 5. 当前用户在不在 docker 组（不在的话 docker 命令要 sudo 才能跑，run_dashboard.sh 等脚本没加 sudo 会直接报权限错）
 groups | tr ' ' '\n' | grep -qx docker && echo "already in docker group" || {
     sudo usermod -aG docker "$USER"
     echo "已加入 docker 组，重新登录一次 shell（或重启）让组权限生效"
 }
+
+# 6. CPU 是否满核在线——nvpmodel 功耗模式可能把机器留在低功耗档（比如 15W 只开 4/6 核），
+# docker-compose.yml 的 cpus 限额假设满核在线，不满足的话容器会直接创建失败
+# （"range of CPUs is from 0.01 to 4.00"），不是跑得慢而是根本起不来
+nproc   # 少于 6 就说明功耗模式没开满，且这台机器插电常驻、无功耗顾虑的话：
+sudo nvpmodel -q                # 查看当前档位
+sudo nvpmodel -m 0              # 切到 MAXN_SUPER 满血模式（会提示确认重启）
 ```
 
 全新出厂设备如果这几项都没有，也可以直接走 §3.1 用 `setup_host.sh`——它跑的
@@ -179,10 +197,24 @@ cd insight-dashboard-deploy-vX.Y.Z
 首次运行时 `update.sh` 会额外从镜像里把 `config/` 目录播种到宿主机（这台设备
 还没有自己的机群配置/标定），此后这个 `config/` 就是本机独有的、不受镜像升级影响。
 
-首次安装完成后，`config/cameras.json` 里的相机列表、`config/board_calibration.json`
-的标定板参数都是占位/上一台设备遗留的默认值——**必须针对这台设备实际连接的
-相机、实际使用的标定板重新走一遍配置和标定**，不能假设装完就能直接用，
-即使镜像是从另一台已标定好的设备打包出来的。
+**装完 update.sh 之后，还有一步不能漏**：跑一次部署包自带的宿主机调优脚本
+（`scripts/host_setup.sh` 由 `build_release.sh` 一起打进部署包，跟开发者路径
+`setup_host.sh` 用的是同一份逻辑）——它做两件事：写内核 UDP 接收缓冲区调优
+（不做这步录制会丢 10-24% 图像帧）、装并启用开机自动重启相机的 systemd unit
+（相机比 Jetson 先启动完，DDS participant 会卡在错误的网络状态，见其脚本注释）。
+这两项不在 `update.sh` 的职责范围内（它只管容器生命周期），必须单独跑一次：
+
+```bash
+./scripts/host_setup.sh
+```
+
+首次安装完成后，如果这台设备接的是跟别的 jetson-nx 设备不同的相机机群，
+`config/cameras.json` 里的相机列表、`config/board_calibration.json` 的标定板
+参数都是占位/上一台设备遗留的默认值，需要重新配置和标定；如果相机机群
+本来就是固定的（本项目目前是：insight3_a / insight3_b / insight9_a，见
+仓库根 `CLAUDE.md`「分支模型」一节），`cameras.json` 不用改，只有
+`board_calibration.json`（标定板与具体这块板子/这次摆放相关）通常还是要
+针对这台设备重新标定一次。
 
 浏览器访问 `http://<设备IP>:8765/`，或 `./scripts/run_dashboard.sh --jetson`
 在设备屏幕本机打开全屏看板。日常操作和故障排查见 `docs/USAGE.md`。

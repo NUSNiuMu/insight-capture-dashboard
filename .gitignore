@@ -1,3 +1,12 @@
 bags/
 logs/
 scripts/__pycache__/
+
+# Runtime/recording data and release build artifacts -- never tracked, but
+# also weren't actually gitignored (relying on nobody running `git add -A`).
+release/
+rosbags/
+outputs/
+runs/
+data/
+config/alignment/live_alignment_state.json

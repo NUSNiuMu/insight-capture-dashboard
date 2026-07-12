@@ -12,10 +12,11 @@
 # its own DDS participant rebinds with cameras already reachable -- live data
 # flows immediately instead of waiting for the in-process 60s watchdog.
 #
-# Install (done automatically by scripts/setup_host.sh):
-#   sudo cp scripts/systemd/insight-camera-reboot.service /etc/systemd/system/
-#   sudo systemctl daemon-reload
-#   sudo systemctl enable insight-camera-reboot.service
+# Install (done automatically by scripts/host_setup.sh, called by both
+# scripts/setup_host.sh and the deploy bundle's own copy -- see
+# docs/DEPLOYMENT.md §3.2): WorkingDirectory/ExecStart below are placeholders,
+# rewritten to wherever this checkout actually lives at install time, since
+# that differs between a dev clone and a deploy bundle directory.
 #
 # Watch a boot run: journalctl -u insight-camera-reboot -b
 
