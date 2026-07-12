@@ -275,6 +275,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # real profile dir is used (not /tmp) so it survives container restarts.
 COPY scripts/firefox-kiosk-user.js /opt/firefox-kiosk-profile/user.js
 
+# Non-root account to actually run the kiosk Firefox process (see the `su`
+# in scripts/open_web_3d_right.sh). Firefox refuses to enable its content
+# sandbox for uid 0 and instead shows a permanent "security sandbox is
+# disabled, unsupported and less secure" bar -- Mozilla hardcodes this
+# warning with no pref/policy to suppress it (sandboxing root is
+# meaningless, so they deliberately don't make it hideable). uid 1000
+# mirrors this host's desktop user (nvidia) on purpose: the X server
+# authorizes by the *kernel* uid of the connecting process (this Docker
+# setup has no userns-remap, so container uid 1000 IS host uid 1000), and
+# scripts/run_dashboard.sh's `xhost +SI:localuser:$(id -un)` grant is keyed
+# off that same uid -- the container-local username below doesn't need to
+# match anything. GID 104 is "render" on the host (/dev/dri/renderD128)
+# but collides with systemd-resolve's GID inside this image; joining it by
+# number still grants the device access that group membership is for.
+RUN useradd -m -u 1000 -G video,104 -s /bin/bash kiosk \
+    && chown -R kiosk:kiosk /opt/firefox-kiosk-profile
+
 # ── GStreamer core + PyGObject for the NVJPEG hardware JPEG path ────────────
 # scripts/hw_jpeg.py drives nvjpegenc/nvjpegdec through GStreamer. The NVIDIA
 # plugin .so files themselves (libgstnvjpeg.so, libgstnvvidconv.so, ...) are

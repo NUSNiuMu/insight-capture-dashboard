@@ -29,16 +29,28 @@ fi
 # --kiosk: true fullscreen, no window chrome. --profile points at the
 # baked-in profile (Dockerfile) that suppresses first-run dialogs, which
 # would otherwise sit on top of the dashboard with no one at the keyboard
-# to dismiss them. MOZ_DISABLE_CONTENT_SANDBOX is needed because this runs
-# as root in the container; the container boundary is the actual sandbox
-# here, same trust model as the Chromium kiosk this replaces.
+# to dismiss them.
+#
+# Run as the unprivileged `kiosk` user (Dockerfile), not root: Firefox
+# refuses its content sandbox for uid 0 and shows a permanent "security
+# sandbox is disabled" bar instead that can't be turned off short of not
+# running as root (Mozilla hardcodes the warning). `su` resets the
+# environment, so DISPLAY/XAUTHORITY are threaded through explicitly; X11
+# access for this uid is granted host-side by run_dashboard.sh's
+# `xhost +SI:localuser:$(id -un)`.
 FIREFOX_PROFILE="/opt/firefox-kiosk-profile"
 KIOSK_LOG="${INSIGHT_KIOSK_LOG:-/tmp/insight-kiosk-firefox.log}"
-export MOZ_DISABLE_CONTENT_SANDBOX=1
-exec "${FIREFOX_BIN}" \
-  --kiosk \
-  --new-instance \
-  --no-remote \
-  --profile "${FIREFOX_PROFILE}" \
-  "${URL}" \
-  >"${KIOSK_LOG}" 2>&1
+
+# The XDG_RUNTIME_DIR exported above resolved to root's (/run/user/0, or
+# whatever root's uid was) -- kiosk can't use that. Give it its own.
+KIOSK_RUNTIME_DIR="/tmp/kiosk-runtime"
+mkdir -p "${KIOSK_RUNTIME_DIR}"
+chown kiosk:kiosk "${KIOSK_RUNTIME_DIR}"
+chmod 700 "${KIOSK_RUNTIME_DIR}"
+
+exec su -s /bin/bash kiosk -c "
+  export DISPLAY='${DISPLAY}'
+  export XAUTHORITY='${XAUTHORITY}'
+  export XDG_RUNTIME_DIR='${KIOSK_RUNTIME_DIR}'
+  exec '${FIREFOX_BIN}' --kiosk --new-instance --no-remote --profile '${FIREFOX_PROFILE}' '${URL}'
+" >"${KIOSK_LOG}" 2>&1

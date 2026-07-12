@@ -172,6 +172,13 @@ if [[ "${jetson_mode}" == "true" ]]; then
     # explicitly allows it. Harmless no-op if xhost isn't installed or
     # this DISPLAY has no server (`|| true` keeps `set -e` from tripping).
     xhost +SI:localuser:root >/dev/null 2>&1 || true
+    # open_web_3d_right.sh actually runs Firefox as the unprivileged
+    # `kiosk` user inside the container (uid 1000), not root -- Firefox
+    # won't enable its content sandbox for uid 0 and shows a permanent
+    # warning bar instead. No docker userns-remap is configured, so
+    # container uid 1000 is this host's uid 1000 (whoever is invoking this
+    # script); grant that same uid the same X access as root above.
+    xhost +SI:localuser:"$(id -un)" >/dev/null 2>&1 || true
     # PyQt5/QtWebEngine only exist inside the image, not necessarily on a
     # fresh host, so this runs via `docker exec` rather than directly here.
     # -e DISPLAY overrides whatever was baked in at `docker compose up`
