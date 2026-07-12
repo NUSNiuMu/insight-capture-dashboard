@@ -624,6 +624,16 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 # all of them short over one dropout.
                 continue
 
+            if not self._camera_link_up():
+                # No camera USB-ethernet link exists, so "frames stopped" is
+                # not a recoverable link drop and a restart fixes nothing.
+                # Concretely: on a machine with no cameras attached, bag
+                # playback populates camera_frame_times, and when the bag
+                # ends the stall check below would restart-loop the backend
+                # (observed 2026-07-12 on the dev machine after the fleet
+                # moved to another device).
+                continue
+
             for camera in self.cameras:
                 frame_times = self.camera_frame_times[camera.name]
                 if not frame_times or now - frame_times[-1] <= camera_stall_grace_sec:

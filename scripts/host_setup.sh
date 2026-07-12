@@ -33,21 +33,31 @@ if [[ -f /.dockerenv ]]; then
     exit 1
 fi
 
-# ── kernel UDP receive buffers for large DDS image samples ──────────────────
+# ── kernel UDP buffers for large DDS image samples (both directions) ─────────
 if [[ -f "${SYSCTL_FILE}" ]] \
-        && [[ "$(sysctl -n net.core.rmem_max)" -ge 67108864 ]]; then
+        && [[ "$(sysctl -n net.core.rmem_max)" -ge 67108864 ]] \
+        && [[ "$(sysctl -n net.core.wmem_max)" -ge 67108864 ]]; then
     log "sysctl buffers already configured: OK"
 else
     log "writing ${SYSCTL_FILE} (sudo password may be prompted)..."
     sudo tee "${SYSCTL_FILE}" >/dev/null <<'EOF'
-# DDS large-image receive path (insight cameras -> dashboard).
+# DDS large-image paths (insight cameras -> dashboard, and bag playback).
 # A single infra frame is a 510KB best-effort sample; the 208KB kernel
-# default receive buffer overflows under CPU bursts and drops 10-24%
-# of image frames in recordings. FastDDS uses rmem_default for its
-# sockets when no XML override is set, so both values matter.
+# default buffers silently drop them on BOTH sides:
+# - receive (rmem): incoming camera frames overflow under CPU bursts and
+#   recordings lose 10-24% of image frames (verified 2026-07-07)
+# - send (wmem): `ros2 bag play` publishes from THIS host, and its bursts
+#   overflow the send buffer -- playback delivered 4-8fps instead of the
+#   recorded 20/30fps until this was raised (verified 2026-07-12; live
+#   view was never affected because live frames are SENT by the cameras,
+#   not by this host)
+# FastDDS uses the kernel defaults when no XML override is set, so the
+# *_default values matter, not just *_max.
 # Written by scripts/host_setup.sh -- re-run it after a reflash.
 net.core.rmem_max = 67108864
 net.core.rmem_default = 67108864
+net.core.wmem_max = 67108864
+net.core.wmem_default = 67108864
 # IP fragment reassembly headroom for the fragmented UDP datagrams.
 net.ipv4.ipfrag_high_thresh = 134217728
 EOF
