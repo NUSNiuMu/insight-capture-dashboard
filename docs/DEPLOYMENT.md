@@ -142,9 +142,33 @@ cd insight_capture
 ### 3.2 使用者路径（拿到部署包 + 镜像 tar，机器上没有源码）
 
 前提：JetPack 6.x、已装 docker 与 nvidia-container-runtime、当前用户在 `docker` 组里。
-这几项本身不在 `update.sh` 的自动化范围内——它假设 docker 已经能跑；全新出厂设备如果
-连 docker 都没装，先按 JetPack/NVIDIA 官方文档把这一层跑通，或者走 §3.1 用
-`setup_host.sh`（它会检查这些前提并在缺失时明确报错指出该装什么）。
+这几项本身不在 `update.sh` 的自动化范围内——它假设 docker 已经能跑。走这条路径前
+逐条核对：
+
+```bash
+# 1. JetPack 版本——R36.x 对应 JetPack 6.x（R36.4 = 6.2.x），R35.x 是 JetPack 5，不满足要求
+cat /etc/nv_tegra_release
+
+# 2. docker 是否已装
+command -v docker || sudo apt update && sudo apt install -y docker.io
+
+# 3. NVIDIA container runtime 是否已注册进 docker（"Runtimes:" 一行里要有 nvidia）
+docker info 2>/dev/null | grep "Runtimes:"
+# 没有就装：
+sudo apt install -y nvidia-container-toolkit && sudo systemctl restart docker
+# JetPack 出厂镜像通常已经带了这个包和 /etc/docker/daemon.json 里的 nvidia 运行时项，
+# 走到这一步要装的情况不多见，遇到了大概率是精简过的出厂镜像或手动裁过包。
+
+# 4. 当前用户在不在 docker 组（不在的话 docker 命令要 sudo 才能跑，run_dashboard.sh 等脚本没加 sudo 会直接报权限错）
+groups | tr ' ' '\n' | grep -qx docker && echo "already in docker group" || {
+    sudo usermod -aG docker "$USER"
+    echo "已加入 docker 组，重新登录一次 shell（或重启）让组权限生效"
+}
+```
+
+全新出厂设备如果这几项都没有，也可以直接走 §3.1 用 `setup_host.sh`——它跑的
+就是同一套检查（见其 `# ── 1. docker + NVIDIA runtime ──` 一节），缺什么会明确
+报错指出该装什么，不用照抄上面的命令逐条手动核对。
 
 ```bash
 tar xzf insight-dashboard-deploy-vX.Y.Z.tar.gz
