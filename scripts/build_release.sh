@@ -37,7 +37,13 @@ log "Saving image to ${image_tarball} (several GB; takes a while)..."
 docker save "${IMAGE_NAME}:${version}" | gzip > "${image_tarball}"
 
 log "Assembling deploy bundle..."
-bundle_dir="release/${IMAGE_NAME}-deploy-${version}"
+# The bundle's top-level dir is deliberately version-less: it becomes the
+# customer's permanent install dir (holding .env, config/, rosbags/ ...), so
+# its name must stay stable across releases -- only the tarball filename and
+# the image tag carry the version. A versioned dir name here meant every
+# fresh install landed in a different path, breaking anything that pointed
+# at the previous one (the camera-reboot systemd unit, muscle memory, docs).
+bundle_dir="release/${IMAGE_NAME}-deploy"
 rm -rf "${bundle_dir}"
 mkdir -p "${bundle_dir}/scripts/systemd"
 cp deploy/docker-compose.yml deploy/update.sh deploy/README.md "${bundle_dir}/"
@@ -61,7 +67,7 @@ find "${bundle_dir}/looper_cli" -name '__pycache__' -type d -exec rm -rf {} +
 chmod +x "${bundle_dir}/scripts/host_setup.sh" "${bundle_dir}/scripts/reboot_cameras.sh"
 
 bundle_tarball="release/${IMAGE_NAME}-deploy-${version}.tar.gz"
-tar -C release -czf "${bundle_tarball}" "${IMAGE_NAME}-deploy-${version}"
+tar -C release -czf "${bundle_tarball}" "${IMAGE_NAME}-deploy"
 rm -rf "${bundle_dir}"
 
 log "Done."

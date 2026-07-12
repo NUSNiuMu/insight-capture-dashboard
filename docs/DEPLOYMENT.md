@@ -189,9 +189,12 @@ sudo nvpmodel -m 0              # 切到 MAXN_SUPER 满血模式（会提示确�
 报错指出该装什么，不用照抄上面的命令逐条手动核对。
 
 ```bash
+# 解压出的目录固定叫 insight-dashboard-deploy（不带版本号）——它就是这台设备的
+# 常驻安装目录（.env、config/、rosbags/ 都在里面），名字跨版本不变，版本号只体现
+# 在 tar 文件名和镜像 tag 上
 tar xzf insight-dashboard-deploy-vX.Y.Z.tar.gz
-cd insight-dashboard-deploy-vX.Y.Z
-./update.sh insight-dashboard-vX.Y.Z.tar.gz
+cd insight-dashboard-deploy
+./update.sh ../insight-dashboard-vX.Y.Z.tar.gz
 ```
 
 首次运行时 `update.sh` 会额外从镜像里把 `config/` 目录播种到宿主机（这台设备

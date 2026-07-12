@@ -15,12 +15,13 @@
 
 ```bash
 tar xzf insight-dashboard-deploy-vX.Y.Z.tar.gz
-cd insight-dashboard-deploy-vX.Y.Z
+cd insight-dashboard-deploy        # 解压出的目录不带版本号——它是常驻安装目录，名字跨版本不变
 ./update.sh /path/to/insight-dashboard-vX.Y.Z.tar.gz
+sudo ./scripts/host_setup.sh       # 一次性宿主机调优：UDP 缓冲区（不做录制丢 10-24% 帧）+ 开机自动重启相机
 ```
 
 `update.sh` 会加载镜像、生成 `config/` 等数据目录并启动服务，
-最后等待后端健康检查通过。
+最后等待后端健康检查通过。`host_setup.sh` 只在首次安装（或重刷系统后）需要跑一次。
 
 ## 日常使用
 
