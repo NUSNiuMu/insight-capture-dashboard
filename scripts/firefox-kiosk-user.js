@@ -15,3 +15,9 @@ user_pref("browser.tabs.warnOnClose", false);
 user_pref("browser.sessionstore.resume_from_crash", false);
 user_pref("app.normandy.first_run", false);
 user_pref("trailhead.firstrun.didSeeAboutWelcome", true);
+// Send real-IP ICE candidates instead of mDNS-obfuscated <uuid>.local ones
+// (privacy default, pointless on a kiosk viewing its own localhost backend).
+// The backend can resolve mDNS candidates itself (webrtc_stream.py), but
+// skipping the indirection entirely makes the kiosk's WebRTC connect
+// unconditionally -- even if multicast is somehow filtered.
+user_pref("media.peerconnection.ice.obfuscate_host_addresses", false);

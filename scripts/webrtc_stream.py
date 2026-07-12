@@ -61,6 +61,112 @@ def _bitrate_for(width: int, height: int) -> int:
     return max(_MIN_BITRATE, min(_MAX_BITRATE, int(width * height * 30 * 0.15)))
 
 
+# One query resolves both of a browser's candidates (UDP + TCP carry the same
+# name), and reconnects reuse it too. Entries are tiny; no eviction needed.
+_mdns_cache: Dict[str, str] = {}
+
+
+def _resolve_mdns(hostname: str, timeout: float = 2.0) -> Optional[str]:
+    """Resolve a .local mDNS hostname to an IPv4 address, no external deps.
+
+    Browsers obfuscate their WebRTC host candidates as <uuid>.local mDNS
+    names (privacy default in both Chrome and Firefox). libnice cannot
+    resolve those in this container (no avahi/nss-mdns), so every candidate
+    pair was unusable: ICE sat in `checking` forever, the frontend's
+    first-frame watchdog gave up, and every viewer silently fell back to
+    JPEG polling (~14.7fps, the 50ms-poll ceiling) -- diagnosed 2026-07-12,
+    root cause of "WebRTC only reaches 15fps".
+
+    Sends a standard multicast A query from a socket that is itself a
+    member of the mDNS group on port 5353. SO_REUSEADDR lets it coexist
+    with any avahi/browser responders sharing the host network namespace
+    (this container runs with network_mode: host). Responders answer to
+    the multicast group, which we receive as a member; a plain
+    unicast-response (QU) query was tried first and went unanswered --
+    Firefox's responder only replies to the group.
+    """
+    import socket
+    import struct
+    import time
+
+    target = hostname.rstrip(".").lower()
+    cached = _mdns_cache.get(target)
+    if cached:
+        return cached
+    query = struct.pack(">HHHHHH", 0, 0, 1, 0, 0, 0)
+    for label in target.split("."):
+        encoded = label.encode("utf-8")
+        query += struct.pack("B", len(encoded)) + encoded
+    query += b"\x00" + struct.pack(">HH", 1, 1)  # A record, class IN
+
+    def _skip_name(data: bytes, pos: int) -> int:
+        while pos < len(data) and data[pos] != 0:
+            if data[pos] & 0xC0:
+                return pos + 2
+            pos += 1 + data[pos]
+        return pos + 1
+
+    def _read_name(data: bytes, pos: int) -> str:
+        parts = []
+        hops = 0
+        while pos < len(data) and data[pos] != 0 and hops < 16:
+            if data[pos] & 0xC0:
+                pos = ((data[pos] & 0x3F) << 8) | data[pos + 1]
+                hops += 1
+                continue
+            parts.append(data[pos + 1 : pos + 1 + data[pos]].decode("utf-8", "replace"))
+            pos += 1 + data[pos]
+        return ".".join(parts).lower()
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except OSError:
+            pass
+        sock.bind(("", 5353))
+        sock.setsockopt(
+            socket.IPPROTO_IP,
+            socket.IP_ADD_MEMBERSHIP,
+            socket.inet_aton("224.0.0.251") + socket.inet_aton("0.0.0.0"),
+        )
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+        sock.sendto(query, ("224.0.0.251", 5353))
+        end_time = time.monotonic() + timeout
+        while time.monotonic() < end_time:
+            sock.settimeout(max(0.05, end_time - time.monotonic()))
+            try:
+                data, _addr = sock.recvfrom(4096)
+            except socket.timeout:
+                break
+            try:
+                flags, qdcount, ancount = struct.unpack(">HHH", data[2:8])
+                if not (flags & 0x8000) or not ancount:
+                    continue  # a query (possibly our own echo), not a response
+                pos = 12
+                for _ in range(qdcount):
+                    pos = _skip_name(data, pos) + 4
+                for _ in range(ancount):
+                    name = _read_name(data, pos)
+                    pos = _skip_name(data, pos)
+                    rtype, _rclass, _ttl, rdlen = struct.unpack(">HHIH", data[pos : pos + 10])
+                    pos += 10
+                    if rtype == 1 and rdlen == 4 and name == target:
+                        address = socket.inet_ntoa(data[pos : pos + 4])
+                        _mdns_cache[target] = address
+                        return address
+                    pos += rdlen
+            except (IndexError, struct.error):
+                continue
+        return None
+    except OSError:
+        return None
+    finally:
+        sock.close()
+
+
 class WebRtcSession:
     """One viewer's H.264 stream for one camera.
 
@@ -204,8 +310,25 @@ class WebRtcSession:
     def add_ice_candidate(self, mline_index: int, candidate: str) -> None:
         with self._lock:
             webrtc = self._webrtc
-        if webrtc is not None and candidate:
-            webrtc.emit("add-ice-candidate", int(mline_index), candidate)
+        if webrtc is None or not candidate:
+            return
+        # candidate:<f> <comp> <proto> <prio> <addr> <port> typ ... -- addr
+        # is field 5. See _resolve_mdns for why .local names must be
+        # rewritten to real IPs before webrtcbin/libnice sees them.
+        parts = candidate.split()
+        if len(parts) > 4 and parts[4].endswith(".local"):
+            resolved = _resolve_mdns(parts[4])
+            if resolved:
+                self._log(f"webrtc[{self.camera_name}]: mDNS {parts[4]} -> {resolved}")
+                parts[4] = resolved
+                candidate = " ".join(parts)
+            else:
+                self._log(
+                    f"webrtc[{self.camera_name}]: cannot resolve mDNS candidate "
+                    f"{parts[4]} (multicast blocked?); dropping it"
+                )
+                return
+        webrtc.emit("add-ice-candidate", int(mline_index), candidate)
 
     # ── teardown ─────────────────────────────────────────────────────────────
 
