@@ -269,6 +269,10 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         if self.reference_camera is None and self.poses:
             self.reference_camera = self.poses[0].name
 
+        # Set by main() once RecordingManager exists (constructed after this
+        # node) -- consulted by the stale-participant watchdog so it doesn't
+        # kill an in-progress recording over one camera dropping out.
+        self.recording_manager: Optional[RecordingManager] = None
         self._playback_mode: bool = False
         # Bounded deque: append is O(1) and old points fall off automatically.
         # A plain list needed an O(max_points) slice-delete per pose message,
@@ -537,58 +541,99 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             sock.close()
         return False
 
+    def _restart_for_stale_participant(self, reason: str) -> None:
+        # Shared exit path for both watchdog cases below. Fast DDS enumerates
+        # network interfaces only at participant creation, so a link that
+        # appeared/changed after this process started stays invisible to it
+        # until the participant is recreated, i.e. until this process
+        # restarts. Inside docker, `restart: unless-stopped` (docker-compose.yml)
+        # brings it back with the current links present; outside docker there
+        # is no such policy, so warn instead of exiting into nothing.
+        if os.path.exists("/.dockerenv"):
+            self.get_logger().error(
+                f"{reason} -- exiting so the container restart policy recreates the DDS participant."
+            )
+            os._exit(1)
+        self.get_logger().warning(f"{reason} -- restart this process to recover.")
+
+    def _recording_active(self) -> bool:
+        manager = self.recording_manager
+        if manager is None:
+            return False
+        try:
+            return bool(manager.status().get("recording"))
+        except Exception:
+            return False
+
     def _stale_participant_watchdog_loop(self) -> None:
         # Fast DDS enumerates network interfaces only at participant
-        # creation. This container auto-starts at host boot (restart:
-        # unless-stopped), usually before the per-camera USB-ethernet links
-        # exist, so the participant advertises unicast locators the cameras
-        # can't route to and never receives a single message. That state
-        # does NOT self-heal (observed fully stale >15min while a fresh
-        # `ros2 topic list` in the same container saw every topic
-        # instantly); the only fix is recreating the participant, i.e.
-        # restarting this process. run_dashboard.sh has the same check, but
-        # only runs when someone invokes the script -- this covers headless
-        # boots too.
+        # creation, so two related failure modes share the same fix
+        # (recreate the participant, i.e. restart this process):
         #
-        # Exit condition (deliberately conservative so it can never fire
-        # during normal operation): this process has NEVER received any ROS
-        # message, yet a camera link has been up continuously for 60s. The
-        # grace period rides out a freshly plugged camera still booting its
-        # own ROS stack (~30-60s); the never-received-anything condition
-        # means recording or live use can't be interrupted -- there is
-        # nothing flowing to interrupt. The thread retires for good on the
-        # first message, so its steady-state cost is zero.
+        # 1. Boot race: this container auto-starts at host boot (restart:
+        #    unless-stopped), usually before the per-camera USB-ethernet
+        #    links exist, so the participant advertises unicast locators the
+        #    cameras can't route to and never receives a single message.
+        #    That state does NOT self-heal (observed fully stale >15min
+        #    while a fresh `ros2 topic list` in the same container saw
+        #    every topic instantly). run_dashboard.sh has the same
+        #    link-presence check, but only runs once when someone invokes
+        #    the script -- this covers headless boots too.
+        # 2. Runtime drop: a camera that WAS streaming loses its link (USB
+        #    unplugged and replugged) and never comes back on its own, for
+        #    the same interface-enumeration reason. Case 1's "any data ever
+        #    received" check can't see this -- the other cameras are still
+        #    flowing -- so this needs its own per-camera staleness check.
+        #
+        # This thread never retires: case 1 can only ever fire once per
+        # process (after that, "some data has arrived" is permanent), but
+        # case 2 needs to keep watching for the life of the process.
         link_grace_sec = 60.0
         poll_sec = 5.0
+        # Generous vs. camera_stale_timeout_sec (the UI's "no signal" flag,
+        # default 2s) so a brief frame gap or exposure hiccup can't trigger a
+        # restart -- this only fires on a camera that stays silent.
+        camera_stall_grace_sec = 15.0
         link_up_since: Optional[float] = None
         while True:
             time.sleep(poll_sec)
-            if self._any_ros_data_received():
-                return
-            if not self._camera_link_up():
-                link_up_since = None
-                continue
             now = time.monotonic()
-            if link_up_since is None:
+
+            if not self._any_ros_data_received():
+                if not self._camera_link_up():
+                    link_up_since = None
+                    continue
+                if link_up_since is None:
+                    link_up_since = now
+                    continue
+                if now - link_up_since < link_grace_sec:
+                    continue
+                self._restart_for_stale_participant(
+                    "Camera link up for 60s but no ROS data ever received -- DDS participant "
+                    "likely predates the camera links"
+                )
                 link_up_since = now
                 continue
-            if now - link_up_since < link_grace_sec:
+
+            link_up_since = None
+
+            if self._recording_active():
+                # Don't kill an in-progress recording over one stalled
+                # camera -- the others are still capturing fine, and a
+                # full-process restart (the only fix DDS gives us) would cut
+                # all of them short over one dropout.
                 continue
-            if os.path.exists("/.dockerenv"):
-                self.get_logger().error(
-                    "Camera link up for 60s but no ROS data ever received -- DDS participant "
-                    "likely predates the camera links. Exiting so the container restart policy "
-                    "recreates the participant with the links present."
+
+            for camera in self.cameras:
+                frame_times = self.camera_frame_times[camera.name]
+                if not frame_times or now - frame_times[-1] <= camera_stall_grace_sec:
+                    continue
+                self._restart_for_stale_participant(
+                    f"Camera '{camera.name}' produced no frames for over "
+                    f"{camera_stall_grace_sec:.0f}s after previously streaming "
+                    "(likely a USB/link drop)"
                 )
-                os._exit(1)
-            # Outside docker there is no restart policy to catch the exit;
-            # warn instead, and re-arm so the warning repeats every grace
-            # period rather than spamming every poll.
-            self.get_logger().warning(
-                "Camera link up for 60s but no ROS data ever received -- DDS participant "
-                "likely predates the camera links. Restart this process to recover."
-            )
-            link_up_since = now
+                break
 
     def _make_pose_callback(self, pose_name: str, is_live: bool = True):
         def callback(msg: PoseStamped) -> None:
@@ -2131,6 +2176,7 @@ def main() -> None:
     # Adopt recordings orphaned in rosbags/_staging/ by a power cut or crash
     # (reindex/salvage + merge into a normal bag, in the background).
     recording_manager.start_orphan_recovery()
+    node.recording_manager = recording_manager
     if args.start_alignment and node.live_alignment_available and not args.fake_pose:
         node.start_live_alignment()
     executor = MultiThreadedExecutor()
