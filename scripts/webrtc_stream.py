@@ -317,18 +317,43 @@ class WebRtcSession:
         # rewritten to real IPs before webrtcbin/libnice sees them.
         parts = candidate.split()
         if len(parts) > 4 and parts[4].endswith(".local"):
-            resolved = _resolve_mdns(parts[4])
-            if resolved:
-                self._log(f"webrtc[{self.camera_name}]: mDNS {parts[4]} -> {resolved}")
-                parts[4] = resolved
-                candidate = " ".join(parts)
-            else:
-                self._log(
-                    f"webrtc[{self.camera_name}]: cannot resolve mDNS candidate "
-                    f"{parts[4]} (multicast blocked?); dropping it"
-                )
-                return
+            # This method runs on the aiohttp event loop; a blocking mDNS
+            # query here stalls every websocket and HTTP handler in the
+            # process (observed: one slow remote viewer's 2s resolution
+            # timeouts starved the kiosk's own signaling past its 8s
+            # first-frame watchdog). Resolve in the background and trickle
+            # the candidate in when done -- late candidates are fine.
+            threading.Thread(
+                target=self._resolve_and_add,
+                args=(int(mline_index), parts),
+                daemon=True,
+                name=f"mdns_resolve_{self.camera_name}",
+            ).start()
+            return
         webrtc.emit("add-ice-candidate", int(mline_index), candidate)
+
+    def _resolve_and_add(self, mline_index: int, parts: List[str]) -> None:
+        hostname = parts[4]
+        resolved = None
+        # WiFi multicast is lossy; a couple of short attempts beats one
+        # long one (the responder answers in ~10ms when the query gets
+        # through at all).
+        for _attempt in range(3):
+            resolved = _resolve_mdns(hostname, timeout=0.7)
+            if resolved:
+                break
+        if not resolved:
+            self._log(
+                f"webrtc[{self.camera_name}]: cannot resolve mDNS candidate "
+                f"{hostname} (multicast blocked?); dropping it"
+            )
+            return
+        self._log(f"webrtc[{self.camera_name}]: mDNS {hostname} -> {resolved}")
+        parts[4] = resolved
+        with self._lock:
+            webrtc = self._webrtc
+        if webrtc is not None:
+            webrtc.emit("add-ice-candidate", mline_index, " ".join(parts))
 
     # ── teardown ─────────────────────────────────────────────────────────────
 
