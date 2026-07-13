@@ -144,10 +144,15 @@ data_restarts=0
 while true; do
     data_deadline=$(( $(date +%s) + ALL_LIVE_WAIT_SEC ))
     all_live=false
+    next_progress=$(( $(date +%s) + 5 ))
     while (( $(date +%s) <= data_deadline )); do
         if all_cameras_live; then
             all_live=true
             break
+        fi
+        if (( $(date +%s) >= next_progress )); then
+            log "  still waiting, stale: $(stale_camera_names)"
+            next_progress=$(( $(date +%s) + 5 ))
         fi
         sleep 1
     done
@@ -166,7 +171,8 @@ while true; do
         break
     fi
     if (( data_restarts >= ALL_LIVE_MAX_RESTARTS )); then
-        log "WARNING: not all cameras live after ${ALL_LIVE_MAX_RESTARTS} backend restart(s) (stale: $(stale_camera_names)) -- continuing anyway (check cameras/network)."
+        log "WARNING: not all cameras live after ${ALL_LIVE_MAX_RESTARTS} backend restart(s) (stale: $(stale_camera_names)) -- continuing anyway."
+        log "         If a stale camera answers HTTP but its interface shows no traffic, its stream is wedged -- reboot it: curl -X POST http://<camera-ip>/api/reboot"
         break
     fi
     data_restarts=$(( data_restarts + 1 ))
