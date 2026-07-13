@@ -9,6 +9,10 @@ bags/
 .git/
 .claude/
 .gitignore
+CLAUDE.md
+
+# Runtime alignment state (per-machine, lives in the mounted config/ volume)
+config/alignment/live_alignment_state.json
 
 # Node build artifacts (dist/ is checked in and needed; node_modules is not)
 web_dashboard/node_modules/
