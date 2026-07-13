@@ -1,0 +1,9 @@
+{
+  "rosbag_dir": "rosbags",
+  "host_rosbag_sync_dir": "/home/muniu",
+  "host_rosbag_sync_ssh_target": "muniu@192.168.19.61:/home/muniu",
+  "sync_rosbag_to_host": false,
+  "results_dir": "outputs/results",
+  "max_cache_size": 104857600,
+  "record_topics": []
+}

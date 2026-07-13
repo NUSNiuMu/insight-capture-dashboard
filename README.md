@@ -63,6 +63,12 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 ## 单一配置入口：config/cameras.json
 
+> `config/cameras.json`、`config/board_calibration.json`、`config/post_processing.json`
+> 是按设备生成的产物（`.gitignore` 掉了），源头是 `config/devices/<name>/`，用
+> `scripts/select_device.sh <name>` 切换/生成——直接改 `config/` 下的文件本身没问题
+> （对当前选中的设备生效），但换设备/长期改动要改回 `config/devices/<name>/` 里的源文件，
+> 否则下次 `select_device.sh` 会把改动覆盖掉。详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+
 **优先只改这一个文件**：[config/cameras.json](config/cameras.json)。它控制：
 
 - dashboard 显示哪几路图像、用哪几路 VIO
@@ -115,7 +121,7 @@ python3 scripts/multi_camera_dashboard_web.py &
 - `/images`：图片页骨架，实时看图具体传输方案待定（见下）
 - `/bags`：本地 rosbag 列表页，路径/大小/时长/label/scoring/optimization 状态
 - `/scoring`：轨迹评分页骨架
-- `/optimization`：COLMAP 轨迹优化页（本分支 `deploy/jetson-nx` 的镜像自带 CUDA sm_87 编译的 COLMAP 3.9.1，开箱即用，见下方"部署"）
+- `/optimization`：COLMAP 轨迹优化页（`jetson-nx` profile 的镜像自带 CUDA sm_87 编译的 COLMAP 3.9.1，开箱即用，见下方"部署"）
 
 3D 页面右上角 `Start Alignment / Stop Alignment` 按钮：不需要命令行参数，随时可以开始/停止标定，适合左边看 RGB、右边控制标定。
 
@@ -227,22 +233,30 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 ## 部署
 
 打包发布镜像、给设备升级、全新设备首次部署的完整步骤见
-**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**。这里只记本分支特有的技术背景：
+**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**。这里只记设备差异的技术背景：
 
-### 本分支（`deploy/jetson-nx`）：Orin NX，全功能自包含
+### 设备与 config profile
+
+三台设备（`jetson-nx`/`lite`/`lite-779`）现在共用同一个 `main` 分支，不再各自维护
+一个 git 分支——设备差异收敛到 `config/devices/<name>/` 下的三个文件（见下方"单一
+配置入口"一节），用 `scripts/select_device.sh <name>` 选择。只有 `jetson-nx` 会打
+正式发布镜像，`lite`/`lite-779` 是开发机专用 profile。
+
+### COLMAP：只在 jetson-nx profile 上开箱即用
 
 COLMAP（3.9.1，CUDA sm_87，GUI 关闭）和 `looper-vio-colmap-handoff` 流水线在
 `docker compose build` 时编译/克隆进镜像（见 Dockerfile 的 `colmap-builder`
 阶段），不需要任何宿主机挂载或每台设备手工编译——`/optimization` 开箱即用。
-只支持 Orin NX（sm_87 单架构编译），不支持 Nano。
+只支持 Orin NX（sm_87 单架构编译），不支持 Nano，因此这也是目前唯一会打正式
+发布镜像的设备。`lite`/`lite-779` 这两台开发机没有 COLMAP 依赖，`/optimization`
+页面不可用。
 
 `looper-vio-colmap-handoff` 钉在固定 commit 上，其上打了两个本地补丁
 （COLMAP 3.9.1 的 GPU 参数名、stdbuf 行缓冲让网页日志实时刷新），升级
 该仓库 commit 时需要复核补丁是否仍然适用（见 Dockerfile 内注释）。
 
-### 旧分支参考
-
-- `deploy/lite`：无 COLMAP 依赖的轻量分支（曾用于 Nano），`/optimization` 不可用；
-- `main` / `web-dashboard-pages`：依赖开发机上手工编译的 COLMAP 宿主机挂载，已被本分支的镜像内编译方案取代。
-
-部署到新机器后，`config/cameras.json`、`config/board_calibration.json`、`config/alignment/live_alignment_state.json` 都是跟**当前这批相机**绑定的配置/状态，换了相机需要重新走一遍标定，不是复制过去就能直接用。
+部署到新机器后，`config/cameras.json`、`config/board_calibration.json`、
+`config/post_processing.json`、`config/alignment/live_alignment_state.json`
+都是跟**当前这批相机/这台设备**绑定的配置/状态（前三个由 `select_device.sh`
+从 `config/devices/<name>/` 生成，不是手改的），换了相机需要重新走一遍标定，
+不是复制过去就能直接用。

@@ -12,6 +12,14 @@
 部署包只在**首次安装**时需要（它带着 `update.sh` 本身、`docker-compose.yml`、
 `README.md`）；之后每次升级只需要发一个新的镜像 tar，使用者已有的 `update.sh` 不变。
 
+### 设备与 config profile
+
+三台设备（`jetson-nx`/`lite`/`lite-779`）现在共用同一个 `main` 分支，不再各自一个 git
+分支。设备差异收敛到 `config/devices/<name>/{cameras.json,board_calibration.json,
+post_processing.json}` 三个文件，`scripts/select_device.sh <name>` 把选中的 profile
+复制成 `config/` 下真正生效的文件（这三个文件本身是 `.gitignore` 掉的本地生成产物）。
+只有 `jetson-nx` 会走 §1 打成正式发布镜像；`lite`/`lite-779` 是开发机专用 profile。
+
 ---
 
 ## 1. 开发者手册：怎么编译发布镜像
@@ -20,8 +28,11 @@
 
 - 在 Jetson（arm64）上编译，不能在 x86 开发机上交叉编译当前的 Dockerfile
   （COLMAP 的 CUDA sm_87 编译在 `colmap-builder` 阶段，依赖宿主机的 NVIDIA 工具链）。
-- 当前分支就是要发布的版本——`build_release.sh` 直接 `docker build` 工作目录，
+- 当前 `main` 就是要发布的版本——`build_release.sh` 直接 `docker build` 工作目录，
   发布前先确认 `git status` 干净、该合的改动都合并了。
+- `config/` 必须选中 `jetson-nx` profile（`scripts/select_device.sh jetson-nx`）——
+  三台设备现在共用同一个分支，`config/cameras.json` 等三个文件是本地生成产物，
+  见"分支与部署"一节；`build_release.sh` 会自己校验这一点，选错了会直接报错退出。
 - 本地先用根目录的开发机 `docker-compose.yml`（`docker compose build && docker compose up -d`）
   把要发布的改动完整跑一遍、`/verify` 或手动过一遍关键页面，**不要用没跑过的代码直接打包发布**。
 
@@ -127,19 +138,27 @@ cd <部署目录>   # 首次安装时 update.sh 所在的那个目录
 ```bash
 git clone git@github.com:NUSNiuMu/insight-capture-dashboard.git insight_capture
 cd insight_capture
-./scripts/setup_host.sh
+./scripts/setup_host.sh --device jetson-nx
 ```
 
-`setup_host.sh` 是幂等的一次性宿主机配置，按顺序做：
+`main` 现在是唯一的代码分支，三台设备（`jetson-nx`/`lite`/`lite-779`）的差异只体现在
+`config/devices/<name>/{cameras.json,board_calibration.json,post_processing.json}`——
+`--device <name>` 会先跑一次 `scripts/select_device.sh <name>`，把对应 profile 复制成
+`config/` 下真正生效的文件（已经选过的话这个参数可以省略）。
 
-1. 检查 docker + NVIDIA container runtime 是否就绪（硬件 JPEG/H.264 编解码依赖它注入 GStreamer 插件）；
-2. 调用 `scripts/host_setup.sh`（与使用者路径共用，见 §3.2）：写 `/etc/sysctl.d/99-dds-rx-buffers.conf`、
+`setup_host.sh` 之后是幂等的一次性宿主机配置，按顺序做：
+
+1. 选定/校验设备 profile（见上）；
+2. 检查 docker + NVIDIA container runtime 是否就绪（硬件 JPEG/H.264 编解码依赖它注入 GStreamer 插件）；
+3. 调用 `scripts/host_setup.sh`（与使用者路径共用，见 §3.2）：写 `/etc/sysctl.d/99-dds-rx-buffers.conf`、
    安装并启用开机自动重启相机的 systemd unit、检查 CPU 是否满核在线；
-3. `docker compose build`（首次在设备上编译 COLMAP，约 20-40 分钟，只支持 Orin NX，不支持 Nano）；
-4. 拉起 `./scripts/run_dashboard.sh`（可以 `--no-start` 跳过，只做环境准备）。
+4. `docker compose build`（首次在设备上编译 COLMAP，约 20-40 分钟，只支持 Orin NX，不支持 Nano）；
+5. 拉起 `./scripts/run_dashboard.sh`（可以 `--no-start` 跳过，只做环境准备）。
 
 批量部署多台设备时不要每台都走这条路径重新编译——在一台机器上按 §1 打包，
 其余设备走下面的使用者路径导入镜像即可，省去每台 20-40 分钟的 COLMAP 编译。
+**注意**：目前只有 `jetson-nx` 这个 profile 会走 §1 打成正式发布镜像——`deploy/lite`、
+`deploy/lite-779` 是两台开发机，只用 `select_device.sh` 切本地 config，不发布镜像。
 
 ### 3.2 使用者路径（拿到部署包 + 镜像 tar，机器上没有源码）
 
@@ -215,7 +234,7 @@ cd insight-dashboard-deploy
 `config/cameras.json` 里的相机列表、`config/board_calibration.json` 的标定板
 参数都是占位/上一台设备遗留的默认值，需要重新配置和标定；如果相机机群
 本来就是固定的（本项目目前是：insight3_a / insight3_b / insight9_a，见
-仓库根 `CLAUDE.md`「分支模型」一节），`cameras.json` 不用改，只有
+仓库根 `CLAUDE.md`「设备与 config profile」一节），`cameras.json` 不用改，只有
 `board_calibration.json`（标定板与具体这块板子/这次摆放相关）通常还是要
 针对这台设备重新标定一次。
 

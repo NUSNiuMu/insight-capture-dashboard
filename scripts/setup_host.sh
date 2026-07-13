@@ -4,6 +4,8 @@
 # diagnosing "it worked on the other device" differences).
 #
 # What it does, in order:
+#   0. select the device's config profile (scripts/select_device.sh), if
+#      --device was passed or none is selected yet
 #   1. sanity-check docker + the NVIDIA container runtime (hardware JPEG
 #      encode needs the runtime's GStreamer plugin injection)
 #   2/3. sysctl DDS receive buffers + boot-time camera reboot unit + CPU
@@ -13,8 +15,9 @@
 #   5. ./scripts/run_dashboard.sh  (skipped with --no-start)
 #
 # Usage:
-#   ./scripts/setup_host.sh              # full setup + start
-#   ./scripts/setup_host.sh --no-start   # setup only (CI / pre-provisioning)
+#   ./scripts/setup_host.sh                        # full setup + start
+#   ./scripts/setup_host.sh --device jetson-nx     # select a device profile first
+#   ./scripts/setup_host.sh --no-start             # setup only (CI / pre-provisioning)
 
 set -euo pipefail
 
@@ -25,14 +28,24 @@ log()  { echo "[setup] $*"; }
 fail() { echo "[setup] ERROR: $*" >&2; exit 1; }
 
 no_start=false
-for arg in "$@"; do
-    case "${arg}" in
-        --no-start) no_start=true ;;
-        *) echo "Usage: $0 [--no-start]" >&2; exit 1 ;;
+device=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --no-start) no_start=true; shift ;;
+        --device) device="${2:?--device requires a name}"; shift 2 ;;
+        *) echo "Usage: $0 [--device <name>] [--no-start]" >&2; exit 1 ;;
     esac
 done
 
 [[ -f /.dockerenv ]] && fail "run this on the host, not inside the container."
+
+# ── 0. device config profile ─────────────────────────────────────────────────
+if [[ -n "${device}" ]]; then
+    "${SCRIPT_DIR}/select_device.sh" "${device}"
+elif [[ ! -f "${ROOT_DIR}/config/.device" ]]; then
+    fail "no device profile selected yet -- run ./scripts/select_device.sh <name> first (or pass --device <name> here)."
+fi
+log "device profile: $(cat "${ROOT_DIR}/config/.device")"
 
 # ── 1. docker + NVIDIA runtime ──────────────────────────────────────────────
 command -v docker >/dev/null || fail "docker is not installed (install JetPack's docker or docker-ce)."

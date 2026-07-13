@@ -28,6 +28,15 @@ mkdir -p release
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
+# Only jetson-nx ships as a customer release (deploy/lite, deploy/lite-779 are
+# dev-only device profiles, see config/devices/). config/ is baked into the
+# image verbatim by the Dockerfile's `COPY .`, so if a developer left the
+# checkout pointed at a different device profile (scripts/select_device.sh)
+# and forgot to switch back, this would silently ship the wrong cameras.json.
+selected_device="$(cat config/.device 2>/dev/null || echo "<none>")"
+[[ "${selected_device}" == "jetson-nx" ]] \
+    || { echo "ERROR: config/ is currently set to '${selected_device}', not 'jetson-nx' -- run ./scripts/select_device.sh jetson-nx first" >&2; exit 1; }
+
 log "Building ${IMAGE_NAME}:${version} ..."
 # --network host: same Jetson iptables raw-table workaround as docker-compose.yml
 docker build --network host -t "${IMAGE_NAME}:${version}" .
