@@ -26,6 +26,27 @@ PING_INTERVAL=3         # seconds between ping attempts
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
+# All deadlines below use bash's SECONDS (monotonic since script start), not
+# `date +%s`: at boot a Jetson without a live NTP sync still runs on a stale
+# RTC-less clock, and the forward jump when chrony/systemd-timesyncd corrects
+# it (observed ~20h on 2026-07-13) instantly expires wall-clock deadlines,
+# cutting discovery/wait windows to zero.
+
+# How many cameras this fleet should have -- discovery keeps polling until it
+# sees all of them (or the window runs out), because USB links enumerate one
+# by one at boot and stopping at the first hit used to skip late links
+# entirely (insight3_b missed its post-boot reboot that way).
+expected_camera_count() {
+    python3 - "${SCRIPT_DIR}/../config/cameras.json" 2>/dev/null <<'PY' || echo 0
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        print(len(json.load(fh).get("cameras", [])))
+except Exception:
+    print(0)
+PY
+}
+
 # Print one "http://<ip>" per camera currently reachable on a 169.254.x.x
 # link, derived from local interface addresses (not a brute-force /16 scan,
 # which is both slow and unreliable across a container network namespace).
@@ -48,12 +69,21 @@ discover_devices() {
     done | sort -u
 }
 
-log "Discovering cameras on 169.254.0.0/16 links..."
+EXPECTED_COUNT="$(expected_camera_count)"
+if (( EXPECTED_COUNT > 0 )); then
+    log "Discovering cameras on 169.254.0.0/16 links (expecting ${EXPECTED_COUNT} per config/cameras.json)..."
+else
+    log "Discovering cameras on 169.254.0.0/16 links (no expected count available)..."
+fi
 DEVICES=()
-deadline=$(( $(date +%s) + DISCOVERY_TIMEOUT ))
-while (( $(date +%s) < deadline )); do
+discovery_deadline=$(( SECONDS + DISCOVERY_TIMEOUT ))
+while (( SECONDS < discovery_deadline )); do
     mapfile -t DEVICES < <(discover_devices)
-    (( ${#DEVICES[@]} > 0 )) && break
+    if (( EXPECTED_COUNT > 0 )); then
+        (( ${#DEVICES[@]} >= EXPECTED_COUNT )) && break
+    else
+        (( ${#DEVICES[@]} > 0 )) && break
+    fi
     sleep "${DISCOVERY_INTERVAL}"
 done
 
@@ -63,14 +93,19 @@ if (( ${#DEVICES[@]} == 0 )); then
     exit 1
 fi
 
+if (( EXPECTED_COUNT > 0 && ${#DEVICES[@]} < EXPECTED_COUNT )); then
+    log "WARNING: Only ${#DEVICES[@]}/${EXPECTED_COUNT} camera link(s) appeared within ${DISCOVERY_TIMEOUT}s."
+    log "WARNING: Cameras on links that come up later will keep a stale DDS participant and stream nothing."
+fi
+
 log "Found ${#DEVICES[@]} camera(s): ${DEVICES[*]}"
 
 wait_for_device() {
     local url="$1"
     local host="${url#http://}"
-    local deadline=$(( $(date +%s) + WAIT_TIMEOUT ))
+    local deadline=$(( SECONDS + WAIT_TIMEOUT ))
     log "Waiting for ${host} to come back online..."
-    while (( $(date +%s) < deadline )); do
+    while (( SECONDS < deadline )); do
         if ping -c 1 -W 1 "${host}" &>/dev/null; then
             log "${host} is back online"
             return 0

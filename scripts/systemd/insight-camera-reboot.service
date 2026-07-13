@@ -34,13 +34,16 @@ User=nvidia
 Group=nvidia
 WorkingDirectory=/home/nvidia/insight-capture-dashboard
 # Boot-time USB enumeration can be slower than an interactive run; give
-# discovery a wider window than the script's 40s interactive default.
-Environment=INSIGHT_DISCOVERY_TIMEOUT=120
+# discovery a wider window than the script's 40s interactive default. The
+# script now waits for ALL cameras listed in config/cameras.json (links
+# enumerate one by one, and rebooting only the early ones leaves the late
+# ones with a stale DDS participant), so this window covers the slowest link.
+Environment=INSIGHT_DISCOVERY_TIMEOUT=180
 ExecStart=/home/nvidia/insight-capture-dashboard/scripts/reboot_cameras.sh
 # Fresh DDS participant now that cameras are back; '-' tolerates the container
 # not existing yet (first boot before any `docker compose up`).
 ExecStartPost=-/usr/bin/docker restart insight-dashboard
-# discovery (<=120s) + reboot + come-back wait (<=120s/camera, parallel pings
+# discovery (<=180s) + reboot + come-back wait (<=120s/camera, parallel pings
 # but serial waits) + container restart, with margin.
 TimeoutStartSec=600
 RemainAfterExit=yes
