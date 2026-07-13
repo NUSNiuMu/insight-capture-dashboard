@@ -106,10 +106,16 @@ camera_links_present() {
         | awk '$2 != "lo" && $2 !~ /^docker/ && $4 ~ /^169\.254\./ {found=1} END {exit !found}'
 }
 
-any_camera_live() {
+all_cameras_live() {
     curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
-        | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if any(not c.get("stale", True) for c in d.get("cameras", [])) else 1)' \
+        | python3 -c 'import json,sys; c=json.load(sys.stdin).get("cameras", []); sys.exit(0 if c and all(not x.get("stale", True) for x in c) else 1)' \
         2>/dev/null
+}
+
+stale_camera_names() {
+    curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
+        | python3 -c 'import json,sys; print(", ".join(x["name"] for x in json.load(sys.stdin).get("cameras", []) if x.get("stale", True)) or "(none)")' \
+        2>/dev/null || echo "(api unreachable)"
 }
 
 log "Waiting for backend to become healthy on :${PORT}..."
@@ -122,36 +128,51 @@ log "Backend is up."
 # flowing showed an empty 3D view / no image stream even though everything
 # was otherwise fine a few seconds later. Wait here instead of leaving that
 # race to whoever's watching the screen.
-log "Waiting for at least one camera to report live data..."
-data_deadline=$(( $(date +%s) + 30 ))
-stale_restart_at=$(( $(date +%s) + 10 ))
-restarted_for_stale_dds=false
-until any_camera_live; do
-    now=$(date +%s)
-    # Fast DDS enumerates network interfaces only when the participant is
-    # created. The container auto-starts at host boot (restart:
-    # unless-stopped), usually *before* the per-camera USB-ethernet links
-    # exist, so the backend advertises unicast locators the cameras can't
-    # route to (the WiFi IP instead of 169.254.x.2) and never receives a
-    # single message. This does NOT self-heal: observed fully stale >15min
-    # while a fresh `ros2 topic list` inside the same container saw every
-    # topic instantly. Camera links up + still stale after 10s is exactly
-    # that state, so restart the backend once -- the recreated participant
-    # binds the now-present links and goes live within seconds.
-    if [[ "${restarted_for_stale_dds}" == "false" && "${in_container}" == "false" ]] \
-            && (( now >= stale_restart_at )) && camera_links_present; then
-        log "Camera links are up but no data after 10s -- backend likely started before the camera links existed (stale DDS participant). Restarting backend once..."
-        docker compose restart
-        restarted_for_stale_dds=true
-        wait_for_backend_health
-        data_deadline=$(( $(date +%s) + 30 ))
-        continue
-    fi
-    if (( now > data_deadline )); then
-        log "WARNING: no camera reported live data within the wait window -- continuing anyway (check cameras/network if this is unexpected)."
+#
+# Wait for ALL cameras (per config/cameras.json) to go live, not just one:
+# a Fast DDS participant created before some camera's USB-ethernet link
+# existed never sees that camera (interfaces are enumerated only at
+# participant creation, and it does NOT self-heal -- observed fully stale
+# >15min while a fresh `ros2 topic list` in the same container saw every
+# topic instantly). The only fix is recreating the participant, i.e.
+# restarting the backend, so on timeout restart and wait again, up to
+# ALL_LIVE_MAX_RESTARTS times before giving up and continuing anyway.
+ALL_LIVE_WAIT_SEC="${INSIGHT_ALL_LIVE_WAIT_SEC:-30}"
+ALL_LIVE_MAX_RESTARTS="${INSIGHT_ALL_LIVE_MAX_RESTARTS:-3}"
+log "Waiting for all cameras to report live data..."
+data_restarts=0
+while true; do
+    data_deadline=$(( $(date +%s) + ALL_LIVE_WAIT_SEC ))
+    all_live=false
+    while (( $(date +%s) <= data_deadline )); do
+        if all_cameras_live; then
+            all_live=true
+            break
+        fi
+        sleep 1
+    done
+    if [[ "${all_live}" == "true" ]]; then
+        log "All cameras are live."
         break
     fi
-    sleep 1
+    if ! camera_links_present; then
+        # No camera USB-ethernet link exists at all (e.g. a dev machine
+        # with no cameras attached) -- restarting can't conjure data.
+        log "WARNING: no camera links present and not all cameras live (stale: $(stale_camera_names)) -- continuing anyway."
+        break
+    fi
+    if [[ "${in_container}" == "true" ]]; then
+        log "WARNING: not all cameras live (stale: $(stale_camera_names)) and no docker CLI in-container to restart the backend -- continuing anyway."
+        break
+    fi
+    if (( data_restarts >= ALL_LIVE_MAX_RESTARTS )); then
+        log "WARNING: not all cameras live after ${ALL_LIVE_MAX_RESTARTS} backend restart(s) (stale: $(stale_camera_names)) -- continuing anyway (check cameras/network)."
+        break
+    fi
+    data_restarts=$(( data_restarts + 1 ))
+    log "Not all cameras live within ${ALL_LIVE_WAIT_SEC}s (stale: $(stale_camera_names)) -- restarting backend to recreate the DDS participant (attempt ${data_restarts}/${ALL_LIVE_MAX_RESTARTS})..."
+    docker compose restart
+    wait_for_backend_health
 done
 
 if [[ "${jetson_mode}" == "true" ]]; then
