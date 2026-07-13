@@ -16,7 +16,7 @@
       "ui_refresh_ms": 50,
       "image_decode_reduction": 0,
       "display_fps_limit": 20,
-      "image_qos_reliability": "best_effort",
+      "image_qos_reliability": "reliable",
       "pose_timeout_sec": 2.0,
       "camera_stale_timeout_sec": 2.0,
       "title": "3D VIO Trajectory",

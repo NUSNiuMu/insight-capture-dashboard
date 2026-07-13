@@ -231,6 +231,12 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self.project_root = config_path.resolve().parents[1]
         self.window_title = config.get("window_title", "Insight Web Dashboard")
         trajectory_config = config.get("trajectory", {})
+        # config/cameras.json sets this to "reliable" on this fleet: measured
+        # 2026-07-13 that "best_effort" silently drops a whole image sample
+        # on a single lost UDP fragment (no retransmission), causing ~1-4%
+        # scattered single-frame loss in recordings with 0 kernel-level
+        # errors to show for it -- "reliable" measured 0.0% loss across
+        # repeated trials with no regression to the other topics.
         self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
         self.pose_timeout_sec = max(0.2, float(trajectory_config.get("pose_timeout_sec", 2.0)))
         self.camera_stale_timeout_sec = max(0.2, float(trajectory_config.get("camera_stale_timeout_sec", 2.0)))
@@ -381,8 +387,13 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # KEEP_LAST depth=1, any executor scheduling hiccup overwrites the
         # not-yet-delivered frame and the recording loses it, even under
         # RELIABLE (reliability guarantees delivery into the history, not
-        # that history won't be overwritten). 5 * ~510KB per camera is cheap.
-        image_qos = make_image_qos(depth=5, reliability=self.image_qos_reliability)
+        # that history won't be overwritten). depth=20 (~666ms-1s of slack)
+        # costs at most ~20 * ~510KB per raw camera -- cheap defensive
+        # headroom against executor scheduling stalls, raised from 5 while
+        # investigating the insight9_a loss below (measured to make no
+        # difference on its own -- see image_qos_reliability for the actual
+        # fix -- but kept since it's free insurance against a slower one).
+        image_qos = make_image_qos(depth=20, reliability=self.image_qos_reliability)
         for camera in self.cameras:
             namespace = camera.namespace
             align_topic = (
