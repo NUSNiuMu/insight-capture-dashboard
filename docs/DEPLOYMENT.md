@@ -125,7 +125,7 @@ cd <部署目录>   # 首次安装时 update.sh 所在的那个目录
 ### 3.1 开发者路径（有源码访问权限，要在这台设备上继续开发）
 
 ```bash
-git clone -b deploy/jetson-nx git@github.com:NUSNiuMu/insight-capture-dashboard.git insight_capture
+git clone git@github.com:NUSNiuMu/insight-capture-dashboard.git insight_capture
 cd insight_capture
 ./scripts/setup_host.sh
 ```
