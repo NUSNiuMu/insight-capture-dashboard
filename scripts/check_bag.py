@@ -2,25 +2,43 @@
 
 """Frame-drop / completeness check for a rosbag2 (sqlite3) recording.
 
-Reads message receive times AND sensor header stamps (parsed straight from
-the CDR blob: 4-byte encapsulation header, then int32 sec + uint32 nsec) so
-the two failure modes can be told apart:
+Two modes:
 
-  - gaps in *header stamps*  -> those frames never reached this process
-    (camera-side stall, or DDS/UDP loss on the way here)
-  - gaps only in *recv times* while stamps are complete -> delivery was
-    bursty but nothing was lost (normal for batched IMU delivery)
+  - default (fast): per-topic message counts and the recording duration come
+    straight from metadata.yaml -- no database read at all, so it's instant
+    regardless of bag size. Reports average rate and estimated loss %% per
+    topic (expected = duration x nominal rate, minus a warmup allowance for
+    subscriptions settling at recording start). This is all the Scoring
+    page's integrity check needs; the old full-table stamp scan took ~10s
+    per recorded GB and grew linearly with recording length.
 
-The 2026-07-07 investigation used exactly this distinction to pin 10-24%
-image loss on the kernel's 208KB default UDP receive buffer vs 510KB
-best-effort image samples (fix: /etc/sysctl.d/99-dds-rx-buffers.conf,
-written by scripts/setup_host.sh). camera_info (tiny, RELIABLE) arriving
-complete while images dropped ruled the cameras themselves out.
+  - --deep: the original per-message scan. Reads message receive times AND
+    sensor header stamps (parsed from the first 12 bytes of the CDR blob:
+    4-byte encapsulation header, then int32 sec + uint32 nsec) so the two
+    failure modes can be told apart:
+
+      - gaps in *header stamps*  -> those frames never reached this process
+        (camera-side stall, or DDS/UDP loss on the way here)
+      - gaps only in *recv times* while stamps are complete -> delivery was
+        bursty but nothing was lost (normal for batched IMU delivery)
+
+    The 2026-07-07 investigation used exactly this distinction to pin
+    10-24% image loss on the kernel's 208KB default UDP receive buffer vs
+    510KB best-effort image samples (fix: /etc/sysctl.d/
+    99-dds-rx-buffers.conf, written by scripts/setup_host.sh). camera_info
+    (tiny, RELIABLE) arriving complete while images dropped ruled the
+    cameras themselves out. Keep --deep for that kind of triage; it also
+    reports per-gap detail (gap_events / worst_gaps) that the fast mode
+    cannot know.
+
+    Bags without a readable metadata.yaml (e.g. power-loss orphans before
+    recovery) fall back to --deep automatically.
 
 Used two ways:
   - CLI (host or `docker exec`):
       python3 scripts/check_bag.py                      # newest bag in rosbags/
       python3 scripts/check_bag.py rosbags/<bag_dir>    # specific bag
+      python3 scripts/check_bag.py --deep ...           # full stamp-gap scan
       python3 scripts/check_bag.py --max-loss 1.0 ...   # exit 1 above this %
   - imported by the dashboard backend (analyze_bag) for the Scoring page's
     "Verify Integrity" button and the Bags page integrity badge.
@@ -28,7 +46,7 @@ Used two ways:
 Exit code: 0 = every checked topic within --max-loss, 1 = drops found,
 2 = bag unreadable. Suitable for scripting after important recordings.
 
-No ROS dependencies -- plain sqlite3 + struct, runs on host or container.
+No ROS dependencies -- plain sqlite3/struct/yaml, runs on host or container.
 """
 
 import argparse
@@ -54,8 +72,10 @@ NOMINAL_HZ = [
 
 DEFAULT_MAX_LOSS_PCT = 0.5
 # Subscriptions settling right after recording start produce harmless gaps;
-# ignoring the first seconds keeps the loss threshold sensitive to real
-# mid-recording loss instead.
+# forgiving the first seconds keeps the loss threshold sensitive to real
+# mid-recording loss instead. In fast mode this is an allowance subtracted
+# from the expected message count; in --deep mode the first seconds of
+# stamps are excluded outright.
 DEFAULT_WARMUP_S = 2.0
 
 
@@ -85,16 +105,65 @@ def gap_stats(ts, nominal_hz):
     ]
 
 
-def analyze_bag(
-    bag_dir: Path,
-    max_loss_pct: float = DEFAULT_MAX_LOSS_PCT,
-    warmup_s: float = DEFAULT_WARMUP_S,
-) -> Dict[str, object]:
-    """Analyze one bag directory; returns a JSON-serializable report.
+def _read_metadata_counts(bag_dir: Path):
+    """(duration_s, {topic: count}) from metadata.yaml, or None if unusable."""
+    meta_file = bag_dir / "metadata.yaml"
+    if not meta_file.is_file():
+        return None
+    try:
+        import yaml
+        info = yaml.safe_load(meta_file.read_text())["rosbag2_bagfile_information"]
+        duration_s = info["duration"]["nanoseconds"] / 1e9
+        counts = {
+            entry["topic_metadata"]["name"]: int(entry["message_count"])
+            for entry in info["topics_with_message_count"]
+        }
+    except Exception:
+        return None
+    if duration_s <= 0 or not counts:
+        return None
+    return duration_s, counts
 
-    Raises ValueError when the bag has no readable .db3 file.
-    """
-    bag_dir = Path(bag_dir)
+
+def _analyze_fast(
+    bag_dir: Path, duration_s: float, counts: Dict[str, int],
+    max_loss_pct: float, warmup_s: float,
+) -> List[Dict[str, object]]:
+    """Rate + loss %% per topic from counts alone (no database read)."""
+    topics: List[Dict[str, object]] = []
+    for name in sorted(counts):
+        nominal = nominal_for(name)
+        if nominal is None:
+            continue
+        msgs = counts[name]
+        if msgs < 2:
+            topics.append({
+                "name": name, "ok": False, "msgs": msgs,
+                "error": f"only {msgs} message(s)",
+            })
+            continue
+        avg_hz = msgs / duration_s
+        # Expected over the whole duration, minus a warmup allowance (frames
+        # a settling subscription may legitimately have missed at the start).
+        expected = duration_s * nominal
+        missing = max(0, round(expected - warmup_s * nominal) - msgs)
+        loss_pct = missing / expected * 100 if expected > 0 else 0.0
+        topics.append({
+            "name": name,
+            "ok": loss_pct <= max_loss_pct,
+            "msgs": msgs,
+            "avg_hz": round(avg_hz, 2),
+            "nominal_hz": nominal,
+            "missing": missing,
+            "loss_pct": round(loss_pct, 2),
+        })
+    return topics
+
+
+def _analyze_deep(
+    bag_dir: Path, max_loss_pct: float, warmup_s: float,
+) -> List[Dict[str, object]]:
+    """Original per-message stamp-gap scan (slow: reads the whole table)."""
     db3 = sorted(glob.glob(str(bag_dir / "*.db3")))
     if not db3:
         raise ValueError(f"no .db3 file in {bag_dir}")
@@ -110,8 +179,11 @@ def analyze_bag(
             nominal = nominal_for(name)
             if nominal is None:
                 continue
+            # substr(): only the 12 stamp bytes leave sqlite instead of
+            # full image blobs -- measured 11.6s -> 8.2s cold on a 3GB bag.
             rows = conn.execute(
-                "SELECT timestamp, data FROM messages WHERE topic_id=? ORDER BY timestamp",
+                "SELECT timestamp, substr(data,1,12) FROM messages "
+                "WHERE topic_id=? ORDER BY timestamp",
                 (tid,),
             ).fetchall()
             if len(rows) < 2:
@@ -139,6 +211,35 @@ def analyze_bag(
                 "gap_events": events,
                 "worst_gaps": worst,
             })
+    return topics
+
+
+def analyze_bag(
+    bag_dir: Path,
+    max_loss_pct: float = DEFAULT_MAX_LOSS_PCT,
+    warmup_s: float = DEFAULT_WARMUP_S,
+    deep: bool = False,
+) -> Dict[str, object]:
+    """Analyze one bag directory; returns a JSON-serializable report.
+
+    Raises ValueError when the bag has no readable .db3 file (deep mode /
+    fallback) or no usable metadata.
+
+    Fast mode (default) never opens the database; bags without a readable
+    metadata.yaml fall back to the deep scan.
+    """
+    bag_dir = Path(bag_dir)
+    method = "deep_scan"
+    if deep:
+        topics = _analyze_deep(bag_dir, max_loss_pct, warmup_s)
+    else:
+        meta = _read_metadata_counts(bag_dir)
+        if meta is not None:
+            duration_s, counts = meta
+            topics = _analyze_fast(bag_dir, duration_s, counts, max_loss_pct, warmup_s)
+            method = "metadata_counts"
+        else:
+            topics = _analyze_deep(bag_dir, max_loss_pct, warmup_s)
 
     failed = [t["name"] for t in topics if not t["ok"]]
     return {
@@ -147,6 +248,7 @@ def analyze_bag(
         "ok": bool(topics) and not failed,
         "failed_topics": failed,
         "topics": topics,
+        "method": method,
         "max_loss_pct": max_loss_pct,
         "warmup_s": warmup_s,
         "checked_at_epoch_s": time.time(),
@@ -171,19 +273,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("bag", nargs="?", help="bag directory (default: newest under rosbags/)")
     parser.add_argument("--max-loss", type=float, default=DEFAULT_MAX_LOSS_PCT,
-                        help=f"max tolerated header-stamp loss %% per topic (default {DEFAULT_MAX_LOSS_PCT})")
+                        help=f"max tolerated loss %% per topic (default {DEFAULT_MAX_LOSS_PCT})")
     parser.add_argument("--warmup", type=float, default=DEFAULT_WARMUP_S,
-                        help=f"seconds to ignore at each topic's start (default {DEFAULT_WARMUP_S})")
+                        help=f"seconds forgiven at each topic's start (default {DEFAULT_WARMUP_S})")
+    parser.add_argument("--deep", action="store_true",
+                        help="full per-message stamp-gap scan (slow; reports gap timing detail)")
     args = parser.parse_args()
 
     bag_dir = find_bag(args.bag)
     print(f"bag: {bag_dir}\n")
     try:
-        report = analyze_bag(bag_dir, max_loss_pct=args.max_loss, warmup_s=args.warmup)
+        report = analyze_bag(bag_dir, max_loss_pct=args.max_loss,
+                             warmup_s=args.warmup, deep=args.deep)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
 
+    if report["method"] == "deep_scan" and not args.deep:
+        print("(no usable metadata.yaml -- fell back to the deep scan)\n")
     for topic in report["topics"]:
         verdict = "ok  " if topic["ok"] else "FAIL"
         print(f"{verdict}  {topic['name']}")
@@ -191,8 +298,10 @@ def main():
             print(f"      {topic['error']}")
             continue
         line = (f"      msgs={topic['msgs']} avg={topic['avg_hz']}Hz (nominal {topic['nominal_hz']:g})"
-                f" missing={topic['missing']} ({topic['loss_pct']}%) gap_events={topic['gap_events']}")
-        if topic["worst_gaps"]:
+                f" missing={topic['missing']} ({topic['loss_pct']}%)")
+        if "gap_events" in topic:
+            line += f" gap_events={topic['gap_events']}"
+        if topic.get("worst_gaps"):
             line += f" worst={topic['worst_gaps']}"
         print(line)
 

@@ -2327,7 +2327,7 @@ async function runIntegrityCheck() {
     return;
   }
   hideIntegrityResult();
-  setScoringStatus(`Verifying integrity of ${bagName}... (a few seconds)`);
+  setScoringStatus(`Verifying integrity of ${bagName}...`);
   try {
     const response = await fetch("/api/integrity/run", {
       method: "POST",
@@ -2366,8 +2366,7 @@ function renderIntegrityResult(report) {
     const color = topic.ok ? okColor : badColor;
     const detail = topic.error
       ? escapeHtml(topic.error)
-      : `${Number(topic.msgs).toLocaleString()} msgs · ${topic.avg_hz}/${topic.nominal_hz}Hz · loss ${topic.loss_pct}%`
-        + (topic.worst_gaps && topic.worst_gaps.length ? ` · worst ${escapeHtml(topic.worst_gaps.join(", "))}` : "");
+      : `${Number(topic.msgs).toLocaleString()} msgs · ${topic.avg_hz}/${topic.nominal_hz}Hz · loss ${topic.loss_pct}%`;
     return `
       <tr>
         <td style="padding:4px 10px 4px 0;font-family:monospace;font-size:0.78rem;white-space:nowrap">${escapeHtml(topic.name || "")}</td>

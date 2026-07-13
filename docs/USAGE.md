@@ -85,7 +85,11 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 ```bash
 docker exec insight-dashboard python3 scripts/check_bag.py                # 最新一份就可以
 docker exec insight-dashboard python3 scripts/check_bag.py rosbags/<目录名>
+docker exec insight-dashboard python3 scripts/check_bag.py --deep rosbags/<目录名>  # 深扫描：逐条消息统计，附每个断流时刻，慢（排查丢帧原因时用）
 ```
+
+默认模式直接读 metadata.yaml 的消息计数，任意大小的 bag 都秒出（只报每话题帧率与
+丢帧百分比）；`--deep` 保留原来的逐消息时间戳分析（区分"相机没发出"与"到达但突发"）。
 
 ### 3.2 磁盘管理
 

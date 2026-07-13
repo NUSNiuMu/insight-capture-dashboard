@@ -1893,8 +1893,9 @@ class WebDashboardServer:
             return web.json_response({"error": "Bag not found."}, status=404)
         loop = asyncio.get_event_loop()
         try:
-            # Full-table sqlite scan, a few seconds for a GB-scale bag --
-            # off the event loop so camera polling doesn't stutter.
+            # Fast mode: counts from metadata.yaml, no database read (the
+            # old full-table stamp scan took ~10s per recorded GB). Still
+            # off the event loop for the metadata-less fallback deep scan.
             report = await loop.run_in_executor(None, analyze_bag, bag_path)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=422)
