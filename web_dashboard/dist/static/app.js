@@ -43,7 +43,6 @@ const optimizationLogEl = document.getElementById("optimization-log");
 const optimizationResultPanel = document.getElementById("optimization-result-panel");
 const optimizationLogLink = document.getElementById("optimization-log-link");
 const runScoringButton = document.getElementById("run-scoring-button");
-const verifyIntegrityButton = document.getElementById("verify-integrity-button");
 const integrityResultEl = document.getElementById("integrity-result");
 const integrityResultBody = document.getElementById("integrity-result-body");
 const scoringTopicInput = document.getElementById("scoring-topic");
@@ -194,12 +193,7 @@ if (refreshBagsButton) {
 }
 if (runScoringButton) {
   runScoringButton.addEventListener("click", () => {
-    void runScoring();
-  });
-}
-if (verifyIntegrityButton) {
-  verifyIntegrityButton.addEventListener("click", () => {
-    void runIntegrityCheck();
+    void runScoringAndVerify();
   });
 }
 if (refreshImageCapabilitiesButton) {
@@ -1132,6 +1126,10 @@ function setSettingsStatus(message) {
   }
 }
 
+// Avatar-model switching is temporarily locked in the Settings UI (the
+// backend API stays available); flip to false to restore the dropdown.
+const AVATAR_MODEL_SWITCHING_LOCKED = true;
+
 function renderSettings(payload) {
   if (!settingsCameraList) {
     return;
@@ -1163,8 +1161,8 @@ function renderSettings(payload) {
           <span class="settings-role-pill">${escapeHtml(roleLabel)}</span>
         </div>
         <label class="settings-field">
-          <span>Avatar model</span>
-          <select class="settings-model-select" data-camera="${escapeHtml(pose.name)}">${modelOptions}</select>
+          <span>Avatar model${AVATAR_MODEL_SWITCHING_LOCKED ? ' <span style="color:var(--muted);font-weight:400">(locked)</span>' : ""}</span>
+          <select class="settings-model-select" data-camera="${escapeHtml(pose.name)}"${AVATAR_MODEL_SWITCHING_LOCKED ? " disabled" : ""}>${modelOptions}</select>
         </label>
         ${gripperRow}
         ${handOverlayRow}
@@ -1172,11 +1170,13 @@ function renderSettings(payload) {
     `;
   }).join("");
 
-  settingsCameraList.querySelectorAll(".settings-model-select").forEach((select) => {
-    select.addEventListener("change", () => {
-      void setPoseAvatarModel(select.dataset.camera, select.value);
+  if (!AVATAR_MODEL_SWITCHING_LOCKED) {
+    settingsCameraList.querySelectorAll(".settings-model-select").forEach((select) => {
+      select.addEventListener("change", () => {
+        void setPoseAvatarModel(select.dataset.camera, select.value);
+      });
     });
-  });
+  }
   settingsCameraList.querySelectorAll(".settings-gripper-toggle").forEach((toggle) => {
     toggle.addEventListener("change", () => {
       void setGripperTrackingEnabled(toggle.dataset.camera, toggle.checked);
@@ -2251,6 +2251,25 @@ function refreshTrailMesh(trail) {
   trail.mesh.material.alpha = 0.96;
 }
 
+async function runScoringAndVerify() {
+  // Single "Scoring" button: run the fast integrity check first (its report
+  // stays visible), then kick off the scoring job regardless of the verdict.
+  if (scoringBusy) {
+    return;
+  }
+  const bagSelect = document.getElementById("scoring-bag-select");
+  const bagName = bagSelect ? bagSelect.value : "";
+  if (!bagName) {
+    setScoringStatus("Select a rosbag first.");
+    return;
+  }
+  if (runScoringButton) {
+    runScoringButton.disabled = true;
+  }
+  await runIntegrityCheck();
+  await runScoring();
+}
+
 async function runScoring() {
   if (scoringBusy) {
     return;
@@ -2307,9 +2326,6 @@ async function runIntegrityCheck() {
     setScoringStatus("Select a rosbag first.");
     return;
   }
-  if (verifyIntegrityButton) {
-    verifyIntegrityButton.disabled = true;
-  }
   hideIntegrityResult();
   setScoringStatus(`Verifying integrity of ${bagName}... (a few seconds)`);
   try {
@@ -2330,10 +2346,6 @@ async function runIntegrityCheck() {
     void refreshRosbags(); // update the Bags-page badge data
   } catch (error) {
     setScoringStatus(`Integrity error: ${error instanceof Error ? error.message : String(error)}`);
-  } finally {
-    if (verifyIntegrityButton) {
-      verifyIntegrityButton.disabled = false;
-    }
   }
 }
 
