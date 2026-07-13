@@ -2378,7 +2378,7 @@ function renderIntegrityResult(report) {
   const headline = report.ok
     ? `<strong style="color:${okColor}">Complete</strong> — no frame loss above ${report.max_loss_pct}% on any topic`
     : `<strong style="color:${badColor}">Incomplete</strong> — frame loss on: ${escapeHtml((report.failed_topics || []).join(", "))}`
-      + ` <span style="color:var(--muted)">(triage: USAGE.md §录制掉帧)</span>`;
+      + ` <span style="color:var(--muted)">(triage: USAGE.md §6.3)</span>`;
   integrityResultBody.innerHTML = `
     <div style="padding:12px 16px;border-radius:8px;background:var(--panel);border:1px solid var(--line)">
       <div style="margin-bottom:8px;font-size:0.95rem">${headline}</div>

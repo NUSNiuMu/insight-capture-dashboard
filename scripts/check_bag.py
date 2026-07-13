@@ -199,7 +199,7 @@ def main():
     print()
     if not report["ok"]:
         print(f"RESULT: FAIL -- {len(report['failed_topics'])} topic(s) above {args.max_loss}% loss.")
-        print("Triage: docs/USAGE.md §常见问题 · 录制掉帧")
+        print("Triage: docs/USAGE.md §6.3 (dropped frames during recording)")
         sys.exit(1)
     print(f"RESULT: OK -- all checked topics within {args.max_loss}% loss.")
 
