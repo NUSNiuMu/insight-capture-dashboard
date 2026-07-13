@@ -178,8 +178,8 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 
 ### 6.3 录制掉帧 / 数据不完整
 
-**症状**：`/scoring` 页 Verify Integrity 显示红色 Incomplete（或 `/bags`
-列表出现红色 `incomplete` 徽章、命令行 `check_bag.py` 报 FAIL）。
+**症状**：`/scoring` 页点 Scoring 后，完整性结果面板显示红色 Incomplete（或
+`/bags` 列表出现红色 `incomplete` 徽章、命令行 `check_bag.py` 报 FAIL）。
 
 按 FAIL 的模式判断：
 
