@@ -18,10 +18,10 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
                                 └─ 在线标定 / 评分
 ```
 
-- 服务随开机自启（断电重启后自动恢复），正常情况下**无需任何手动启动操作**；
-- 设备与相机一起上电时，系统会在开机后**自动重启一次所有相机**（相机比主机
-  先启动完成会处于错误的网络状态，属预期行为）——从上电到画面就绪约 2-3 分钟；
-- 每台相机独占一个 USB 网口（`169.254.x.x` 段），插拔顺序不影响使用；
+- **不支持热插拔**：后端/前端已经启动之后，如果中途把某台相机的网线拔掉
+  再插回去，相机重新连上并不会让画面自动恢复——必须等相机重新连上后，
+  手动重启一次后端（`docker restart insight-dashboard` 或重跑
+  `./scripts/run_dashboard.sh`）画面才会回来，详见 §6.2；
 - 所有数据（录制、标定、配置）保存在设备的 `rosbags/`、`config/`、`outputs/`
   目录，软件升级不会触碰它们。
 
@@ -31,27 +31,26 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 
 ### 2.1 一键启动
 
-服务开机自启，通常直接访问即可。需要手动确认/重启时：
+**情形 A：不在 Jetson 本机操作（自己电脑远程访问，或 Jetson 没接显示器）**
 
 ```bash
-./scripts/run_dashboard.sh             # 启动或确认后端在跑；Ctrl-C 停止
-./scripts/run_dashboard.sh --jetson    # 同时在设备屏幕上打开全屏看板（接显示器时）
-./scripts/run_dashboard.sh --logs      # 同时跟随后端日志
+./scripts/run_dashboard.sh
 ```
 
-脚本自带健康检查与自愈：等待服务就绪、等待相机出数据；若检测到"相机网口
-已连接但迟迟无数据"（开机时序问题）会自动重启一次后端。可随时重复执行。
-
-停止服务：前台 Ctrl-C，或 `docker compose down`（在部署目录下执行）。
-
-### 2.2 浏览器访问
-
-- 同一局域网：`http://<设备IP>:8765/`
-- 或 SSH 隧道（不依赖局域网可达）：
-  ```bash
   ssh -L 8765:localhost:8765 <用户名>@<设备IP>
   # 然后浏览器打开 http://localhost:8765/
-  ```
+
+
+浏览器直接访问：
+- 同一局域网：`http://<设备IP>:8765/`
+
+
+
+**情形 B：就在 Jetson 本机操作，且接了显示器（要在设备屏幕上看全屏看板）**
+
+```bash
+./scripts/run_dashboard.sh --jetson
+```
 
 ---
 
@@ -59,26 +58,70 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 
 | 路径 | 用途 |
 |---|---|
-| `/` 或 `/3d` | 3D VIO 轨迹 + 在线标定按钮 |
+| `/3d` | 3D VIO 轨迹 + 在线标定按钮 |
 | `/images` | 三路相机实时画面 |
 | `/recording` | rosbag 录制：topic 发现、勾选、开始/停止 |
 | `/bags` | 本地录制列表：大小/时长/完整性/评分/优化状态，可删除 |
 | `/scoring` | 轨迹评分 + 录制完整性验证 |
 | `/optimization` | COLMAP 轨迹优化：对录制的彩色图像做三维重建并与 VIO 轨迹对齐 |
-| `/settings` | 手部叠加、夹爪追踪、标定参数、图像管线诊断、重启后端（Avatar 模型下拉框当前暂时锁定，不可更换） |
+| `/settings` | 逐相机开关手部叠加、夹爪追踪；Avatar 模型下拉框当前暂时锁定，不可更换 |
 
-### 3.1 标准采集流程
 
+### 3.1 在线标定（多相机轨迹对齐）
+
+操作入口在 `/3d` 页**左上角**的 "Live Alignment" 面板——标定进行时全程盯
+这里的标题文字，不是看画面本身。流程与参数详见仓库 [README.md](../README.md)
+的"在线轨迹标定"一节，这里只讲操作时面板上会看到什么：
+
+1. 点击面板上的 `Start Alignment`（标定中会变成 `Stop Alignment`）；
+2. 面板标题会依次经过下面几种状态，对应流程的每一步：
+   - `Alignment ON | board X/Y visible` —— 还没看到板子；X/Y 是**当前看到
+     标定板的相机数 / 参与标定的相机总数**；
+   - `Alignment ON | waiting pose` —— 板子已经看到，等待位姿数据就绪；
+   - `Alignment ON | samples n/12` —— **正在采样，这是最需要盯着的一行**：
+     - `12` 是这台设备要求的样本数（来自 `config/board_calibration.json`
+       的 `required_samples`，出厂默认 12）；
+     - `n` **不是**"看到过几帧标定板"，而是**当前正在标定的这一台相机**
+       已经采到的、质量合格的样本数——采集过程会自动剔除明显不一致的
+       坏样本，所以 n 涨得快慢取决于板子和相机拿得够不够稳、够不够
+       清晰，不是纯粹看时间；
+     - **一次只标一台相机**：这台的 n 涨满 12 后会自动换下一台相机继续
+       采样（n 从 0 重新开始涨），需要每台相机都各自走完一轮采样；
+   - `Alignment ON | tracking` —— 当前相机采样完成，标定生效中；
+   - `Alignment ON | unstable (anchor spread too high)` —— 采到的样本彼此
+     对不上（标定过程中板子或相机被碰动/晃动了），保持稳定后会自动恢复；
+3. 全部待标定相机都完成标定后，点击 `Stop Alignment` 结束；标定
+   结果会持续保留并用于 3D 轨迹显示，即使面板显示已关闭也不受影响（会
+   显示 `Alignment OFF | locked`，或提示"上次标定结果仍在使用"）。
+
+标定迟迟不进（长时间停在 `board 0/Y visible`，或 `samples` 长期不涨）：
+确认板子确实在该相机视野内且成像足够大——
+`http://<设备IP>:8765/api/cameras/<相机名>/frame` 可直接查看该相机当前画面。
+
+---
+
+
+### 3.2 标准采集流程
+
+0. **程序启动后第一次采集，相机轨迹异动**：先完成一次 §3.1的在线
+   标定，否则多相机 3D 轨迹互相对不齐；
 1. 打开 `/images`，确认三路画面都在动（面板无 stale 灰标）；
 2. `/recording` → `Refresh Topics` → 勾选要录的 topic（支持按相机整组勾选）→ `Start`；
-3. 采集完成 → `Stop`；
-4. **立刻校验数据完整性并打分**（完整性约 10 秒出结论，随后自动打分）：
-   打开 `/scoring` 页，选中刚录的 bag，点 **Scoring**（一个按钮同时做两件事：
-   先跑完整性校验，报告先出来；随后不论完整性结果如何都自动接着跑轨迹评分）。
-   完整性结果面板逐 topic 给出 `实收条数 / 实测频率 / 丢失% / 最大断口位置`，
-   顶部绿色 **Complete** 即数据完整；红色 **Incomplete** 时按 §6.3 排查。
-   验证结果会持久保存，`/bags` 列表中该 bag 会带上绿色 `complete` /
-   红色 `incomplete` 徽章（未验证过的显示灰色 `unverified`）。
+3. 采集完成 → `Stop`,等待录包流程结束；
+4. **校验数据完整性并打分**：打开 `/scoring` 页，选中刚录的 bag，点
+   **Scoring**（一个按钮同时做两件事：先跑完整性校验，报告先出来；随后
+   不论完整性结果如何都自动接着跑轨迹评分）。
+
+   - **完整性结果**：逐 topic 一行，格式为「消息条数 · 实测频率/标称频率Hz ·
+     丢失 X%」，行首 `ok`/`FAIL` 标色。顶部结论只有两种：绿色
+     **Complete**（所有 topic 丢帧都在阈值内）或红色 **Incomplete**
+     （列出具体哪些 topic 丢帧，按 §6.3 排查）。结果会持久保存，`/bags`
+     列表中该 bag 会带上徽章 `complete` / `incomplete`（从没验证过的
+     显示 `unverified`）。
+   - **轨迹评分**：每台相机一张卡片，给出 0-100 分和一个质量等级标签，
+     用于横向比较不同录制/相机的相对好坏；评分完成后 `/bags` 列表该
+     bag 带上 `scored` 徽章（未跑过显示 `unscored`）。评分具体如何计算
+     不对外说明，仅看结果即可。
 
 命令行等价方式（脚本化/无浏览器时）：
 
@@ -88,10 +131,8 @@ docker exec insight-dashboard python3 scripts/check_bag.py rosbags/<目录名>
 docker exec insight-dashboard python3 scripts/check_bag.py --deep rosbags/<目录名>  # 深扫描：逐条消息统计，附每个断流时刻，慢（排查丢帧原因时用）
 ```
 
-默认模式直接读 metadata.yaml 的消息计数，任意大小的 bag 都秒出（只报每话题帧率与
-丢帧百分比）；`--deep` 保留原来的逐消息时间戳分析（区分"相机没发出"与"到达但突发"）。
 
-### 3.2 磁盘管理
+### 3.3 磁盘管理
 
 三路全录约 **1.2GB/分钟**，录制前确认空间：
 
@@ -104,24 +145,12 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 
 ---
 
-## 4. 在线标定（多相机轨迹对齐）
 
-操作入口在 `/3d` 页右上角 `Start / Stop Alignment`。流程与参数详见仓库
-[README.md](../README.md) 的"在线轨迹标定"一节，操作要点：
 
-1. 让每台待标定相机稳定看到同一块 AprilTag 标定板几秒（无需多台同时看到）；
-2. 页面状态从 `samples n/12` 攒满后自动进入 `tracking`；
-3. 全部标完点 `Stop Alignment`，结果保留并持续用于轨迹显示。
+### 4. 轨迹优化（COLMAP）
 
-标定不收敛时：确认板子确实在该相机视野内且成像足够大
-（`http://<设备IP>:8765/api/cameras/<相机名>/frame` 可直接查看该相机当前画面）。
-
----
-
-## 4.5 轨迹优化（COLMAP）
-
-`/optimization` 页选择 bag 和相机后启动。设备端全流程运行（GPU 加速特征
-提取/匹配），一段 1-2 分钟的录制约需 5-15 分钟出结果，期间页面实时显示
+`/optimization` 页选择 bag 和相机后启动（目前只支持insight9 彩色图）。设备端全流程运行（GPU 加速特征
+提取/匹配），一段 1-2 分钟的录制约需 10-15 分钟出结果，期间页面实时显示
 进度和 COLMAP 日志。**优化运行时避免同时录制**（两者都吃满资源）。
 
 结果不理想时的判断依据：
@@ -151,6 +180,7 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 ## 6. 常见问题排查
 
 > 任何异常先跑通用三板斧：
+首先怀疑是否相机调线，查看网卡是否存在，如果相机重连则重启前端
 > ```bash
 > docker ps | grep insight                     # 1. 容器活着吗（STATUS 应为 Up）
 > curl -s localhost:8765/healthz               # 2. 服务活着吗（应返回 ok）
@@ -162,7 +192,7 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 | 检查 | 命令/方法 | 处理 |
 |---|---|---|
 | 容器没起来 | `docker ps -a \| grep insight` | `./scripts/run_dashboard.sh`；仍失败看 `docker logs insight-dashboard` |
-| 网络不可达 | 能否 `ping <设备IP>` | 检查设备联网，或改用 SSH 隧道（§2.2） |
+| 网络不可达 | 能否 `ping <设备IP>` | 检查设备联网，或改用 SSH 隧道（§2.1） |
 | 浏览器缓存 | 强制刷新 Ctrl+Shift+R | — |
 
 ### 6.2 相机画面黑 / 灰标 stale（最常见）
@@ -201,7 +231,7 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
    sudo sysctl -p /etc/sysctl.d/99-dds-rx-buffers.conf
    docker restart insight-dashboard
    ```
-   然后重录一段用 `check_bag.py` 复验（此问题实测丢帧 10-24%，修复后为 0）；
+   然后重录一段用 `check_bag.py` 复验；
 2. **只有高频小消息 topic（400Hz IMU 等）分散丢几个百分点、image/camera_info
    完好** → 与上一条是不同的内核层：不是 socket 接收缓冲（那个已经够大），是
    NAPI 每核 backlog 队列太浅——这台机型相机 USB 网口的中断全部落在同一个
@@ -249,7 +279,8 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 curl -s localhost:8765/api/images/capabilities | python3 -m json.tool
 ```
 
-`active_path` 应为 `jpeg-hardware-nvjpeg`（`/settings` 页也有同样的诊断卡片）。
+`active_path` 应为 `jpeg-hardware-nvjpeg`（当前该诊断只能用上面这条命令查，
+`/settings` 页面已经没有对应的图像管线诊断卡片了）。
 
 | 现象 | 处理 |
 |---|---|
