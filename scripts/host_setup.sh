@@ -10,7 +10,22 @@
 #   1. write /etc/sysctl.d/99-dds-rx-buffers.conf (needs sudo) -- without
 #      this, best-effort image samples (~510KB each) overflow the kernel's
 #      208KB default UDP receive buffer and recordings silently lose
-#      10-24% of image frames (verified 2026-07-07, see docs/USAGE.md)
+#      10-24% of image frames (verified 2026-07-07, see docs/USAGE.md).
+#      Same file also raises net.core.netdev_max_backlog: all 3 cameras'
+#      USB-ethernet IRQs land on a single CPU core (no irqbalance/RPS on
+#      this platform -- confirmed via /proc/interrupts, one core handling
+#      100% of xhci-hcd traffic), and that core's default 1000-slot NAPI
+#      backlog queue overflows under combined bursts even though the socket
+#      buffers above are plenty big -- a different kernel layer entirely.
+#      Symptom: small BEST_EFFORT topics (400Hz IMU) losing ~0.5-0.9% of
+#      samples throughout a recording, invisible at the socket/DDS layer
+#      (`/proc/net/softnet_stat` col 2 = drops, col 3 = time_squeeze was
+#      always 0, i.e. not a CPU/budget problem, purely queue depth).
+#      Verified 2026-07-14 on 192.168.19.151: raising to 8192 took IMU loss
+#      from 0.47-0.94% (four separate storage configs, none of which moved
+#      the needle) to 0.0% (400.00Hz, 0 missing) across two 60-100s trials,
+#      with the per-camera NIC "dropped" counters not incrementing at all
+#      during the recording window (verified via `ip -s link`).
 #   2. install + enable the boot-time camera reboot unit (cameras boot
 #      faster than the Jetson and come up with stale DDS participants;
 #      see scripts/systemd/insight-camera-reboot.service). The unit's
@@ -36,7 +51,8 @@ fi
 # ── kernel UDP buffers for large DDS image samples (both directions) ─────────
 if [[ -f "${SYSCTL_FILE}" ]] \
         && [[ "$(sysctl -n net.core.rmem_max)" -ge 67108864 ]] \
-        && [[ "$(sysctl -n net.core.wmem_max)" -ge 67108864 ]]; then
+        && [[ "$(sysctl -n net.core.wmem_max)" -ge 67108864 ]] \
+        && [[ "$(sysctl -n net.core.netdev_max_backlog)" -ge 8192 ]]; then
     log "sysctl buffers already configured: OK"
 else
     log "writing ${SYSCTL_FILE} (sudo password may be prompted)..."
@@ -60,6 +76,13 @@ net.core.wmem_max = 67108864
 net.core.wmem_default = 67108864
 # IP fragment reassembly headroom for the fragmented UDP datagrams.
 net.ipv4.ipfrag_high_thresh = 134217728
+# NAPI per-CPU backlog depth: all camera USB-ethernet IRQs land on one CPU
+# core on this platform, and the default 1000-slot queue overflows under
+# combined camera traffic bursts before packets ever reach a DDS socket --
+# a small BEST_EFFORT stream (400Hz IMU) silently loses ~0.5-0.9% of samples
+# throughout a recording with zero errors visible anywhere above this layer.
+# Verified 2026-07-14: eliminated that loss entirely (400.00Hz, 0 missing).
+net.core.netdev_max_backlog = 8192
 EOF
     sudo sysctl -p "${SYSCTL_FILE}"
     log "sysctl buffers: applied + persisted"

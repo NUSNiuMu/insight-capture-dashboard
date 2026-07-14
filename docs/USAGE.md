@@ -202,11 +202,30 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
    docker restart insight-dashboard
    ```
    然后重录一段用 `check_bag.py` 复验（此问题实测丢帧 10-24%，修复后为 0）；
-2. **所有 topic 在同一时间段一起断** → 录制期间设备被其他任务抢占，
+2. **只有高频小消息 topic（400Hz IMU 等）分散丢几个百分点、image/camera_info
+   完好** → 与上一条是不同的内核层：不是 socket 接收缓冲（那个已经够大），是
+   NAPI 每核 backlog 队列太浅——这台机型相机 USB 网口的中断全部落在同一个
+   CPU 核上（`cat /proc/interrupts | grep xhci` 只有一列非零可确认），该核
+   默认 1000 条的 backlog 队列在多相机流量突发时会溢出，包在到达任何
+   DDS socket 之前就已经在内核网络层被丢弃，`ip -s link show <相机对应网口>`
+   的 `dropped` 计数会在录制窗口内持续增长。验证与恢复：
+   ```bash
+   sysctl net.core.netdev_max_backlog   # 正常应 >= 8192；默认值 1000 即命中
+   cat /proc/net/softnet_stat | head -1 # 第2列(16进制)=丢包数在录制前后应几乎不变
+   ```
+   恢复（与上一条同一个 `/etc/sysctl.d/99-dds-rx-buffers.conf` 文件，
+   `scripts/host_setup.sh` 会一并写入两项设置，重跑一次即可持久化）：
+   ```bash
+   sudo sysctl -w net.core.netdev_max_backlog=8192   # 立即生效，未持久化
+   ./scripts/host_setup.sh                            # 持久化进 99-dds-rx-buffers.conf
+   ```
+   然后重录一段用 `check_bag.py --deep` 复验（此问题实测 IMU 丢帧
+   0.47-0.94%，修复后为 0.0%，验证于 2026-07-14）；
+3. **所有 topic 在同一时间段一起断** → 录制期间设备被其他任务抢占，
    `docker stats insight-dashboard` 观察 CPU；录制时避免同时跑评分/优化任务；
-3. **某台相机自己的全部 topic（含 IMU/VIO）同时断** → 相机侧停顿，
+4. **某台相机自己的全部 topic（含 IMU/VIO）同时断** → 相机侧停顿，
    与主机无关；复现请记录相机名与时间点后报障；
-4. **磁盘写满**：见 §3.2。
+5. **磁盘写满**：见 §3.2。
 
 ### 6.4 录制无法开始 / 停止异常
 
