@@ -12,11 +12,22 @@ blips):
                L = (log10(p50) + log10(p90)) / 2:
                    base = 100 / (1 + exp(-(1.1 + 1.2 * z)))
                    z    = (cal_median_L - L) / cal_sigma_L
-               Calibration anchors come from this fleet's own bag history
-               (2026-07-10, 33 bag x camera samples: median_L = -3.743
-               i.e. ~1.8e-4, robust sigma 0.412 decades), so the fleet
-               median maps to ~75 and scores spread bell-shaped instead
-               of saturating at 100.
+               Calibration anchor is this machine's own bag history, not
+               fleet-wide stats (2026-07-14, 192.168.19.222: 53 samples,
+               vio_image_cov across every locally recorded bag x camera
+               with duration >= 5s, short smoke-test recordings excluded):
+               median_L = -3.9195 (trace ~1.2e-4) is set to score 80 (not
+               ~75 as an untouched median would under this logistic curve)
+               -- a typical/"fair" recording on this hardware is meant to
+               read as a solidly good score, with headroom above it for
+               genuinely tight trajectories, not sit at the midpoint of the
+               scale. Sigma (spread) is kept at the prior value, 0.412
+               decades -- re-deriving it needs many more samples than we
+               had to be reliable, and changing the anchor alone already
+               satisfies the goal here. Recalibrate by recomputing the
+               median over a fresh batch of representative recordings if
+               the hardware or environment changes materially -- scores
+               are only comparable within one calibration.
 
   spike terms  samples above 8 x the bag's own median trace, grouped
                into consecutive runs:
@@ -56,11 +67,8 @@ from rosidl_runtime_py.utilities import get_message
 
 DEFAULT_TOPIC = "/insight7_a/camera/vio_image_cov"
 
-# Fleet calibration (see module docstring for provenance). Recalibrate by
-# recomputing median/MAD*1.4826 of L over recent bags when the fleet or
-# environment changes materially; scores are only comparable within one
-# calibration.
-DEFAULT_CAL_MEDIAN_L = -3.743
+# Local-machine calibration (see module docstring for provenance).
+DEFAULT_CAL_MEDIAN_L = -3.8212
 DEFAULT_CAL_SIGMA_L = 0.412
 
 SPIKE_FACTOR = 8.0            # spike threshold = SPIKE_FACTOR * median trace
@@ -242,7 +250,7 @@ def print_report(stats: dict, bag_path: str, topic: str) -> None:
     print(f"  Max  cov trace   : {stats['max_trace']:.6e}")
     print("-" * width)
     print(f"  Base score       : {stats['base_score']:.1f}  "
-          f"(fleet cal: median_L={stats['cal_median_log10_trace']}, "
+          f"(cal: median_L={stats['cal_median_log10_trace']}, "
           f"sigma={stats['cal_sigma_log10_trace']})")
     print(f"  Transient blips  : {stats['transient_run_count']} run(s)  "
           f"-> -{stats['transient_penalty']:.1f}")
@@ -278,8 +286,8 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_CAL_MEDIAN_L,
         help=(
-            "Fleet calibration: log10 covariance-trace level that maps to the "
-            f"distribution centre (~75 points). Default: {DEFAULT_CAL_MEDIAN_L}"
+            "Calibration: log10 covariance-trace level that maps to 80 points "
+            f"(a typical/'fair' local recording). Default: {DEFAULT_CAL_MEDIAN_L}"
         ),
     )
     parser.add_argument(
@@ -287,7 +295,7 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_CAL_SIGMA_L,
         help=(
-            "Fleet calibration: robust sigma of log10 trace in decades. "
+            "Calibration: robust sigma of log10 trace in decades. "
             f"Default: {DEFAULT_CAL_SIGMA_L}"
         ),
     )
