@@ -5,6 +5,7 @@ import os
 import re
 import signal
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -13,7 +14,10 @@ from collections import deque
 from pathlib import Path
 from typing import Callable, Deque, Dict, List, Optional, Sequence, Set, Tuple
 
+import yaml
+
 from camera_setup import camera_base, camera_info_topic, enabled_cameras, image_topic
+from check_bag import nominal_for
 from perf_tracker import track
 
 try:
@@ -374,6 +378,113 @@ def _topic_group(topic: str) -> str:
     return topic.strip("/").split("/", 1)[0]
 
 
+def _trim_startup_skew(bag_dir: Path) -> Dict[str, object]:
+    """Cut the ragged startup window from a freshly-merged bag.
+
+    Each subprocess-recorded topic (IMU/VIO/camera_info/image) begins
+    capturing at a slightly different wall-clock instant -- DDS discovery
+    for a fresh `ros2 bag record` process takes anywhere from ~0.1s to
+    occasionally 1.5-2s depending on that camera's own timing (measured
+    2026-07-14 on 192.168.19.151), so right after "Start" some topics are
+    already flowing while others haven't matched their publisher yet. A
+    per-topic rate check reads that stagger as "loss" even though nothing
+    was ever dropped -- there's just no data to lose because that camera's
+    recorder wasn't listening yet.
+
+    Fix: find the latest of every frame topic's own first-message time
+    (the slowest-starting camera/stream), then delete every frame-topic
+    row before that instant. What's left is either complete from its own
+    true start or entirely absent -- never "started but already missing
+    its first N samples". Also rewrites metadata.yaml's starting_time /
+    duration / per-topic message_count so a later `check_bag.py` fast-mode
+    read (which trusts metadata.yaml, not the raw messages table) reports
+    the same corrected picture.
+
+    Latched/one-shot topics (tf_static -- nominal_for() returns None,
+    they're not in check_bag.NOMINAL_HZ) are left untouched: they're not
+    frame streams, and dropping their only sample to align with a camera
+    topic would lose real static data for no completeness benefit. The
+    bag-level starting_time is computed from frame topics only for the
+    same reason -- otherwise an untouched tf_static sample published
+    before any camera connected would drag the reported start time back
+    to the exact skew this function exists to remove.
+
+    Capped at MAX_TRIM_NS (2s): normal per-camera discovery jitter measured
+    2026-07-14 topped out around 1.8s, so a skew beyond 2s means something
+    actually wrong (a stalled/wedged camera, not ordinary startup variance)
+    -- silently eating an unbounded amount of the front of the recording to
+    paper over that would hide a real problem instead of just smoothing a
+    harmless one. Past the cap, the still-lagging topic(s) keep whatever
+    real gap they have and it surfaces normally in check_bag/integrity.
+    """
+    MAX_TRIM_NS = 2_000_000_000
+    metadata_path = bag_dir / "metadata.yaml"
+    info = yaml.safe_load(metadata_path.read_text())["rosbag2_bagfile_information"]
+    db_path = bag_dir / info["relative_file_paths"][0]
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        topic_ids = {name: tid for tid, name in conn.execute("SELECT id, name FROM topics")}
+        frame_topic_ids = [tid for name, tid in topic_ids.items() if nominal_for(name) is not None]
+        if not frame_topic_ids:
+            return {"trimmed_ns": 0}
+
+        placeholders = ",".join("?" * len(frame_topic_ids))
+        first_by_topic = dict(conn.execute(
+            f"SELECT topic_id, MIN(timestamp) FROM messages WHERE topic_id IN ({placeholders}) "
+            "GROUP BY topic_id",
+            frame_topic_ids,
+        ))
+        if not first_by_topic:
+            return {"trimmed_ns": 0}
+        # Only topics that actually captured something count toward the
+        # sync point -- a camera stream with zero messages is a dead-camera
+        # failure, a different problem trimming can't and shouldn't mask.
+        sync_point_ns = max(first_by_topic.values())
+        old_min_ns = min(first_by_topic.values())
+        if sync_point_ns <= old_min_ns:
+            return {"trimmed_ns": 0}  # every frame topic already started together
+
+        trim_point_ns = min(sync_point_ns, old_min_ns + MAX_TRIM_NS)
+        capped = trim_point_ns < sync_point_ns
+
+        conn.execute(
+            f"DELETE FROM messages WHERE timestamp < ? AND topic_id IN ({placeholders})",
+            [trim_point_ns, *frame_topic_ids],
+        )
+        conn.commit()
+
+        counts = dict(conn.execute(
+            "SELECT t.name, COUNT(*) FROM messages m JOIN topics t ON t.id = m.topic_id GROUP BY t.name"
+        ))
+        new_min_ns = conn.execute(
+            f"SELECT MIN(timestamp) FROM messages WHERE topic_id IN ({placeholders})", frame_topic_ids
+        ).fetchone()[0]
+        new_max_ns = conn.execute("SELECT MAX(timestamp) FROM messages").fetchone()[0]
+    finally:
+        conn.close()
+
+    for entry in info["topics_with_message_count"]:
+        entry["message_count"] = counts.get(entry["topic_metadata"]["name"], 0)
+    info["message_count"] = sum(counts.values())
+    info["starting_time"]["nanoseconds_since_epoch"] = int(new_min_ns)
+    info["duration"]["nanoseconds"] = int(new_max_ns - new_min_ns)
+    for file_entry in info.get("files") or []:
+        file_entry["starting_time"]["nanoseconds_since_epoch"] = int(new_min_ns)
+        file_entry["duration"]["nanoseconds"] = int(new_max_ns - new_min_ns)
+        file_entry["message_count"] = info["message_count"]
+
+    metadata_path.write_text(yaml.dump(
+        {"rosbag2_bagfile_information": info}, sort_keys=False, default_flow_style=False, width=1_000_000
+    ))
+    return {
+        "trimmed_ns": int(trim_point_ns - old_min_ns),
+        "sync_point_ns": int(sync_point_ns),
+        "capped": capped,
+        "residual_skew_ns": int(sync_point_ns - trim_point_ns) if capped else 0,
+    }
+
+
 # Crash-safe sqlite pragmas (WAL) for every recording writer; without this
 # a power cut mid-recording leaves malformed .db3 files. See the yaml for
 # details. Shared by the `ros2 bag record` subprocesses here and the
@@ -669,6 +780,20 @@ class RecordingManager:
 
             with track("rosbag_merge"):
                 self._convert_merge(part_bags, output_path)
+
+            trim = _trim_startup_skew(output_path)
+            if trim["trimmed_ns"] > 0:
+                self._output_lines.append(
+                    f"[merge] Trimmed {trim['trimmed_ns'] / 1e9:.2f}s of unsynced camera-startup "
+                    "skew from the front of the bag (recorders began at slightly different instants)"
+                )
+            if trim.get("capped"):
+                total_skew_s = (trim["trimmed_ns"] + trim["residual_skew_ns"]) / 1e9
+                self._output_lines.append(
+                    f"[merge] WARNING: startup skew was {total_skew_s:.2f}s, beyond the 2s trim cap -- "
+                    "a camera took unusually long to start; the remaining "
+                    f"{trim['residual_skew_ns'] / 1e9:.2f}s gap is real and will show as loss, not silently cut"
+                )
 
             shutil.rmtree(staging_dir, ignore_errors=True)
             with self._lock:

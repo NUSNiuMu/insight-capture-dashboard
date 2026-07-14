@@ -65,18 +65,31 @@ NOMINAL_HZ = [
     ("image_rect_raw/compressed", 30.0),
     ("image_rect_raw", 20.0),
     ("camera_info", None),  # follows its image stream; resolved below
-    ("vio_100hz", 100.0),
+    # Labeled 100Hz but the VIO estimator's own compute cycle never quite
+    # hits that: a bare `ros2 topic hz` with zero recorder/dashboard code
+    # attached measures a steady 99.19-99.31Hz on all 3 cameras (verified
+    # 2026-07-14, std dev ~0.0025s -- not sporadic loss, a real cycle-time
+    # floor). 99.0 leaves headroom under the observed floor so hitting that
+    # ceiling isn't reported as loss, while still catching a genuine
+    # additional drop below it.
+    ("vio_100hz", 99.0),
     ("vio_image_cov", 20.0),
     ("tf_static", None),
 ]
 
 DEFAULT_MAX_LOSS_PCT = 0.5
-# Subscriptions settling right after recording start produce harmless gaps;
-# forgiving the first seconds keeps the loss threshold sensitive to real
-# mid-recording loss instead. In fast mode this is an allowance subtracted
-# from the expected message count; in --deep mode the first seconds of
-# stamps are excluded outright.
-DEFAULT_WARMUP_S = 2.0
+# Subscriptions settling right after recording start used to produce
+# harmless gaps that this allowance forgave -- but it did so by subtracting
+# a flat allowance from the expected count regardless of WHERE the shortfall
+# actually fell, so it just as easily masked real mid-recording loss as it
+# forgave startup jitter (e.g. IMU averaging 395-398Hz still read 0% loss).
+# RecordingManager._trim_startup_skew (post_processing.py) now cuts that
+# startup window out of the merged bag at merge time instead, up to a 2s
+# cap, so every topic reaching check_bag has either fully started or is
+# fully absent -- no more startup-jitter class of gap to forgive here.
+# Default 0 so loss is reported honestly; pass --warmup for bags recorded
+# before 2026-07-14 (no trim applied) if they show stale startup-only gaps.
+DEFAULT_WARMUP_S = 0.0
 
 
 def nominal_for(topic: str) -> Optional[float]:
