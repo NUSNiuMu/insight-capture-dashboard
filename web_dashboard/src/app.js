@@ -309,7 +309,9 @@ function resolveWebSocketUrl() {
 
 function createScene(engineRef, canvasRef) {
   const sceneRef = new BABYLON.Scene(engineRef);
-  sceneRef.clearColor = new BABYLON.Color4(0.03, 0.08, 0.11, 1.0);
+  // Warm paper, a step deeper than the page background so the viewport
+  // reads as a surface (Daylight Telemetry theme).
+  sceneRef.clearColor = new BABYLON.Color4(0.937, 0.906, 0.843, 1.0);
 
   const camera = new BABYLON.ArcRotateCamera("camera", -1.2, 1.1, 5.8, new BABYLON.Vector3(0, 0.9, 0), sceneRef);
   camera.attachControl(canvasRef, true);
@@ -340,7 +342,7 @@ function createScene(engineRef, canvasRef) {
     ]);
   }
   const grid = BABYLON.MeshBuilder.CreateLineSystem("grid", { lines: gridLines }, sceneRef);
-  grid.color = new BABYLON.Color3(0.07, 0.14, 0.18);
+  grid.color = new BABYLON.Color3(0.72, 0.67, 0.58);
   grid.alpha = 0.55;
   grid.isPickable = false;
 
@@ -2980,7 +2982,7 @@ function buildOptTrajScene(vioPoints, colmapPoints, runName) {
   const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: false, stencil: false });
   _optEngine = engine;
   const scene = new BABYLON.Scene(engine);
-  scene.clearColor = new BABYLON.Color4(0.05, 0.07, 0.05, 1);
+  scene.clearColor = new BABYLON.Color4(0.937, 0.906, 0.843, 1);
 
   const camera = new BABYLON.ArcRotateCamera("cam", -Math.PI / 2, Math.PI / 3, 3, BABYLON.Vector3.Zero(), scene);
   camera.attachControl(canvas, true);
@@ -3013,8 +3015,9 @@ function buildOptTrajScene(vioPoints, colmapPoints, runName) {
     lines.color = color;
   }
 
-  drawLine(vioNorm, new BABYLON.Color3(1, 0.35, 0.35));
-  drawLine(colmapNorm, new BABYLON.Color3(0.34, 0.84, 0.48));
+  // Matches the CSS plot-legend swatches (--red / --green) on warm paper.
+  drawLine(vioNorm, new BABYLON.Color3(0.76, 0.27, 0.24));
+  drawLine(colmapNorm, new BABYLON.Color3(0.12, 0.54, 0.33));
 
   const span = allPts.length > 0 ? Math.max(...allPts.map((p) => Math.abs(p[0] - c[0])), ...allPts.map((p) => Math.abs(p[2] - c[2]))) : 1;
   camera.radius = Math.max(span * 2.5, 0.5);
