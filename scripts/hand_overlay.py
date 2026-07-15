@@ -15,6 +15,7 @@ under scripts/; this module is a browser-side port of its drawing logic):
                    bbox.center = pixel location
 """
 
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -68,6 +69,71 @@ HAND_DATA_TIMEOUT_SEC = 2.0
 # instead -- the plain passthrough JPEG a moment of no overlay, not a
 # visibly wrong one.
 MAX_SYNC_NS = 120_000_000
+
+# Which dashboard teleop role each HandEngine class_id anchors to in the 3D
+# scene. UNVERIFIED against real data: insight9_a is an outward-looking head
+# camera, so whether its "hand_left" is the wearer's physical left hand (the
+# insight7_b wrist pose) or mirrored depends on HandEngine's own convention.
+# If skeletons show up on the wrong wrist during a real replay, swap the two
+# values here -- this dict is the single flip point.
+HAND_CLASS_TO_ROLE = {
+    "hand_left": "left_hand",
+    "hand_right": "right_hand",
+}
+
+# Synthetic per-landmark depth (hand-plane normal) offsets, in the normalized
+# units of normalize_hand_landmarks (wrist->middle-MCP distance == 1). The 2D
+# detections carry no depth at all; these constants only keep the rendered
+# hand from being perfectly flat -- thumb arcs out of the palm plane, finger
+# joints lift slightly toward the fingertips. Purely cosmetic, tune freely.
+_LANDMARK_Z = [
+    0.00,                       # 0 wrist
+    0.06, 0.12, 0.18, 0.24,     # 1-4 thumb
+    0.00, 0.03, 0.06, 0.09,     # 5-8 index
+    0.00, 0.03, 0.06, 0.09,     # 9-12 middle
+    0.00, 0.03, 0.06, 0.09,     # 13-16 ring
+    0.00, 0.03, 0.06, 0.09,     # 17-20 pinky
+]
+
+
+def normalize_hand_landmarks(
+    keypoints: List[Dict[str, object]], min_score: float = MIN_KEYPOINT_SCORE
+) -> Optional[List[Optional[List[float]]]]:
+    """Convert 21 pixel-space keypoints into a wrist-local normalized frame
+    for the 3D scene: origin at landmark 0 (wrist), scaled so the wrist->
+    middle-MCP (landmark 9) distance is 1 (cancels how close the hand is to
+    the detecting camera's lens), axes a=along-hand toward the fingers,
+    b=lateral in the hand plane, z=synthetic depth from _LANDMARK_Z. Returns
+    a 21-entry list ([a, b, z] or None for below-score landmarks), or None
+    when the two anchor landmarks aren't confidently detected.
+    """
+    points: Dict[int, Tuple[float, float]] = {}
+    for kp in keypoints:
+        if float(kp.get("score", 0.0)) < min_score:
+            continue
+        points[int(kp["i"])] = (float(kp["x"]), float(kp["y"]))
+    if 0 not in points or 9 not in points:
+        return None
+    origin_x, origin_y = points[0]
+    ref_x = points[9][0] - origin_x
+    ref_y = points[9][1] - origin_y
+    ref_len = math.hypot(ref_x, ref_y)
+    if ref_len < 1e-6:
+        return None
+    ux, uy = ref_x / ref_len, ref_y / ref_len
+    vx, vy = -uy, ux
+    landmarks: List[Optional[List[float]]] = []
+    for index in range(21):
+        point = points.get(index)
+        if point is None:
+            landmarks.append(None)
+            continue
+        dx = (point[0] - origin_x) / ref_len
+        dy = (point[1] - origin_y) / ref_len
+        along = dx * ux + dy * uy
+        lateral = dx * vx + dy * vy
+        landmarks.append([round(along, 3), round(lateral, 3), _LANDMARK_Z[index]])
+    return landmarks
 
 
 def draw_hands_on_frame(
@@ -148,32 +214,25 @@ class HandOverlayMixin:
         self._hand_latest_boxes: Dict[str, object] = {}
         self.hand_latest_snapshot: Dict[str, HandOverlaySnapshot] = {}
 
-    def _on_hand_boxes(self, camera_name: str, msg) -> None:
-        # Live-only: HandEngine's device-side hand topics aren't remapped
-        # during `ros2 bag play` (see bagplay_topic / PlaybackManager), so a
-        # still-connected live camera would otherwise overlay live hand
-        # landmarks onto replayed video frames. Simpler than giving hand
-        # overlay its own shadow-topic split like images/poses: it's a
-        # visual toggle, not the primary display, so it just goes inert for
-        # the duration of playback instead.
-        if self._playback_mode:
+    def _on_hand_boxes(self, camera_name: str, msg, is_live: bool = True) -> None:
+        # Live and playback are two separate subscriptions (playback's is
+        # remapped to /bagplay/... -- see bagplay_topic / PlaybackManager),
+        # gated exactly like the image/pose callbacks: is_live ==
+        # self._playback_mode means "wrong source for the current mode".
+        if is_live == self._playback_mode:
             return
-        # Cheap regardless of the Settings toggle -- this is what makes the
-        # "Hand landmark overlay" checkbox appear at all (hand_overlay_available
-        # is data-driven, see build_settings_payload). The actual per-message
-        # parsing below is skipped unless enabled, so a disabled camera pays
-        # only this one set-add per message, not the full Detection2DArray walk.
         self.hand_overlay_available.add(camera_name)
-        if camera_name not in self.hand_overlay_enabled:
-            return
         self._hand_latest_boxes[camera_name] = msg
 
-    def _on_hand_keypoints(self, camera_name: str, msg) -> None:
-        if self._playback_mode:
+    def _on_hand_keypoints(self, camera_name: str, msg, is_live: bool = True) -> None:
+        if is_live == self._playback_mode:
             return
         self.hand_overlay_available.add(camera_name)
-        if camera_name not in self.hand_overlay_enabled:
-            return
+        # Parsed regardless of the Settings 2D-overlay toggle: the snapshot
+        # also feeds the 3D hand skeleton via hand_landmarks_for_role, which
+        # has no per-camera toggle. Only cameras actually running HandEngine
+        # publish here, and a Detection2DArray walk (~42 entries) is cheap
+        # next to the per-frame image work.
         with track(f"hand_parse:{camera_name}"):
             boxes_by_hand: Dict[int, Dict[str, object]] = {}
             boxes_msg = self._hand_latest_boxes.get(camera_name)
@@ -230,6 +289,23 @@ class HandOverlayMixin:
             self.hand_overlay_enabled.add(camera_name)
         else:
             self.hand_overlay_enabled.discard(camera_name)
+
+    def hand_landmarks_for_role(self, role: str) -> Optional[List[Optional[List[float]]]]:
+        """Latest normalized 21-point landmarks for a teleop role ("left_hand"
+        / "right_hand"), scanning every camera's snapshot (any HandEngine
+        camera may see either hand). Returns None when no fresh detection of
+        that hand exists anywhere."""
+        now = time.monotonic()
+        for snapshot in self.hand_latest_snapshot.values():
+            if now - snapshot.received_monotonic > HAND_DATA_TIMEOUT_SEC:
+                continue
+            for hand in snapshot.hands:
+                if HAND_CLASS_TO_ROLE.get(str(hand.get("label", ""))) != role:
+                    continue
+                landmarks = normalize_hand_landmarks(hand.get("keypoints", []))
+                if landmarks is not None:
+                    return landmarks
+        return None
 
     def hand_overlay_payload(self, camera_name: str) -> Optional[Dict[str, object]]:
         snapshot = self.hand_latest_snapshot.get(camera_name)

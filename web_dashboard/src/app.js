@@ -72,6 +72,28 @@ const TRAIL_RADIUS_BY_ROLE = {
   right_hand: 0.008
 };
 
+// Stick-figure rig: same MediaPipe 21-point topology and finger grouping as
+// HAND_EDGES/FINGER_COLORS in scripts/hand_overlay.py (the 2D image overlay),
+// so both views read the same. Landmark 0 is the wrist.
+const HAND_RIG_EDGES = [
+  [0, 1, "thumb"], [1, 2, "thumb"], [2, 3, "thumb"], [3, 4, "thumb"],
+  [0, 5, "palm"], [5, 6, "index"], [6, 7, "index"], [7, 8, "index"],
+  [5, 9, "palm"], [9, 10, "middle"], [10, 11, "middle"], [11, 12, "middle"],
+  [9, 13, "palm"], [13, 14, "ring"], [14, 15, "ring"], [15, 16, "ring"],
+  [13, 17, "palm"], [0, 17, "palm"], [17, 18, "pinky"], [18, 19, "pinky"], [19, 20, "pinky"]
+];
+const HAND_RIG_FINGER_COLORS = {
+  thumb: "#ff5050",
+  index: "#ffa040",
+  middle: "#ffe14d",
+  ring: "#4dd162",
+  pinky: "#4d7dff",
+  palm: "#c8c8c8"
+};
+// Landmarks arrive normalized to wrist->middle-MCP == 1; this is that
+// distance in meters on the rendered rig.
+const HAND_RIG_SCALE = 0.09;
+
 const wsUrl = resolveWebSocketUrl();
 const engine = enable3d && canvas ? new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: false, stencil: true }) : null;
 const scene = engine && canvas ? createScene(engine, canvas) : null;
@@ -79,6 +101,8 @@ const poseNodes = new Map();
 const modelPromises = new Map();
 const modelWarnings = new Set();
 const trailStates = new Map();
+const armRigs = new Map();
+const handRigs = new Map();
 const cameraPanels = new Map();
 const cameraPollState = new Map();
 let maximizedCameraName = null;
@@ -1429,6 +1453,8 @@ async function applyPoseUpdate(payload) {
     await ensurePoseVisual(pose, node);
     applyGripperOpening(pose, node);
     updateTrailFromPose(pose);
+    updateArmRig(pose, scenePosition);
+    updateHandRig(pose, node);
     if (legend) {
       const row = legend.querySelector(`[data-legend-role="${CSS.escape(pose.role)}"] .legend-meta`);
       if (row) row.textContent = pose.visible ? pose.name : `${pose.name} hidden`;
@@ -2084,6 +2110,97 @@ function applyGripperOpening(pose, node) {
   const closeFraction = 1.0 - Math.min(1, Math.max(0, opening));
   fingers.left.position.copyFrom(fingers.leftRestPosition).addInPlaceFromFloats(closeFraction * fingers.leftMaxTravel, 0, 0);
   fingers.right.position.copyFrom(fingers.rightRestPosition).addInPlaceFromFloats(-closeFraction * fingers.rightMaxTravel, 0, 0);
+}
+
+function updateArmRig(pose, wristScenePosition) {
+  // Two synthesized bones (shoulder->elbow->wrist) computed server-side by
+  // solve_arm_ik; the shoulder/elbow fields only exist on hand poses while
+  // both the head and that hand are visible.
+  if (!scene) {
+    return;
+  }
+  let rig = armRigs.get(pose.name);
+  if (rig && rig.mesh.isDisposed()) {
+    armRigs.delete(pose.name);
+    rig = null;
+  }
+  const hasData = pose.visible && Array.isArray(pose.shoulder_position) && Array.isArray(pose.elbow_position);
+  if (!hasData) {
+    if (rig) rig.mesh.setEnabled(false);
+    return;
+  }
+  const points = [
+    mapDashboardPositionToScene(pose.shoulder_position),
+    mapDashboardPositionToScene(pose.elbow_position),
+    wristScenePosition.clone()
+  ];
+  if (rig) {
+    BABYLON.MeshBuilder.CreateLines(null, { points, instance: rig.mesh });
+    rig.mesh.setEnabled(true);
+  } else {
+    const mesh = BABYLON.MeshBuilder.CreateLines(`arm-rig-${pose.name}`, { points, updatable: true }, scene);
+    mesh.color = BABYLON.Color3.FromHexString((ROLE_STYLE[pose.role] || ROLE_STYLE.head).color);
+    mesh.isPickable = false;
+    mesh.renderingGroupId = 1;
+    armRigs.set(pose.name, { mesh });
+  }
+}
+
+function handLandmarkToLocal(landmark) {
+  // Server landmarks are [along-fingers, lateral, synthetic-normal] in units
+  // of wrist->middle-MCP == 1 (see normalize_hand_landmarks). The mapping
+  // onto the wrist node's local axes assumes the hand camera's body-x points
+  // along the fingers (dashboard x -> local scene z after the basis change);
+  // flip signs here if a real replay renders the hand mirrored or rotated.
+  return new BABYLON.Vector3(
+    -landmark[1] * HAND_RIG_SCALE,
+    landmark[2] * HAND_RIG_SCALE,
+    landmark[0] * HAND_RIG_SCALE
+  );
+}
+
+function updateHandRig(pose, node) {
+  if (!scene) {
+    return;
+  }
+  let rig = handRigs.get(pose.name);
+  // ensurePoseVisual's disposeNodeChildren wipes every descendant of the
+  // pose node when the avatar model changes -- including this parented line
+  // system -- so recreate rather than instance-update a disposed mesh.
+  if (rig && rig.mesh.isDisposed()) {
+    handRigs.delete(pose.name);
+    rig = null;
+  }
+  const landmarks = Array.isArray(pose.hand_landmarks) ? pose.hand_landmarks : null;
+  if (!pose.visible || !landmarks) {
+    if (rig) rig.mesh.setEnabled(false);
+    return;
+  }
+  const origin = BABYLON.Vector3.Zero();
+  const lines = HAND_RIG_EDGES.map(([a, b]) => {
+    const pointA = landmarks[a];
+    const pointB = landmarks[b];
+    if (!pointA || !pointB) {
+      // Zero-length line keeps the line-system topology constant so the
+      // cheap instance update below stays valid despite dropped landmarks.
+      return [origin, origin];
+    }
+    return [handLandmarkToLocal(pointA), handLandmarkToLocal(pointB)];
+  });
+  if (rig) {
+    BABYLON.MeshBuilder.CreateLineSystem(null, { lines, instance: rig.mesh });
+    rig.mesh.setEnabled(true);
+  } else {
+    const colors = HAND_RIG_EDGES.map(([, , finger]) => {
+      const color = BABYLON.Color4.FromHexString(`${HAND_RIG_FINGER_COLORS[finger] || "#ffffff"}ff`);
+      return [color, color];
+    });
+    const mesh = BABYLON.MeshBuilder.CreateLineSystem(`hand-rig-${pose.name}`, { lines, colors, updatable: true }, scene);
+    mesh.parent = node;
+    mesh.isPickable = false;
+    mesh.renderingGroupId = 1;
+    handRigs.set(pose.name, { mesh });
+  }
 }
 
 function collectInstantiatedMeshes(rootNodes) {
