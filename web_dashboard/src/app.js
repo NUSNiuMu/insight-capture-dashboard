@@ -1,7 +1,7 @@
 const dashboardView = document.body.dataset.dashboardView || "full";
 const enable3d = dashboardView === "full" || dashboardView === "3d";
 const enableImages = dashboardView === "images";
-const enableCameras = dashboardView === "full" || dashboardView === "cameras" || enableImages;
+const enableCameras = dashboardView === "full" || dashboardView === "cameras" || enableImages || enable3d;
 
 const canvas = document.getElementById("render-canvas");
 const modelStatus = document.getElementById("model-status");
@@ -73,7 +73,7 @@ const TRAIL_RADIUS_BY_ROLE = {
 };
 
 const wsUrl = resolveWebSocketUrl();
-const engine = enable3d && canvas ? new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true }) : null;
+const engine = enable3d && canvas ? new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: false, stencil: true }) : null;
 const scene = engine && canvas ? createScene(engine, canvas) : null;
 const poseNodes = new Map();
 const modelPromises = new Map();
@@ -127,7 +127,15 @@ const DEFAULT_TRAIL_ENABLED = {
 };
 
 if (engine && scene) {
+  const sceneFrameIntervalMs = 1000 / 30;
+  let sceneRenderBudgetMs = 0;
+  engine.setHardwareScalingLevel(1.15);
   engine.runRenderLoop(() => {
+    sceneRenderBudgetMs += engine.getDeltaTime();
+    if (sceneRenderBudgetMs < sceneFrameIntervalMs) {
+      return;
+    }
+    sceneRenderBudgetMs %= sceneFrameIntervalMs;
     updateTrails();
     scene.render();
   });
@@ -290,14 +298,26 @@ function createScene(engineRef, canvasRef) {
   dir.position = new BABYLON.Vector3(3, 6, 4);
   dir.intensity = 0.7;
 
-  const ground = BABYLON.MeshBuilder.CreateGround("grid", { width: 8, height: 8, subdivisions: 20 }, sceneRef);
-  const groundMaterial = new BABYLON.StandardMaterial("ground-mat", sceneRef);
-  groundMaterial.diffuseColor = new BABYLON.Color3(0.07, 0.14, 0.18);
-  groundMaterial.emissiveColor = new BABYLON.Color3(0.05, 0.11, 0.15);
-  groundMaterial.alpha = 0.55;
-  groundMaterial.wireframe = true;
-  ground.material = groundMaterial;
-  ground.position.y = 0;
+  const gridSize = 8;
+  const gridCells = 20;
+  const gridHalf = gridSize / 2;
+  const gridStep = gridSize / gridCells;
+  const gridLines = [];
+  for (let index = 0; index <= gridCells; index += 1) {
+    const offset = -gridHalf + index * gridStep;
+    gridLines.push([
+      new BABYLON.Vector3(-gridHalf, 0, offset),
+      new BABYLON.Vector3(gridHalf, 0, offset),
+    ]);
+    gridLines.push([
+      new BABYLON.Vector3(offset, 0, -gridHalf),
+      new BABYLON.Vector3(offset, 0, gridHalf),
+    ]);
+  }
+  const grid = BABYLON.MeshBuilder.CreateLineSystem("grid", { lines: gridLines }, sceneRef);
+  grid.color = new BABYLON.Color3(0.07, 0.14, 0.18);
+  grid.alpha = 0.55;
+  grid.isPickable = false;
 
   createAxes(sceneRef, 1.1);
   return sceneRef;
@@ -587,7 +607,6 @@ function renderTopicList(topics) {
         <input type="checkbox" data-record-topic value="${escapeHtml(topic.name)}" data-record-group-name="${escapeHtml(topic.group || "")}" ${checked}>
         <span class="record-topic-copy">
           <strong>${escapeHtml(topic.short_name || topic.name)}</strong>
-          <span>${escapeHtml(topic.name)}</span>
         </span>
       </label>
     `;
@@ -952,17 +971,19 @@ function renderBagList(bags) {
     bagList.innerHTML = '<div class="empty-state">No local rosbags found yet.</div>';
     return;
   }
-  bagList.innerHTML = bags.map((bag) => `
+  bagList.innerHTML = bags.map((bag, index) => `
     <article class="bag-row">
-      <div class="bag-row-main">
-        <strong>${escapeHtml(bag.name || "unnamed bag")}</strong>
-        <span>${escapeHtml(bag.path || "")}</span>
+      <div class="bag-row-identity">
+        <span class="bag-index">${String(index + 1).padStart(2, "0")}</span>
+        <div class="bag-row-main">
+          <strong>${escapeHtml(bag.name || "unnamed bag")}</strong>
+        </div>
       </div>
       <div class="bag-row-stats">
-        <span>${formatDuration(Number(bag.duration_s || 0))}</span>
-        <span>${escapeHtml(bag.size_label || "--")}</span>
-        <span>${Number(bag.message_count || 0).toLocaleString()} msgs</span>
-        <span>${Number(bag.topic_count || 0)} topics</span>
+        <span><small>Duration</small><strong>${formatDuration(Number(bag.duration_s || 0))}</strong></span>
+        <span><small>Size</small><strong>${escapeHtml(bag.size_label || "--")}</strong></span>
+        <span><small>Messages</small><strong>${Number(bag.message_count || 0).toLocaleString()}</strong></span>
+        <span><small>Topics</small><strong>${Number(bag.topic_count || 0)}</strong></span>
       </div>
       <div class="bag-badges">
         <span class="bag-badge ${bag.integrity === true ? "is-ok" : bag.integrity === false ? "is-bad" : ""}">${
@@ -1568,6 +1589,11 @@ function updateCameraPanelLayout(panel, index) {
   if (enableImages) {
     panel.style.gridColumn = "";
     panel.style.gridRow = "";
+    return;
+  }
+  if (cameraDock?.classList.contains("spatial-camera-dock")) {
+    panel.style.gridColumn = "1 / span 1";
+    panel.style.gridRow = `${index + 1} / span 1`;
     return;
   }
   panel.style.gridColumn = `${index + 1} / span 1`;

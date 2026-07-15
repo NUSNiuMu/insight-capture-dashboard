@@ -1,96 +1,31 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Insight Trajectory Optimization</title>
-    <link rel="stylesheet" href="/static/styles.css">
-    <script src="/static/babylon.js"></script>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight Trajectory Optimization</title><link rel="stylesheet" href="/static/styles.css?v=20260715-workspace-v13"><script src="/static/babylon.js"></script>
   </head>
   <body data-dashboard-view="optimization">
-    <div class="shell shell-page">
-      <header class="page-header">
-        <div>
-          <div class="camera-page-eyebrow">INSIGHT</div>
-          <h1>Trajectory Optimization</h1>
-          <p class="page-copy">Run VIO + COLMAP pipeline on a recorded bag. Results include aligned 2D/3D trajectory plots.</p>
-        </div>
-        <nav class="page-nav" aria-label="Dashboard pages">
-          <a href="/3d">3D</a>
-          <a href="/images">Images</a>
-          <a href="/recording">Recording</a>
-          <a href="/bags">Bags</a>
-          <a href="/scoring">Scoring</a>
-          <a href="/optimization" aria-current="page">Optimization</a>
-          <a href="/settings">Settings</a>
-        </nav>
-      </header>
-
-      <main class="page-grid">
-
-        <div class="tool-panel">
-          <p class="eyebrow">Input</p>
-
-          <label class="field-label" for="optimization-bag-select">Rosbag</label>
-          <select id="optimization-bag-select" class="bag-select" data-bag-select></select>
-          <p id="optimization-bag-meta" class="page-copy">Loading bags...</p>
-
-          <label class="field-label">Camera</label>
-          <div id="optimization-camera-group" class="opt-radio-group"></div>
-
-          <label class="field-label">Image Stream</label>
-          <div class="opt-radio-group">
-            <label class="opt-radio-item"><input type="radio" name="opt-stream" value="color_compressed" checked><span>color (compressed)</span></label>
-            <label class="opt-radio-item"><input type="radio" name="opt-stream" value="color"><span>color (raw)</span></label>
-            <label class="opt-radio-item"><input type="radio" name="opt-stream" value="infra1"><span>infra1</span></label>
-            <label class="opt-radio-item"><input type="radio" name="opt-stream" value="infra2"><span>infra2</span></label>
+    <div class="app-shell">
+      <aside class="app-sidebar">
+        <a class="app-brand" href="/3d"><span class="brand-mark">I</span><span>INSIGHT<small>Capture Studio</small></span></a><div class="workspace-card"><span><i></i> Active workspace</span><strong>Jetson NX</strong><small>ROS 2 · Domain 20</small></div>
+        <nav class="side-nav" aria-label="Dashboard pages"><p>Monitor</p><a href="/3d"><b>01</b><span>Spatial view</span></a><p>Capture</p><a href="/recording"><b>02</b><span>Recording</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/scoring"><b>04</b><span>Scoring</span></a><a href="/optimization" class="is-active"><b>05</b><span>Optimization</span></a><p>System</p><a href="/settings"><b>06</b><span>Settings</span></a></nav><div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
+      </aside>
+      <section class="app-main"><header class="app-topbar"><span>Process / <strong>Optimization</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
+        <main class="page-content"><header class="content-heading"><div><p class="section-kicker">Reconstruction pipeline</p><h1>Trajectory optimization</h1><p>Align VIO motion against COLMAP reconstruction and inspect the result.</p></div><div class="heading-stat"><strong>Sim3</strong><span>alignment model</span></div></header>
+          <div class="pipeline-layout">
+            <section class="form-surface pipeline-input"><div class="step-label"><span>01</span><div><strong>Configure run</strong><small>Source, camera and image stream</small></div></div>
+              <label class="field-label" for="optimization-bag-select">Rosbag</label><select id="optimization-bag-select" class="field-control" data-bag-select></select><p id="optimization-bag-meta" class="field-help">Loading bags...</p>
+              <label class="field-label">Camera</label><div id="optimization-camera-group" class="opt-radio-group"></div>
+              <label class="field-label">Image stream</label><div class="opt-radio-group"><label class="opt-radio-item"><input type="radio" name="opt-stream" value="color_compressed" checked><span>color compressed</span></label><label class="opt-radio-item"><input type="radio" name="opt-stream" value="color"><span>color raw</span></label><label class="opt-radio-item"><input type="radio" name="opt-stream" value="infra1"><span>infra 1</span></label><label class="opt-radio-item"><input type="radio" name="opt-stream" value="infra2"><span>infra 2</span></label></div>
+              <label class="field-label" for="optimization-run-name">Run name</label><input id="optimization-run-name" class="field-control" type="text" placeholder="Auto-generated">
+              <div class="button-row"><button type="button" id="start-optimization-button" class="primary-button">Run optimization</button><button type="button" id="stop-optimization-button" class="danger-button" hidden>Stop</button></div>
+            </section>
+            <section class="console-surface pipeline-progress" id="optimization-status-panel"><div class="step-label"><span>02</span><div><strong>Pipeline activity</strong><small>Live reconstruction progress</small></div></div><div class="opt-progress-meta"><span id="optimization-step-label">Idle</span><strong id="optimization-percent-label">0%</strong></div><div class="opt-progress-track"><div id="optimization-progress-fill" class="opt-progress-fill" style="width:0%"></div></div><pre id="optimization-log" class="opt-log"></pre></section>
           </div>
-
-          <label class="field-label" for="optimization-run-name">Run Name</label>
-          <input id="optimization-run-name" class="bag-select" type="text" placeholder="auto" style="font-size:13px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);">
-
-          <div style="display:flex;gap:8px;margin-top:16px;">
-            <button type="button" id="start-optimization-button" class="recording-button">Run Optimization</button>
-            <button type="button" id="stop-optimization-button" class="recording-button" hidden>Stop</button>
-          </div>
-        </div>
-
-        <div class="tool-panel" id="optimization-status-panel">
-          <p class="eyebrow">Progress</p>
-          <div class="opt-progress-track">
-            <div id="optimization-progress-fill" class="opt-progress-fill" style="width:0%"></div>
-          </div>
-          <div class="opt-progress-meta">
-            <span id="optimization-step-label" class="page-copy">Idle</span>
-            <span id="optimization-percent-label" class="page-copy">0%</span>
-          </div>
-          <pre id="optimization-log" class="opt-log"></pre>
-        </div>
-
-        <div class="tool-panel" style="grid-column: 1 / -1;">
-          <p class="eyebrow">View Saved Run</p>
-          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-            <select id="opt-saved-run-select" class="bag-select" style="flex:1;min-width:200px;"></select>
-            <button type="button" id="load-opt-run-button" class="recording-button recording-button-secondary">Load Trajectory</button>
-          </div>
-        </div>
-
-        <div class="tool-panel" id="optimization-result-panel" hidden style="grid-column: 1 / -1;">
-          <p class="eyebrow">Result — Interactive 3D Trajectory</p>
-          <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
-            <span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);">
-              <span style="width:12px;height:3px;background:#ff5a5a;border-radius:2px;display:inline-block;"></span>VIO
-            </span>
-            <span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);">
-              <span style="width:12px;height:3px;background:#57d67c;border-radius:2px;display:inline-block;"></span>COLMAP (Sim3)
-            </span>
-            <a id="optimization-log-link" href="#" target="_blank" class="page-copy" style="margin-left:auto;color:var(--muted);font-size:12px;">View COLMAP log</a>
-          </div>
-          <canvas id="opt-traj-canvas" style="width:100%;height:480px;border-radius:10px;display:block;touch-action:none;"></canvas>
-        </div>
-
-      </main>
-    </div>
-    <script type="module" src="/static/app.js"></script>
+          <section class="control-strip saved-run-strip"><div class="control-strip-copy"><span class="control-number">03</span><div><strong>Saved run</strong><small>Open an existing reconstruction</small></div></div><div class="playback-row"><select id="opt-saved-run-select" class="field-control"></select><button type="button" id="load-opt-run-button" class="quiet-button">Load trajectory</button></div></section>
+          <section class="result-canvas-surface" id="optimization-result-panel" hidden><div class="section-heading"><div><p class="section-kicker">Interactive result</p><h2>Aligned trajectory</h2></div><div class="plot-legend"><span><i class="vio-line"></i>VIO</span><span><i class="colmap-line"></i>COLMAP</span><a id="optimization-log-link" href="#" target="_blank">View log ↗</a></div></div><canvas id="opt-traj-canvas"></canvas></section>
+        </main>
+      </section>
+    </div><script type="module" src="/static/app.js?v=20260715-ui-v7"></script>
   </body>
 </html>

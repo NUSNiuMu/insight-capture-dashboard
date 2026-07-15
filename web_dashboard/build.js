@@ -44,5 +44,6 @@ copyFile(path.join(srcDir, "optimization.html"), path.join(distDir, "optimizatio
 copyFile(path.join(srcDir, "settings.html"), path.join(distDir, "settings.html"));
 copyFile(path.join(srcDir, "app.js"), path.join(staticDir, "app.js"));
 copyFile(path.join(srcDir, "styles.css"), path.join(staticDir, "styles.css"));
+copyFile(path.join(srcDir, "fonts", "InterVariable.woff2"), path.join(staticDir, "fonts", "InterVariable.woff2"));
 
 console.log("Built web dashboard into " + distDir);

@@ -2034,7 +2034,7 @@ class WebDashboardServer:
         return web.FileResponse(self.web_root / "recording.html")
 
     async def _handle_images_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.web_root / "images.html")
+        raise web.HTTPFound("/3d")
 
     async def _handle_bags_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.web_root / "bags.html")

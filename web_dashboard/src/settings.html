@@ -1,42 +1,20 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Insight Dashboard Settings</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Insight Settings</title><link rel="stylesheet" href="/static/styles.css?v=20260715-workspace-v13">
   </head>
   <body data-dashboard-view="settings">
-    <div class="shell shell-page">
-      <header class="page-header">
-        <div>
-          <div class="camera-page-eyebrow">INSIGHT</div>
-          <h1>Settings</h1>
-          <p class="page-copy">Camera avatars and gripper tracking apply immediately.</p>
-        </div>
-        <nav class="page-nav" aria-label="Dashboard pages">
-          <a href="/3d">3D</a>
-          <a href="/images">Images</a>
-          <a href="/recording">Recording</a>
-          <a href="/bags">Bags</a>
-          <a href="/scoring">Scoring</a>
-          <a href="/optimization">Optimization</a>
-          <a href="/settings" aria-current="page">Settings</a>
-        </nav>
-      </header>
-
-      <div id="settings-restart-banner" class="settings-restart-banner" hidden>
-        <span id="settings-restart-message">Saved. Restart the backend to apply.</span>
-        <button type="button" id="settings-restart-button" class="recording-button recording-button-secondary">Restart backend now</button>
-      </div>
-
-      <main class="settings-page-panel recording-panel" id="settings-panel">
-        <p class="eyebrow">Cameras</p>
-        <p id="settings-status" class="record-topic-status" aria-live="polite">Loading settings...</p>
-        <div id="settings-camera-list" class="settings-camera-list"></div>
-      </main>
-
-    </div>
-    <script type="module" src="/static/app.js"></script>
+    <div class="app-shell">
+      <aside class="app-sidebar">
+        <a class="app-brand" href="/3d"><span class="brand-mark">I</span><span>INSIGHT<small>Capture Studio</small></span></a><div class="workspace-card"><span><i></i> Active workspace</span><strong>Jetson NX</strong><small>ROS 2 · Domain 20</small></div>
+        <nav class="side-nav" aria-label="Dashboard pages"><p>Monitor</p><a href="/3d"><b>01</b><span>Spatial view</span></a><p>Capture</p><a href="/recording"><b>02</b><span>Recording</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/scoring"><b>04</b><span>Scoring</span></a><a href="/optimization"><b>05</b><span>Optimization</span></a><p>System</p><a href="/settings" class="is-active"><b>06</b><span>Settings</span></a></nav><div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
+      </aside>
+      <section class="app-main"><header class="app-topbar"><span>System / <strong>Settings</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
+        <main class="page-content"><header class="content-heading"><div><p class="section-kicker">System configuration</p><h1>Workspace settings</h1><p>Configure camera representation and tracking services.</p></div><div class="heading-stat"><strong>Local</strong><span>configuration</span></div></header>
+          <div id="settings-restart-banner" class="restart-banner" hidden><span id="settings-restart-message">Saved. Restart the backend to apply.</span><button type="button" id="settings-restart-button" class="quiet-button">Restart backend</button></div>
+          <section class="settings-surface recording-panel" id="settings-panel"><div class="section-heading"><div><p class="section-kicker">Connected devices</p><h2>Camera configuration</h2></div><p id="settings-status" class="field-help" aria-live="polite">Loading settings...</p></div><div id="settings-camera-list" class="settings-camera-list"></div></section>
+        </main>
+      </section>
+    </div><script type="module" src="/static/app.js?v=20260715-ui-v7"></script>
   </body>
 </html>

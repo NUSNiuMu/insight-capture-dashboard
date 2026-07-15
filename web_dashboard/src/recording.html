@@ -1,48 +1,37 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Insight Recording Dashboard</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight Recording</title><link rel="stylesheet" href="/static/styles.css?v=20260715-workspace-v13">
   </head>
   <body data-dashboard-view="recording">
-    <div class="shell shell-recording-only">
-      <div class="recording-page-header">
-        <div>
-          <div class="camera-page-eyebrow">INSIGHT</div>
-          <h1>Rosbag Recording</h1>
-          <p class="recording-page-copy">Refresh live topics, choose what to record, then start or stop rosbag from this page.</p>
-        </div>
-        <nav class="page-nav" aria-label="Dashboard pages">
-          <a href="/3d">3D</a>
-          <a href="/images">Images</a>
-          <a href="/recording" aria-current="page">Recording</a>
-          <a href="/bags">Bags</a>
-          <a href="/scoring">Scoring</a>
-          <a href="/optimization">Optimization</a>
-          <a href="/settings">Settings</a>
-        </nav>
-      </div>
-      <div class="recording-page-panel recording-panel" id="recording-panel">
-        <p class="eyebrow">ROS 2 Rosbag</p>
-        <div class="recording-panel-row">
-          <div class="recording-title-row">
-            <h2 id="recording-status">Recording idle</h2>
-            <span id="system-load-pill" class="system-load-pill" title="1-minute load average vs. this container's CPU quota">-- load</span>
+    <div class="app-shell">
+      <aside class="app-sidebar">
+        <a class="app-brand" href="/3d"><span class="brand-mark">I</span><span>INSIGHT<small>Capture Studio</small></span></a>
+        <div class="workspace-card"><span><i></i> Active workspace</span><strong>Jetson NX</strong><small>ROS 2 · Domain 20</small></div>
+        <nav class="side-nav" aria-label="Dashboard pages"><p>Monitor</p><a href="/3d"><b>01</b><span>Spatial view</span></a><p>Capture</p><a href="/recording" class="is-active"><b>02</b><span>Recording</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/scoring"><b>04</b><span>Scoring</span></a><a href="/optimization"><b>05</b><span>Optimization</span></a><p>System</p><a href="/settings"><b>06</b><span>Settings</span></a></nav>
+        <div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
+      </aside>
+      <section class="app-main">
+        <header class="app-topbar"><span>Capture / <strong>Recording</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
+        <main class="page-content recording-workspace">
+          <header class="content-heading"><div><p class="section-kicker">Capture session</p><h1>New recording</h1><p>Name the session, select ROS topics and begin capture.</p></div><span id="system-load-pill" class="load-chip" title="1-minute load average vs. this container's CPU quota">-- load</span></header>
+          <section class="record-hero recording-panel" id="recording-panel">
+            <div class="record-state"><span class="record-orb"></span><div><p class="section-kicker">Recorder status</p><h2 id="recording-status">Recording idle</h2><p id="record-topic-status">Waiting for topic catalog...</p></div></div>
+            <div class="record-controls">
+              <input type="text" id="recording-bag-name" class="field-control" placeholder="Session name (auto-generated if empty)" autocomplete="off" spellcheck="false">
+              <button type="button" id="refresh-record-topics-button" class="quiet-button">Refresh topics</button>
+              <button type="button" id="start-recording-button" class="primary-button">Start capture</button>
+              <button type="button" id="stop-recording-button" class="danger-button">Stop</button>
+            </div>
+          </section>
+          <div class="recording-layout">
+            <section class="data-surface topic-surface"><div class="section-heading"><div><p class="section-kicker">Input channels</p><h2>ROS topics</h2></div><span>Select what to capture</span></div><div id="record-topic-groups" class="record-topic-groups"></div></section>
+            <aside class="console-surface"><div class="section-heading"><div><p class="section-kicker">Activity</p><h2>Recorder log</h2></div><span>Live output</span></div><pre id="recording-output" class="recording-output">Recording panel ready</pre></aside>
           </div>
-          <div class="recording-actions">
-            <input type="text" id="recording-bag-name" class="recording-bag-name-input" placeholder="Bag name (default: insight_record_YYYYMMDD_HHMMSS)" autocomplete="off" spellcheck="false">
-            <button type="button" id="refresh-record-topics-button" class="recording-button recording-button-secondary">Refresh Topics</button>
-            <button type="button" id="start-recording-button" class="recording-button">Start</button>
-            <button type="button" id="stop-recording-button" class="recording-button recording-button-danger">Stop</button>
-          </div>
-        </div>
-        <p id="record-topic-status" class="record-topic-status">Waiting for topic catalog...</p>
-        <div id="record-topic-groups" class="record-topic-groups"></div>
-        <pre id="recording-output" class="recording-output">Recording panel ready</pre>
-      </div>
+        </main>
+      </section>
     </div>
-    <script type="module" src="/static/app.js"></script>
+    <script type="module" src="/static/app.js?v=20260715-ui-v7"></script>
   </body>
 </html>
