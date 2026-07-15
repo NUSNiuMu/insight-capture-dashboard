@@ -152,9 +152,15 @@ const DEFAULT_TRAIL_ENABLED = {
 };
 
 if (engine && scene) {
-  const sceneFrameIntervalMs = 1000 / 30;
+  // 20fps cap: pose data arrives at 15Hz, so a 30fps render loop painted
+  // half its frames with an identical scene while starving the Firefox
+  // compositor (measured pegged at a full core) that also has to composite
+  // three WebRTC <video> elements. 1.4 hardware scaling renders the WebGL
+  // buffer at ~51% of the canvas' native pixel count (was ~76% at 1.15,
+  // i.e. ~1/3 fewer pixels than before); only the 3D canvas is affected.
+  const sceneFrameIntervalMs = 1000 / 20;
   let sceneRenderBudgetMs = 0;
-  engine.setHardwareScalingLevel(1.15);
+  engine.setHardwareScalingLevel(1.4);
   engine.runRenderLoop(() => {
     sceneRenderBudgetMs += engine.getDeltaTime();
     if (sceneRenderBudgetMs < sceneFrameIntervalMs) {

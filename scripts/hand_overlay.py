@@ -95,6 +95,34 @@ HAND_LABEL_FLIP_FRACTION = 0.7
 # flip the incumbent -- ~0.5s of consistent evidence at HandEngine's 15Hz.
 HAND_LABEL_FLIP_MIN_VOTES = 8
 
+# Per-role track lifecycle for the 3D skeleton (hand_landmarks_for_role).
+# HandEngine's per-frame recall is well below 100%: with a hand steadily in
+# view it still misses individual frames, and it publishes an *empty*
+# detection array on those (not "no message"), so "render only frames with a
+# fresh detection" made the 3D rig blink several times a second. The 2D
+# image overlay deliberately does NOT use these tracks -- drawing held-over
+# keypoints onto a newer image frame would be visibly misaligned (see
+# MAX_SYNC_NS); a missing overlay frame there is invisible, not a blink.
+#   birth: this many consecutive detections before the skeleton appears,
+#          filtering single-frame false positives;
+HAND_TRACK_BIRTH_MIN_HITS = 3
+#   consecutive = gaps shorter than this between hits (~4 frame periods at
+#          HandEngine's 15Hz, so one dropped frame doesn't restart the count);
+HAND_TRACK_BIRTH_MAX_GAP_SEC = 0.30
+#   coast: after birth, dropout frames keep showing the last-seen hand shape
+#          (held, not extrapolated) up to this long before the track dies.
+HAND_TRACK_COAST_SEC = 0.5
+
+
+@dataclass
+class HandRoleTrack:
+    """Lifecycle state for one teleop role's 3D hand skeleton."""
+
+    streak: int = 0                # consecutive-hit count while unborn
+    last_hit_monotonic: float = 0.0
+    visible: bool = False
+    landmarks: Optional[List[Optional[List[float]]]] = None
+
 
 def smooth_hand_label(votes: Deque[str], current: Optional[str]) -> Optional[str]:
     """Return the smoothed label given the raw-vote history and the current
@@ -254,6 +282,11 @@ class HandOverlayMixin:
         # HandEngine ever assigns.
         self._hand_label_votes: Dict[Tuple[str, int], Deque[str]] = {}
         self._hand_label_current: Dict[Tuple[str, int], str] = {}
+        # Per-role 3D skeleton tracks -- see HandRoleTrack / the lifecycle
+        # constants above. Written from ROS callbacks, read from the asyncio
+        # broadcast loop; individual attribute reads/writes are GIL-atomic,
+        # same unsynchronized pattern as hand_latest_snapshot.
+        self._hand_role_tracks: Dict[str, HandRoleTrack] = {}
 
     def _on_hand_boxes(self, camera_name: str, msg, is_live: bool = True) -> None:
         # Live and playback are two separate subscriptions (playback's is
@@ -334,6 +367,39 @@ class HandOverlayMixin:
                 hands=hands,
             )
 
+            # Feed the per-role 3D skeleton tracks. One hit per role per
+            # message: with two hands momentarily smoothed to the same label
+            # the first (matching the old first-match-wins scan) feeds the
+            # track and the duplicate is ignored.
+            roles_hit = set()
+            for hand in hands:
+                role = HAND_CLASS_TO_ROLE.get(str(hand.get("label", "")))
+                if role is None or role in roles_hit:
+                    continue
+                landmarks = normalize_hand_landmarks(hand.get("keypoints", []))
+                if landmarks is None:
+                    continue
+                roles_hit.add(role)
+                self._hand_track_hit(role, landmarks)
+
+    def _hand_track_hit(
+        self, role: str, landmarks: List[Optional[List[float]]]
+    ) -> None:
+        """Record one confident detection of `role`; births the track once
+        HAND_TRACK_BIRTH_MIN_HITS consecutive hits accumulate."""
+        now = time.monotonic()
+        track = self._hand_role_tracks.setdefault(role, HandRoleTrack())
+        if now - track.last_hit_monotonic > HAND_TRACK_BIRTH_MAX_GAP_SEC:
+            # Too long since the previous hit: an unborn streak restarts. A
+            # visible track is unaffected -- its death is coast-timeout only
+            # (in hand_landmarks_for_role), and any hit refreshes it.
+            track.streak = 0
+        track.streak += 1
+        track.last_hit_monotonic = now
+        track.landmarks = landmarks
+        if track.streak >= HAND_TRACK_BIRTH_MIN_HITS:
+            track.visible = True
+
     def set_hand_overlay_enabled(self, camera_name: str, enabled: bool) -> None:
         if camera_name not in self.hand_overlay_available:
             raise ValueError(f"'{camera_name}' has not published any hand-landmark data yet")
@@ -343,21 +409,21 @@ class HandOverlayMixin:
             self.hand_overlay_enabled.discard(camera_name)
 
     def hand_landmarks_for_role(self, role: str) -> Optional[List[Optional[List[float]]]]:
-        """Latest normalized 21-point landmarks for a teleop role ("left_hand"
-        / "right_hand"), scanning every camera's snapshot (any HandEngine
-        camera may see either hand). Returns None when no fresh detection of
-        that hand exists anywhere."""
-        now = time.monotonic()
-        for snapshot in self.hand_latest_snapshot.values():
-            if now - snapshot.received_monotonic > HAND_DATA_TIMEOUT_SEC:
-                continue
-            for hand in snapshot.hands:
-                if HAND_CLASS_TO_ROLE.get(str(hand.get("label", ""))) != role:
-                    continue
-                landmarks = normalize_hand_landmarks(hand.get("keypoints", []))
-                if landmarks is not None:
-                    return landmarks
-        return None
+        """Normalized 21-point landmarks for a teleop role ("left_hand" /
+        "right_hand") from that role's lifecycle track (fed by every
+        HandEngine camera -- any of them may see either hand). During a
+        detection dropout the last-seen shape is held for up to
+        HAND_TRACK_COAST_SEC, so per-frame recall misses don't blink the 3D
+        skeleton. Returns None while the track is unborn or dead."""
+        track = self._hand_role_tracks.get(role)
+        if track is None or not track.visible:
+            return None
+        if time.monotonic() - track.last_hit_monotonic > HAND_TRACK_COAST_SEC:
+            track.visible = False
+            track.streak = 0
+            track.landmarks = None
+            return None
+        return track.landmarks
 
     def hand_overlay_payload(self, camera_name: str) -> Optional[Dict[str, object]]:
         snapshot = self.hand_latest_snapshot.get(camera_name)
