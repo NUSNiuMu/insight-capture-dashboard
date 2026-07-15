@@ -56,6 +56,24 @@ _REQUIRED_ELEMENTS = (
 _MIN_BITRATE = 1_500_000
 _MAX_BITRATE = 10_000_000
 
+# Streams are downscaled on the VIC (the nvvidconv already in the pipeline,
+# zero CPU) before encoding. The dashboard's camera wall renders ~300px-wide
+# thumbnails, so encoding at the sensor's native 1088x1920 made the browser
+# software-decode ~13x more pixels than it displayed -- measured as a full
+# core of decoder (Firefox RDD) time on the kiosk. Cost of the cap: a
+# maximized panel upscales from this width and looks softer.
+STREAM_MAX_WIDTH = 540
+
+
+def _scaled_dims(width: int, height: int) -> Tuple[int, int]:
+    """Cap width at STREAM_MAX_WIDTH keeping aspect, rounded to even (NV12)."""
+    if width <= STREAM_MAX_WIDTH:
+        return (width, height)
+    scale = STREAM_MAX_WIDTH / float(width)
+    out_w = STREAM_MAX_WIDTH & ~1
+    out_h = int(round(height * scale)) & ~1
+    return (out_w, max(2, out_h))
+
 
 def _bitrate_for(width: int, height: int) -> int:
     return max(_MIN_BITRATE, min(_MAX_BITRATE, int(width * height * 30 * 0.15)))
@@ -223,7 +241,8 @@ class WebRtcSession:
     # ── pipeline (called under self._lock) ──────────────────────────────────
 
     def _build_pipeline(self, fmt: str, width: int, height: int) -> None:
-        bitrate = _bitrate_for(width, height)
+        out_width, out_height = _scaled_dims(width, height)
+        bitrate = _bitrate_for(out_width, out_height)
         if fmt == "JPEG":
             source = (
                 f"appsrc name=src is-live=true format=time do-timestamp=true "
@@ -242,7 +261,7 @@ class WebRtcSession:
         # next keyframe. idrinterval=30 bounds that wait to ~1s.
         description = (
             f"{source}"
-            f"nvvidconv ! video/x-raw(memory:NVMM),format=NV12 ! "
+            f"nvvidconv ! video/x-raw(memory:NVMM),format=NV12,width={out_width},height={out_height} ! "
             f"nvv4l2h264enc bitrate={bitrate} insert-sps-pps=true idrinterval=30 "
             f"iframeinterval=30 maxperf-enable=true ! "
             f"h264parse config-interval=-1 ! "
@@ -261,7 +280,7 @@ class WebRtcSession:
         self._appsrc = pipeline.get_by_name("src")
         self._webrtc = webrtc
         self._log(
-            f"webrtc[{self.camera_name}]: streaming {fmt} {width}x{height} at {bitrate // 1000} kbps"
+            f"webrtc[{self.camera_name}]: streaming {fmt} {width}x{height} -> {out_width}x{out_height} at {bitrate // 1000} kbps"
         )
 
     # ── webrtcbin callbacks (GStreamer threads) ─────────────────────────────
