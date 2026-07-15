@@ -2044,7 +2044,7 @@ function attachStickMarker(pose, node) {
   material.specularColor = BABYLON.Color3.Black();
   const mesh = BABYLON.MeshBuilder.CreateSphere(
     `stick-marker-${pose.name}`,
-    { diameter: pose.role === "head" ? 0.12 : 0.09 },
+    { diameter: pose.role === "head" ? 0.06 : 0.045 },
     scene
   );
   mesh.material = material;
@@ -2188,7 +2188,9 @@ function updateArmRig(pose, wristScenePosition) {
     armRigs.delete(pose.name);
     rig = null;
   }
-  const hasData = pose.visible && Array.isArray(pose.shoulder_position) && Array.isArray(pose.elbow_position);
+  // The skeleton layer belongs to stick-figure mode: with the toggle off the
+  // scene shows only the avatar models, exactly as before the feature.
+  const hasData = stickFigureMode && pose.visible && Array.isArray(pose.shoulder_position) && Array.isArray(pose.elbow_position);
   if (!hasData) {
     if (rig) rig.mesh.setEnabled(false);
     return;
@@ -2236,7 +2238,7 @@ function updateHandRig(pose, node) {
     rig = null;
   }
   const landmarks = Array.isArray(pose.hand_landmarks) ? pose.hand_landmarks : null;
-  if (!pose.visible || !landmarks) {
+  if (!stickFigureMode || !pose.visible || !landmarks) {
     if (rig) rig.mesh.setEnabled(false);
     return;
   }

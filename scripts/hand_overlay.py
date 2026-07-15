@@ -17,8 +17,9 @@ under scripts/; this module is a browser-side port of its drawing logic):
 
 import math
 import time
+from collections import Counter, deque
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -80,6 +81,41 @@ HAND_CLASS_TO_ROLE = {
     "hand_left": "left_hand",
     "hand_right": "right_hand",
 }
+
+# HandEngine's per-frame left/right classification of a single hand is not
+# stable -- observed flip-flopping between hand_left/hand_right frame to
+# frame, which made the 3D skeleton jump between the two wrist nodes. The
+# effective label is smoothed by majority vote over a sliding window with
+# hysteresis: it only flips once the challenger label holds this fraction
+# of the recent votes, so a 50/50 jitter stays put on the incumbent.
+HAND_LABEL_VOTE_WINDOW = 15
+HAND_LABEL_FLIP_FRACTION = 0.7
+# A flip also needs this many absolute challenger votes, so a short burst of
+# one label while the window is still filling (message drops make runs) can't
+# flip the incumbent -- ~0.5s of consistent evidence at HandEngine's 15Hz.
+HAND_LABEL_FLIP_MIN_VOTES = 8
+
+
+def smooth_hand_label(votes: Deque[str], current: Optional[str]) -> Optional[str]:
+    """Return the smoothed label given the raw-vote history and the current
+    smoothed label (None on first sight -> adopt the newest raw vote)."""
+    if not votes:
+        return current
+    if current is None:
+        return votes[-1]
+    counts = Counter(votes)
+    challenger, challenger_votes = max(
+        ((label, count) for label, count in counts.items() if label != current),
+        default=(None, 0),
+        key=lambda item: item[1],
+    )
+    if (
+        challenger is not None
+        and challenger_votes >= HAND_LABEL_FLIP_MIN_VOTES
+        and challenger_votes >= HAND_LABEL_FLIP_FRACTION * len(votes)
+    ):
+        return challenger
+    return current
 
 # Synthetic per-landmark depth (hand-plane normal) offsets, in the normalized
 # units of normalize_hand_landmarks (wrist->middle-MCP distance == 1). The 2D
@@ -213,6 +249,11 @@ class HandOverlayMixin:
         self.hand_overlay_available: set = set()
         self._hand_latest_boxes: Dict[str, object] = {}
         self.hand_latest_snapshot: Dict[str, HandOverlaySnapshot] = {}
+        # Per (camera, hand_index) label-vote history and smoothed label --
+        # see smooth_hand_label. Bounded: cameras x the few hand indexes
+        # HandEngine ever assigns.
+        self._hand_label_votes: Dict[Tuple[str, int], Deque[str]] = {}
+        self._hand_label_current: Dict[Tuple[str, int], str] = {}
 
     def _on_hand_boxes(self, camera_name: str, msg, is_live: bool = True) -> None:
         # Live and playback are two separate subscriptions (playback's is
@@ -275,6 +316,17 @@ class HandOverlayMixin:
                     "keypoints": sorted(keypoints, key=lambda kp: kp["i"]),
                 }
                 entry.update(boxes_by_hand.get(hand_index, {}))
+                raw_label = entry.get("label")
+                if isinstance(raw_label, str) and raw_label in HAND_CLASS_TO_ROLE:
+                    key = (camera_name, hand_index)
+                    votes = self._hand_label_votes.setdefault(
+                        key, deque(maxlen=HAND_LABEL_VOTE_WINDOW)
+                    )
+                    votes.append(raw_label)
+                    smoothed = smooth_hand_label(votes, self._hand_label_current.get(key))
+                    self._hand_label_current[key] = smoothed
+                    entry["label_raw"] = raw_label
+                    entry["label"] = smoothed
                 hands.append(entry)
 
             self.hand_latest_snapshot[camera_name] = HandOverlaySnapshot(
