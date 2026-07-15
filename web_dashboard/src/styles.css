@@ -125,10 +125,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .page-content { width: min(1500px, 100%); margin: 0 auto; padding: 46px clamp(24px, 3.6vw, 58px) 70px; }
 .content-heading { display: flex; min-height: 126px; margin-bottom: 40px; padding-bottom: 22px; align-items: flex-start; justify-content: space-between; gap: 30px; border-bottom: 1px solid var(--line); }
 .section-kicker { margin: 0 0 10px; color: var(--accent); font-family: var(--mono); font-size: 9px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
-.content-heading h1 { max-width: 800px; margin: 0; font-family: var(--mono); font-size: clamp(26px, 2.8vw, 40px); font-weight: 600; letter-spacing: -.03em; line-height: 1.08; }
+.content-heading h1 { max-width: 800px; margin: 0; font-family: var(--mono); font-size: clamp(32px, 3.4vw, 48px); font-weight: 600; letter-spacing: -.03em; line-height: 1.08; }
 .content-heading > div:first-child > p:last-child { max-width: 620px; margin: 17px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .heading-stat { display: flex; min-width: 124px; padding-top: 22px; flex-direction: column; align-items: flex-end; }
-.heading-stat strong { font-family: var(--mono); font-size: 20px; font-style: normal; font-weight: 600; color: var(--teal); }
+.heading-stat strong { font-family: var(--mono); font-size: 22px; font-style: normal; font-weight: 600; color: var(--teal); }
 .heading-stat span { margin-top: 4px; color: var(--muted); font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
 
 .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .alignment-button, .nav-button { display: inline-flex; min-height: 41px; padding: 0 16px; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 8px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .05em; line-height: 1; text-decoration: none; cursor: pointer; transition: transform 140ms, box-shadow 140ms, background 140ms, border-color 140ms; }
@@ -155,14 +155,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .metric-grid article { position: relative; min-height: 130px; padding: 20px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .metric-grid article::after { position: absolute; right: -22px; bottom: -38px; width: 90px; height: 90px; border: 1px solid var(--line); border-radius: 50%; content: ""; box-shadow: 0 0 0 14px var(--surface), 0 0 0 15px var(--line); }
 .metric-grid span { display: block; color: var(--muted); font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: .1em; }
-.metric-grid strong { display: block; margin-top: 20px; font-family: var(--mono); font-size: 22px; font-style: normal; font-weight: 600; color: var(--teal); }
+.metric-grid strong { display: block; margin-top: 20px; font-family: var(--mono); font-size: 24px; font-style: normal; font-weight: 600; color: var(--teal); }
 .metric-grid small { display: block; margin-top: 4px; color: var(--muted-light); font-size: 9px; }
 
 .data-surface, .form-surface, .result-surface, .console-surface, .settings-surface, .feed-section, .result-canvas-surface { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .data-surface, .settings-surface, .feed-section, .result-canvas-surface { padding: clamp(20px, 2.3vw, 30px); }
 .form-surface, .result-surface, .console-surface { padding: 26px; }
 .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
-.section-heading h2 { margin: 0; font-family: var(--mono); font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
+.section-heading h2 { margin: 0; font-family: var(--mono); font-size: 19px; font-weight: 600; letter-spacing: -.02em; }
 .section-heading > span, .section-heading > p { margin: 3px 0 0; color: var(--muted-light); font-family: var(--mono); font-size: 8px; text-transform: uppercase; letter-spacing: .08em; }
 
 .control-strip { display: flex; min-height: 86px; margin-bottom: 18px; padding: 16px 18px; align-items: center; justify-content: space-between; gap: 20px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
@@ -224,7 +224,7 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .record-state { display: flex; align-items: center; gap: 17px; }
 .record-orb { position: relative; display: block; width: 42px; height: 42px; flex: 0 0 auto; border: 1px solid var(--line-dark); border-radius: 50%; background: var(--surface-soft); }
 .record-orb::before { position: absolute; inset: 12px; border-radius: 50%; content: ""; background: var(--red); box-shadow: 0 0 16px rgba(194, 69, 62, 0.45); }
-.record-state h2 { margin: 0; font-family: var(--mono); font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
+.record-state h2 { margin: 0; font-family: var(--mono); font-size: 22px; font-weight: 600; letter-spacing: -.02em; }
 .record-state #record-topic-status { margin: 6px 0 0; color: var(--muted); font-size: 9px; }
 .record-controls { display: flex; width: min(760px, 62%); align-items: center; justify-content: flex-end; gap: 8px; }
 .record-controls .field-control { min-width: 240px; flex: 1; }
@@ -352,12 +352,12 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
 .spatial-playback { display: flex; min-height: 62px; padding: 10px 12px; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 14px; }
 .spatial-playback-copy { display: flex; min-width: 150px; flex-direction: column; gap: 1px; }
 .spatial-playback-copy .section-kicker { margin-bottom: 4px; }
-.spatial-playback-copy strong { font-size: 12px; font-weight: 600; }
+.spatial-playback-copy strong { font-size: 14px; font-weight: 600; }
 .spatial-playback .playback-row { width: min(700px, 100%); }
 .spatial-playback .field-control { min-height: 36px; }
 .spatial-playback .primary-button, .spatial-playback .quiet-button, .spatial-playback .danger-button { min-height: 36px; }
 .alignment-panel { display: flex; min-width: 0; min-height: 88px; padding: 15px 16px; align-items: center; justify-content: space-between; gap: 20px; }
-.alignment-panel h2 { margin: 0; font-family: var(--mono); font-size: 14px; font-weight: 600; }
+.alignment-panel h2 { margin: 0; font-family: var(--mono); font-size: 16px; font-weight: 600; }
 .alignment-meta { max-width: 320px; margin: 5px 0 0; overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 .alignment-actions { display: flex; align-items: center; gap: 6px; }
 .alignment-panel .quiet-button { min-height: 34px; padding: 0 10px; }
@@ -440,57 +440,57 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
 }
 
 /* Readability: the workstation is typically viewed at arm's length. */
-body { font-size: 14px; }
-.app-brand { font-size: 14px; }
-.app-brand small, .workspace-card > span, .workspace-card small { font-size: 11px; }
-.workspace-card strong { font-size: 15px; }
-.side-nav p { font-size: 10px; }
-.side-nav a { font-size: 13px; }
-.side-nav a b { font-size: 10px; }
-.sidebar-foot span { font-size: 12px; }
-.sidebar-foot small { font-size: 10px; }
-.app-topbar { font-size: 12px; }
-.topbar-clock { font-size: 10px; }
-.section-kicker { font-size: 11px; }
-.content-heading > div:first-child > p:last-child { font-size: 15px; }
-.heading-stat span, .metric-grid span, .metric-grid small { font-size: 11px; }
-.primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .alignment-button, .nav-button { font-size: 12px; }
-.field-control, .bag-select, .field-input, .settings-text-input, .settings-model-select, .recording-bag-name-input { font-size: 13px; }
-.field-label, .field-help { font-size: 12px; }
-.field-label small { font-size: 10px; }
-.section-heading > span, .section-heading > p { font-size: 10px; }
-.control-number, .step-label > span { font-size: 10px; }
-.control-strip-copy strong, .step-label strong { font-size: 13px; }
-.control-strip-copy small, .step-label small { font-size: 11px; }
-.camera-title strong { font-size: 13px; }
-.camera-title span, .camera-overlay { font-size: 10px; }
-.bag-row-main strong { font-size: 15px; }
-.bag-row-stats small { font-size: 9px; }
-.bag-row-stats strong { font-size: 12px; }
-.bag-badges, .bag-row-actions, .bag-badge { font-size: 10px; }
-.empty-state, .load-chip, .system-load-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner { font-size: 12px; }
-.record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend, .image-pipeline-notes { font-size: 11px; }
-.record-topic-summary-meta, .record-topic-copy span, .recording-output, .opt-log, .result-placeholder small, .settings-role-pill, .capability-row span { font-size: 10px; }
-.record-topic-copy strong, .settings-camera-head h3, .capability-row strong { font-size: 12px; }
-.rail-nav a::before { font-size: 11px; }
-.camera-wall-heading h2 { font-size: 16px; }
-.camera-wall-heading > span { font-size: 9px; }
-.stage-status strong { font-size: 11px; }
-.stage-status small { font-size: 9px; }
-.alignment-meta, .legend-row, .trail-toggle { font-size: 10px; }
-.legend-row strong { font-size: 11px; }
-.stage-footer { font-size: 9px; }
+body { font-size: 15px; }
+.app-brand { font-size: 15px; }
+.app-brand small, .workspace-card > span, .workspace-card small { font-size: 12px; }
+.workspace-card strong { font-size: 16px; }
+.side-nav p { font-size: 11px; }
+.side-nav a { font-size: 14px; }
+.side-nav a b { font-size: 11px; }
+.sidebar-foot span { font-size: 13px; }
+.sidebar-foot small { font-size: 11px; }
+.app-topbar { font-size: 13px; }
+.topbar-clock { font-size: 11px; }
+.section-kicker { font-size: 12px; }
+.content-heading > div:first-child > p:last-child { font-size: 16px; }
+.heading-stat span, .metric-grid span, .metric-grid small { font-size: 12px; }
+.primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .alignment-button, .nav-button { font-size: 13px; }
+.field-control, .bag-select, .field-input, .settings-text-input, .settings-model-select, .recording-bag-name-input { font-size: 14px; }
+.field-label, .field-help { font-size: 13px; }
+.field-label small { font-size: 11px; }
+.section-heading > span, .section-heading > p { font-size: 11px; }
+.control-number, .step-label > span { font-size: 11px; }
+.control-strip-copy strong, .step-label strong { font-size: 14px; }
+.control-strip-copy small, .step-label small { font-size: 12px; }
+.camera-title strong { font-size: 14px; }
+.camera-title span, .camera-overlay { font-size: 11px; }
+.bag-row-main strong { font-size: 16px; }
+.bag-row-stats small { font-size: 10px; }
+.bag-row-stats strong { font-size: 13px; }
+.bag-badges, .bag-row-actions, .bag-badge { font-size: 11px; }
+.empty-state, .load-chip, .system-load-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner { font-size: 13px; }
+.record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend, .image-pipeline-notes { font-size: 12px; }
+.record-topic-summary-meta, .record-topic-copy span, .recording-output, .opt-log, .result-placeholder small, .settings-role-pill, .capability-row span { font-size: 11px; }
+.record-topic-copy strong, .settings-camera-head h3, .capability-row strong { font-size: 13px; }
+.rail-nav a::before { font-size: 12px; }
+.camera-wall-heading h2 { font-size: 18px; }
+.camera-wall-heading > span { font-size: 10px; }
+.stage-status strong { font-size: 12px; }
+.stage-status small { font-size: 10px; }
+.alignment-meta, .legend-row, .trail-toggle { font-size: 11px; }
+.legend-row strong { font-size: 12px; }
+.stage-footer { font-size: 10px; }
 
 /* Large desktop viewports get a modest type increase without changing the
    1600px workstation layout or allowing text to overwhelm the controls. */
 @media (min-width: 1800px) {
-  body, .app-brand { font-size: 15px; }
-  .app-brand small, .workspace-card > span, .workspace-card small, .side-nav p, .side-nav a b, .sidebar-foot small, .topbar-clock, .section-heading > span, .section-heading > p, .control-number, .step-label > span, .camera-title span, .camera-overlay, .bag-badges, .bag-row-actions, .bag-badge, .record-topic-summary-meta, .result-placeholder small, .settings-role-pill, .capability-row span, .alignment-meta, .legend-row, .trail-toggle { font-size: 11px; }
-  .workspace-card strong, .content-heading > div:first-child > p:last-child, .bag-row-main strong { font-size: 16px; }
-  .side-nav a, .sidebar-foot span, .app-topbar, .section-kicker, .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .alignment-button, .nav-button, .field-label, .field-help, .control-strip-copy strong, .step-label strong, .camera-title strong, .bag-row-stats strong, .empty-state, .load-chip, .system-load-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner, .record-topic-copy strong, .settings-camera-head h3, .capability-row strong { font-size: 13px; }
-  .field-control, .bag-select, .field-input, .settings-text-input, .settings-model-select, .recording-bag-name-input { font-size: 14px; }
-  .record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend, .image-pipeline-notes, .control-strip-copy small, .step-label small, .legend-row strong { font-size: 12px; }
-  .camera-wall-heading h2 { font-size: 18px; }
+  body, .app-brand { font-size: 16px; }
+  .app-brand small, .workspace-card > span, .workspace-card small, .side-nav p, .side-nav a b, .sidebar-foot small, .topbar-clock, .section-heading > span, .section-heading > p, .control-number, .step-label > span, .camera-title span, .camera-overlay, .bag-badges, .bag-row-actions, .bag-badge, .record-topic-summary-meta, .result-placeholder small, .settings-role-pill, .capability-row span, .alignment-meta, .legend-row, .trail-toggle { font-size: 12px; }
+  .workspace-card strong, .content-heading > div:first-child > p:last-child, .bag-row-main strong { font-size: 17px; }
+  .side-nav a, .sidebar-foot span, .app-topbar, .section-kicker, .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .alignment-button, .nav-button, .field-label, .field-help, .control-strip-copy strong, .step-label strong, .camera-title strong, .bag-row-stats strong, .empty-state, .load-chip, .system-load-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner, .record-topic-copy strong, .settings-camera-head h3, .capability-row strong { font-size: 14px; }
+  .field-control, .bag-select, .field-input, .settings-text-input, .settings-model-select, .recording-bag-name-input { font-size: 15px; }
+  .record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend, .image-pipeline-notes, .control-strip-copy small, .step-label small, .legend-row strong { font-size: 13px; }
+  .camera-wall-heading h2 { font-size: 19px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
