@@ -1469,18 +1469,29 @@ class WebDashboardServer:
                 await task
         self.recording_manager.stop()
 
+    def _build_pose_broadcast_json(self) -> str:
+        payload = self.node.build_pose_payload()
+        for pose in payload["poses"]:
+            pose["asset_url"] = self.node.model_asset_url(pose.get("avatar_model"))
+        return json.dumps(payload)
+
     async def _broadcast_loop(self) -> None:
+        loop = asyncio.get_running_loop()
         while True:
             await asyncio.sleep(1.0 / self.node.pose_publish_hz)
             if not self._clients:
                 continue
-            payload = self.node.build_pose_payload()
-            for pose in payload["poses"]:
-                pose["asset_url"] = self.node.model_asset_url(pose.get("avatar_model"))
+            # build_pose_payload() rounds/serializes a full ~300-point trace
+            # per pose every tick -- CPU-bound Python that used to run
+            # in-line on this event loop and block pending camera-frame HTTP
+            # responses for its duration. Running it (plus the json.dumps,
+            # so send_str below doesn't re-serialize) in the default executor
+            # keeps the loop free to answer other requests while it computes.
+            payload_json = await loop.run_in_executor(None, self._build_pose_broadcast_json)
             stale = []
             for ws in list(self._clients):
                 try:
-                    await ws.send_json(payload)
+                    await ws.send_str(payload_json)
                 except Exception:
                     stale.append(ws)
             for ws in stale:
