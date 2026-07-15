@@ -338,6 +338,10 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # kill an in-progress recording over one camera dropping out.
         self.recording_manager: Optional[RecordingManager] = None
         self._playback_mode: bool = False
+        # Settings toggle: render poses as large role-colored dots instead of
+        # loading the GLB avatar models -- the clean stick-figure look for the
+        # skeleton overlays. In-memory only, like the rest of Settings.
+        self.stick_figure_mode: bool = False
         # Bounded deque: append is O(1) and old points fall off automatically.
         # A plain list needed an O(max_points) slice-delete per pose message,
         # which at 100Hz x 3 poses was ~300 full-list shifts per second.
@@ -1144,6 +1148,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             "timestamp_ms": int(time.time() * 1000),
             "fake_pose": self.fake_pose,
             "playback_mode": self._playback_mode,
+            "stick_figure_mode": bool(self.stick_figure_mode),
             "alignment": self.build_alignment_payload(),
             "poses": poses,
         }
@@ -1236,6 +1241,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         return {
             "poses": poses,
             "available_models": AVAILABLE_AVATAR_MODELS,
+            "stick_figure_mode": bool(self.stick_figure_mode),
         }
 
     def set_pose_avatar_model(self, pose_name: str, model_file: str) -> PoseSpec:
@@ -1520,6 +1526,7 @@ class WebDashboardServer:
         app.router.add_post("/api/settings/rosbag-sync", self._handle_settings_rosbag_sync_post)
         app.router.add_post("/api/settings/restart-backend", self._handle_settings_restart)
         app.router.add_post("/api/settings/hand-overlay", self._handle_settings_hand_overlay)
+        app.router.add_post("/api/settings/stick-figure", self._handle_settings_stick_figure)
         app.router.add_get("/api/cameras/{camera_name}/hand", self._handle_camera_hand_overlay)
         app.router.add_get("/asset", self._handle_asset)
         if self.web_root and self.web_root.exists():
@@ -1728,6 +1735,13 @@ class WebDashboardServer:
         if not name or "enabled" not in payload:
             raise ValueError("Fields 'name' and 'enabled' are required.")
         self.node.set_hand_overlay_enabled(name, bool(payload.get("enabled")))
+        return web.json_response(self.node.build_settings_payload())
+
+    async def _handle_settings_stick_figure(self, request: web.Request) -> web.Response:
+        payload = await self._read_json_body(request)
+        if "enabled" not in payload:
+            raise ValueError("Field 'enabled' is required.")
+        self.node.stick_figure_mode = bool(payload.get("enabled"))
         return web.json_response(self.node.build_settings_payload())
 
     async def _handle_settings_get(self, _request: web.Request) -> web.Response:

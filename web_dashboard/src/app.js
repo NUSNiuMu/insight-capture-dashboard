@@ -119,6 +119,7 @@ let knownRosbags = [];
 let playbackBusy = false;
 let playbackPollTimer = null;
 let keepTrajectory = false;
+let stickFigureMode = false;
 let optimizationBusy = false;
 let optimizationPollTimer = null;
 const keptPoints = new Map();
@@ -1179,6 +1180,18 @@ function renderSettings(payload) {
   if (!settingsCameraList) {
     return;
   }
+  const stickRow = document.getElementById("stick-figure-row");
+  const stickToggle = document.getElementById("stick-figure-toggle");
+  if (stickRow && stickToggle) {
+    stickRow.hidden = false;
+    stickToggle.checked = Boolean(payload && payload.stick_figure_mode);
+    if (!stickToggle.dataset.bound) {
+      stickToggle.dataset.bound = "1";
+      stickToggle.addEventListener("change", () => {
+        void setStickFigureMode(stickToggle.checked);
+      });
+    }
+  }
   const poses = Array.isArray(payload && payload.poses) ? payload.poses : [];
   const models = Array.isArray(payload && payload.available_models) ? payload.available_models : [];
   settingsCameraList.innerHTML = poses.map((pose) => {
@@ -1232,6 +1245,26 @@ function renderSettings(payload) {
       void setHandOverlayEnabled(toggle.dataset.camera, toggle.checked);
     });
   });
+}
+
+async function setStickFigureMode(enabled) {
+  setSettingsStatus("Updating stick-figure mode...");
+  try {
+    const response = await fetch("/api/settings/stick-figure", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to update stick-figure mode.");
+    }
+    renderSettings(payload);
+    setSettingsStatus(`Stick-figure mode ${enabled ? "enabled" : "disabled"}.`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSettingsStatus(`Failed to update stick-figure mode: ${message}`);
+  }
 }
 
 async function setHandOverlayEnabled(name, enabled) {
@@ -1402,6 +1435,9 @@ async function applyPoseUpdate(payload) {
   if (!enable3d || !scene) {
     return;
   }
+  // Toggled from the Settings page; buildAssetKey folds it in, so flipping
+  // it makes ensurePoseVisual dispose the GLB/marker and rebuild the other.
+  stickFigureMode = Boolean(payload.stick_figure_mode);
   // Every payload carries the full trace, so skipped updates self-heal on
   // the first message after the tab becomes visible again.
   if (document.hidden) {
@@ -1920,6 +1956,11 @@ async function ensurePoseVisual(pose, node) {
   disposeNodeChildren(node);
   node.metadata = { assetKey: buildAssetKey(pose) };
 
+  if (stickFigureMode) {
+    attachStickMarker(pose, node);
+    return;
+  }
+
   const modelPath = pose.avatar_model || "";
   const lower = modelPath.toLowerCase();
   if (!modelPath) {
@@ -1988,6 +2029,29 @@ async function ensurePoseVisual(pose, node) {
   } catch (error) {
     warnOnce(`load:${modelPath}`, `Failed to load model ${modelPath}: ${String(error)}. Using primitive fallback.`);
     attachPrimitive(pose, node, "Model load failed, using primitive fallback");
+  }
+}
+
+function attachStickMarker(pose, node) {
+  // Stick-figure mode: one large role-colored dot per pose instead of the
+  // GLB avatar, so the skeleton lines carry the picture. Fixed size on
+  // purpose -- avatar_scale belongs to the models this mode replaces.
+  const style = ROLE_STYLE[pose.role] || ROLE_STYLE.head;
+  const color = BABYLON.Color3.FromHexString(style.color);
+  const material = new BABYLON.StandardMaterial(`stick-marker-mat-${pose.name}`, scene);
+  material.diffuseColor = color;
+  material.emissiveColor = color.scale(0.55);
+  material.specularColor = BABYLON.Color3.Black();
+  const mesh = BABYLON.MeshBuilder.CreateSphere(
+    `stick-marker-${pose.name}`,
+    { diameter: pose.role === "head" ? 0.12 : 0.09 },
+    scene
+  );
+  mesh.material = material;
+  mesh.parent = node;
+  mesh.isPickable = false;
+  if (modelStatus) {
+    modelStatus.textContent = "Models: stick-figure markers";
   }
 }
 
@@ -2226,6 +2290,9 @@ function disposeNodeChildren(node) {
 }
 
 function buildAssetKey(pose) {
+  if (stickFigureMode) {
+    return `stick-marker:${pose.role}`;
+  }
   const rotation = Array.isArray(pose.avatar_rotation_deg_xyz) ? pose.avatar_rotation_deg_xyz.join(",") : "0,0,0";
   const offset = Array.isArray(pose.avatar_offset_xyz) ? pose.avatar_offset_xyz.join(",") : "0,0,0";
   return String(pose.avatar_model || "primitive") + ":" + String(pose.avatar_scale || 1) + ":" + rotation + ":" + offset;
