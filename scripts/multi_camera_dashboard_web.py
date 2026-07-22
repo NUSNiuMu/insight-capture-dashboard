@@ -63,7 +63,7 @@ from camera_setup import (
     image_topic,
     load_setup,
 )
-from check_bag import analyze_bag
+from check_bag import analyze_bag, nominal_for
 from gripper_tracking import GripperTrackingMixin
 from hand_overlay import HandOverlayMixin
 from hw_jpeg import HwJpegCodec
@@ -330,6 +330,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # per image topic at its first frame; later frames must retain the
         # camera cadence rather than inheriting Python executor jitter.
         self._recording_timestamp_offsets_ns: Dict[str, Optional[int]] = {}
+        self._recording_header_audit: Dict[str, Dict[str, object]] = {}
         self._recording_writer_lock = threading.Lock()
         # Latest-frame handoff from the (near-zero-cost) image subscription
         # callbacks to the per-camera worker threads that do the heavy
@@ -789,6 +790,11 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self._recording_writers = writers_by_path
             self._recording_writer_by_topic = writer_by_topic
             self._recording_timestamp_offsets_ns = {topic: None for topic in topic_output_paths}
+            self._recording_header_audit = {
+                topic: {"count": 0, "first_ns": None, "last_ns": None, "missing": 0,
+                        "gap_events": 0, "worst_gap_ns": 0}
+                for topic in topic_output_paths
+            }
 
     def stop_image_recording(self) -> Dict[str, object]:
         with self._recording_writer_lock:
@@ -796,11 +802,38 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self._recording_writers = {}
             self._recording_writer_by_topic = {}
             self._recording_timestamp_offsets_ns = {}
+            audit = self._finalize_image_header_audit()
+            self._recording_header_audit = {}
         dropped = 0
         for writer in writers.values():
             writer.close()
             dropped += writer.dropped_count
-        return {"dropped": dropped}
+        # A continuous received-header sequence is not sufficient if the
+        # bounded disk queue rejected a frame after this callback observed it.
+        audit["writer_queue_dropped"] = dropped
+        audit["ok"] = bool(audit["ok"]) and dropped == 0
+        return {"dropped": dropped, "image_header_audit": audit}
+
+    def _finalize_image_header_audit(self) -> Dict[str, object]:
+        """Return the in-flight image continuity report without re-reading a bag."""
+        topics: Dict[str, object] = {}
+        for topic, stat in self._recording_header_audit.items():
+            count = int(stat["count"])
+            first_ns = stat["first_ns"]
+            last_ns = stat["last_ns"]
+            nominal_hz = nominal_for(topic)
+            span_s = ((int(last_ns) - int(first_ns)) / 1e9) if count > 1 and first_ns is not None and last_ns is not None else 0.0
+            topics[topic] = {
+                "frames": count,
+                "nominal_hz": nominal_hz,
+                "observed_hz": round((count - 1) / span_s, 3) if span_s > 0 else None,
+                "missing": int(stat["missing"]),
+                "gap_events": int(stat["gap_events"]),
+                "worst_gap_ms": round(int(stat["worst_gap_ns"]) / 1e6, 3),
+                "ok": count > 1 and int(stat["missing"]) == 0,
+            }
+        return {"method": "live_image_header_audit", "topics": topics,
+                "ok": bool(topics) and all(item["ok"] for item in topics.values())}
 
     def _feed_recording_writer(self, topic: str, msg: object) -> None:
         writer = self._recording_writer_by_topic.get(topic)
@@ -816,6 +849,21 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             # headerless custom image message.
             writer.write(topic, msg, now_ns)
             return
+
+        audit = self._recording_header_audit.get(topic)
+        if audit is not None:
+            previous_ns = audit["last_ns"]
+            if previous_ns is not None:
+                gap_ns = source_ns - int(previous_ns)
+                nominal_hz = nominal_for(topic)
+                if nominal_hz and gap_ns > 1.5e9 / nominal_hz:
+                    audit["gap_events"] = int(audit["gap_events"]) + 1
+                    audit["missing"] = int(audit["missing"]) + max(0, round(gap_ns * nominal_hz / 1e9) - 1)
+                    audit["worst_gap_ns"] = max(int(audit["worst_gap_ns"]), gap_ns)
+            if audit["first_ns"] is None:
+                audit["first_ns"] = source_ns
+            audit["last_ns"] = source_ns
+            audit["count"] = int(audit["count"]) + 1
 
         offset_ns = self._recording_timestamp_offsets_ns.get(topic)
         if offset_ns is None:

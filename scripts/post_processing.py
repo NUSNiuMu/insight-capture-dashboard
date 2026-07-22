@@ -539,6 +539,7 @@ class RecordingManager:
         self._start_image_recording = start_image_recording
         self._stop_image_recording = stop_image_recording
         self._image_writer_active = False
+        self._image_header_audit: Optional[Dict[str, object]] = None
         # One `ros2 bag record` per camera (see _topic_group) instead of one
         # process for every selected topic -- keyed by group name so start/
         # stop/status can address them individually.
@@ -692,6 +693,7 @@ class RecordingManager:
             self._stdout_threads = stdout_threads
             self._staging_dir = staging_dir
             self._image_writer_active = image_writer_active
+            self._image_header_audit = None
             self.output_path = str(output_path)
             self.started_at = time.time()
             self.current_topics = list(selected_topics)
@@ -737,6 +739,7 @@ class RecordingManager:
                 dropped = int(result.get("dropped", 0)) if result else 0
                 if dropped:
                     self._output_lines.append(f"[_images] WARNING: dropped {dropped} message(s) (writer queue full)")
+                self._image_header_audit = result.get("image_header_audit") if result else None
             except Exception as exc:  # noqa: BLE001 - surfaced via output log, not fatal to stop()
                 self._output_lines.append(f"[_images] ERROR stopping writer: {exc}")
         deadline = time.monotonic() + max(float(timeout_sec), 0.1)
@@ -792,6 +795,10 @@ class RecordingManager:
                 self._convert_merge(part_bags, output_path)
 
             trim = _trim_startup_skew(output_path)
+            if self._image_header_audit is not None:
+                (output_path / "image_header_audit.json").write_text(
+                    json.dumps(self._image_header_audit, indent=2, sort_keys=True)
+                )
             if trim["trimmed_ns"] > 0:
                 self._output_lines.append(
                     f"[merge] Trimmed {trim['trimmed_ns'] / 1e9:.2f}s of unsynced camera-startup "
