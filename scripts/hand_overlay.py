@@ -55,21 +55,27 @@ MIN_KEYPOINT_SCORE = 0.3
 # freezing a stale skeleton on screen.
 HAND_DATA_TIMEOUT_SEC = 2.0
 
-# Matches visualize_hand_landmarks.py's --max-sync-ms default: the maximum
-# |image_stamp - keypoints_stamp| gap for compose_hand_overlay_jpeg to draw
-# the skeleton onto that particular image frame. Deliberately much tighter
-# than HAND_DATA_TIMEOUT_SEC above -- that one answers "has the topic gone
-# dead", this one answers "would drawing this specific keypoints frame onto
-# this specific image frame look visibly misaligned" (HandEngine and the
-# image stream are two independent publishers; a moving hand can drift
-# several pixels within even 100ms). The reference tool solves the same
-# problem by picking whichever buffered image is closest to the keypoints'
-# stamp and printing "kpt out of sync" instead of drawing; the dashboard
-# has no image buffer to pick from (it draws onto whichever frame just
-# arrived), so out-of-sync here means "skip the overlay for this frame"
-# instead -- the plain passthrough JPEG a moment of no overlay, not a
-# visibly wrong one.
-MAX_SYNC_NS = 120_000_000
+# Matches visualize_hand_landmarks.py's --max-sync-ms default: how fresh a
+# hand_keypoints message must be, relative to right now, for
+# compose_hand_overlay_jpeg to draw it onto the frame currently being
+# encoded. Deliberately much tighter than HAND_DATA_TIMEOUT_SEC above --
+# that one answers "has the topic gone dead", this one answers "would
+# drawing this keypoints snapshot onto the current frame look visibly
+# misaligned" (a moving hand can drift several pixels within even 100ms).
+#
+# This used to compare the image's own header.stamp against the keypoints'
+# header.stamp directly (matching the reference tool, which buffers images
+# and picks whichever is closest to the keypoints' stamp). That assumes
+# both stamps share a zero point, which does not hold here: measured
+# 2026-07-22 with a real hand in view, image_stamp_ns vs. the
+# hand_keypoints stamp_ns sat at a *stable* ~430-500ms gap (not jitter --
+# HandEngine apparently timestamps relative to its own clock, not the
+# camera driver's), which made this check reject every single frame and
+# silently blocked the overlay from ever drawing. Comparing against
+# received_monotonic instead -- both messages' arrival time on this
+# process's own clock -- sidesteps the cross-clock-domain mismatch
+# entirely and is what HAND_DATA_TIMEOUT_SEC above already does.
+MAX_SYNC_SEC = 0.12
 
 # Which dashboard teleop role each HandEngine class_id anchors to in the 3D
 # scene. UNVERIFIED against real data: insight9_a is an outward-looking head
@@ -157,7 +163,7 @@ HAND_ROLE_ANCHOR_MAX_AGE_SEC = 3.0
 # fresh detection" made the 3D rig blink several times a second. The 2D
 # image overlay deliberately does NOT use these tracks -- drawing held-over
 # keypoints onto a newer image frame would be visibly misaligned (see
-# MAX_SYNC_NS); a missing overlay frame there is invisible, not a blink.
+# MAX_SYNC_SEC); a missing overlay frame there is invisible, not a blink.
 #   birth: this many consecutive detections before the skeleton appears,
 #          filtering single-frame false positives;
 HAND_TRACK_BIRTH_MIN_HITS = 3
@@ -637,7 +643,7 @@ class HandOverlayMixin:
         }
 
     def compose_hand_overlay_jpeg(
-        self, camera_name: str, jpeg_bytes: bytes, image_stamp_ns: int, version: int = 0
+        self, camera_name: str, jpeg_bytes: bytes, version: int = 0
     ) -> Optional[bytes]:
         """Gate + dispatch: decides whether this frame is worth overlaying
         (cheap -- payload lookup, staleness, sync-window checks) and, if so,
@@ -658,12 +664,18 @@ class HandOverlayMixin:
         once a hand is actually visible, which is exactly why fps used to
         collapse only "once a hand is detected" (see wiki changelog).
         """
-        payload = self.hand_overlay_payload(camera_name)
-        if not payload or payload["stale"] or not payload["hands"]:
+        snapshot = self.hand_latest_snapshot.get(camera_name)
+        if snapshot is None:
             return None
-        if abs(image_stamp_ns - payload["stamp_ns"]) > MAX_SYNC_NS:
+        now = time.monotonic()
+        if now - snapshot.received_monotonic > HAND_DATA_TIMEOUT_SEC or not snapshot.hands:
+            return None
+        # See MAX_SYNC_SEC's comment: freshness is judged against this
+        # process's own receive clock, not the two messages' own stamps
+        # (which measured 2026-07-22 as sitting on incomparable clocks).
+        if now - snapshot.received_monotonic > MAX_SYNC_SEC:
             return None
         dispatch = getattr(self, "_dispatch_hand_overlay", None)
         if dispatch is not None:
-            dispatch(camera_name, version, jpeg_bytes, payload["hands"])
+            dispatch(camera_name, version, jpeg_bytes, snapshot.hands)
         return None

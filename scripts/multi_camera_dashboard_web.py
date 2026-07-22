@@ -361,6 +361,10 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self._hand_overlay_authkey = secrets.token_bytes(32)
         self._pending_hand_overlay_frames: Dict[str, Tuple[int, bytes, list]] = {}
         self._hand_overlay_frame_event = threading.Event()
+        # Highest composited version actually applied per camera so far --
+        # see _apply_composited_hand_overlay for why this replaces an exact
+        # camera_frame_versions match.
+        self._hand_overlay_last_applied: Dict[str, int] = {}
         self._hand_overlay_proc = self._start_hand_overlay_worker()
         threading.Thread(target=self._hand_overlay_ipc_loop, daemon=True, name="hand_overlay_ipc").start()
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
@@ -1010,18 +1014,30 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             time.sleep(1.0)
 
     def _apply_composited_hand_overlay(self, camera_name: str, version: int, composited: bytes) -> None:
-        """Patches a worker's composited JPEG into latest_camera_frames --
-        but only if no newer raw frame has already superseded the version
-        this composite was made from, so an async result arriving late can
-        never move a served frame backwards (the frame just stays
-        undecorated for that tick instead, same as a dropped composite)."""
+        """Patches a worker's composited JPEG into latest_camera_frames.
+
+        The round trip through hand_overlay_worker.py (two process hops
+        plus a GStreamer hardware encode/decode) routinely takes longer
+        than one camera frame period, so by the time a result comes back
+        the raw frame it was dispatched from is almost never still the
+        "current" one anymore -- requiring an exact version match (the
+        first cut of this) silently discarded essentially every composite,
+        which looked exactly like "hand overlay draws nothing" even though
+        detection and compositing were both working. This only guards
+        against applying a composite older than one already applied (so an
+        out-of-order arrival can't flicker backwards); the served frame's
+        own stamp_ns/version are left as whatever they already are --
+        only the pixel bytes change, arriving a frame or two late is
+        invisible at 20-30fps.
+        """
+        if version <= self._hand_overlay_last_applied.get(camera_name, -1):
+            return
         width, height = self._jpeg_dimensions(composited)
         with self.camera_frame_lock:
-            if self.camera_frame_versions.get(camera_name) != version:
-                return
             current = self.latest_camera_frames.get(camera_name)
-            if current is None or current.version != version:
+            if current is None:
                 return
+            self._hand_overlay_last_applied[camera_name] = version
             self.latest_camera_frames[camera_name] = CameraFrame(
                 data=composited,
                 stamp_ns=current.stamp_ns,
@@ -1029,7 +1045,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 mime_type="image/jpeg",
                 width=width,
                 height=height,
-                version=version,
+                version=current.version,
             )
 
     def _webrtc_ipc_loop(self) -> None:
@@ -1113,7 +1129,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 # asynchronously and patches into latest_camera_frames once
                 # ready (_hand_overlay_ipc_loop), so a served frame is
                 # undecorated for at most one IPC round trip.
-                self.compose_hand_overlay_jpeg(camera_name, data, stamp_ns, version)
+                self.compose_hand_overlay_jpeg(camera_name, data, version)
             width, height = self._jpeg_dimensions(data)
             return CameraFrame(
                 data=data,
