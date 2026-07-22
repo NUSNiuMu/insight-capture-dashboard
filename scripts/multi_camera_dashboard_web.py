@@ -208,6 +208,7 @@ class CameraFrame:
     width: int
     height: int
     version: int
+    hand_overlay_pending: bool = False
 
 
 class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin, Node):
@@ -867,7 +868,14 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 if frame is None:
                     continue
                 with self.camera_frame_lock:
-                    self.latest_camera_frames[camera_name] = frame
+                    # Once an overlay has been dispatched, keep the last
+                    # composited frame onscreen until its replacement returns
+                    # from the worker. Replacing it with every raw source
+                    # frame made the overlay visible only for the fraction of
+                    # a frame between the asynchronous result and the next
+                    # camera callback.
+                    if not frame.hand_overlay_pending:
+                        self.latest_camera_frames[camera_name] = frame
                     self.camera_frame_times[camera_name].append(frame.received_monotonic)
                 self._maybe_queue_webrtc_frame(camera_name, topic_type, msg, frame)
             except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the worker
@@ -888,6 +896,12 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         """
         if not self._webrtc_has_sessions.get(camera_name):
             return
+        # A hand-overlay worker has the current JPEG. Sending its raw source
+        # now would interleave undecorated video frames with the late
+        # composite; wait for _apply_composited_hand_overlay to forward the
+        # matching JPEG instead.
+        if frame.hand_overlay_pending:
+            return
         if topic_type == "compressed":
             if frame is None or frame.width <= 0 or frame.height <= 0:
                 return
@@ -905,6 +919,16 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         script_path = Path(__file__).resolve().parent / "webrtc_worker.py"
         env = dict(os.environ)
         env["INSIGHT_WEBRTC_AUTHKEY"] = self._webrtc_authkey.hex()
+        # JetPack's nvv4l2 encoder loads libnvmmlite_video at runtime. In
+        # this container its dependency on NvOsSleepMS is not promoted into
+        # the global linker scope reliably, causing the worker to exit after
+        # pipelines start. Preload the matching host-mounted libnvos so the
+        # symbol is always available to the encoder plugin.
+        nvos_library = Path("/usr/lib/aarch64-linux-gnu/nvidia/libnvos.so")
+        if nvos_library.exists():
+            env["LD_PRELOAD"] = " ".join(
+                item for item in (str(nvos_library), env.get("LD_PRELOAD", "")) if item
+            )
         log_path = self.project_root / "outputs" / "webrtc_worker.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = open(log_path, "a", buffering=1)
@@ -1041,12 +1065,15 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self.latest_camera_frames[camera_name] = CameraFrame(
                 data=composited,
                 stamp_ns=current.stamp_ns,
-                received_monotonic=current.received_monotonic,
+                received_monotonic=time.monotonic(),
                 mime_type="image/jpeg",
                 width=width,
                 height=height,
-                version=current.version,
+                version=version,
             )
+        if self._webrtc_has_sessions.get(camera_name):
+            self._pending_webrtc_frames[camera_name] = ("JPEG", width, height, composited)
+            self._webrtc_frame_event.set()
 
     def _webrtc_ipc_loop(self) -> None:
         """Owns the single connection to webrtc_worker.py: sends frames the
@@ -1120,6 +1147,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self.camera_frame_versions[camera_name] = version
         if topic_type == "compressed":
             data = bytes(msg.data)
+            hand_overlay_pending = False
             if camera_name in self.hand_overlay_enabled:
                 # Gates the frame and, if worth overlaying, dispatches the
                 # actual decode/draw/re-encode to hand_overlay_worker.py --
@@ -1129,7 +1157,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 # asynchronously and patches into latest_camera_frames once
                 # ready (_hand_overlay_ipc_loop), so a served frame is
                 # undecorated for at most one IPC round trip.
-                self.compose_hand_overlay_jpeg(camera_name, data, version)
+                hand_overlay_pending = self.compose_hand_overlay_jpeg(camera_name, data, version)
             width, height = self._jpeg_dimensions(data)
             return CameraFrame(
                 data=data,
@@ -1139,6 +1167,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 width=width,
                 height=height,
                 version=version,
+                hand_overlay_pending=hand_overlay_pending,
             )
         if self._hw_jpeg is not None:
             with track(f"image_encode_hw:{camera_name}"):

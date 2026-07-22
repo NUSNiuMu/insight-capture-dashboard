@@ -644,14 +644,14 @@ class HandOverlayMixin:
 
     def compose_hand_overlay_jpeg(
         self, camera_name: str, jpeg_bytes: bytes, version: int = 0
-    ) -> Optional[bytes]:
+    ) -> bool:
         """Gate + dispatch: decides whether this frame is worth overlaying
         (cheap -- payload lookup, staleness, sync-window checks) and, if so,
         hands the actual decode/draw/encode off to the hand_overlay_worker.py
-        process instead of doing it inline. Always returns None -- the
-        caller's passthrough JPEG for this tick is deliberately left
+        process instead of doing it inline. Returns True only when work was
+        dispatched. The caller's passthrough JPEG for that tick is left
         undecorated; the worker's result lands asynchronously and patches
-        into self.latest_camera_frames once ready (see
+        into the display and WebRTC paths once ready (see
         PoseBridgeNode._hand_overlay_ipc_loop). Only called when
         hand_overlay_enabled for this camera, so cameras without it on keep
         the cheap passthrough path in _encode_dashboard_frame untouched.
@@ -666,16 +666,17 @@ class HandOverlayMixin:
         """
         snapshot = self.hand_latest_snapshot.get(camera_name)
         if snapshot is None:
-            return None
+            return False
         now = time.monotonic()
         if now - snapshot.received_monotonic > HAND_DATA_TIMEOUT_SEC or not snapshot.hands:
-            return None
+            return False
         # See MAX_SYNC_SEC's comment: freshness is judged against this
         # process's own receive clock, not the two messages' own stamps
         # (which measured 2026-07-22 as sitting on incomparable clocks).
         if now - snapshot.received_monotonic > MAX_SYNC_SEC:
-            return None
+            return False
         dispatch = getattr(self, "_dispatch_hand_overlay", None)
         if dispatch is not None:
             dispatch(camera_name, version, jpeg_bytes, snapshot.hands)
-        return None
+            return True
+        return False
