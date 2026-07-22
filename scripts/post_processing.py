@@ -569,6 +569,11 @@ class RecordingManager:
             group: process for group, process in self.processes.items() if process.poll() is None
         }
 
+    def is_recording(self) -> bool:
+        """Cheap hot-path status for image workers; avoids building API JSON."""
+        with self._lock:
+            return bool(self.processes) or self._image_writer_active
+
     def _drain_stdout(self, label: str, process: subprocess.Popen) -> None:
         stream = process.stdout
         if stream is None:

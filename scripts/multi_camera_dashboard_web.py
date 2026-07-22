@@ -215,6 +215,11 @@ class CameraFrame:
 # disconnect/reconnect. Encoding it at every source frame wastes the same
 # NVJPEG/GIL time that WebRTC was introduced to avoid.
 WEBRTC_JPEG_FALLBACK_INTERVAL_SEC = 0.5
+# Recording owns the source frames.  Limit only the visual WebRTC preview
+# while it is active, so JPEG copies/IPC cannot starve the DDS callbacks that
+# feed the bag writer.  The preview returns to native rate immediately after
+# stop; the bag itself continues to receive every source frame.
+RECORDING_WEBRTC_PREVIEW_FPS = 10.0
 
 
 class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin, Node):
@@ -364,6 +369,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self._webrtc_frame_event = threading.Event()
         self._webrtc_available_cached = False
         self._last_webrtc_fallback_jpeg_at: Dict[str, float] = {}
+        self._last_recording_preview_at: Dict[str, float] = {}
         self._webrtc_proc = self._start_webrtc_worker()
         threading.Thread(target=self._webrtc_ipc_loop, daemon=True, name="webrtc_ipc").start()
         threading.Thread(target=self._webrtc_healthz_loop, daemon=True, name="webrtc_healthz").start()
@@ -645,7 +651,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         if manager is None:
             return False
         try:
-            return bool(manager.status().get("recording"))
+            return manager.is_recording()
         except Exception:
             return False
 
@@ -922,6 +928,21 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             if msg is None:
                 continue
             try:
+                # The subscription callback above has already put this frame
+                # on the recording queue. During a recording, rendering and
+                # copying every 1080p JPEG into the WebRTC IPC channel can
+                # monopolize the Python process long enough for DDS history
+                # to backpressure the publisher. Keep a responsive preview
+                # but deliberately sacrifice preview cadence before capture
+                # cadence. This is only relevant while a browser has a
+                # WebRTC session; without one the existing fallback is cheap.
+                preview_now = time.monotonic()
+                if self._recording_active() and self._webrtc_has_sessions.get(camera_name):
+                    min_interval = 1.0 / RECORDING_WEBRTC_PREVIEW_FPS
+                    previous = self._last_recording_preview_at.get(camera_name, 0.0)
+                    if preview_now - previous < min_interval:
+                        continue
+                    self._last_recording_preview_at[camera_name] = preview_now
                 if alignment_cb is not None:
                     alignment_cb(msg)
                 # Decode once and share: the display path and the gripper
