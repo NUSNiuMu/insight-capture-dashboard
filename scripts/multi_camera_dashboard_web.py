@@ -211,6 +211,12 @@ class CameraFrame:
     hand_overlay_pending: bool = False
 
 
+# The polling fallback only needs a recent still frame to cover a WebRTC
+# disconnect/reconnect. Encoding it at every source frame wastes the same
+# NVJPEG/GIL time that WebRTC was introduced to avoid.
+WEBRTC_JPEG_FALLBACK_INTERVAL_SEC = 0.5
+
+
 class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin, Node):
     def __init__(
         self,
@@ -350,6 +356,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self._pending_webrtc_frames: Dict[str, Tuple[str, int, int, bytes]] = {}
         self._webrtc_frame_event = threading.Event()
         self._webrtc_available_cached = False
+        self._last_webrtc_fallback_jpeg_at: Dict[str, float] = {}
         self._webrtc_proc = self._start_webrtc_worker()
         threading.Thread(target=self._webrtc_ipc_loop, daemon=True, name="webrtc_ipc").start()
         threading.Thread(target=self._webrtc_healthz_loop, daemon=True, name="webrtc_healthz").start()
@@ -864,9 +871,22 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                     )
                     if gripper_image is not None:
                         self._process_gripper_image(camera_name, gripper_image)
-                frame = self._encode_dashboard_frame(camera_name, topic_type, msg, display_image)
-                if frame is None:
-                    continue
+                now = time.monotonic()
+                # Compressed input is already a JPEG, but raw input would
+                # otherwise pay an NVJPEG encode for every frame solely for
+                # an HTTP fallback hidden behind an active WebRTC <video>.
+                # Refresh that fallback twice a second instead.
+                refresh_fallback = (
+                    topic_type == "compressed"
+                    or not self._webrtc_has_sessions.get(camera_name)
+                    or now - self._last_webrtc_fallback_jpeg_at.get(camera_name, 0.0)
+                    >= WEBRTC_JPEG_FALLBACK_INTERVAL_SEC
+                )
+                frame = (
+                    self._encode_dashboard_frame(camera_name, topic_type, msg, display_image)
+                    if refresh_fallback
+                    else None
+                )
                 with self.camera_frame_lock:
                     # Once an overlay has been dispatched, keep the last
                     # composited frame onscreen until its replacement returns
@@ -874,9 +894,11 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                     # frame made the overlay visible only for the fraction of
                     # a frame between the asynchronous result and the next
                     # camera callback.
-                    if not frame.hand_overlay_pending:
+                    if frame is not None and not frame.hand_overlay_pending:
                         self.latest_camera_frames[camera_name] = frame
-                    self.camera_frame_times[camera_name].append(frame.received_monotonic)
+                        if topic_type != "compressed":
+                            self._last_webrtc_fallback_jpeg_at[camera_name] = frame.received_monotonic
+                    self.camera_frame_times[camera_name].append(now)
                 self._maybe_queue_webrtc_frame(camera_name, topic_type, msg, frame)
             except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the worker
                 self.get_logger().warning(f"frame worker {camera_name}: {exc}")
@@ -900,7 +922,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # now would interleave undecorated video frames with the late
         # composite; wait for _apply_composited_hand_overlay to forward the
         # matching JPEG instead.
-        if frame.hand_overlay_pending:
+        if frame is not None and frame.hand_overlay_pending:
             return
         if topic_type == "compressed":
             if frame is None or frame.width <= 0 or frame.height <= 0:
