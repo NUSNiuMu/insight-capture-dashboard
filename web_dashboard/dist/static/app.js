@@ -82,17 +82,14 @@ const HAND_RIG_EDGES = [
   [9, 13, "palm"], [13, 14, "ring"], [14, 15, "ring"], [15, 16, "ring"],
   [13, 17, "palm"], [0, 17, "palm"], [17, 18, "pinky"], [18, 19, "pinky"], [19, 20, "pinky"]
 ];
-const HAND_RIG_FINGER_COLORS = {
-  thumb: "#ff5050",
-  index: "#ffa040",
-  middle: "#ffe14d",
-  ring: "#4dd162",
-  pinky: "#4d7dff",
-  palm: "#c8c8c8"
-};
 // Landmarks arrive normalized to wrist->middle-MCP == 1; this is that
 // distance in meters on the rendered rig.
 const HAND_RIG_SCALE = 0.09;
+// Bones are real tube geometry (not GL_LINES) so this is an actual radius
+// in scene meters, not a hint most WebGL backends ignore -- one uniform
+// color for all fingers, thick enough to read clearly at the marker scale.
+const HAND_RIG_COLOR = "#ff0000";
+const HAND_RIG_RADIUS = 0.004;
 
 const wsUrl = resolveWebSocketUrl();
 const engine = enable3d && canvas ? new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: false, stencil: true }) : null;
@@ -2061,7 +2058,7 @@ function attachStickMarker(pose, node) {
   material.specularColor = BABYLON.Color3.Black();
   const mesh = BABYLON.MeshBuilder.CreateSphere(
     `stick-marker-${pose.name}`,
-    { diameter: pose.role === "head" ? 0.06 : 0.045 },
+    { diameter: pose.role === "head" ? 0.06 : 0.0225 },
     scene
   );
   mesh.material = material;
@@ -2206,48 +2203,70 @@ function handLandmarkToLocal(landmark) {
   );
 }
 
+let handRigMaterial = null;
+
+function ensureHandRigMaterial() {
+  // Shared by every bone tube across both hands -- one material, not one
+  // per mesh. Unlit (disableLighting) so the red reads the same regardless
+  // of scene lighting/angle, matching how a plain colored line would look.
+  if (!handRigMaterial && scene) {
+    handRigMaterial = new BABYLON.StandardMaterial("hand-rig-mat", scene);
+    const color = BABYLON.Color3.FromHexString(HAND_RIG_COLOR);
+    handRigMaterial.diffuseColor = color;
+    handRigMaterial.emissiveColor = color;
+    handRigMaterial.specularColor = BABYLON.Color3.Black();
+    handRigMaterial.disableLighting = true;
+  }
+  return handRigMaterial;
+}
+
 function updateHandRig(pose, node) {
   if (!scene) {
     return;
   }
   let rig = handRigs.get(pose.name);
   // ensurePoseVisual's disposeNodeChildren wipes every descendant of the
-  // pose node when the avatar model changes -- including this parented line
-  // system -- so recreate rather than instance-update a disposed mesh.
-  if (rig && rig.mesh.isDisposed()) {
+  // pose node when the avatar model changes -- including these parented
+  // bone tubes -- so recreate rather than instance-update a disposed mesh.
+  if (rig && rig.tubes.some((tube) => tube && tube.isDisposed())) {
     handRigs.delete(pose.name);
     rig = null;
   }
   const landmarks = Array.isArray(pose.hand_landmarks) ? pose.hand_landmarks : null;
   if (!stickFigureMode || !pose.visible || !landmarks) {
-    if (rig) rig.mesh.setEnabled(false);
+    if (rig) rig.tubes.forEach((tube) => tube && tube.setEnabled(false));
     return;
   }
-  const origin = BABYLON.Vector3.Zero();
-  const lines = HAND_RIG_EDGES.map(([a, b]) => {
+  if (!rig) {
+    rig = { tubes: new Array(HAND_RIG_EDGES.length).fill(null) };
+    handRigs.set(pose.name, rig);
+  }
+  const material = ensureHandRigMaterial();
+  HAND_RIG_EDGES.forEach(([a, b], index) => {
     const pointA = landmarks[a];
     const pointB = landmarks[b];
+    const tube = rig.tubes[index];
     if (!pointA || !pointB) {
-      // Zero-length line keeps the line-system topology constant so the
-      // cheap instance update below stays valid despite dropped landmarks.
-      return [origin, origin];
+      if (tube) tube.setEnabled(false);
+      return;
     }
-    return [handLandmarkToLocal(pointA), handLandmarkToLocal(pointB)];
+    const path = [handLandmarkToLocal(pointA), handLandmarkToLocal(pointB)];
+    if (tube) {
+      BABYLON.MeshBuilder.CreateTube(null, { path, instance: tube });
+      tube.setEnabled(true);
+    } else {
+      const mesh = BABYLON.MeshBuilder.CreateTube(
+        `hand-rig-${pose.name}-${index}`,
+        { path, radius: HAND_RIG_RADIUS, tessellation: 6, updatable: true, cap: BABYLON.Mesh.CAP_ALL },
+        scene
+      );
+      mesh.material = material;
+      mesh.parent = node;
+      mesh.isPickable = false;
+      mesh.renderingGroupId = 1;
+      rig.tubes[index] = mesh;
+    }
   });
-  if (rig) {
-    BABYLON.MeshBuilder.CreateLineSystem(null, { lines, instance: rig.mesh });
-    rig.mesh.setEnabled(true);
-  } else {
-    const colors = HAND_RIG_EDGES.map(([, , finger]) => {
-      const color = BABYLON.Color4.FromHexString(`${HAND_RIG_FINGER_COLORS[finger] || "#ffffff"}ff`);
-      return [color, color];
-    });
-    const mesh = BABYLON.MeshBuilder.CreateLineSystem(`hand-rig-${pose.name}`, { lines, colors, updatable: true }, scene);
-    mesh.parent = node;
-    mesh.isPickable = false;
-    mesh.renderingGroupId = 1;
-    handRigs.set(pose.name, { mesh });
-  }
 }
 
 function collectInstantiatedMeshes(rootNodes) {
