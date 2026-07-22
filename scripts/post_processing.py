@@ -740,6 +740,14 @@ class RecordingManager:
                 if dropped:
                     self._output_lines.append(f"[_images] WARNING: dropped {dropped} message(s) (writer queue full)")
                 self._image_header_audit = result.get("image_header_audit") if result else None
+                if self._image_header_audit:
+                    audit_topics = self._image_header_audit.get("topics", {})
+                    verdict = "PASS" if self._image_header_audit.get("ok") else "FAIL"
+                    details = ", ".join(
+                        f"{topic}: {item.get('frames', 0)} frames, {item.get('missing', 0)} missing"
+                        for topic, item in sorted(audit_topics.items())
+                    )
+                    self._output_lines.append(f"[_images] live header audit {verdict} -- {details}")
             except Exception as exc:  # noqa: BLE001 - surfaced via output log, not fatal to stop()
                 self._output_lines.append(f"[_images] ERROR stopping writer: {exc}")
         deadline = time.monotonic() + max(float(timeout_sec), 0.1)
