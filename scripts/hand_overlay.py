@@ -82,6 +82,17 @@ HAND_CLASS_TO_ROLE = {
     "hand_right": "right_hand",
 }
 
+# Fresh-seeding order for _assign_hand_roles' stage 3 (a role with no recent
+# position at all -- track birth, or both hands appearing at once): the
+# first hand detected this session claims the first role in this list, the
+# second claims the second. Deliberately NOT based on HandEngine's class_id
+# -- per user request 2026-07-22, since that label is what was causing the
+# instability in the first place. This makes no claim about true anatomical
+# left/right; it only guarantees the pairing is stable once made (stages
+# 1-2's positional continuity keep it pinned from there). Swap the order
+# here if hand shapes consistently land on the wrong wrist.
+HAND_ROLE_SEED_ORDER = ("right_hand", "left_hand")
+
 # HandEngine's per-frame left/right classification of a single hand is not
 # stable -- observed flip-flopping between hand_left/hand_right frame to
 # frame, which made the 3D skeleton jump between the two wrist nodes. The
@@ -457,9 +468,14 @@ class HandOverlayMixin:
         continuous back-and-forth flipping between two hands that are both
         just sitting within the old single wide threshold of each other;
         (2) wider nearest-neighbor competition (HAND_POSITION_JUMP_FACTOR)
-        for a role stickiness didn't resolve; (3) smoothed classifier label
-        to seed a role with no recent position at all -- track birth, or
-        both hands appearing at once.
+        for a role stickiness didn't resolve; (3) fixed arrival-order
+        seeding (HAND_ROLE_SEED_ORDER) for a role with no recent position at
+        all -- track birth, or both hands appearing at once. Stage 3 does
+        NOT use class_id: it's unreliable enough on its own (see above)
+        that even confidence-gated/smoothed it could still seed a role
+        backward, and the whole point of stages 1-2 is that once seeded,
+        position -- not class_id -- is what keeps a role pinned to the
+        right physical hand.
         """
         candidates = [
             (entry, anchor)
@@ -524,17 +540,24 @@ class HandOverlayMixin:
                     wide_pairs.append((dist, role, idx))
         _apply(wide_pairs)
 
-        # Stage 3 -- classifier fallback for a hand with no continuity at
-        # all (track birth, or both hands appearing at once).
-        for idx, (entry, _) in enumerate(candidates):
-            if idx in idx_taken:
+        # Stage 3 -- fixed arrival-order seeding for a hand with no
+        # continuity at all (track birth, or both hands appearing at once).
+        # hand_index ordering is the closest thing to "which hand this
+        # message saw first" available; not a strong signal on its own, but
+        # it only matters for this one-time seed -- stages 1-2 hold the
+        # pairing steady from the next frame on regardless of what
+        # hand_index does afterward.
+        remaining = sorted(
+            (idx for idx in range(len(candidates)) if idx not in idx_taken),
+            key=lambda idx: candidates[idx][0].get("hand_index", idx),
+        )
+        for role in HAND_ROLE_SEED_ORDER:
+            if role in role_taken or not remaining:
                 continue
-            role = HAND_CLASS_TO_ROLE.get(str(entry.get("label", "")))
-            if role is None or role in role_taken:
-                continue
+            idx = remaining.pop(0)
             role_taken.add(role)
             idx_taken.add(idx)
-            assignments.append((entry, role))
+            assignments.append((candidates[idx][0], role))
 
         for entry, role in assignments:
             anchor = next(a for e, a in candidates if e is entry)
