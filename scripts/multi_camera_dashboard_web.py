@@ -324,6 +324,12 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # other on a single writer thread.
         self._recording_writers: Dict[str, InProcessBagWriter] = {}
         self._recording_writer_by_topic: Dict[str, InProcessBagWriter] = {}
+        # Camera header stamps are monotonic in the camera's boot-relative
+        # clock, while rosbag2 requires epoch-ish timestamps in the shared
+        # recording timeline.  Each recording establishes one fixed mapping
+        # per image topic at its first frame; later frames must retain the
+        # camera cadence rather than inheriting Python executor jitter.
+        self._recording_timestamp_offsets_ns: Dict[str, Optional[int]] = {}
         self._recording_writer_lock = threading.Lock()
         # Latest-frame handoff from the (near-zero-cost) image subscription
         # callbacks to the per-camera worker threads that do the heavy
@@ -782,12 +788,14 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 writer_by_topic[topic] = writer
             self._recording_writers = writers_by_path
             self._recording_writer_by_topic = writer_by_topic
+            self._recording_timestamp_offsets_ns = {topic: None for topic in topic_output_paths}
 
     def stop_image_recording(self) -> Dict[str, object]:
         with self._recording_writer_lock:
             writers = self._recording_writers
             self._recording_writers = {}
             self._recording_writer_by_topic = {}
+            self._recording_timestamp_offsets_ns = {}
         dropped = 0
         for writer in writers.values():
             writer.close()
@@ -798,7 +806,27 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         writer = self._recording_writer_by_topic.get(topic)
         if writer is None:
             return
-        writer.write(topic, msg, self.get_clock().now().nanoseconds)
+        now_ns = self.get_clock().now().nanoseconds
+        header = getattr(msg, "header", None)
+        stamp = getattr(header, "stamp", None)
+        source_ns = int(getattr(stamp, "sec", 0)) * 1_000_000_000 + int(getattr(stamp, "nanosec", 0))
+        if source_ns <= 0:
+            # This is not expected for our image messages, but retaining a
+            # usable fallback keeps recording compatible with a malformed or
+            # headerless custom image message.
+            writer.write(topic, msg, now_ns)
+            return
+
+        offset_ns = self._recording_timestamp_offsets_ns.get(topic)
+        if offset_ns is None:
+            # The source clocks are boot-relative.  Anchor each stream once,
+            # then write subsequent samples using source time so a 30-80 ms
+            # Python/DDS scheduling pause cannot look like a dropped frame in
+            # the resulting bag (the complete frames are often delivered in
+            # a short burst immediately afterwards).
+            offset_ns = now_ns - source_ns
+            self._recording_timestamp_offsets_ns[topic] = offset_ns
+        writer.write(topic, msg, source_ns + offset_ns)
 
     def _make_dashboard_image_callback(
         self, camera_name: str, topic_type: str, also_alignment: bool = False, is_live: bool = True
