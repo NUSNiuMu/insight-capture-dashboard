@@ -1703,7 +1703,7 @@ function updateCameraStream(panel, camera) {
 }
 
 function maybeStartCameraWebRtc(camera, panel) {
-  if (!window.RTCPeerConnection || !camera.webrtc_available) {
+  if (!window.RTCPeerConnection || !camera.webrtc_available || !camera.webrtc_port) {
     return;
   }
   if (!camera.visible || camera.stale) {
@@ -1715,24 +1715,35 @@ function maybeStartCameraWebRtc(camera, panel) {
   if (state && (state.pc || state.retryTimer || state.unavailable || state.attempts >= WEBRTC_MAX_ATTEMPTS)) {
     return;
   }
-  startCameraWebRtc(camera.name, panel);
+  startCameraWebRtc(camera.name, panel, camera.webrtc_port);
 }
 
-function startCameraWebRtc(cameraName, panel) {
+// webrtc_worker.py (a separate process from this backend, see wiki
+// changelog 2026-07-22) serves WebRTC signaling on its own port -- webrtcPort
+// is only passed in on the first dial (from the camera-status payload);
+// scheduleWebRtcRetry's retries call back in without it, so it falls back
+// to whatever the previous attempt already cached in cameraWebRtc's state.
+function startCameraWebRtc(cameraName, panel, webrtcPort) {
+  const previous = cameraWebRtc.get(cameraName);
+  const port = webrtcPort || (previous && previous.webrtcPort);
+  if (!port) {
+    return;
+  }
   const video = panel.querySelector(".camera-video");
   const img = panel.querySelector("img.camera-frame");
-  const previous = cameraWebRtc.get(cameraName);
   const state = {
     pc: null,
     ws: null,
     active: false,
     attempts: (previous ? previous.attempts : 0) + 1,
     retryTimer: null,
-    unavailable: Boolean(previous && previous.unavailable)
+    unavailable: Boolean(previous && previous.unavailable),
+    webrtcPort: port
   };
   cameraWebRtc.set(cameraName, state);
   const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${wsProtocol}://${location.host}/ws/webrtc?camera=${encodeURIComponent(cameraName)}`);
+  const hostname = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
+  const ws = new WebSocket(`${wsProtocol}://${hostname}:${port}/ws/webrtc?camera=${encodeURIComponent(cameraName)}`);
   const pc = new RTCPeerConnection();
   state.ws = ws;
   state.pc = pc;

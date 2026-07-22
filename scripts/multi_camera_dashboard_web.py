@@ -4,18 +4,23 @@ import argparse
 import asyncio
 import contextlib
 import fcntl
+import http.client
 import json
 import math
 import os
+import secrets
 import shutil
 import socket
 import struct
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 import traceback
 from collections import deque
 from dataclasses import dataclass
+from multiprocessing.connection import Client
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import quote
@@ -63,7 +68,6 @@ from gripper_tracking import GripperTrackingMixin
 from hand_overlay import HandOverlayMixin
 from hw_jpeg import HwJpegCodec
 from inprocess_bag_writer import InProcessBagWriter
-from webrtc_stream import WebRtcStreams
 import perf_tracker
 from perf_tracker import track
 from live_alignment import LiveAlignmentMixin
@@ -269,15 +273,15 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self,
         config_path: Path,
         fake_pose: bool = False,
-        pose_publish_hz: float = 15.0,
+        pose_publish_hz: float = 50.0,
         enable_alignment_stream: bool = False,
+        webrtc_port: int = 8766,
     ) -> None:
         if rclpy is None:
             raise RuntimeError("rclpy is required to run the web dashboard backend")
         super().__init__("insight_multi_camera_dashboard_web")
         self.config_path = config_path
         self.fake_pose = bool(fake_pose)
-        self.pose_publish_hz = max(1.0, float(pose_publish_hz))
         self.enable_alignment_stream = bool(enable_alignment_stream)
         self.max_points = 300
 
@@ -296,6 +300,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # errors to show for it -- "reliable" measured 0.0% loss across
         # repeated trials with no regression to the other topics.
         self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
+        self.pose_publish_hz = max(1.0, float(trajectory_config.get("pose_publish_hz", pose_publish_hz)))
         self.pose_timeout_sec = max(0.2, float(trajectory_config.get("pose_timeout_sec", 2.0)))
         self.camera_stale_timeout_sec = max(0.2, float(trajectory_config.get("camera_stale_timeout_sec", 2.0)))
         self._configure_live_alignment(raw_config, config)
@@ -386,10 +391,25 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # hand-overlay decode/re-encode; None on non-Jetson hosts, and every
         # call site keeps its cv2 path as fallback (see hw_jpeg.py).
         self._hw_jpeg = HwJpegCodec.create(log=self.get_logger().info)
-        # Hardware H.264 WebRTC streams for the camera panels; None when the
-        # GStreamer WebRTC stack is unavailable, and the frontend keeps its
-        # polling path as fallback either way (see webrtc_stream.py).
-        self.webrtc_streams = WebRtcStreams.create(log=self.get_logger().info)
+        # Hardware H.264 WebRTC (GStreamer/webrtcbin) runs in its own process
+        # (webrtc_worker.py) now, not in this one -- see wiki changelog
+        # 2026-07-22: with the 3D pose broadcast and all 3 WebRTC sessions
+        # active together (the real "3 camera panels + 3D on one screen"
+        # case), the two were measured fighting over this process's GIL with
+        # idle CPU sitting unused, dropping every camera's fps 12-30%. The
+        # frontend keeps its polling fallback either way (webrtc_available
+        # false when the worker isn't up/ready or lacks the hardware
+        # elements -- e.g. the lite/lite-779 dev profiles).
+        self.webrtc_port = webrtc_port
+        self._webrtc_ipc_path = os.path.join(tempfile.gettempdir(), f"insight_webrtc_{os.getpid()}.sock")
+        self._webrtc_authkey = secrets.token_bytes(32)
+        self._webrtc_has_sessions: Dict[str, bool] = {}
+        self._pending_webrtc_frames: Dict[str, Tuple[str, int, int, bytes]] = {}
+        self._webrtc_frame_event = threading.Event()
+        self._webrtc_available_cached = False
+        self._webrtc_proc = self._start_webrtc_worker()
+        threading.Thread(target=self._webrtc_ipc_loop, daemon=True, name="webrtc_ipc").start()
+        threading.Thread(target=self._webrtc_healthz_loop, daemon=True, name="webrtc_healthz").start()
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
         self._initialize_live_alignment_state()
         if self.world_to_reference:
@@ -892,10 +912,131 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 with self.camera_frame_lock:
                     self.latest_camera_frames[camera_name] = frame
                     self.camera_frame_times[camera_name].append(frame.received_monotonic)
-                if self.webrtc_streams is not None:
-                    self.webrtc_streams.push_ros_frame(camera_name, topic_type, msg, frame)
+                self._maybe_queue_webrtc_frame(camera_name, topic_type, msg, frame)
             except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the worker
                 self.get_logger().warning(f"frame worker {camera_name}: {exc}")
+
+    def _maybe_queue_webrtc_frame(self, camera_name: str, topic_type: str, msg, frame) -> None:
+        """Hand a frame to the webrtc_worker process's send queue, unless
+        nobody's watching that camera over WebRTC right now.
+
+        This check has to happen here, before resolving/copying any bytes --
+        moving it to the IPC send thread instead would mean every frame
+        still pays for the resolution work below even with zero viewers,
+        exactly the per-frame cost push_ros_frame() used to skip in-process
+        (see webrtc_stream.py's push_resolved_frame docstring). Gating state
+        comes from webrtc_worker.py's create_session/close_session
+        transitions, relayed over IPC into self._webrtc_has_sessions (see
+        _webrtc_ipc_loop).
+        """
+        if not self._webrtc_has_sessions.get(camera_name):
+            return
+        if topic_type == "compressed":
+            if frame is None or frame.width <= 0 or frame.height <= 0:
+                return
+            data, fmt, width, height = frame.data, "JPEG", frame.width, frame.height
+        else:
+            layout = HwJpegCodec.ros_image_layout(msg)
+            if layout is None:
+                return
+            fmt, width, height = layout
+            data = bytes(msg.data)
+        self._pending_webrtc_frames[camera_name] = (fmt, width, height, data)
+        self._webrtc_frame_event.set()
+
+    def _start_webrtc_worker(self) -> "subprocess.Popen":
+        script_path = Path(__file__).resolve().parent / "webrtc_worker.py"
+        env = dict(os.environ)
+        env["INSIGHT_WEBRTC_AUTHKEY"] = self._webrtc_authkey.hex()
+        log_path = self.project_root / "outputs" / "webrtc_worker.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = open(log_path, "a", buffering=1)
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                str(script_path),
+                "--config",
+                str(self.config_path),
+                "--webrtc-port",
+                str(self.webrtc_port),
+                "--ipc-socket",
+                self._webrtc_ipc_path,
+            ],
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+        self.get_logger().info(f"webrtc: spawned webrtc_worker.py pid={proc.pid} port={self.webrtc_port}")
+        return proc
+
+    def stop_webrtc_worker(self) -> None:
+        proc = getattr(self, "_webrtc_proc", None)
+        if proc is None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=3.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3.0)
+
+    def _webrtc_ipc_loop(self) -> None:
+        """Owns the single connection to webrtc_worker.py: sends frames the
+        worker actually has viewers for, and relays its session_state
+        updates back into self._webrtc_has_sessions. Single thread on this
+        side too (mirrors IpcServer in webrtc_worker.py) so no lock is
+        needed around the Connection itself."""
+        authkey = self._webrtc_authkey
+        while rclpy is not None and rclpy.ok():
+            try:
+                conn = Client(self._webrtc_ipc_path, family="AF_UNIX", authkey=authkey)
+            except OSError:
+                time.sleep(1.0)
+                continue
+            try:
+                while rclpy is not None and rclpy.ok():
+                    while conn.poll(0):
+                        message = conn.recv()
+                        if isinstance(message, tuple) and len(message) == 3 and message[0] == "session_state":
+                            _, camera_name, has_sessions = message
+                            self._webrtc_has_sessions[camera_name] = bool(has_sessions)
+                    if self._webrtc_frame_event.wait(timeout=0.05):
+                        self._webrtc_frame_event.clear()
+                        for camera_name in list(self._pending_webrtc_frames.keys()):
+                            payload = self._pending_webrtc_frames.pop(camera_name, None)
+                            if payload is None:
+                                continue
+                            conn.send((camera_name,) + payload)
+            except (EOFError, OSError) as exc:
+                self.get_logger().warning(f"webrtc ipc: lost connection to worker ({exc}); reconnecting")
+            finally:
+                with contextlib.suppress(Exception):
+                    conn.close()
+            time.sleep(1.0)
+
+    def _webrtc_healthz_loop(self) -> None:
+        """Polls webrtc_worker.py's own /healthz every 5s -- this is the
+        replacement for the old in-process `self.webrtc_streams is not
+        None` check in build_camera_payload. Deliberately dumb (blocking
+        stdlib http.client, short timeout, wide try/except): the worker not
+        being up yet/having crashed/lacking hardware elements must all just
+        read as unavailable here, same as today's fallback-to-polling
+        behavior, not raise."""
+        while rclpy is not None and rclpy.ok():
+            available = False
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", self.webrtc_port, timeout=2.0)
+                try:
+                    conn.request("GET", "/healthz")
+                    resp = conn.getresponse()
+                    payload = json.loads(resp.read())
+                    available = bool(payload.get("webrtc_available"))
+                finally:
+                    conn.close()
+            except Exception:
+                available = False
+            self._webrtc_available_cached = available
+            time.sleep(5.0)
 
     def _encode_dashboard_frame(
         self,
@@ -1200,7 +1341,8 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                         "height": 0 if frame is None else frame.height,
                         "version": 0 if frame is None else frame.version,
                         "frame_url": f"/api/cameras/{quote(camera.name, safe='')}/frame",
-                        "webrtc_available": self.webrtc_streams is not None,
+                        "webrtc_available": self._webrtc_available_cached,
+                        "webrtc_port": self.webrtc_port,
                         "rotation_deg": camera.rotation_deg,
                         "row": camera.row,
                         "column": camera.column,
@@ -1492,7 +1634,6 @@ class WebDashboardServer:
         asyncio.set_event_loop(self._loop)
         app = web.Application(middlewares=[self._json_error_middleware])
         app.router.add_get("/ws", self._handle_ws)
-        app.router.add_get("/ws/webrtc", self._handle_webrtc_ws)
         app.router.add_get("/healthz", self._handle_healthz)
         app.router.add_get("/api/alignment", self._handle_alignment_snapshot)
         app.router.add_post("/api/alignment/start", self._handle_alignment_start)
@@ -1613,45 +1754,8 @@ class WebDashboardServer:
         self._clients.discard(ws)
         return ws
 
-    async def _handle_webrtc_ws(self, request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse(heartbeat=20.0)
-        await ws.prepare(request)
-        camera_name = request.query.get("camera", "")
-        streams = self.node.webrtc_streams
-        spec = next((c for c in self.node.cameras if c.name == camera_name), None)
-        if streams is None or spec is None:
-            await ws.send_json({"type": "webrtc_unavailable"})
-            await ws.close()
-            return ws
-        loop = asyncio.get_running_loop()
-
-        def send_signal(payload: Dict) -> None:
-            # Offer/ICE callbacks land on GStreamer threads; hop back onto
-            # the server loop for the websocket write.
-            try:
-                asyncio.run_coroutine_threadsafe(ws.send_json(payload), loop)
-            except RuntimeError:
-                pass  # loop shutting down; the session is about to close too
-
-        session = streams.create_session(camera_name, spec.topic_type, send_signal)
-        try:
-            async for message in ws:
-                if message.type != web.WSMsgType.TEXT:
-                    continue
-                try:
-                    data = json.loads(message.data)
-                except json.JSONDecodeError:
-                    continue
-                kind = data.get("type")
-                if kind == "answer":
-                    session.set_remote_answer(str(data.get("sdp", "")))
-                elif kind == "ice" and data.get("candidate"):
-                    session.add_ice_candidate(
-                        int(data.get("sdpMLineIndex") or 0), str(data["candidate"])
-                    )
-        finally:
-            streams.close_session(session)
-        return ws
+    # WebRTC signaling (offer/ICE) now lives in webrtc_worker.py's own tiny
+    # aiohttp app on self.node.webrtc_port -- see wiki changelog 2026-07-22.
 
     async def _handle_healthz(self, _request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "fake_pose": self.node.fake_pose})
@@ -2207,13 +2311,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", default=str(Path(__file__).resolve().parents[1] / "config" / "cameras.json"))
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--webrtc-port", type=int, default=8766)
     parser.add_argument("--web-root", default=str(Path(__file__).resolve().parents[1] / "web_dashboard" / "dist"))
     parser.add_argument("--view-mode", choices=("3d",), default="3d")
     parser.add_argument("--fake-pose", action="store_true")
-    # 15Hz: visually indistinguishable for trails, and halving the tick rate
-    # measurably reduces GIL pressure from the broadcast worker (the 20Hz
-    # target was only achieving ~12Hz with heavy jitter under load anyway).
-    parser.add_argument("--pose-publish-hz", type=float, default=15.0)
+    # Fallback only -- overridden by dashboard.trajectory.pose_publish_hz in
+    # cameras.json when present (see PoseBridgeNode.__init__). Raised to 50Hz
+    # 2026-07-22; be aware this broadcast worker measurably competes with
+    # concurrent WebRTC sessions for the GIL with idle CPU sitting unused
+    # (see wiki changelog) -- the webrtc_stream.py process split is meant to
+    # remove that specific interaction, re-verify fps under load if either
+    # side of that split changes.
+    parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument("--start-alignment", action="store_true")
     parser.add_argument("--post-processing-config", default=str(Path(__file__).resolve().parents[1] / "config" / "post_processing.json"))
     parser.add_argument("--rosbag-dir", "-rosbag-dir", default=None)
@@ -2254,6 +2363,10 @@ def main() -> None:
     faulthandler.enable(file=crash_log, all_threads=True)
     for sig in (signal.SIGTERM, signal.SIGINT):
         faulthandler.register(sig, file=crash_log, all_threads=True, chain=True)
+    # On-demand live thread dump (chain=False: SIGUSR1 has no default action
+    # once handled, so this never terminates the process) -- kill -USR1 <pid>
+    # to see every thread's current stack without killing the backend.
+    faulthandler.register(signal.SIGUSR1, file=crash_log, all_threads=True, chain=False)
 
     args = parse_args()
     config_path = Path(args.config).resolve()
@@ -2306,6 +2419,7 @@ def main() -> None:
         fake_pose=args.fake_pose,
         pose_publish_hz=args.pose_publish_hz,
         enable_alignment_stream=enable_alignment_stream,
+        webrtc_port=args.webrtc_port,
     )
     node.get_logger().info(f"View mode={args.view_mode} alignment_stream={enable_alignment_stream}")
 
@@ -2348,6 +2462,7 @@ def main() -> None:
     finally:
         server.stop()
         executor.shutdown()
+        node.stop_webrtc_worker()
         node.destroy_node()
         with contextlib.suppress(Exception):
             rclpy.shutdown()

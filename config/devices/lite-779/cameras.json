@@ -21,7 +21,8 @@
       "camera_stale_timeout_sec": 2.0,
       "title": "3D VIO Trajectory",
       "subtitle": "Interactive 3D view of x/y with z as up using current VIO poses.",
-      "axis_label": "x/y plane, z up"
+      "axis_label": "x/y plane, z up",
+      "pose_publish_hz": 50.0
     }
   },
   "cameras": [

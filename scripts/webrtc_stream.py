@@ -37,8 +37,6 @@ try:
 except Exception:  # pragma: no cover - non-Jetson dev machines
     Gst = None
 
-from hw_jpeg import HwJpegCodec
-
 _REQUIRED_ELEMENTS = (
     "webrtcbin",
     "nicesrc",
@@ -394,10 +392,23 @@ class WebRtcSession:
 
 
 class WebRtcStreams:
-    """Registry of live sessions, keyed by camera. Use create()."""
+    """Registry of live sessions, keyed by camera. Use create().
 
-    def __init__(self, log: Callable[[str], None]) -> None:
+    Runs inside webrtc_worker.py, a separate process from the main
+    dashboard backend (see wiki changelog 2026-07): the main process owns
+    ROS/rclpy and resolves each frame down to (fmt, width, height, data)
+    itself (it already has the ROS message and the encoded CameraFrame in
+    hand), then ships that tuple over here via IPC -- this module never
+    touches rclpy, HwJpegCodec, or a ROS message type.
+    """
+
+    def __init__(
+        self,
+        log: Callable[[str], None],
+        on_session_state_change: Optional[Callable[[str, bool], None]] = None,
+    ) -> None:
         self._log = log
+        self._on_session_state_change = on_session_state_change
         self._lock = threading.Lock()
         self._sessions: Dict[str, List[WebRtcSession]] = {}
         # webrtcbin's ICE/DTLS internals expect a running GLib main loop for
@@ -407,7 +418,7 @@ class WebRtcStreams:
         threading.Thread(target=self._main_loop.run, daemon=True, name="webrtc_glib_loop").start()
 
     @classmethod
-    def create(cls, log=print) -> Optional["WebRtcStreams"]:
+    def create(cls, log=print, on_session_state_change=None) -> Optional["WebRtcStreams"]:
         if Gst is None:
             log("webrtc: PyGObject/GstWebRTC not importable; WebRTC streaming disabled")
             return None
@@ -422,14 +433,18 @@ class WebRtcStreams:
             log(f"webrtc: missing GStreamer elements {missing}; WebRTC streaming disabled")
             return None
         log("webrtc: hardware H.264 WebRTC streaming enabled")
-        return cls(log=log)
+        return cls(log=log, on_session_state_change=on_session_state_change)
 
     def create_session(
         self, camera_name: str, topic_type: str, send_signal: Callable[[Dict], None]
     ) -> WebRtcSession:
         session = WebRtcSession(camera_name, topic_type, send_signal, self._log)
         with self._lock:
-            self._sessions.setdefault(camera_name, []).append(session)
+            sessions = self._sessions.setdefault(camera_name, [])
+            was_empty = not sessions
+            sessions.append(session)
+        if was_empty and self._on_session_state_change:
+            self._on_session_state_change(camera_name, True)
         return session
 
     def close_session(self, session: WebRtcSession) -> None:
@@ -437,34 +452,27 @@ class WebRtcStreams:
             sessions = self._sessions.get(session.camera_name, [])
             if session in sessions:
                 sessions.remove(session)
+            now_empty = not sessions
         session.close()
+        if now_empty and self._on_session_state_change:
+            self._on_session_state_change(session.camera_name, False)
 
     def has_sessions(self, camera_name: str) -> bool:
         sessions = self._sessions.get(camera_name)
         return bool(sessions)
 
-    def push_ros_frame(self, camera_name: str, topic_type: str, msg, frame) -> None:
-        """Fan one frame out to every session on this camera.
+    def push_resolved_frame(self, camera_name: str, fmt: str, width: int, height: int, data: bytes) -> None:
+        """Fan an already-resolved frame out to every session on this camera.
 
-        Called on the camera's worker thread for every frame; must cost
-        nothing when nobody is watching. `frame` is the CameraFrame the
-        polling path already produced -- compressed cameras reuse its JPEG
-        bytes (which include the hand overlay when enabled) while raw
-        cameras feed the untouched NV12/GRAY8 message bytes.
+        Called from the IPC reader loop for every frame the main process
+        decided was worth sending (it already checked has_sessions() over
+        there before doing any work) -- resolving topic_type/HwJpegCodec
+        layout to (fmt, width, height, data) happens on the sender side now,
+        since that's where the ROS message and CameraFrame already live.
         """
         with self._lock:
             sessions = list(self._sessions.get(camera_name, ()))
         if not sessions:
             return
-        if topic_type == "compressed":
-            if frame is None or frame.width <= 0 or frame.height <= 0:
-                return
-            data, fmt, width, height = frame.data, "JPEG", frame.width, frame.height
-        else:
-            layout = HwJpegCodec.ros_image_layout(msg)
-            if layout is None:
-                return
-            fmt, width, height = layout
-            data = bytes(msg.data)
         for session in sessions:
             session.push_frame(data, fmt, width, height)
