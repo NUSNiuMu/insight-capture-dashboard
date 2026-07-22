@@ -2192,14 +2192,23 @@ function applyGripperOpening(pose, node) {
 
 function handLandmarkToLocal(landmark) {
   // Server landmarks are [along-fingers, lateral, synthetic-normal] in units
-  // of wrist->middle-MCP == 1 (see normalize_hand_landmarks). The mapping
-  // onto the wrist node's local axes assumes the hand camera's body-x points
-  // along the fingers (dashboard x -> local scene z after the basis change);
-  // flip signs here if a real replay renders the hand mirrored or rotated.
+  // of wrist->middle-MCP == 1 (see normalize_hand_landmarks). Position
+  // mapping elsewhere (mapDashboardPositionToScene) puts ROS body-forward
+  // on local/scene Z, and the original version here followed that and put
+  // "along the fingers" on local Z too -- but a real replay showed the
+  // rendered hand sitting 90 degrees off from the insight3 wrist camera's
+  // actual forward direction (reported 2026-07-22), i.e. empirically
+  // "along the fingers" needs local X, not Z, on this rig. Rotated this
+  // mapping by 90 degrees about the up axis to compensate (along -> x,
+  // lateral -> z, keeping y as the synthetic depth/up axis); rotate
+  // further about Y (not just flip a sign) if a real replay still shows an
+  // offset in the other direction. Separate concern from mirroring/
+  // chirality, which is whatever the original "-lateral" sign was about --
+  // preserved here (didn't touch that), see updateHandRig for that context.
   return new BABYLON.Vector3(
-    -landmark[1] * HAND_RIG_SCALE,
+    landmark[0] * HAND_RIG_SCALE,
     landmark[2] * HAND_RIG_SCALE,
-    landmark[0] * HAND_RIG_SCALE
+    landmark[1] * HAND_RIG_SCALE
   );
 }
 
