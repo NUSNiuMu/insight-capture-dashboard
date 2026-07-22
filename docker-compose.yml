@@ -18,8 +18,8 @@ services:
     # ── NVIDIA Container Runtime for CUDA acceleration ───────────────────────
     runtime: nvidia
 
-    # Docker's 64MB default /dev/shm is too small for QtWebEngine's Chromium
-    # GPU process (open_web_3d_right.sh / open_monitor_dashboard.sh): its
+    # Docker's 64MB default /dev/shm is too small for the kiosk browser's
+    # GPU process (open_web_3d_right.sh): its
     # command-buffer ring allocation fails silently and the WebGL canvas
     # never renders, both with real GPU (context-loss loop) and swiftshader
     # (AllocateRingBuffer failures). tmpfs, so this only costs memory if
@@ -38,8 +38,8 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
       # For `run_dashboard.sh --jetson` (docker exec ... open_web_3d_right.sh):
-      # PyQt5/QtWebEngine only exist inside this image, not necessarily on a
-      # fresh host, so the kiosk window has to run via `docker exec`, which
+      # The kiosk browser is installed inside this image, so the kiosk window
+      # runs via `docker exec`, which
       # needs DISPLAY + the X11 socket below to reach the host's X server.
       - DISPLAY=${DISPLAY:-:0}
       # Uncomment to override default port:

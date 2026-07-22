@@ -2,7 +2,7 @@
 # Start (or ensure running) the Insight dashboard backend, then stay in the
 # foreground so Ctrl-C can stop it cleanly. Default mode waits quietly (no
 # log spam); --logs follows the backend logs instead; --jetson launches the
-# on-device PyQt5 kiosk window. The two flags combine (--jetson --logs): the
+# on-device browser kiosk window. The two flags combine (--jetson --logs): the
 # kiosk launches in the background and the backend logs (including the
 # perf_tracker CPU breakdown, see scripts/perf_tracker.py) stream in this
 # same terminal.
@@ -185,7 +185,7 @@ if [[ "${jetson_mode}" == "true" ]]; then
     log "Launching on-device kiosk window..."
     export DISPLAY="${DISPLAY:-:0}"
     if [[ "${in_container}" == "true" ]]; then
-        # Already inside the image that has PyQt5/QtWebEngine -- run the
+        # Already inside the image that has the kiosk browser -- run the
         # kiosk directly instead of hopping back out through `docker exec`.
         # xhost (host-side X access control) isn't installed in this image
         # and isn't needed here: if you can already reach this shell with a
@@ -206,7 +206,7 @@ if [[ "${jetson_mode}" == "true" ]]; then
     # container uid 1000 is this host's uid 1000 (whoever is invoking this
     # script); grant that same uid the same X access as root above.
     xhost +SI:localuser:"$(id -un)" >/dev/null 2>&1 || true
-    # PyQt5/QtWebEngine only exist inside the image, not necessarily on a
+    # The kiosk browser only exists inside the image, not necessarily on a
     # fresh host, so this runs via `docker exec` rather than directly here.
     # -e DISPLAY overrides whatever was baked in at `docker compose up`
     # time, in case this shell's X session differs (e.g. it was started

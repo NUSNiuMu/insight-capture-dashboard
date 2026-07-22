@@ -106,9 +106,7 @@ RUN sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.tuna.tsinghu
     && sed -i 's|http://packages.ros.org/ros2/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu|g; s|^Types: deb deb-src|Types: deb|' /etc/apt/sources.list.d/ros2.sources
 
 # ── System & ROS2 packages ──────────────────────────────────────────────────
-# PyQt5/QtWebEngine and their X11 helper libs are gone: the legacy Qt scripts
-# (multi_camera_dashboard_qt.py / web_3d_window.py / open_monitor_dashboard.sh)
-# have no callers on this branch — the on-device kiosk is the vendored
+# The legacy Qt dashboard has been removed. The on-device kiosk is the vendored
 # Playwright Chromium below, whose runtime libs come from
 # `playwright install --with-deps`, not from this list.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -255,7 +253,7 @@ RUN pip3 install --no-cache-dir \
 # that ships an official arm64 Linux build, and Firefox bundles Cisco's
 # OpenH264 plugin specifically for WebRTC's H.264 (Cisco pays the patent
 # license for exactly this use case) -- verified via getCapabilities and a
-# real screenshot of the /images page rendering all three camera panels
+# real screenshot of the /3d page rendering all three camera panels
 # through actual WebRTC decode, no black frames, no flicker.
 #
 # Pinned to a specific release tarball (not the "latest" redirect) so the

@@ -2007,7 +2007,7 @@ class WebDashboardServer:
         # Installed GStreamer elements can't change without a restart, and
         # probing them shells out to gst-inspect-1.0 up to 10 times (2s
         # timeout each) -- cache for the process lifetime so only the first
-        # Images-page visit pays that.
+        # diagnostic request pays that.
         if self._image_capabilities_cache is None:
             self._image_capabilities_cache = self._build_image_capabilities()
         return web.json_response(self._image_capabilities_cache)

@@ -1,7 +1,6 @@
 const dashboardView = document.body.dataset.dashboardView || "full";
 const enable3d = dashboardView === "full" || dashboardView === "3d";
-const enableImages = dashboardView === "images";
-const enableCameras = dashboardView === "full" || dashboardView === "cameras" || enableImages || enable3d;
+const enableCameras = dashboardView === "full" || dashboardView === "cameras" || enable3d;
 
 const canvas = document.getElementById("render-canvas");
 const modelStatus = document.getElementById("model-status");
@@ -50,10 +49,6 @@ const scoringStatusEyebrow = document.getElementById("scoring-status-eyebrow");
 const scoringStatusEl = document.getElementById("scoring-status");
 const scoringResultEl = document.getElementById("scoring-result");
 const scoringResultBody = document.getElementById("scoring-result-body");
-const imageCapabilityStatus = document.getElementById("image-capability-status");
-const imageCapabilityList = document.getElementById("image-capability-list");
-const imagePipelineNotes = document.getElementById("image-pipeline-notes");
-const refreshImageCapabilitiesButton = document.getElementById("refresh-image-capabilities-button");
 const settingsPanel = document.getElementById("settings-panel");
 const settingsStatus = document.getElementById("settings-status");
 const settingsCameraList = document.getElementById("settings-camera-list");
@@ -178,9 +173,6 @@ if (enable3d) {
 if (enableCameras) {
   startCameraPolling();
 }
-if (enableImages) {
-  void refreshImageCapabilities();
-}
 if (recordingPanel) {
   void refreshRecordingStatus({ refreshTopics: true, force: true });
   window.setInterval(() => {
@@ -229,11 +221,6 @@ if (refreshBagsButton) {
 if (runScoringButton) {
   runScoringButton.addEventListener("click", () => {
     void runScoringAndVerify();
-  });
-}
-if (refreshImageCapabilitiesButton) {
-  refreshImageCapabilitiesButton.addEventListener("click", () => {
-    void refreshImageCapabilities();
   });
 }
 if (startPlaybackButton) {
@@ -1087,69 +1074,6 @@ function setBagListStatus(message) {
   }
 }
 
-async function refreshImageCapabilities() {
-  if (!imageCapabilityStatus && !imageCapabilityList && !imagePipelineNotes) {
-    return null;
-  }
-  setImageCapabilityStatus("Checking GStreamer/WebRTC capabilities...");
-  if (refreshImageCapabilitiesButton) {
-    refreshImageCapabilitiesButton.disabled = true;
-  }
-  try {
-    const response = await fetch(`/api/images/capabilities?ts=${Date.now()}`, { cache: "no-store" });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to load image capabilities.");
-    }
-    renderImageCapabilities(payload);
-    return payload;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setImageCapabilityStatus(message);
-    return null;
-  } finally {
-    if (refreshImageCapabilitiesButton) {
-      refreshImageCapabilitiesButton.disabled = false;
-    }
-  }
-}
-
-function renderImageCapabilities(payload) {
-  const elements = (payload && payload.gstreamer && payload.gstreamer.elements) || {};
-  const hardwareEncoder = payload && payload.hardware_encoder;
-  const softwareEncoder = payload && payload.software_encoder;
-  const activePath = (payload && payload.active_path) || "unknown";
-  const hwJpegActive = Boolean(payload && payload.hw_jpeg && payload.hw_jpeg.active);
-  if (imageCapabilityStatus) {
-    if (hwJpegActive) {
-      imageCapabilityStatus.textContent = "Display path: hardware JPEG encode (NVJPEG engine)";
-    } else {
-      imageCapabilityStatus.textContent = `Display path: software JPEG (cv2) · ${activePath}`;
-    }
-  }
-  if (imageCapabilityList) {
-    const rows = [
-      ["NVJPEG display encode", hwJpegActive, "nvjpegenc, in use"],
-      ["NVIDIA JPEG decode", Boolean(elements.nvjpegdec), "nvjpegdec"],
-      ["NVIDIA color convert", Boolean(elements.nvvidconv), "nvvidconv"],
-      ["WebRTC (planned)", Boolean(payload && payload.webrtc_ready), "webrtcbin + nice"],
-      ["Hardware H.264", Boolean(elements.nvv4l2h264enc), "nvv4l2h264enc"],
-      ["Hardware H.265", Boolean(elements.nvv4l2h265enc), "nvv4l2h265enc"],
-      ["Software fallback", Boolean(softwareEncoder), softwareEncoder || "none"]
-    ];
-    imageCapabilityList.innerHTML = rows.map(([label, ok, detail]) => `
-      <div class="capability-row ${ok ? "is-ok" : "is-missing"}">
-        <strong>${escapeHtml(label)}</strong>
-        <span>${ok ? "available" : "missing"} · ${escapeHtml(detail)}</span>
-      </div>
-    `).join("");
-  }
-  if (imagePipelineNotes) {
-    const notes = Array.isArray(payload && payload.notes) ? payload.notes : [];
-    imagePipelineNotes.innerHTML = notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("");
-  }
-}
-
 async function refreshSettings() {
   if (!settingsPanel) {
     return null;
@@ -1371,12 +1295,6 @@ async function restartBackend() {
     settingsRestartMessage.textContent = "Backend did not come back within 30s -- check it manually.";
   }
   settingsRestartButton.disabled = false;
-}
-
-function setImageCapabilityStatus(message) {
-  if (imageCapabilityStatus) {
-    imageCapabilityStatus.textContent = message;
-  }
 }
 
 function formatDuration(seconds) {
@@ -1651,11 +1569,6 @@ function updateCameraPanelAspect(panel, camera) {
 }
 
 function updateCameraPanelLayout(panel, index) {
-  if (enableImages) {
-    panel.style.gridColumn = "";
-    panel.style.gridRow = "";
-    return;
-  }
   if (cameraDock?.classList.contains("spatial-camera-dock")) {
     panel.style.gridColumn = "1 / span 1";
     panel.style.gridRow = `${index + 1} / span 1`;
@@ -2159,7 +2072,7 @@ function findGripperFingerNodes(rootNodes, poseName) {
     return null;
   }
   // Each finger node's rest (fully-open) local X is its distance from the
-  // model's own mirror-symmetry center plane (X=0) — export_gripper_split_from_stl.py
+  // model's own mirror-symmetry center plane (X=0)
   // centers each finger group on its own mesh centroid, not its inner (pad) face.
   // Driving local X all the way to 0 therefore over-closes: the pad's own half-
   // thickness extends past the centroid, so the two fingers interpenetrate by

@@ -10,10 +10,7 @@
 > 构建 + 启动）；录制后数据完整性检查用 `scripts/check_bag.py`。
 > 本 README 侧重功能与配置参考。
 
-保留两条 dashboard 主线：
-
-- **Qt 版**（`multi_camera_dashboard_qt.py`）：原生窗口，直接接显示器用
-- **Web 版**（`multi_camera_dashboard_web.py`，推荐）：ROS2/VIO 处理在后端，前端是 Babylon.js 浏览器 GPU 渲染，可以本机接显示器看，也可以远程浏览器连
+当前 dashboard 使用 **Web 版**（`multi_camera_dashboard_web.py`）：ROS2/VIO 处理在后端，前端是 Babylon.js 浏览器 GPU 渲染，可以本机接显示器看，也可以远程浏览器连。
 
 默认 `ROS_DOMAIN_ID=20`（在 [config/cameras.json](config/cameras.json) 里配置）。
 
@@ -24,7 +21,7 @@
 ```bash
 docker compose build   # 首次构建，之后代码不变可跳过
 ./scripts/run_dashboard.sh            # 只启动后端，打印 SSH 隧道命令，供笔记本电脑远程连
-./scripts/run_dashboard.sh --jetson   # 额外拉起本机 PyQt5 全屏 3D 窗口，接了显示器的场景用
+./scripts/run_dashboard.sh --jetson   # 额外拉起本机全屏 3D kiosk，接了显示器的场景用
 ```
 
 `run_dashboard.sh` 内部就是 `docker compose up -d` + 健康检查，幂等，可以随时重复跑。容器用 `restart: unless-stopped`，SSH 断开、机器重启后 Docker 会自动拉起来。
@@ -118,7 +115,6 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 - `/` 或 `/3d`：3D VIO 轨迹页，Babylon.js GPU 场景 + 在线标定按钮
 - `/recording`：独立 rosbag 录制页，topic 发现、勾选、录制、停止、同步到主机
-- `/images`：图片页骨架，实时看图具体传输方案待定（见下）
 - `/bags`：本地 rosbag 列表页，路径/大小/时长/label/scoring/optimization 状态
 - `/scoring`：轨迹评分页骨架
 - `/optimization`：COLMAP 轨迹优化页（`jetson-nx` profile 的镜像自带 CUDA sm_87 编译的 COLMAP 3.9.1，开箱即用，见下方"部署"）
@@ -128,14 +124,6 @@ python3 scripts/multi_camera_dashboard_web.py &
 Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，支持整组勾选），`Start` 只录勾选的 topic，`Stop` 优雅结束 `ros2 bag record`。输出目录优先级：CLI `--rosbag-dir` > 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
 
 Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小、duration、message/topic 数量，以及 `outputs/results/{labels,scores,optimized}` 里对应的 label/scoring/optimization 状态。
-
-### Images 页面实时看图方案（待定）
-
-三个候选方向，还没定：
-
-- 快速版：直接订阅 `CompressedImage`，HTTP/WebSocket 推 JPEG/PNG 快照，开发最快，高帧率下浏览器解码/带宽压力明显
-- 折中版：WebSocket binary frame + `createImageBitmap`，需要做丢帧/backpressure
-- 高帧率版：后端编码视频流，前端 WebRTC/WebCodecs，延迟吞吐最好但实现最复杂
 
 ### Web avatar 模型配置
 
@@ -216,14 +204,11 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 |---|---|
 | `scripts/run_dashboard.sh` | 统一启动入口，`docker compose up -d` + 健康检查，`--jetson` 额外拉起本机 kiosk 窗口 |
 | `scripts/multi_camera_dashboard_web.py` | Web dashboard 后端：ROS2 pose/图像订阅、fake-pose demo、WebSocket 推流、rosbag 录制/查询 API |
-| `scripts/multi_camera_dashboard_qt.py` | Qt dashboard 主入口 |
-| `scripts/open_monitor_dashboard.sh` | 本机拉起 Qt dashboard |
-| `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的 PyQt5 全屏窗口（kiosk 模式） |
+| `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
 | `scripts/post_processing.py` | Web 版 rosbag 录制管理、topic 发现分组、COLMAP 优化 pipeline 调度 |
 | `scripts/live_alignment.py` | 在线 AprilTag 相对位姿标定和诊断日志 |
 | `scripts/session_alignment.py` | 在线标定用的位姿/矩阵数学工具 |
 | `scripts/camera_setup.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |
-| `scripts/dashboard_widgets.py` | Qt 版图像面板、轨迹控件 |
 | `scripts/reboot_cameras.sh` | 扫描 `169.254.x.x` 网段并批量重启相机 |
 | `scripts/gripper_tracking.py` / `gripper_calibrate.py` | 夹爪张合度识别与标定 |
 | `scripts/traj_score.py` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
