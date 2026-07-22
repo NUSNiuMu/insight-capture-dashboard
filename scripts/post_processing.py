@@ -402,9 +402,9 @@ def _trim_startup_skew(bag_dir: Path) -> Dict[str, object]:
     row before that instant. What's left is either complete from its own
     true start or entirely absent -- never "started but already missing
     its first N samples". Also rewrites metadata.yaml's starting_time /
-    duration / per-topic message_count so a later `check_bag.py` fast-mode
-    read (which trusts metadata.yaml, not the raw messages table) reports
-    the same corrected picture.
+    duration / per-topic message_count so an explicitly requested
+    `check_bag.py --fast` metadata estimate reports the same corrected
+    picture. The default integrity check verifies individual header stamps.
 
     Latched/one-shot topics (tf_static -- nominal_for() returns None,
     they're not in check_bag.NOMINAL_HZ) are left untouched: they're not
@@ -718,6 +718,19 @@ class RecordingManager:
             if not processes and not image_writer_active:
                 return self.status()
 
+        # Signal every per-camera recorder up front (not one-at-a-time) so
+        # their shutdown/flush windows overlap instead of serializing the
+        # wait across N processes. Do this before detaching the in-process
+        # image writers: otherwise their queue is closed first while these
+        # subprocesses keep recording IMU/VIO for another ~0.2s, which makes
+        # the merged bag's whole-duration rate look as though image frames
+        # were missing.
+        for process in processes.values():
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGINT)
+            except ProcessLookupError:
+                pass
+
         if image_writer_active and self._stop_image_recording is not None:
             try:
                 result = self._stop_image_recording()
@@ -726,15 +739,6 @@ class RecordingManager:
                     self._output_lines.append(f"[_images] WARNING: dropped {dropped} message(s) (writer queue full)")
             except Exception as exc:  # noqa: BLE001 - surfaced via output log, not fatal to stop()
                 self._output_lines.append(f"[_images] ERROR stopping writer: {exc}")
-
-        # Signal every per-camera recorder up front (not one-at-a-time) so
-        # their shutdown/flush windows overlap instead of serializing the
-        # wait across N processes.
-        for process in processes.values():
-            try:
-                os.killpg(os.getpgid(process.pid), signal.SIGINT)
-            except ProcessLookupError:
-                pass
         deadline = time.monotonic() + max(float(timeout_sec), 0.1)
         still_running = []
         for process in processes.values():

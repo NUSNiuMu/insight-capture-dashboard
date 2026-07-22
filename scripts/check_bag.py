@@ -4,15 +4,7 @@
 
 Two modes:
 
-  - default (fast): per-topic message counts and the recording duration come
-    straight from metadata.yaml -- no database read at all, so it's instant
-    regardless of bag size. Reports average rate and estimated loss %% per
-    topic (expected = duration x nominal rate, minus a warmup allowance for
-    subscriptions settling at recording start). This is all the Scoring
-    page's integrity check needs; the old full-table stamp scan took ~10s
-    per recorded GB and grew linearly with recording length.
-
-  - --deep: the original per-message scan. Reads message receive times AND
+  - default (exact): per-message scan. Reads message receive times AND
     sensor header stamps (parsed from the first 12 bytes of the CDR blob:
     4-byte encapsulation header, then int32 sec + uint32 nsec) so the two
     failure modes can be told apart:
@@ -28,20 +20,26 @@ Two modes:
     99-dds-rx-buffers.conf, written by scripts/setup_host.sh). camera_info
     (tiny, RELIABLE) arriving complete while images dropped ruled the
     cameras themselves out. Keep --deep for that kind of triage; it also
-    reports per-gap detail (gap_events / worst_gaps) that the fast mode
-    cannot know.
+    reports per-gap detail (gap_events / worst_gaps).
+
+  - --fast: per-topic message counts and whole-bag duration from
+    metadata.yaml only. This is useful for a quick estimate, but it is not
+    an integrity verdict: independently stopped recorders can leave a
+    trailing IMU/VIO-only interval, which makes whole-bag duration falsely
+    report missing image frames even when every image header is continuous.
 
     Bags without a readable metadata.yaml (e.g. power-loss orphans before
-    recovery) fall back to --deep automatically.
+    recovery) automatically use exact mode even when --fast was requested.
 
 Used two ways:
   - CLI (host or `docker exec`):
       python3 scripts/check_bag.py                      # newest bag in rosbags/
       python3 scripts/check_bag.py rosbags/<bag_dir>    # specific bag
-      python3 scripts/check_bag.py --deep ...           # full stamp-gap scan
+      python3 scripts/check_bag.py --fast ...           # metadata estimate only
       python3 scripts/check_bag.py --max-loss 1.0 ...   # exit 1 above this %
   - imported by the dashboard backend (analyze_bag) for the Scoring page's
-    "Verify Integrity" button and the Bags page integrity badge.
+    "Verify Integrity" button and the Bags page integrity badge. These use
+    the exact default mode.
 
 Exit code: 0 = every checked topic within --max-loss, 1 = drops found,
 2 = bag unreadable. Suitable for scripting after important recordings.
@@ -231,15 +229,16 @@ def analyze_bag(
     bag_dir: Path,
     max_loss_pct: float = DEFAULT_MAX_LOSS_PCT,
     warmup_s: float = DEFAULT_WARMUP_S,
-    deep: bool = False,
+    deep: bool = True,
 ) -> Dict[str, object]:
     """Analyze one bag directory; returns a JSON-serializable report.
 
     Raises ValueError when the bag has no readable .db3 file (deep mode /
     fallback) or no usable metadata.
 
-    Fast mode (default) never opens the database; bags without a readable
-    metadata.yaml fall back to the deep scan.
+    Exact mode (default) scans header stamps. Fast mode is an explicitly
+    requested metadata estimate; bags without readable metadata fall back
+    to the exact scan.
     """
     bag_dir = Path(bag_dir)
     method = "deep_scan"
@@ -289,21 +288,23 @@ def main():
                         help=f"max tolerated loss %% per topic (default {DEFAULT_MAX_LOSS_PCT})")
     parser.add_argument("--warmup", type=float, default=DEFAULT_WARMUP_S,
                         help=f"seconds forgiven at each topic's start (default {DEFAULT_WARMUP_S})")
+    parser.add_argument("--fast", action="store_true",
+                        help="metadata-only rate estimate; not an exact integrity verdict")
     parser.add_argument("--deep", action="store_true",
-                        help="full per-message stamp-gap scan (slow; reports gap timing detail)")
+                        help="deprecated compatibility alias; exact mode is already the default")
     args = parser.parse_args()
 
     bag_dir = find_bag(args.bag)
     print(f"bag: {bag_dir}\n")
     try:
         report = analyze_bag(bag_dir, max_loss_pct=args.max_loss,
-                             warmup_s=args.warmup, deep=args.deep)
+                             warmup_s=args.warmup, deep=args.deep or not args.fast)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
 
-    if report["method"] == "deep_scan" and not args.deep:
-        print("(no usable metadata.yaml -- fell back to the deep scan)\n")
+    if report["method"] == "deep_scan" and args.fast:
+        print("(no usable metadata.yaml -- fell back to the exact scan)\n")
     for topic in report["topics"]:
         verdict = "ok  " if topic["ok"] else "FAIL"
         print(f"{verdict}  {topic['name']}")

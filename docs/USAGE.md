@@ -144,7 +144,7 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 ```bash
 docker exec insight-dashboard python3 scripts/check_bag.py                # 最新一份就可以
 docker exec insight-dashboard python3 scripts/check_bag.py rosbags/<目录名>
-docker exec insight-dashboard python3 scripts/check_bag.py --deep rosbags/<目录名>  # 深扫描：逐条消息统计，附每个断流时刻，慢（排查丢帧原因时用）
+docker exec insight-dashboard python3 scripts/check_bag.py --fast rosbags/<目录名>  # 仅元数据的快速估计；不作为完整性判定
 ```
 
 
@@ -265,7 +265,7 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
    sudo sysctl -w net.core.netdev_max_backlog=8192   # 立即生效，未持久化
    ./scripts/host_setup.sh                            # 持久化进 99-dds-rx-buffers.conf
    ```
-   然后重录一段用 `check_bag.py --deep` 复验（此问题实测 IMU 丢帧
+   然后重录一段用 `check_bag.py` 复验（此问题实测 IMU 丢帧
    0.47-0.94%，修复后为 0.0%，验证于 2026-07-14）；
 3. **所有 topic 在同一时间段一起断** → 录制期间设备被其他任务抢占，
    `docker stats insight-dashboard` 观察 CPU；录制时避免同时跑评分/优化任务；

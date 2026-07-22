@@ -2386,7 +2386,7 @@ function refreshTrailMesh(trail) {
 }
 
 async function runScoringAndVerify() {
-  // Single "Scoring" button: run the fast integrity check first (its report
+  // Single "Scoring" button: run the exact integrity check first (its report
   // stays visible), then kick off the scoring job regardless of the verdict.
   if (scoringBusy) {
     return;
