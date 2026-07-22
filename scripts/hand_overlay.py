@@ -94,6 +94,21 @@ HAND_LABEL_FLIP_FRACTION = 0.7
 # one label while the window is still filling (message drops make runs) can't
 # flip the incumbent -- ~0.5s of consistent evidence at HandEngine's 15Hz.
 HAND_LABEL_FLIP_MIN_VOTES = 8
+# MediaPipe's handedness score is P(predicted label), always >= 0.5 -- near
+# that floor the model is essentially guessing (confirmed flip-flopping
+# reported near score~0.5 in google/mediapipe#3047), so votes that unsure
+# are excluded from the window instead of diluting the real signal.
+HAND_LABEL_MIN_CONFIDENCE = 0.6
+# How far (in multiples of hand size) a role's hand may move between
+# messages and still count as the same physical hand for _assign_hand_roles.
+# Generous on purpose -- it only needs to reject "this is obviously a
+# different hand", not track precisely; the classifier fallback covers the
+# rest. See _assign_hand_roles for why this replaces trusting class_id
+# directly: two simultaneously visible hands can swap HandEngine's
+# hand_index between messages (and MediaPipe is known to sometimes label
+# both hands the same, google/mediapipe#3902), which made the 3D skeleton
+# jump between physical hands even though each hand's own label was stable.
+HAND_POSITION_JUMP_FACTOR = 6.0
 
 # Per-role track lifecycle for the 3D skeleton (hand_landmarks_for_role).
 # HandEngine's per-frame recall is well below 100%: with a hand steadily in
@@ -200,6 +215,33 @@ def normalize_hand_landmarks(
     return landmarks
 
 
+def _hand_entry_anchor(entry: Dict[str, object]) -> Optional[Tuple[float, float, float]]:
+    """(center_x, center_y, hand_scale) in pixel space for _assign_hand_roles'
+    positional matching -- a continuity signal independent of HandEngine's
+    per-frame handedness guess. Prefers the tight bbox (hand_scale = its
+    longer side); falls back to the wrist/middle-MCP keypoints (hand_scale
+    approximated the same way normalize_hand_landmarks scales the skeleton)
+    when the box message is stale or missing."""
+    bbox = entry.get("bbox")
+    if bbox:
+        x, y, w, h = bbox
+        return (x + w * 0.5, y + h * 0.5, max(float(w), float(h), 1.0))
+    points = {
+        kp["i"]: (kp["x"], kp["y"])
+        for kp in entry.get("keypoints", [])
+        if float(kp.get("score", 0.0)) >= MIN_KEYPOINT_SCORE
+    }
+    if 0 in points and 9 in points:
+        wx, wy = points[0]
+        mx, my = points[9]
+        return (wx, wy, max(math.hypot(mx - wx, my - wy) * 4.0, 1.0))
+    if points:
+        xs = [p[0] for p in points.values()]
+        ys = [p[1] for p in points.values()]
+        return (sum(xs) / len(xs), sum(ys) / len(ys), 40.0)
+    return None
+
+
 def draw_hands_on_frame(
     frame: np.ndarray, hands: List[Dict[str, object]], min_score: float = MIN_KEYPOINT_SCORE
 ) -> int:
@@ -287,6 +329,10 @@ class HandOverlayMixin:
         # broadcast loop; individual attribute reads/writes are GIL-atomic,
         # same unsynchronized pattern as hand_latest_snapshot.
         self._hand_role_tracks: Dict[str, HandRoleTrack] = {}
+        # Last (x, y, hand_scale, monotonic_ts) seen for each (camera, role)
+        # -- the positional-continuity memory _assign_hand_roles matches new
+        # detections against. Bounded: cameras x 2 roles.
+        self._hand_role_anchor: Dict[Tuple[str, str], Tuple[float, float, float, float]] = {}
 
     def _on_hand_boxes(self, camera_name: str, msg, is_live: bool = True) -> None:
         # Live and playback are two separate subscriptions (playback's is
@@ -350,12 +396,14 @@ class HandOverlayMixin:
                 }
                 entry.update(boxes_by_hand.get(hand_index, {}))
                 raw_label = entry.get("label")
+                raw_score = float(entry.get("score", 0.0))
                 if isinstance(raw_label, str) and raw_label in HAND_CLASS_TO_ROLE:
                     key = (camera_name, hand_index)
                     votes = self._hand_label_votes.setdefault(
                         key, deque(maxlen=HAND_LABEL_VOTE_WINDOW)
                     )
-                    votes.append(raw_label)
+                    if raw_score >= HAND_LABEL_MIN_CONFIDENCE:
+                        votes.append(raw_label)
                     smoothed = smooth_hand_label(votes, self._hand_label_current.get(key))
                     self._hand_label_current[key] = smoothed
                     entry["label_raw"] = raw_label
@@ -367,20 +415,73 @@ class HandOverlayMixin:
                 hands=hands,
             )
 
-            # Feed the per-role 3D skeleton tracks. One hit per role per
-            # message: with two hands momentarily smoothed to the same label
-            # the first (matching the old first-match-wins scan) feeds the
-            # track and the duplicate is ignored.
-            roles_hit = set()
-            for hand in hands:
-                role = HAND_CLASS_TO_ROLE.get(str(hand.get("label", "")))
-                if role is None or role in roles_hit:
-                    continue
-                landmarks = normalize_hand_landmarks(hand.get("keypoints", []))
+            # Feed the per-role 3D skeleton tracks -- see _assign_hand_roles
+            # for why this is positional matching rather than "whichever hand
+            # HandEngine's label says is left/right this frame".
+            for entry, role in self._assign_hand_roles(camera_name, hands, time.monotonic()):
+                landmarks = normalize_hand_landmarks(entry.get("keypoints", []))
                 if landmarks is None:
                     continue
-                roles_hit.add(role)
                 self._hand_track_hit(role, landmarks)
+
+    def _assign_hand_roles(
+        self, camera_name: str, hands: List[Dict[str, object]], now: float
+    ) -> List[Tuple[Dict[str, object], str]]:
+        """Decide which detected hand feeds which teleop role this message.
+
+        HandEngine's hand_index is not a persistent track: with two hands in
+        view it can swap between them message to message, and MediaPipe is
+        known to sometimes label both hands the same (google/mediapipe
+        #3902) -- either way, trusting class_id directly made the 3D
+        skeleton jump between physical hands even when each hand's own
+        label was internally stable. Prefer positional continuity instead:
+        match this frame's hands to whichever role was last seen nearby
+        (within HAND_POSITION_JUMP_FACTOR hand-widths), and only fall back
+        to the smoothed classifier label to seed a role with no recent
+        position -- track birth, or both hands appearing at once.
+        """
+        candidates = [
+            (entry, anchor)
+            for entry in hands
+            if (anchor := _hand_entry_anchor(entry)) is not None
+        ]
+
+        pairs = []
+        for role in HAND_CLASS_TO_ROLE.values():
+            prev = self._hand_role_anchor.get((camera_name, role))
+            if prev is None or now - prev[3] > HAND_TRACK_COAST_SEC:
+                continue
+            px, py, pscale, _ = prev
+            for idx, (_, (x, y, scale)) in enumerate(candidates):
+                dist = math.hypot(x - px, y - py)
+                if dist <= HAND_POSITION_JUMP_FACTOR * max(pscale, scale):
+                    pairs.append((dist, role, idx))
+        pairs.sort(key=lambda item: item[0])
+
+        assignments: List[Tuple[Dict[str, object], str]] = []
+        role_taken = set()
+        idx_taken = set()
+        for dist, role, idx in pairs:
+            if role in role_taken or idx in idx_taken:
+                continue
+            role_taken.add(role)
+            idx_taken.add(idx)
+            assignments.append((candidates[idx][0], role))
+
+        for idx, (entry, _) in enumerate(candidates):
+            if idx in idx_taken:
+                continue
+            role = HAND_CLASS_TO_ROLE.get(str(entry.get("label", "")))
+            if role is None or role in role_taken:
+                continue
+            role_taken.add(role)
+            idx_taken.add(idx)
+            assignments.append((entry, role))
+
+        for entry, role in assignments:
+            anchor = next(a for e, a in candidates if e is entry)
+            self._hand_role_anchor[(camera_name, role)] = (anchor[0], anchor[1], anchor[2], now)
+        return assignments
 
     def _hand_track_hit(
         self, role: str, landmarks: List[Optional[List[float]]]

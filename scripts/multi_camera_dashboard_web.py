@@ -80,7 +80,7 @@ from post_processing import (
     list_rosbags,
     load_post_processing_config,
 )
-from session_alignment import PoseSample, quaternion_to_matrix
+from session_alignment import PoseSample
 
 
 def _read_tum_points(path: Path, max_points: int = 2000) -> list:
@@ -146,64 +146,6 @@ def bagplay_topic(topic: str) -> str:
     still-connected live publisher. Single source of truth for both the
     dashboard's shadow subscriptions and the remap args passed to bag play."""
     return f"/bagplay{topic}"
-
-
-# Synthesized stick-figure arm: bone lengths and shoulder anchors are fixed
-# body-proportion assumptions, not tracked data. The elbow is invented by a
-# two-bone IK solve purely so the replayed skeleton reads as an arm instead
-# of a straight head-to-wrist rubber band -- plausible, not accurate.
-ARM_UPPER_M = 0.28
-ARM_FOREARM_M = 0.26
-# Shoulder offset in the head pose's local frame, assuming ROS body axes
-# (x forward, y left, z up). If a real replay shows the shoulders mirrored
-# or floating, tune the constants here -- nothing else encodes them.
-SHOULDER_OFFSET_LOCAL = {
-    "left_hand": (0.0, 0.18, -0.15),
-    "right_hand": (0.0, -0.18, -0.15),
-}
-
-
-def solve_arm_ik(head_position, head_quaternion_xyzw, wrist_position, role):
-    """Two-bone (upper arm/forearm) IK from a head-anchored shoulder to the
-    tracked wrist. Returns (shoulder_xyz, elbow_xyz) in the same dashboard
-    frame as the inputs, or None for roles without a shoulder anchor."""
-    offset = SHOULDER_OFFSET_LOCAL.get(role)
-    if offset is None:
-        return None
-    rotation = quaternion_to_matrix(*head_quaternion_xyzw)
-    shoulder = np.asarray(head_position, dtype=np.float64) + rotation @ np.asarray(offset)
-    wrist = np.asarray(wrist_position, dtype=np.float64)
-    span = wrist - shoulder
-    dist = float(np.linalg.norm(span))
-    direction = span / dist if dist > 1e-6 else np.array([0.0, 0.0, -1.0])
-    # Clamp to the reachable annulus so the law-of-cosines input stays valid:
-    # out of reach renders as a fully extended arm, too close as fully folded.
-    reach = float(np.clip(dist, abs(ARM_UPPER_M - ARM_FOREARM_M) + 1e-3, ARM_UPPER_M + ARM_FOREARM_M - 1e-3))
-    cos_shoulder = (ARM_UPPER_M**2 + reach**2 - ARM_FOREARM_M**2) / (2.0 * ARM_UPPER_M * reach)
-    shoulder_angle = math.acos(float(np.clip(cos_shoulder, -1.0, 1.0)))
-    # Bend axis chosen so the elbow drops toward the head's local "down":
-    # stays natural when the wearer tilts their head, unlike world-down.
-    head_down = rotation @ np.array([0.0, 0.0, -1.0])
-    bend_axis = np.cross(direction, head_down)
-    bend_norm = float(np.linalg.norm(bend_axis))
-    if bend_norm < 1e-6:
-        # Wrist straight along the pole vector: fall back to the head's
-        # lateral axis so the solve stays defined.
-        bend_axis = np.cross(direction, rotation @ np.array([0.0, 1.0, 0.0]))
-        bend_norm = float(np.linalg.norm(bend_axis)) or 1.0
-    axis = bend_axis / bend_norm
-    sin_a, cos_a = math.sin(shoulder_angle), math.cos(shoulder_angle)
-    # Rodrigues rotation of the shoulder->wrist direction by the shoulder angle.
-    elbow_dir = (
-        direction * cos_a
-        + np.cross(axis, direction) * sin_a
-        + axis * float(np.dot(axis, direction)) * (1.0 - cos_a)
-    )
-    elbow = shoulder + ARM_UPPER_M * elbow_dir
-    return (
-        [round(float(v), 5) for v in shoulder],
-        [round(float(v), 5) for v in elbow],
-    )
 
 
 def make_qos(depth: int = 10) -> QoSProfile:
@@ -1230,8 +1172,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
     def build_pose_payload(self) -> Dict[str, object]:
         now = time.monotonic()
         poses = []
-        head_state = None  # (position, quaternion) of the visible head pose
-        hand_entries = []  # (payload dict, transformed sample) per visible hand
+        hand_entries = []  # payload dicts for visible hands
         with self.pose_lock:
             for pose in self.poses:
                 transformed = self.transformed_pose_sample(pose.name)
@@ -1270,22 +1211,13 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                     "gripper_opening": self.gripper_opening_percent(pose.name),
                 }
                 poses.append(entry)
-                if transformed is not None and visible:
-                    if pose.teleop_role == "head":
-                        head_state = (transformed.position, transformed.orientation_xyzw)
-                    elif pose.teleop_role in SHOULDER_OFFSET_LOCAL:
-                        hand_entries.append((entry, transformed))
-        # Stick-figure extras, same dashboard frame as `position` so the
-        # client maps everything through one basis change: a synthesized
-        # shoulder/elbow per hand (see solve_arm_ik) and the latest
-        # normalized 21-point hand shape (see hand_landmarks_for_role;
-        # None until a HandEngine camera has detected that hand).
-        for entry, transformed in hand_entries:
+                if transformed is not None and visible and pose.teleop_role in ("left_hand", "right_hand"):
+                    hand_entries.append(entry)
+        # Stick-figure extra: the latest normalized 21-point hand shape (see
+        # hand_landmarks_for_role; None until a HandEngine camera has
+        # detected that hand), same dashboard frame as `position`.
+        for entry in hand_entries:
             entry["hand_landmarks"] = self.hand_landmarks_for_role(entry["role"])
-            if head_state is not None:
-                arm = solve_arm_ik(head_state[0], head_state[1], transformed.position, entry["role"])
-                if arm is not None:
-                    entry["shoulder_position"], entry["elbow_position"] = arm
         return {
             "type": "pose_update",
             "timestamp_ms": int(time.time() * 1000),

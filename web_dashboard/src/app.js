@@ -101,7 +101,6 @@ const poseNodes = new Map();
 const modelPromises = new Map();
 const modelWarnings = new Set();
 const trailStates = new Map();
-const armRigs = new Map();
 const handRigs = new Map();
 const cameraPanels = new Map();
 const cameraPollState = new Map();
@@ -1497,7 +1496,6 @@ async function applyPoseUpdate(payload) {
     await ensurePoseVisual(pose, node);
     applyGripperOpening(pose, node);
     updateTrailFromPose(pose);
-    updateArmRig(pose, scenePosition);
     updateHandRig(pose, node);
     if (legend) {
       const row = legend.querySelector(`[data-legend-role="${CSS.escape(pose.role)}"] .legend-meta`);
@@ -2193,42 +2191,6 @@ function applyGripperOpening(pose, node) {
   const closeFraction = 1.0 - Math.min(1, Math.max(0, opening));
   fingers.left.position.copyFrom(fingers.leftRestPosition).addInPlaceFromFloats(closeFraction * fingers.leftMaxTravel, 0, 0);
   fingers.right.position.copyFrom(fingers.rightRestPosition).addInPlaceFromFloats(-closeFraction * fingers.rightMaxTravel, 0, 0);
-}
-
-function updateArmRig(pose, wristScenePosition) {
-  // Two synthesized bones (shoulder->elbow->wrist) computed server-side by
-  // solve_arm_ik; the shoulder/elbow fields only exist on hand poses while
-  // both the head and that hand are visible.
-  if (!scene) {
-    return;
-  }
-  let rig = armRigs.get(pose.name);
-  if (rig && rig.mesh.isDisposed()) {
-    armRigs.delete(pose.name);
-    rig = null;
-  }
-  // The skeleton layer belongs to stick-figure mode: with the toggle off the
-  // scene shows only the avatar models, exactly as before the feature.
-  const hasData = stickFigureMode && pose.visible && Array.isArray(pose.shoulder_position) && Array.isArray(pose.elbow_position);
-  if (!hasData) {
-    if (rig) rig.mesh.setEnabled(false);
-    return;
-  }
-  const points = [
-    mapDashboardPositionToScene(pose.shoulder_position),
-    mapDashboardPositionToScene(pose.elbow_position),
-    wristScenePosition.clone()
-  ];
-  if (rig) {
-    BABYLON.MeshBuilder.CreateLines(null, { points, instance: rig.mesh });
-    rig.mesh.setEnabled(true);
-  } else {
-    const mesh = BABYLON.MeshBuilder.CreateLines(`arm-rig-${pose.name}`, { points, updatable: true }, scene);
-    mesh.color = BABYLON.Color3.FromHexString((ROLE_STYLE[pose.role] || ROLE_STYLE.head).color);
-    mesh.isPickable = false;
-    mesh.renderingGroupId = 1;
-    armRigs.set(pose.name, { mesh });
-  }
 }
 
 function handLandmarkToLocal(landmark) {
