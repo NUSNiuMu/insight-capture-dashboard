@@ -108,7 +108,23 @@ HAND_LABEL_MIN_CONFIDENCE = 0.6
 # hand_index between messages (and MediaPipe is known to sometimes label
 # both hands the same, google/mediapipe#3902), which made the 3D skeleton
 # jump between physical hands even though each hand's own label was stable.
+#
+# This alone turned out to still oscillate in practice: with two hands
+# ~2-3 hand-widths apart (a normal, not-especially-close pose), BOTH fall
+# within HAND_POSITION_JUMP_FACTOR of BOTH roles' last position, so it's a
+# pure greedy nearest-of-4-pairs match every frame with no preference for
+# "what it was last frame" -- ordinary per-frame detection jitter can make
+# the wrong pairing marginally closer than the right one, and just as
+# easily flip back the frame after, i.e. continuous back-and-forth, not a
+# one-off swap. HAND_POSITION_STICKY_FACTOR below is the fix: a much
+# tighter radius, checked first and in isolation per role (not a joint
+# nearest-of-N match), so a role that hasn't moved much keeps its hand
+# without ever being offered the other hand as an alternative. Must stay
+# comfortably smaller than a typical inter-hand gap (so the *other* hand
+# can't also land inside it) and comfortably bigger than frame-to-frame
+# jitter of a hand that's actually just sitting still.
 HAND_POSITION_JUMP_FACTOR = 6.0
+HAND_POSITION_STICKY_FACTOR = 1.0
 
 # Per-role track lifecycle for the 3D skeleton (hand_landmarks_for_role).
 # HandEngine's per-frame recall is well below 100%: with a hand steadily in
@@ -434,11 +450,16 @@ class HandOverlayMixin:
         known to sometimes label both hands the same (google/mediapipe
         #3902) -- either way, trusting class_id directly made the 3D
         skeleton jump between physical hands even when each hand's own
-        label was internally stable. Prefer positional continuity instead:
-        match this frame's hands to whichever role was last seen nearby
-        (within HAND_POSITION_JUMP_FACTOR hand-widths), and only fall back
-        to the smoothed classifier label to seed a role with no recent
-        position -- track birth, or both hands appearing at once.
+        label was internally stable. Prefer positional continuity instead,
+        in three stages: (1) sticky -- each role independently checks only
+        "is my own last hand still right here" (HAND_POSITION_STICKY_FACTOR,
+        no comparison against the other role), which is what prevents
+        continuous back-and-forth flipping between two hands that are both
+        just sitting within the old single wide threshold of each other;
+        (2) wider nearest-neighbor competition (HAND_POSITION_JUMP_FACTOR)
+        for a role stickiness didn't resolve; (3) smoothed classifier label
+        to seed a role with no recent position at all -- track birth, or
+        both hands appearing at once.
         """
         candidates = [
             (entry, anchor)
@@ -446,28 +467,65 @@ class HandOverlayMixin:
             if (anchor := _hand_entry_anchor(entry)) is not None
         ]
 
-        pairs = []
+        assignments: List[Tuple[Dict[str, object], str]] = []
+        role_taken = set()
+        idx_taken = set()
+
+        def _apply(pairs):
+            pairs.sort(key=lambda item: item[0])
+            for dist, role, idx in pairs:
+                if role in role_taken or idx in idx_taken:
+                    continue
+                role_taken.add(role)
+                idx_taken.add(idx)
+                assignments.append((candidates[idx][0], role))
+
+        # Stage 1 -- sticky continuity: each role independently looks for
+        # its own closest candidate within the tight radius, never
+        # comparing against the other role's distance. A hand that hasn't
+        # moved much wins its role outright here and is never put up
+        # against the other hand's distance at all, which is what stops
+        # per-frame jitter from flipping the pairing.
+        sticky_pairs = []
         for role in HAND_CLASS_TO_ROLE.values():
             prev = self._hand_role_anchor.get((camera_name, role))
             if prev is None or now - prev[3] > HAND_TRACK_COAST_SEC:
                 continue
             px, py, pscale, _ = prev
+            best = None
             for idx, (_, (x, y, scale)) in enumerate(candidates):
                 dist = math.hypot(x - px, y - py)
-                if dist <= HAND_POSITION_JUMP_FACTOR * max(pscale, scale):
-                    pairs.append((dist, role, idx))
-        pairs.sort(key=lambda item: item[0])
+                if dist <= HAND_POSITION_STICKY_FACTOR * max(pscale, scale):
+                    if best is None or dist < best[0]:
+                        best = (dist, role, idx)
+            if best is not None:
+                sticky_pairs.append(best)
+        _apply(sticky_pairs)
 
-        assignments: List[Tuple[Dict[str, object], str]] = []
-        role_taken = set()
-        idx_taken = set()
-        for dist, role, idx in pairs:
-            if role in role_taken or idx in idx_taken:
+        # Stage 2 -- wider competition, only for a role stickiness didn't
+        # resolve (its hand moved further than a jitter, or briefly wasn't
+        # detected). This is the plain nearest-of-remaining-candidates match
+        # from before; it can still occasionally pick wrong when a role's
+        # position is genuinely stale, but it no longer runs every single
+        # frame against a hand that never left.
+        wide_pairs = []
+        for role in HAND_CLASS_TO_ROLE.values():
+            if role in role_taken:
                 continue
-            role_taken.add(role)
-            idx_taken.add(idx)
-            assignments.append((candidates[idx][0], role))
+            prev = self._hand_role_anchor.get((camera_name, role))
+            if prev is None or now - prev[3] > HAND_TRACK_COAST_SEC:
+                continue
+            px, py, pscale, _ = prev
+            for idx, (_, (x, y, scale)) in enumerate(candidates):
+                if idx in idx_taken:
+                    continue
+                dist = math.hypot(x - px, y - py)
+                if dist <= HAND_POSITION_JUMP_FACTOR * max(pscale, scale):
+                    wide_pairs.append((dist, role, idx))
+        _apply(wide_pairs)
 
+        # Stage 3 -- classifier fallback for a hand with no continuity at
+        # all (track birth, or both hands appearing at once).
         for idx, (entry, _) in enumerate(candidates):
             if idx in idx_taken:
                 continue
