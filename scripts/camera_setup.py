@@ -35,6 +35,10 @@ AVATAR_MODEL_DEFAULTS = {
         "avatar_scale": 0.5,
         "avatar_rotation_deg_xyz": [90.0, 0.0, -90.0],
     },
+    "glove.glb": {
+        "avatar_scale": 0.005,
+        "avatar_rotation_deg_xyz": [-90.0, 0.0, -180.0],
+    },
 }
 
 
@@ -47,13 +51,13 @@ def avatar_model_defaults(avatar_model) -> Dict:
 # Curated subset of assets/models/*.glb offered as choices in the dashboard's
 # Settings page. Limited to filenames with an AVATAR_MODEL_DEFAULTS entry:
 # without a tuned scale/rotation a model renders at scale=1.0 with no
-# rotation, which looks wrong out of the box (assets/models/ also has
-# glove.glb, left out until someone tunes and adds defaults for it above).
+# rotation, which looks wrong out of the box.
 AVAILABLE_AVATAR_MODELS = [
     {"file": "vis_assembly.glb", "label": "Vis Assembly (hand)"},
     {"file": "MaleBaseModel_BravFG.glb", "label": "Male Base Model"},
     {"file": "ArmBaseModel_BravFG.glb", "label": "Arm Base Model"},
     {"file": "iron-man_helmet_mk3_clean.glb", "label": "Iron Man Helmet (head)"},
+    {"file": "glove.glb", "label": "Glove (hand)"},
 ]
 
 

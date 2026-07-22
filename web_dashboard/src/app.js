@@ -1176,9 +1176,9 @@ function setSettingsStatus(message) {
   }
 }
 
-// Avatar-model switching is temporarily locked in the Settings UI (the
-// backend API stays available); flip to false to restore the dropdown.
-const AVATAR_MODEL_SWITCHING_LOCKED = true;
+// Avatar-model switching in the Settings UI; flip to true to re-lock the
+// dropdown (the backend API stays available either way).
+const AVATAR_MODEL_SWITCHING_LOCKED = false;
 
 function renderSettings(payload) {
   if (!settingsCameraList) {
