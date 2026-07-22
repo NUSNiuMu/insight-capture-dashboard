@@ -941,16 +941,21 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         script_path = Path(__file__).resolve().parent / "webrtc_worker.py"
         env = dict(os.environ)
         env["INSIGHT_WEBRTC_AUTHKEY"] = self._webrtc_authkey.hex()
-        # JetPack's nvv4l2 encoder loads libnvmmlite_video at runtime. In
-        # this container its dependency on NvOsSleepMS is not promoted into
-        # the global linker scope reliably, causing the worker to exit after
-        # pipelines start. Preload the matching host-mounted libnvos so the
-        # symbol is always available to the encoder plugin.
-        nvos_library = Path("/usr/lib/aarch64-linux-gnu/nvidia/libnvos.so")
-        if nvos_library.exists():
-            env["LD_PRELOAD"] = " ".join(
-                item for item in (str(nvos_library), env.get("LD_PRELOAD", "")) if item
-            )
+        # JetPack's nvv4l2 encoder loads libnvmmlite_video at runtime. Its
+        # symbols (NvOsSleepMS and video_parser_flush) are supplied by
+        # sibling libraries but are not promoted to global scope reliably in
+        # this container, so the worker can die only after H.264 pipelines
+        # start. Preload the complete linked trio from the host-mounted
+        # NVIDIA directory before importing GStreamer.
+        nvidia_library_dir = Path("/usr/lib/aarch64-linux-gnu/nvidia")
+        multimedia_libraries = (
+            nvidia_library_dir / "libnvos.so",
+            nvidia_library_dir / "libnvvideo.so",
+            nvidia_library_dir / "libnvparser.so",
+        )
+        preload = [str(path) for path in multimedia_libraries if path.exists()]
+        if preload:
+            env["LD_PRELOAD"] = " ".join(preload + [env.get("LD_PRELOAD", "")]).strip()
         log_path = self.project_root / "outputs" / "webrtc_worker.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = open(log_path, "a", buffering=1)
