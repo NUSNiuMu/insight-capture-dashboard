@@ -15,9 +15,10 @@ rate every time. Routing the already-received message straight to disk here
 means recording never adds a second reader for these topics at all.
 """
 
+import multiprocessing
 import queue
 import threading
-from typing import Optional, Set
+from typing import Optional
 
 import rosbag2_py
 from rclpy.serialization import serialize_message
@@ -29,9 +30,44 @@ def ros_type_string(msg: object) -> str:
     return f"{package}/msg/{cls.__name__}"
 
 
+def _storage_writer_process(
+    output_path: str, storage_id: str, storage_config_uri: str,
+    entries: "multiprocessing.queues.Queue", ready: object, errors: object,
+) -> None:
+    """Own sqlite/rosbag2 writes outside the dashboard interpreter/GIL."""
+    try:
+        writer = rosbag2_py.SequentialWriter()
+        storage_options = rosbag2_py.StorageOptions(uri=output_path, storage_id=storage_id)
+        if storage_config_uri:
+            storage_options.storage_config_uri = storage_config_uri
+        writer.open(storage_options, rosbag2_py.ConverterOptions("", ""))
+    except Exception as exc:  # pragma: no cover - surfaced to parent startup
+        errors.put(str(exc))
+        ready.set()
+        return
+    ready.set()
+    topics_created = set()
+    while True:
+        item = entries.get()
+        if item is None:
+            break
+        topic, topic_type, serialized, stamp_ns = item
+        if topic not in topics_created:
+            writer.create_topic(
+                rosbag2_py.TopicMetadata(name=topic, type=topic_type, serialization_format="cdr")
+            )
+            topics_created.add(topic)
+        writer.write(topic, serialized, stamp_ns)
+    del writer
+
+
 class InProcessBagWriter:
-    """Background-thread rosbag2 writer fed via a bounded queue so the ROS
-    callback thread that calls write() never blocks on disk I/O.
+    """One DDS subscription, with serialization and sqlite writes off its callback.
+
+    Serialization remains in a local background thread because it consumes
+    rclpy message objects directly. The expensive rosbag2/SQLite calls run in
+    a spawned process, so they cannot monopolize the dashboard's GIL and
+    delay the image subscription callback.
     """
 
     def __init__(
@@ -43,19 +79,29 @@ class InProcessBagWriter:
     ) -> None:
         self._storage_config_uri = storage_config_uri
         self._queue: "queue.Queue[object]" = queue.Queue(maxsize=max_queue)
-        self._topics_created: Set[str] = set()
         self._dropped = 0
         self._stop_sentinel = object()
-        self._started = threading.Event()
-        self._open_error: Optional[str] = None
+        context = multiprocessing.get_context("spawn")
+        self._storage_entries = context.Queue(maxsize=max_queue)
+        self._storage_ready = context.Event()
+        self._storage_errors = context.Queue(maxsize=1)
+        self._storage_process = context.Process(
+            target=_storage_writer_process,
+            args=(output_path, storage_id, storage_config_uri, self._storage_entries,
+                  self._storage_ready, self._storage_errors),
+            daemon=True,
+            name="rosbag_storage_writer",
+        )
+        self._storage_process.start()
+        if not self._storage_ready.wait(timeout=5.0):
+            self._storage_process.terminate()
+            raise RuntimeError(f"Timed out opening rosbag writer at {output_path}")
+        if not self._storage_errors.empty():
+            raise RuntimeError(self._storage_errors.get())
         self._thread = threading.Thread(
-            target=self._run, args=(output_path, storage_id), daemon=True, name="inprocess_bag_writer"
+            target=self._run, daemon=True, name="inprocess_bag_serializer"
         )
         self._thread.start()
-        if not self._started.wait(timeout=5.0):
-            raise RuntimeError(f"Timed out opening rosbag writer at {output_path}")
-        if self._open_error:
-            raise RuntimeError(self._open_error)
 
     def write(self, topic: str, msg: object, stamp_ns: int) -> None:
         try:
@@ -70,34 +116,16 @@ class InProcessBagWriter:
     def close(self, timeout: float = 10.0) -> None:
         self._queue.put(self._stop_sentinel)
         self._thread.join(timeout=timeout)
+        self._storage_entries.put(None)
+        self._storage_process.join(timeout=timeout)
+        if self._storage_process.is_alive():
+            self._storage_process.terminate()
+            self._storage_process.join(timeout=1.0)
 
-    def _run(self, output_path: str, storage_id: str) -> None:
-        try:
-            writer = rosbag2_py.SequentialWriter()
-            storage_options = rosbag2_py.StorageOptions(uri=output_path, storage_id=storage_id)
-            if self._storage_config_uri:
-                storage_options.storage_config_uri = self._storage_config_uri
-            writer.open(
-                storage_options,
-                rosbag2_py.ConverterOptions("", ""),
-            )
-        except Exception as exc:  # noqa: BLE001 - surfaced to the constructor via _open_error
-            self._open_error = str(exc)
-            self._started.set()
-            return
-        self._started.set()
-
+    def _run(self) -> None:
         while True:
             item = self._queue.get()
             if item is self._stop_sentinel:
                 break
             topic, msg, stamp_ns = item
-            if topic not in self._topics_created:
-                writer.create_topic(
-                    rosbag2_py.TopicMetadata(name=topic, type=ros_type_string(msg), serialization_format="cdr")
-                )
-                self._topics_created.add(topic)
-            writer.write(topic, serialize_message(msg), stamp_ns)
-        # rosbag2_py has no explicit close(); metadata.yaml is only flushed
-        # when the writer object is destroyed.
-        del writer
+            self._storage_entries.put((topic, ros_type_string(msg), serialize_message(msg), stamp_ns))
