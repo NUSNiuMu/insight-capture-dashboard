@@ -136,6 +136,19 @@ HAND_LABEL_MIN_CONFIDENCE = 0.6
 # jitter of a hand that's actually just sitting still.
 HAND_POSITION_JUMP_FACTOR = 6.0
 HAND_POSITION_STICKY_FACTOR = 1.0
+# How long _hand_role_anchor's last-known-position memory stays usable for
+# stages 1-2, deliberately much longer than HAND_TRACK_COAST_SEC (which only
+# controls when the *rendered skeleton* fades -- a separate concern). Real
+# per-frame recall is well below 100% (see HAND_TRACK_* comments below), so
+# both hands going briefly undetected at once -- occlusion, a fast head
+# turn, a frame drop -- is common enough that tying position memory to the
+# same short 0.5s timer meant it routinely expired for both roles together,
+# forcing stage 3's memory-less hand_index tiebreak (an effective coin
+# flip) far more often than "the hand was actually gone for good" would
+# justify -- this is what was still causing repeated flips after the
+# sticky-hysteresis fix, reported 2026-07-22. A short, real gap should
+# resolve via positional continuity, not a fresh guess.
+HAND_ROLE_ANCHOR_MAX_AGE_SEC = 3.0
 
 # Per-role track lifecycle for the 3D skeleton (hand_landmarks_for_role).
 # HandEngine's per-frame recall is well below 100%: with a hand steadily in
@@ -470,12 +483,16 @@ class HandOverlayMixin:
         (2) wider nearest-neighbor competition (HAND_POSITION_JUMP_FACTOR)
         for a role stickiness didn't resolve; (3) fixed arrival-order
         seeding (HAND_ROLE_SEED_ORDER) for a role with no recent position at
-        all -- track birth, or both hands appearing at once. Stage 3 does
-        NOT use class_id: it's unreliable enough on its own (see above)
-        that even confidence-gated/smoothed it could still seed a role
-        backward, and the whole point of stages 1-2 is that once seeded,
-        position -- not class_id -- is what keeps a role pinned to the
-        right physical hand.
+        all -- track birth, or both hands genuinely gone for
+        HAND_ROLE_ANCHOR_MAX_AGE_SEC. Stage 3 does NOT use class_id: it's
+        unreliable enough on its own (see above) that even
+        confidence-gated/smoothed it could still seed a role backward, and
+        the whole point of stages 1-2 is that once seeded, position -- not
+        class_id -- is what keeps a role pinned to the right physical hand.
+        Stages 1-2 use HAND_ROLE_ANCHOR_MAX_AGE_SEC (not the shorter
+        HAND_TRACK_COAST_SEC the rendered skeleton uses) for how long a
+        position stays trustworthy, so a brief mutual detection gap doesn't
+        force stage 3's memory-less tiebreak.
         """
         candidates = [
             (entry, anchor)
@@ -505,7 +522,7 @@ class HandOverlayMixin:
         sticky_pairs = []
         for role in HAND_CLASS_TO_ROLE.values():
             prev = self._hand_role_anchor.get((camera_name, role))
-            if prev is None or now - prev[3] > HAND_TRACK_COAST_SEC:
+            if prev is None or now - prev[3] > HAND_ROLE_ANCHOR_MAX_AGE_SEC:
                 continue
             px, py, pscale, _ = prev
             best = None
@@ -529,7 +546,7 @@ class HandOverlayMixin:
             if role in role_taken:
                 continue
             prev = self._hand_role_anchor.get((camera_name, role))
-            if prev is None or now - prev[3] > HAND_TRACK_COAST_SEC:
+            if prev is None or now - prev[3] > HAND_ROLE_ANCHOR_MAX_AGE_SEC:
                 continue
             px, py, pscale, _ = prev
             for idx, (_, (x, y, scale)) in enumerate(candidates):
@@ -620,38 +637,33 @@ class HandOverlayMixin:
         }
 
     def compose_hand_overlay_jpeg(
-        self, camera_name: str, jpeg_bytes: bytes, image_stamp_ns: int
+        self, camera_name: str, jpeg_bytes: bytes, image_stamp_ns: int, version: int = 0
     ) -> Optional[bytes]:
-        """Decode -> draw -> re-encode, the same per-frame cost the reference
-        PC tool pays (cv2.imshow/--record both display the drawn-on copy, not
-        the raw stream). Only called when hand_overlay_enabled for this
-        camera, so cameras without it on keep the cheap passthrough path in
-        _encode_dashboard_frame.
+        """Gate + dispatch: decides whether this frame is worth overlaying
+        (cheap -- payload lookup, staleness, sync-window checks) and, if so,
+        hands the actual decode/draw/encode off to the hand_overlay_worker.py
+        process instead of doing it inline. Always returns None -- the
+        caller's passthrough JPEG for this tick is deliberately left
+        undecorated; the worker's result lands asynchronously and patches
+        into self.latest_camera_frames once ready (see
+        PoseBridgeNode._hand_overlay_ipc_loop). Only called when
+        hand_overlay_enabled for this camera, so cameras without it on keep
+        the cheap passthrough path in _encode_dashboard_frame untouched.
+
+        Moving the decode/draw/encode off this process was necessary, not
+        just tidy: it round-trips through the same GStreamer
+        appsrc->nvjpegdec/nvjpegenc->appsink pipeline (hw_jpeg.py) that
+        webrtc_worker.py's docstring documents fighting this process's GIL
+        for -- and unlike the plain image-encode path, this one only fires
+        once a hand is actually visible, which is exactly why fps used to
+        collapse only "once a hand is detected" (see wiki changelog).
         """
         payload = self.hand_overlay_payload(camera_name)
         if not payload or payload["stale"] or not payload["hands"]:
             return None
         if abs(image_stamp_ns - payload["stamp_ns"]) > MAX_SYNC_NS:
             return None
-        # NVJPEG path: decode to BGRx, draw in place (cv2 primitives accept 4
-        # channels), re-encode -- both JPEG passes on the hardware engine.
-        # Any None along the way falls through to the cv2 path below.
-        hw_jpeg = getattr(self, "_hw_jpeg", None)
-        if hw_jpeg is not None:
-            with track(f"hand_overlay_draw_hw:{camera_name}"):
-                image = hw_jpeg.decode_jpeg_bgrx(camera_name, jpeg_bytes)
-                if image is not None:
-                    draw_hands_on_frame(image, payload["hands"])
-                    encoded = hw_jpeg.encode_bgrx(camera_name, image, quality=90)
-                    if encoded is not None:
-                        return encoded
-        with track(f"hand_overlay_draw:{camera_name}"):
-            arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-            image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if image is None:
-                return None
-            draw_hands_on_frame(image, payload["hands"])
-            ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            if not ok:
-                return None
-            return encoded.tobytes()
+        dispatch = getattr(self, "_dispatch_hand_overlay", None)
+        if dispatch is not None:
+            dispatch(camera_name, version, jpeg_bytes, payload["hands"])
+        return None

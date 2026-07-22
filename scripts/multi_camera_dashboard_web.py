@@ -352,6 +352,17 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self._webrtc_proc = self._start_webrtc_worker()
         threading.Thread(target=self._webrtc_ipc_loop, daemon=True, name="webrtc_ipc").start()
         threading.Thread(target=self._webrtc_healthz_loop, daemon=True, name="webrtc_healthz").start()
+        # Hand-overlay JPEG compositing also runs in its own process now,
+        # same reason and same shape as the WebRTC split above (see
+        # hand_overlay.compose_hand_overlay_jpeg's docstring): its
+        # hw_jpeg.py round trip shares this GStreamer/GIL contention but
+        # only fires once a hand is actually detected.
+        self._hand_overlay_ipc_path = os.path.join(tempfile.gettempdir(), f"insight_hand_overlay_{os.getpid()}.sock")
+        self._hand_overlay_authkey = secrets.token_bytes(32)
+        self._pending_hand_overlay_frames: Dict[str, Tuple[int, bytes, list]] = {}
+        self._hand_overlay_frame_event = threading.Event()
+        self._hand_overlay_proc = self._start_hand_overlay_worker()
+        threading.Thread(target=self._hand_overlay_ipc_loop, daemon=True, name="hand_overlay_ipc").start()
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
         self._initialize_live_alignment_state()
         if self.world_to_reference:
@@ -922,6 +933,105 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             proc.kill()
             proc.wait(timeout=3.0)
 
+    def _start_hand_overlay_worker(self) -> "subprocess.Popen":
+        script_path = Path(__file__).resolve().parent / "hand_overlay_worker.py"
+        env = dict(os.environ)
+        env["INSIGHT_HANDOVERLAY_AUTHKEY"] = self._hand_overlay_authkey.hex()
+        log_path = self.project_root / "outputs" / "hand_overlay_worker.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = open(log_path, "a", buffering=1)
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                str(script_path),
+                "--ipc-socket",
+                self._hand_overlay_ipc_path,
+            ],
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
+        self.get_logger().info(f"hand_overlay: spawned hand_overlay_worker.py pid={proc.pid}")
+        return proc
+
+    def stop_hand_overlay_worker(self) -> None:
+        proc = getattr(self, "_hand_overlay_proc", None)
+        if proc is None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=3.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=3.0)
+
+    def _dispatch_hand_overlay(self, camera_name: str, version: int, jpeg_bytes: bytes, hands: list) -> None:
+        """Fire-and-forget handoff to hand_overlay_worker.py -- called from
+        hand_overlay.compose_hand_overlay_jpeg once it's decided this frame
+        is worth overlaying. Only the newest dispatch per camera is kept
+        (mirrors _pending_webrtc_frames), so a slow worker never backs up
+        the camera's own frame worker thread."""
+        self._pending_hand_overlay_frames[camera_name] = (version, jpeg_bytes, hands)
+        self._hand_overlay_frame_event.set()
+
+    def _hand_overlay_ipc_loop(self) -> None:
+        """Owns the single connection to hand_overlay_worker.py: sends
+        dispatched frames and applies composited results back into
+        latest_camera_frames. Single thread on this side too (mirrors
+        IpcServer in hand_overlay_worker.py) so no lock is needed around
+        the Connection itself."""
+        authkey = self._hand_overlay_authkey
+        while rclpy is not None and rclpy.ok():
+            try:
+                conn = Client(self._hand_overlay_ipc_path, family="AF_UNIX", authkey=authkey)
+            except OSError:
+                time.sleep(1.0)
+                continue
+            try:
+                while rclpy is not None and rclpy.ok():
+                    while conn.poll(0):
+                        message = conn.recv()
+                        if not (isinstance(message, tuple) and len(message) == 3):
+                            continue
+                        camera_name, version, composited = message
+                        self._apply_composited_hand_overlay(camera_name, version, composited)
+                    if self._hand_overlay_frame_event.wait(timeout=0.05):
+                        self._hand_overlay_frame_event.clear()
+                        for camera_name in list(self._pending_hand_overlay_frames.keys()):
+                            payload = self._pending_hand_overlay_frames.pop(camera_name, None)
+                            if payload is None:
+                                continue
+                            conn.send((camera_name,) + payload)
+            except (EOFError, OSError) as exc:
+                self.get_logger().warning(f"hand overlay ipc: lost connection to worker ({exc}); reconnecting")
+            finally:
+                with contextlib.suppress(Exception):
+                    conn.close()
+            time.sleep(1.0)
+
+    def _apply_composited_hand_overlay(self, camera_name: str, version: int, composited: bytes) -> None:
+        """Patches a worker's composited JPEG into latest_camera_frames --
+        but only if no newer raw frame has already superseded the version
+        this composite was made from, so an async result arriving late can
+        never move a served frame backwards (the frame just stays
+        undecorated for that tick instead, same as a dropped composite)."""
+        width, height = self._jpeg_dimensions(composited)
+        with self.camera_frame_lock:
+            if self.camera_frame_versions.get(camera_name) != version:
+                return
+            current = self.latest_camera_frames.get(camera_name)
+            if current is None or current.version != version:
+                return
+            self.latest_camera_frames[camera_name] = CameraFrame(
+                data=composited,
+                stamp_ns=current.stamp_ns,
+                received_monotonic=current.received_monotonic,
+                mime_type="image/jpeg",
+                width=width,
+                height=height,
+                version=version,
+            )
+
     def _webrtc_ipc_loop(self) -> None:
         """Owns the single connection to webrtc_worker.py: sends frames the
         worker actually has viewers for, and relays its session_state
@@ -995,14 +1105,15 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         if topic_type == "compressed":
             data = bytes(msg.data)
             if camera_name in self.hand_overlay_enabled:
-                # Decode/draw/re-encode -- same per-frame cost the reference
-                # PC tool (visualize_hand_landmarks.py) pays to bake the
-                # skeleton into the pixels it displays/records. Only paid by
-                # cameras with the Settings toggle on; everyone else keeps
-                # the cheap passthrough (no decode) below.
-                composited = self.compose_hand_overlay_jpeg(camera_name, data, stamp_ns)
-                if composited is not None:
-                    data = composited
+                # Gates the frame and, if worth overlaying, dispatches the
+                # actual decode/draw/re-encode to hand_overlay_worker.py --
+                # see compose_hand_overlay_jpeg's docstring for why that work
+                # can't happen inline here anymore. This tick still serves
+                # the plain passthrough `data`; the composited version lands
+                # asynchronously and patches into latest_camera_frames once
+                # ready (_hand_overlay_ipc_loop), so a served frame is
+                # undecorated for at most one IPC round trip.
+                self.compose_hand_overlay_jpeg(camera_name, data, stamp_ns, version)
             width, height = self._jpeg_dimensions(data)
             return CameraFrame(
                 data=data,
@@ -2395,6 +2506,7 @@ def main() -> None:
         server.stop()
         executor.shutdown()
         node.stop_webrtc_worker()
+        node.stop_hand_overlay_worker()
         node.destroy_node()
         with contextlib.suppress(Exception):
             rclpy.shutdown()
