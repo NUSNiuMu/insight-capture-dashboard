@@ -2473,8 +2473,9 @@ async function runIntegrityCheck() {
       setScoringStatus(`Integrity error: ${payload.error || response.statusText}`);
       return;
     }
+    const scope = payload.scope === "image_streams" ? "image streams" : "all topics";
     setScoringStatus(payload.ok
-      ? `Integrity OK: ${bagName} — all topics complete`
+      ? `Integrity OK: ${bagName} — ${scope} complete`
       : `Integrity FAILED: ${bagName} — ${payload.failed_topics.length} topic(s) with frame loss`);
     renderIntegrityResult(payload);
     void refreshRosbags(); // update the Bags-page badge data
@@ -2508,8 +2509,9 @@ function renderIntegrityResult(report) {
         <td style="padding:4px 0;color:var(--muted);font-size:0.8rem">${detail}</td>
       </tr>`;
   }).join("");
+  const isImageOnly = report.scope === "image_streams";
   const headline = report.ok
-    ? `<strong style="color:${okColor}">Complete</strong> — no frame loss above ${report.max_loss_pct}% on any topic`
+    ? `<strong style="color:${okColor}">Complete</strong> — no frame loss above ${report.max_loss_pct}% on ${isImageOnly ? "recorded image streams" : "any topic"}`
     : `<strong style="color:${badColor}">Incomplete</strong> — frame loss on: ${escapeHtml((report.failed_topics || []).join(", "))}`
       + ` <span style="color:var(--muted)">(triage: USAGE.md §6.3)</span>`;
   integrityResultBody.innerHTML = `
