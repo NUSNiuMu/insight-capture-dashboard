@@ -1,33 +1,19 @@
 #!/usr/bin/env python3
 
 import argparse
-import asyncio
 import contextlib
-import fcntl
-import http.client
-import json
 import math
 import os
 import secrets
-import shutil
-import socket
-import struct
-import subprocess
-import sys
 import tempfile
 import threading
 import time
 import traceback
 from collections import deque
-from dataclasses import dataclass
-from multiprocessing.connection import Client
 from pathlib import Path
-from typing import Deque, Dict, List, Optional, Sequence, Set, Tuple
-from urllib.parse import quote
+from typing import Deque, Dict, List, Optional, Tuple
 
 import numpy as np
-import cv2
-from aiohttp import web
 
 try:
     import rclpy
@@ -65,25 +51,31 @@ from camera_setup import (
     image_topic,
     load_setup,
 )
-from check_bag import analyze_bag, nominal_for
 from gripper_tracking import GripperTrackingMixin
 from hand_overlay import HandOverlayMixin
 from hw_jpeg import HwJpegCodec
 from inprocess_bag_writer import InProcessBagWriter
 import perf_tracker
-from perf_tracker import track
 from live_alignment import LiveAlignmentMixin
 from post_processing import (
-    OptimizationManager,
-    PlaybackManager,
     RecordingManager,
-    STORAGE_CONFIG_PATH,
     build_default_topics,
-    list_rosbags,
     load_post_processing_config,
 )
 from session_alignment import PoseSample
 from dashboard_web import WebDashboardServer, bagplay_topic
+
+from dashboard_runtime import (
+    CameraFrame,
+    CameraSpec,
+    ImagePipeline,
+    ParticipantWatchdog,
+    PayloadBuilder,
+    PoseSpec,
+    RecordingBridge,
+    WorkerSupervisor,
+)
+
 
 def make_qos(depth: int = 10) -> QoSProfile:
     return QoSProfile(
@@ -108,55 +100,6 @@ def make_image_qos(depth: int = 1, reliability: str = "best_effort") -> QoSProfi
     )
 
 
-@dataclass
-class PoseSpec:
-    name: str
-    topic: str
-    color: str
-    teleop_role: str
-    avatar_model: Optional[str]
-    avatar_scale: float
-    avatar_rotation_deg_xyz: Tuple[float, float, float]
-    avatar_offset_xyz: Tuple[float, float, float]
-
-
-@dataclass
-class CameraSpec:
-    name: str
-    namespace: str
-    label: str
-    topic: str
-    camera_info_topic: str
-    topic_type: str
-    rotation_deg: int
-    row: int
-    column: int
-    column_span: int
-    row_span: int
-    alignment_image_stream: Optional[str] = None
-
-
-@dataclass
-class CameraFrame:
-    data: bytes
-    stamp_ns: int
-    received_monotonic: float
-    mime_type: str
-    width: int
-    height: int
-    version: int
-    hand_overlay_pending: bool = False
-
-
-# The polling fallback only needs a recent still frame to cover a WebRTC
-# disconnect/reconnect. Encoding it at every source frame wastes the same
-# NVJPEG/GIL time that WebRTC was introduced to avoid.
-WEBRTC_JPEG_FALLBACK_INTERVAL_SEC = 0.5
-# Recording owns the source frames.  Limit only the visual WebRTC preview
-# while it is active, so JPEG copies/IPC cannot starve the DDS callbacks that
-# feed the bag writer.  The preview returns to native rate immediately after
-# stop; the bag itself continues to receive every source frame.
-RECORDING_WEBRTC_PREVIEW_FPS = 10.0
 
 
 class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin, Node):
@@ -171,6 +114,11 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         if rclpy is None:
             raise RuntimeError("rclpy is required to run the web dashboard backend")
         super().__init__("insight_multi_camera_dashboard_web")
+        self._participant_watchdog = ParticipantWatchdog(self)
+        self._recording_bridge = RecordingBridge(self)
+        self._image_pipeline = ImagePipeline(self)
+        self._worker_supervisor = WorkerSupervisor(self)
+        self._payload_builder = PayloadBuilder(self)
         self.config_path = config_path
         self.fake_pose = bool(fake_pose)
         self.enable_alignment_stream = bool(enable_alignment_stream)
@@ -553,147 +501,25 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             )
 
     def _any_ros_data_received(self) -> bool:
-        # GIL-atomic dict reads; values only ever go None->frame / 0.0->t
-        # before the first user-triggered reset, so no locks needed for a
-        # boolean "has anything ever arrived".
-        return any(frame is not None for frame in self.latest_camera_frames.values()) or any(
-            t > 0.0 for t in self.last_pose_received_time.values()
-        )
+        return self._participant_watchdog._any_ros_data_received()
+
 
     @staticmethod
     def _camera_link_up() -> bool:
-        # A 169.254.x.x address on any non-loopback/docker interface is a
-        # camera's point-to-point USB-ethernet link (see
-        # scripts/reboot_cameras.sh) -- i.e. a camera is physically
-        # connected, whether or not its ROS stack is publishing yet. Pure
-        # ioctls (microseconds) rather than shelling out to `ip`, so the
-        # watchdog poll is effectively free.
-        try:
-            names = os.listdir("/sys/class/net")
-        except OSError:
-            return False
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            for name in names:
-                if name == "lo" or name.startswith("docker"):
-                    continue
-                try:
-                    packed = fcntl.ioctl(
-                        sock.fileno(),
-                        0x8915,  # SIOCGIFADDR
-                        struct.pack("256s", name.encode()[:15]),
-                    )
-                except OSError:
-                    continue  # interface has no IPv4 address
-                if socket.inet_ntoa(packed[20:24]).startswith("169.254."):
-                    return True
-        finally:
-            sock.close()
-        return False
+        return ParticipantWatchdog._camera_link_up()
+
 
     def _restart_for_stale_participant(self, reason: str) -> None:
-        # Shared exit path for both watchdog cases below. Fast DDS enumerates
-        # network interfaces only at participant creation, so a link that
-        # appeared/changed after this process started stays invisible to it
-        # until the participant is recreated, i.e. until this process
-        # restarts. Inside docker, `restart: unless-stopped` (docker-compose.yml)
-        # brings it back with the current links present; outside docker there
-        # is no such policy, so warn instead of exiting into nothing.
-        if os.path.exists("/.dockerenv"):
-            self.get_logger().error(
-                f"{reason} -- exiting so the container restart policy recreates the DDS participant."
-            )
-            os._exit(1)
-        self.get_logger().warning(f"{reason} -- restart this process to recover.")
+        self._participant_watchdog._restart_for_stale_participant(reason)
+
 
     def _recording_active(self) -> bool:
-        manager = self.recording_manager
-        if manager is None:
-            return False
-        try:
-            return manager.is_recording()
-        except Exception:
-            return False
+        return self._participant_watchdog._recording_active()
+
 
     def _stale_participant_watchdog_loop(self) -> None:
-        # Fast DDS enumerates network interfaces only at participant
-        # creation, so two related failure modes share the same fix
-        # (recreate the participant, i.e. restart this process):
-        #
-        # 1. Boot race: this container auto-starts at host boot (restart:
-        #    unless-stopped), usually before the per-camera USB-ethernet
-        #    links exist, so the participant advertises unicast locators the
-        #    cameras can't route to and never receives a single message.
-        #    That state does NOT self-heal (observed fully stale >15min
-        #    while a fresh `ros2 topic list` in the same container saw
-        #    every topic instantly). run_dashboard.sh has the same
-        #    link-presence check, but only runs once when someone invokes
-        #    the script -- this covers headless boots too.
-        # 2. Runtime drop: a camera that WAS streaming loses its link (USB
-        #    unplugged and replugged) and never comes back on its own, for
-        #    the same interface-enumeration reason. Case 1's "any data ever
-        #    received" check can't see this -- the other cameras are still
-        #    flowing -- so this needs its own per-camera staleness check.
-        #
-        # This thread never retires: case 1 can only ever fire once per
-        # process (after that, "some data has arrived" is permanent), but
-        # case 2 needs to keep watching for the life of the process.
-        link_grace_sec = 60.0
-        poll_sec = 5.0
-        # Generous vs. camera_stale_timeout_sec (the UI's "no signal" flag,
-        # default 2s) so a brief frame gap or exposure hiccup can't trigger a
-        # restart -- this only fires on a camera that stays silent.
-        camera_stall_grace_sec = 15.0
-        link_up_since: Optional[float] = None
-        while True:
-            time.sleep(poll_sec)
-            now = time.monotonic()
+        self._participant_watchdog._stale_participant_watchdog_loop()
 
-            if not self._any_ros_data_received():
-                if not self._camera_link_up():
-                    link_up_since = None
-                    continue
-                if link_up_since is None:
-                    link_up_since = now
-                    continue
-                if now - link_up_since < link_grace_sec:
-                    continue
-                self._restart_for_stale_participant(
-                    "Camera link up for 60s but no ROS data ever received -- DDS participant "
-                    "likely predates the camera links"
-                )
-                link_up_since = now
-                continue
-
-            link_up_since = None
-
-            if self._recording_active():
-                # Don't kill an in-progress recording over one stalled
-                # camera -- the others are still capturing fine, and a
-                # full-process restart (the only fix DDS gives us) would cut
-                # all of them short over one dropout.
-                continue
-
-            if not self._camera_link_up():
-                # No camera USB-ethernet link exists, so "frames stopped" is
-                # not a recoverable link drop and a restart fixes nothing.
-                # Concretely: on a machine with no cameras attached, bag
-                # playback populates camera_frame_times, and when the bag
-                # ends the stall check below would restart-loop the backend
-                # (observed 2026-07-12 on the dev machine after the fleet
-                # moved to another device).
-                continue
-
-            for camera in self.cameras:
-                frame_times = self.camera_frame_times[camera.name]
-                if not frame_times or now - frame_times[-1] <= camera_stall_grace_sec:
-                    continue
-                self._restart_for_stale_participant(
-                    f"Camera '{camera.name}' produced no frames for over "
-                    f"{camera_stall_grace_sec:.0f}s after previously streaming "
-                    "(likely a USB/link drop)"
-                )
-                break
 
     def _make_pose_callback(self, pose_name: str, is_live: bool = True):
         def callback(msg: PoseStamped) -> None:
@@ -732,623 +558,93 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         return callback
 
     def start_image_recording(self, topic_output_paths: Dict[str, str]) -> None:
-        """topic_output_paths maps each image topic to its own bag output
-        path -- one InProcessBagWriter (and background thread) per distinct
-        path, so e.g. insight3_a's and insight3_b's large uncompressed
-        streams don't serialize behind each other on a single writer thread
-        (measured: sharing one writer capped both around 13-16Hz instead of
-        their ~20Hz native rate, while insight9_a's much smaller compressed
-        stream alone kept up fine)."""
-        with self._recording_writer_lock:
-            if self._recording_writers:
-                raise RuntimeError("Image recording writer is already running.")
-            writers_by_path: Dict[str, InProcessBagWriter] = {}
-            writer_by_topic: Dict[str, InProcessBagWriter] = {}
-            for topic, output_path in topic_output_paths.items():
-                writer = writers_by_path.get(output_path)
-                if writer is None:
-                    # The compressed Insight9 stream averages ~133 KiB at
-                    # 30 Hz. Its two 128-entry writer stages only absorb
-                    # about 8.5s total; a measured transient SQLite/writeback
-                    # stall exceeded that and rejected 109 otherwise
-                    # continuous frames. A later shared writeback stall also
-                    # overflowed both 20 Hz raw writers at depth 128 (86
-                    # frames each) while their received header sequences
-                    # remained continuous. Use 512 for every image writer:
-                    # about 34s of two-stage headroom for the compressed
-                    # stream and 51s for each raw stream. The two raw streams'
-                    # worst-case combined backlog is about 1 GiB, within this
-                    # machine's measured memory headroom.
-                    writer = InProcessBagWriter(
-                        output_path,
-                        max_queue=512,
-                        storage_config_uri=str(STORAGE_CONFIG_PATH) if STORAGE_CONFIG_PATH.is_file() else "",
-                    )
-                    writers_by_path[output_path] = writer
-                writer_by_topic[topic] = writer
-            self._recording_writers = writers_by_path
-            self._recording_writer_by_topic = writer_by_topic
-            self._recording_timestamp_offsets_ns = {topic: None for topic in topic_output_paths}
-            self._recording_header_audit = {
-                topic: {"count": 0, "first_ns": None, "last_ns": None, "missing": 0,
-                        "gap_events": 0, "worst_gap_ns": 0}
-                for topic in topic_output_paths
-            }
+        self._recording_bridge.start_image_recording(topic_output_paths)
+
 
     def stop_image_recording(self) -> Dict[str, object]:
-        with self._recording_writer_lock:
-            writers = self._recording_writers
-            self._recording_writers = {}
-            self._recording_writer_by_topic = {}
-            self._recording_timestamp_offsets_ns = {}
-            audit = self._finalize_image_header_audit()
-            self._recording_header_audit = {}
-        dropped = 0
-        dropped_by_topic: Dict[str, int] = {}
-        for writer in writers.values():
-            writer.close()
-            dropped += writer.dropped_count
-            for topic, count in writer.dropped_by_topic.items():
-                dropped_by_topic[topic] = dropped_by_topic.get(topic, 0) + int(count)
-        # A continuous received-header sequence is not sufficient if the
-        # bounded disk queue rejected a frame after this callback observed it.
-        audit["writer_queue_dropped"] = dropped
-        audit["writer_queue_dropped_by_topic"] = dropped_by_topic
-        for topic, topic_audit in audit.get("topics", {}).items():
-            topic_dropped = int(dropped_by_topic.get(topic, 0))
-            topic_audit["writer_queue_dropped"] = topic_dropped
-            topic_audit["ok"] = bool(topic_audit.get("ok")) and topic_dropped == 0
-        audit["ok"] = bool(audit["ok"]) and dropped == 0
-        return {"dropped": dropped, "image_header_audit": audit}
+        return self._recording_bridge.stop_image_recording()
+
 
     def _finalize_image_header_audit(self) -> Dict[str, object]:
-        """Return the in-flight image continuity report without re-reading a bag."""
-        topics: Dict[str, object] = {}
-        for topic, stat in self._recording_header_audit.items():
-            count = int(stat["count"])
-            first_ns = stat["first_ns"]
-            last_ns = stat["last_ns"]
-            nominal_hz = nominal_for(topic)
-            span_s = ((int(last_ns) - int(first_ns)) / 1e9) if count > 1 and first_ns is not None and last_ns is not None else 0.0
-            topics[topic] = {
-                "frames": count,
-                "nominal_hz": nominal_hz,
-                "observed_hz": round((count - 1) / span_s, 3) if span_s > 0 else None,
-                "missing": int(stat["missing"]),
-                "gap_events": int(stat["gap_events"]),
-                "worst_gap_ms": round(int(stat["worst_gap_ns"]) / 1e6, 3),
-                "ok": count > 1 and int(stat["missing"]) == 0,
-            }
-        return {"method": "live_image_header_audit", "topics": topics,
-                "ok": bool(topics) and all(item["ok"] for item in topics.values())}
+        return self._recording_bridge._finalize_image_header_audit()
+
 
     def _feed_recording_writer(self, topic: str, msg: object) -> None:
-        writer = self._recording_writer_by_topic.get(topic)
-        if writer is None:
-            return
-        now_ns = self.get_clock().now().nanoseconds
-        header = getattr(msg, "header", None)
-        stamp = getattr(header, "stamp", None)
-        source_ns = int(getattr(stamp, "sec", 0)) * 1_000_000_000 + int(getattr(stamp, "nanosec", 0))
-        if source_ns <= 0:
-            # This is not expected for our image messages, but retaining a
-            # usable fallback keeps recording compatible with a malformed or
-            # headerless custom image message.
-            writer.write(topic, msg, now_ns)
-            return
+        self._recording_bridge._feed_recording_writer(topic, msg)
 
-        audit = self._recording_header_audit.get(topic)
-        if audit is not None:
-            previous_ns = audit["last_ns"]
-            if previous_ns is not None:
-                gap_ns = source_ns - int(previous_ns)
-                nominal_hz = nominal_for(topic)
-                if nominal_hz and gap_ns > 1.5e9 / nominal_hz:
-                    audit["gap_events"] = int(audit["gap_events"]) + 1
-                    audit["missing"] = int(audit["missing"]) + max(0, round(gap_ns * nominal_hz / 1e9) - 1)
-                    audit["worst_gap_ns"] = max(int(audit["worst_gap_ns"]), gap_ns)
-            if audit["first_ns"] is None:
-                audit["first_ns"] = source_ns
-            audit["last_ns"] = source_ns
-            audit["count"] = int(audit["count"]) + 1
-
-        offset_ns = self._recording_timestamp_offsets_ns.get(topic)
-        if offset_ns is None:
-            # The source clocks are boot-relative.  Anchor each stream once,
-            # then write subsequent samples using source time so a 30-80 ms
-            # Python/DDS scheduling pause cannot look like a dropped frame in
-            # the resulting bag (the complete frames are often delivered in
-            # a short burst immediately afterwards).
-            offset_ns = now_ns - source_ns
-            self._recording_timestamp_offsets_ns[topic] = offset_ns
-        writer.write(topic, msg, source_ns + offset_ns)
 
     def _make_dashboard_image_callback(
         self, camera_name: str, topic_type: str, also_alignment: bool = False, is_live: bool = True
     ):
-        camera_topic = next(c.topic for c in self.cameras if c.name == camera_name)
-        event = self._pending_frame_events[camera_name]
+        return self._image_pipeline._make_dashboard_image_callback(
+            camera_name, topic_type, also_alignment=also_alignment, is_live=is_live
+        )
 
-        # The subscription callback must stay near-zero cost: anything heavy
-        # here (gripper ArUco detection alone was measured at 35-48% of a
-        # core per camera) pushes per-frame handling past the 50ms frame
-        # period, the DDS receive queue overflows, and messages are dropped
-        # before recording ever sees them. So this only feeds the recording
-        # writer (a queue put) and stashes the latest message for the
-        # per-camera worker thread, which does gripper/alignment/encode at
-        # whatever rate it can manage -- skipping display frames is fine,
-        # losing recorded frames is not.
-        #
-        # Live and playback are two SEPARATE subscriptions on two different
-        # topics (playback's is remapped to /bagplay/... by PlaybackManager),
-        # both funneling into this same per-camera pending-frame slot. Exactly
-        # one side is ever authoritative: is_live == self._playback_mode means
-        # "wrong source for the current mode" -- a live camera still
-        # connected during playback, or a stray playback message lingering
-        # after playback stopped -- so it's dropped before display, never
-        # blended by timestamp guessing (camera header stamps are boot-
-        # relative, not epoch, so they can't disambiguate the two).
-        def callback(msg) -> None:
-            if is_live == self._playback_mode:
-                return
-            if not self._playback_mode:
-                self._feed_recording_writer(camera_topic, msg)
-            self._pending_frames[camera_name] = msg
-            event.set()
 
-        return callback
+    def _frame_worker_loop(
+        self, camera_name: str, topic_type: str, also_alignment: bool
+    ) -> None:
+        self._image_pipeline._frame_worker_loop(
+            camera_name, topic_type, also_alignment
+        )
 
-    def _frame_worker_loop(self, camera_name: str, topic_type: str, also_alignment: bool) -> None:
-        alignment_cb = self._make_live_alignment_image_callback(camera_name, topic_type) if also_alignment else None
-        event = self._pending_frame_events[camera_name]
-        while rclpy is not None and rclpy.ok():
-            if not event.wait(timeout=1.0):
-                continue
-            event.clear()
-            msg = self._pending_frames.pop(camera_name, None)
-            if msg is None:
-                continue
-            try:
-                # The subscription callback above has already put this frame
-                # on the recording queue. During a recording, rendering and
-                # copying every 1080p JPEG into the WebRTC IPC channel can
-                # monopolize the Python process long enough for DDS history
-                # to backpressure the publisher. Keep a responsive preview
-                # but deliberately sacrifice preview cadence before capture
-                # cadence. This is only relevant while a browser has a
-                # WebRTC session; without one the existing fallback is cheap.
-                preview_now = time.monotonic()
-                if self._recording_active() and self._webrtc_has_sessions.get(camera_name):
-                    min_interval = 1.0 / RECORDING_WEBRTC_PREVIEW_FPS
-                    previous = self._last_recording_preview_at.get(camera_name, 0.0)
-                    if preview_now - previous < min_interval:
-                        continue
-                    self._last_recording_preview_at[camera_name] = preview_now
-                if alignment_cb is not None:
-                    alignment_cb(msg)
-                # Decode once and share: the display path and the gripper
-                # detector both work on the same pixels (the detector accepts
-                # 2-D grayscale directly and converts BGR itself otherwise),
-                # so a second full decode of the identical message is waste.
-                # When NVJPEG will encode the raw NV12/mono8 bytes directly
-                # and no gripper detector needs BGR pixels, skip the CPU
-                # decode entirely -- nvvidconv does the color conversion in
-                # hardware on the way into the encoder.
-                display_image = None
-                if topic_type != "compressed" and (
-                    camera_name in self.gripper_tracking_cameras
-                    or self._hw_jpeg is None
-                    or not self._hw_jpeg.can_encode_ros_image(camera_name, msg)
-                ):
-                    display_image = self._decode_display_image(msg)
-                if camera_name in self.gripper_tracking_cameras:
-                    gripper_image = (
-                        display_image
-                        if display_image is not None
-                        else self._decode_calibration_message(topic_type, msg)
-                    )
-                    if gripper_image is not None:
-                        self._process_gripper_image(camera_name, gripper_image)
-                now = time.monotonic()
-                # Compressed input is already a JPEG, but raw input would
-                # otherwise pay an NVJPEG encode for every frame solely for
-                # an HTTP fallback hidden behind an active WebRTC <video>.
-                # Refresh that fallback twice a second instead.
-                refresh_fallback = (
-                    topic_type == "compressed"
-                    or not self._webrtc_has_sessions.get(camera_name)
-                    or now - self._last_webrtc_fallback_jpeg_at.get(camera_name, 0.0)
-                    >= WEBRTC_JPEG_FALLBACK_INTERVAL_SEC
-                )
-                frame = (
-                    self._encode_dashboard_frame(camera_name, topic_type, msg, display_image)
-                    if refresh_fallback
-                    else None
-                )
-                with self.camera_frame_lock:
-                    # Once an overlay has been dispatched, keep the last
-                    # composited frame onscreen until its replacement returns
-                    # from the worker. Replacing it with every raw source
-                    # frame made the overlay visible only for the fraction of
-                    # a frame between the asynchronous result and the next
-                    # camera callback.
-                    if frame is not None and not frame.hand_overlay_pending:
-                        self.latest_camera_frames[camera_name] = frame
-                        if topic_type != "compressed":
-                            self._last_webrtc_fallback_jpeg_at[camera_name] = frame.received_monotonic
-                    self.camera_frame_times[camera_name].append(now)
-                self._maybe_queue_webrtc_frame(camera_name, topic_type, msg, frame)
-            except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the worker
-                self.get_logger().warning(f"frame worker {camera_name}: {exc}")
 
     def _maybe_queue_webrtc_frame(self, camera_name: str, topic_type: str, msg, frame) -> None:
-        """Hand a frame to the webrtc_worker process's send queue, unless
-        nobody's watching that camera over WebRTC right now.
+        self._worker_supervisor._maybe_queue_webrtc_frame(camera_name, topic_type, msg, frame)
 
-        This check has to happen here, before resolving/copying any bytes --
-        moving it to the IPC send thread instead would mean every frame
-        still pays for the resolution work below even with zero viewers,
-        exactly the per-frame cost push_ros_frame() used to skip in-process
-        (see webrtc_stream.py's push_resolved_frame docstring). Gating state
-        comes from webrtc_worker.py's create_session/close_session
-        transitions, relayed over IPC into self._webrtc_has_sessions (see
-        _webrtc_ipc_loop).
-        """
-        if not self._webrtc_has_sessions.get(camera_name):
-            return
-        # A hand-overlay worker has the current JPEG. Sending its raw source
-        # now would interleave undecorated video frames with the late
-        # composite; wait for _apply_composited_hand_overlay to forward the
-        # matching JPEG instead.
-        if frame is not None and frame.hand_overlay_pending:
-            return
-        if topic_type == "compressed":
-            if frame is None or frame.width <= 0 or frame.height <= 0:
-                return
-            data, fmt, width, height = frame.data, "JPEG", frame.width, frame.height
-        else:
-            layout = HwJpegCodec.ros_image_layout(msg)
-            if layout is None:
-                return
-            fmt, width, height = layout
-            data = bytes(msg.data)
-        self._pending_webrtc_frames[camera_name] = (fmt, width, height, data)
-        self._webrtc_frame_event.set()
 
     def _start_webrtc_worker(self) -> "subprocess.Popen":
-        script_path = Path(__file__).resolve().parent / "webrtc_worker.py"
-        env = dict(os.environ)
-        env["INSIGHT_WEBRTC_AUTHKEY"] = self._webrtc_authkey.hex()
-        # JetPack's nvv4l2 encoder loads libnvmmlite_video at runtime. Its
-        # symbols (NvOsSleepMS and video_parser_flush) are supplied by
-        # sibling libraries but are not promoted to global scope reliably in
-        # this container, so the worker can die only after H.264 pipelines
-        # start. Preload the complete linked trio from the host-mounted
-        # NVIDIA directory before importing GStreamer.
-        nvidia_library_dir = Path("/usr/lib/aarch64-linux-gnu/nvidia")
-        multimedia_libraries = (
-            nvidia_library_dir / "libnvos.so",
-            nvidia_library_dir / "libnvvideo.so",
-            nvidia_library_dir / "libnvparser.so",
-        )
-        preload = [str(path) for path in multimedia_libraries if path.exists()]
-        if preload:
-            env["LD_PRELOAD"] = " ".join(preload + [env.get("LD_PRELOAD", "")]).strip()
-        log_path = self.project_root / "outputs" / "webrtc_worker.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_file = open(log_path, "a", buffering=1)
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                str(script_path),
-                "--config",
-                str(self.config_path),
-                "--webrtc-port",
-                str(self.webrtc_port),
-                "--ipc-socket",
-                self._webrtc_ipc_path,
-            ],
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-        )
-        self.get_logger().info(f"webrtc: spawned webrtc_worker.py pid={proc.pid} port={self.webrtc_port}")
-        return proc
+        return self._worker_supervisor._start_webrtc_worker()
+
 
     def stop_webrtc_worker(self) -> None:
-        proc = getattr(self, "_webrtc_proc", None)
-        if proc is None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=3.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=3.0)
+        self._worker_supervisor.stop_webrtc_worker()
+
 
     def _start_hand_overlay_worker(self) -> "subprocess.Popen":
-        script_path = Path(__file__).resolve().parent / "hand_overlay_worker.py"
-        env = dict(os.environ)
-        env["INSIGHT_HANDOVERLAY_AUTHKEY"] = self._hand_overlay_authkey.hex()
-        log_path = self.project_root / "outputs" / "hand_overlay_worker.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_file = open(log_path, "a", buffering=1)
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                str(script_path),
-                "--ipc-socket",
-                self._hand_overlay_ipc_path,
-            ],
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-        )
-        self.get_logger().info(f"hand_overlay: spawned hand_overlay_worker.py pid={proc.pid}")
-        return proc
+        return self._worker_supervisor._start_hand_overlay_worker()
+
 
     def stop_hand_overlay_worker(self) -> None:
-        proc = getattr(self, "_hand_overlay_proc", None)
-        if proc is None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=3.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=3.0)
+        self._worker_supervisor.stop_hand_overlay_worker()
+
 
     def _dispatch_hand_overlay(self, camera_name: str, version: int, jpeg_bytes: bytes, hands: list) -> None:
-        """Fire-and-forget handoff to hand_overlay_worker.py -- called from
-        hand_overlay.compose_hand_overlay_jpeg once it's decided this frame
-        is worth overlaying. Only the newest dispatch per camera is kept
-        (mirrors _pending_webrtc_frames), so a slow worker never backs up
-        the camera's own frame worker thread."""
-        self._pending_hand_overlay_frames[camera_name] = (version, jpeg_bytes, hands)
-        self._hand_overlay_frame_event.set()
+        self._worker_supervisor._dispatch_hand_overlay(camera_name, version, jpeg_bytes, hands)
+
 
     def _hand_overlay_ipc_loop(self) -> None:
-        """Owns the single connection to hand_overlay_worker.py: sends
-        dispatched frames and applies composited results back into
-        latest_camera_frames. Single thread on this side too (mirrors
-        IpcServer in hand_overlay_worker.py) so no lock is needed around
-        the Connection itself."""
-        authkey = self._hand_overlay_authkey
-        while rclpy is not None and rclpy.ok():
-            try:
-                conn = Client(self._hand_overlay_ipc_path, family="AF_UNIX", authkey=authkey)
-            except OSError:
-                time.sleep(1.0)
-                continue
-            try:
-                while rclpy is not None and rclpy.ok():
-                    while conn.poll(0):
-                        message = conn.recv()
-                        if not (isinstance(message, tuple) and len(message) == 3):
-                            continue
-                        camera_name, version, composited = message
-                        self._apply_composited_hand_overlay(camera_name, version, composited)
-                    if self._hand_overlay_frame_event.wait(timeout=0.05):
-                        self._hand_overlay_frame_event.clear()
-                        for camera_name in list(self._pending_hand_overlay_frames.keys()):
-                            payload = self._pending_hand_overlay_frames.pop(camera_name, None)
-                            if payload is None:
-                                continue
-                            conn.send((camera_name,) + payload)
-            except (EOFError, OSError) as exc:
-                self.get_logger().warning(f"hand overlay ipc: lost connection to worker ({exc}); reconnecting")
-            finally:
-                with contextlib.suppress(Exception):
-                    conn.close()
-            time.sleep(1.0)
+        self._worker_supervisor._hand_overlay_ipc_loop()
+
 
     def _apply_composited_hand_overlay(self, camera_name: str, version: int, composited: bytes) -> None:
-        """Patches a worker's composited JPEG into latest_camera_frames.
+        self._worker_supervisor._apply_composited_hand_overlay(camera_name, version, composited)
 
-        The round trip through hand_overlay_worker.py (two process hops
-        plus a GStreamer hardware encode/decode) routinely takes longer
-        than one camera frame period, so by the time a result comes back
-        the raw frame it was dispatched from is almost never still the
-        "current" one anymore -- requiring an exact version match (the
-        first cut of this) silently discarded essentially every composite,
-        which looked exactly like "hand overlay draws nothing" even though
-        detection and compositing were both working. This only guards
-        against applying a composite older than one already applied (so an
-        out-of-order arrival can't flicker backwards); the served frame's
-        own stamp_ns/version are left as whatever they already are --
-        only the pixel bytes change, arriving a frame or two late is
-        invisible at 20-30fps.
-        """
-        if version <= self._hand_overlay_last_applied.get(camera_name, -1):
-            return
-        width, height = self._jpeg_dimensions(composited)
-        with self.camera_frame_lock:
-            current = self.latest_camera_frames.get(camera_name)
-            if current is None:
-                return
-            self._hand_overlay_last_applied[camera_name] = version
-            self.latest_camera_frames[camera_name] = CameraFrame(
-                data=composited,
-                stamp_ns=current.stamp_ns,
-                received_monotonic=time.monotonic(),
-                mime_type="image/jpeg",
-                width=width,
-                height=height,
-                version=version,
-            )
-        if self._webrtc_has_sessions.get(camera_name):
-            self._pending_webrtc_frames[camera_name] = ("JPEG", width, height, composited)
-            self._webrtc_frame_event.set()
 
     def _webrtc_ipc_loop(self) -> None:
-        """Owns the single connection to webrtc_worker.py: sends frames the
-        worker actually has viewers for, and relays its session_state
-        updates back into self._webrtc_has_sessions. Single thread on this
-        side too (mirrors IpcServer in webrtc_worker.py) so no lock is
-        needed around the Connection itself."""
-        authkey = self._webrtc_authkey
-        while rclpy is not None and rclpy.ok():
-            try:
-                conn = Client(self._webrtc_ipc_path, family="AF_UNIX", authkey=authkey)
-            except OSError:
-                time.sleep(1.0)
-                continue
-            try:
-                while rclpy is not None and rclpy.ok():
-                    while conn.poll(0):
-                        message = conn.recv()
-                        if isinstance(message, tuple) and len(message) == 3 and message[0] == "session_state":
-                            _, camera_name, has_sessions = message
-                            self._webrtc_has_sessions[camera_name] = bool(has_sessions)
-                    if self._webrtc_frame_event.wait(timeout=0.05):
-                        self._webrtc_frame_event.clear()
-                        for camera_name in list(self._pending_webrtc_frames.keys()):
-                            payload = self._pending_webrtc_frames.pop(camera_name, None)
-                            if payload is None:
-                                continue
-                            conn.send((camera_name,) + payload)
-            except (EOFError, OSError) as exc:
-                self.get_logger().warning(f"webrtc ipc: lost connection to worker ({exc}); reconnecting")
-            finally:
-                with contextlib.suppress(Exception):
-                    conn.close()
-            time.sleep(1.0)
+        self._worker_supervisor._webrtc_ipc_loop()
+
 
     def _webrtc_healthz_loop(self) -> None:
-        """Polls webrtc_worker.py's own /healthz every 5s -- this is the
-        replacement for the old in-process `self.webrtc_streams is not
-        None` check in build_camera_payload. Deliberately dumb (blocking
-        stdlib http.client, short timeout, wide try/except): the worker not
-        being up yet/having crashed/lacking hardware elements must all just
-        read as unavailable here, same as today's fallback-to-polling
-        behavior, not raise."""
-        while rclpy is not None and rclpy.ok():
-            available = False
-            try:
-                conn = http.client.HTTPConnection("127.0.0.1", self.webrtc_port, timeout=2.0)
-                try:
-                    conn.request("GET", "/healthz")
-                    resp = conn.getresponse()
-                    payload = json.loads(resp.read())
-                    available = bool(payload.get("webrtc_available"))
-                finally:
-                    conn.close()
-            except Exception:
-                available = False
-            self._webrtc_available_cached = available
-            time.sleep(5.0)
+        self._worker_supervisor._webrtc_healthz_loop()
+
 
     def _encode_dashboard_frame(
-        self,
-        camera_name: str,
-        topic_type: str,
-        msg: object,
-        decoded_image: Optional[np.ndarray] = None,
+        self, camera_name: str, topic_type: str, msg: object, decoded_image: Optional[np.ndarray] = None
     ) -> Optional[CameraFrame]:
-        stamp_ns = self._stamp_to_ns(msg.header.stamp)
-        received_monotonic = time.monotonic()
-        with self.camera_frame_lock:
-            version = self.camera_frame_versions.get(camera_name, 0) + 1
-            self.camera_frame_versions[camera_name] = version
-        if topic_type == "compressed":
-            data = bytes(msg.data)
-            hand_overlay_pending = False
-            if camera_name in self.hand_overlay_enabled:
-                # Gates the frame and, if worth overlaying, dispatches the
-                # actual decode/draw/re-encode to hand_overlay_worker.py --
-                # see compose_hand_overlay_jpeg's docstring for why that work
-                # can't happen inline here anymore. This tick still serves
-                # the plain passthrough `data`; the composited version lands
-                # asynchronously and patches into latest_camera_frames once
-                # ready (_hand_overlay_ipc_loop), so a served frame is
-                # undecorated for at most one IPC round trip.
-                hand_overlay_pending = self.compose_hand_overlay_jpeg(camera_name, data, version)
-            width, height = self._jpeg_dimensions(data)
-            return CameraFrame(
-                data=data,
-                stamp_ns=stamp_ns,
-                received_monotonic=received_monotonic,
-                mime_type="image/jpeg",
-                width=width,
-                height=height,
-                version=version,
-                hand_overlay_pending=hand_overlay_pending,
-            )
-        if self._hw_jpeg is not None:
-            with track(f"image_encode_hw:{camera_name}"):
-                hw_result = self._hw_jpeg.encode_ros_image(camera_name, msg, quality=82)
-            if hw_result is not None:
-                data, width, height = hw_result
-                return CameraFrame(
-                    data=data,
-                    stamp_ns=stamp_ns,
-                    received_monotonic=received_monotonic,
-                    mime_type="image/jpeg",
-                    width=width,
-                    height=height,
-                    version=version,
-                )
-        image = decoded_image if decoded_image is not None else self._decode_display_image(msg)
-        if image is None:
-            return None
-        with track(f"image_encode:{camera_name}"):
-            ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
-        if not ok:
-            return None
-        height, width = image.shape[:2]
-        return CameraFrame(
-            data=encoded.tobytes(),
-            stamp_ns=stamp_ns,
-            received_monotonic=received_monotonic,
-            mime_type="image/jpeg",
-            width=int(width),
-            height=int(height),
-            version=version,
+        return self._image_pipeline._encode_dashboard_frame(
+            camera_name, topic_type, msg, decoded_image
         )
 
+
     def _decode_display_image(self, msg: object) -> Optional[np.ndarray]:
-        # Display-only decode for raw (non-compressed) streams. mono8/8uc1
-        # is genuinely single-channel at the format level (no chroma exists
-        # to discard), so that shortcut stays. NV12 previously took the same
-        # Y-plane-only shortcut on the assumption its chroma was always
-        # neutral -- live insight3_b samples confirmed real per-frame U/V
-        # content, so that assumption doesn't hold in general. Route it
-        # through the shared full YUV->BGR decoder instead so no color data
-        # is silently dropped.
-        if isinstance(msg, RosImage) and msg.width > 0:
-            encoding = msg.encoding.lower()
-            if encoding in ("mono8", "8uc1"):
-                data = np.frombuffer(msg.data, dtype=np.uint8)
-                return data.reshape((msg.height, msg.width))
-        return self._decode_calibration_message("image", msg)
+        return self._image_pipeline._decode_display_image(msg)
+
 
     @staticmethod
     def _jpeg_dimensions(data: bytes) -> Tuple[int, int]:
-        # Fast JPEG SOF scan so compressed display does not need a full decode.
-        try:
-            index = 2
-            length = len(data)
-            while index + 9 < length:
-                if data[index] != 0xFF:
-                    index += 1
-                    continue
-                marker = data[index + 1]
-                index += 2
-                if marker in {0xD8, 0xD9, 0x01} or 0xD0 <= marker <= 0xD7:
-                    continue
-                if index + 2 > length:
-                    break
-                segment_length = int.from_bytes(data[index:index + 2], byteorder="big")
-                if segment_length < 2 or index + segment_length > length:
-                    break
-                if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
-                    height = int.from_bytes(data[index + 3:index + 5], byteorder="big")
-                    width = int.from_bytes(data[index + 5:index + 7], byteorder="big")
-                    return width, height
-                index += segment_length
-        except Exception:
-            pass
-        return 0, 0
+        return ImagePipeline._jpeg_dimensions(data)
+
 
     def _make_live_alignment_image_callback(self, camera_name: str, topic_type: str):
         def callback(msg) -> None:
@@ -1431,155 +727,28 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self._record_pose_sample(pose.name, sample)
 
     def build_pose_payload(self) -> Dict[str, object]:
-        now = time.monotonic()
-        poses = []
-        hand_entries = []  # payload dicts for visible hands
-        with self.pose_lock:
-            for pose in self.poses:
-                transformed = self.transformed_pose_sample(pose.name)
-                raw_sample = self.latest_pose_sample.get(pose.name)
-                visible = raw_sample is not None and (self.fake_pose or (now - self.last_pose_received_time[pose.name]) <= self.pose_timeout_sec)
-                if transformed is None:
-                    position = [0.0, 0.0, 0.0]
-                    quaternion = [0.0, 0.0, 0.0, 1.0]
-                else:
-                    # Rounded to 0.01mm (position) / 1e-5 (quaternion, unitless) --
-                    # this stream broadcasts at ~20Hz with a full trace history
-                    # (up to max_points) resent every tick, so untruncated
-                    # float64 repr (~17 sig figs) was bloating each message to
-                    # ~60KB and both server-side json.dumps and client-side
-                    # parse/render of that at 20Hz was the actual source of
-                    # the trajectory lag -- far beyond what this visualization
-                    # needs precision-wise.
-                    position = [round(float(value), 5) for value in transformed.position]
-                    quaternion = [round(float(value), 5) for value in transformed.orientation_xyzw]
-                trace_points = self.transformed_trace(pose.name)
-                # np.round over the whole trace in C instead of a 300-iteration
-                # Python loop -- measured ~2x faster, and less GIL hold time
-                # per broadcast tick.
-                trace = np.round(np.asarray(trace_points, dtype=np.float64), 4).tolist() if trace_points else []
-                entry = {
-                    "name": pose.name,
-                    "role": pose.teleop_role,
-                    "visible": visible,
-                    "position": position,
-                    "quaternion_xyzw": quaternion,
-                    "trace": trace,
-                    "avatar_model": pose.avatar_model,
-                    "avatar_scale": pose.avatar_scale,
-                    "avatar_rotation_deg_xyz": [float(value) for value in pose.avatar_rotation_deg_xyz],
-                    "avatar_offset_xyz": [float(value) for value in pose.avatar_offset_xyz],
-                    "gripper_opening": self.gripper_opening_percent(pose.name),
-                }
-                poses.append(entry)
-                if transformed is not None and visible and pose.teleop_role in ("left_hand", "right_hand"):
-                    hand_entries.append(entry)
-        # Stick-figure extra: the latest normalized 21-point hand shape (see
-        # hand_landmarks_for_role; None until a HandEngine camera has
-        # detected that hand), same dashboard frame as `position`.
-        for entry in hand_entries:
-            entry["hand_landmarks"] = self.hand_landmarks_for_role(entry["role"])
-        return {
-            "type": "pose_update",
-            "timestamp_ms": int(time.time() * 1000),
-            "fake_pose": self.fake_pose,
-            "playback_mode": self._playback_mode,
-            "stick_figure_mode": bool(self.stick_figure_mode),
-            "alignment": self.build_alignment_payload(),
-            "poses": poses,
-        }
+        return self._payload_builder.build_pose_payload()
+
 
     def build_alignment_payload(self) -> Dict[str, object]:
-        target_camera = getattr(self, "live_alignment_target_camera", None)
-        inlier_counts = getattr(self, "live_alignment_inlier_counts", {})
-        return {
-            "available": bool(self.live_alignment_available and not self.fake_pose),
-            "active": bool(self.live_alignment_active),
-            "status_text": self.alignment_status_text(),
-            "lock_on_first_solution": bool(self.live_alignment_lock_on_first_solution),
-            "required_samples": int(self.live_alignment_required_samples),
-            "visible_cameras": int(getattr(self, "live_alignment_visible_cameras", 0)),
-            "camera_count": len(self.cameras),
-            "inlier_count": int(0 if target_camera is None else inlier_counts.get(target_camera, 0)),
-            "last_status": str(getattr(self, "live_alignment_last_status", "")),
-            "has_solution": bool(self.world_to_reference),
-            "camera_names": [camera.name for camera in self.cameras],
-        }
+        return self._payload_builder.build_alignment_payload()
+
 
     def build_camera_payload(self) -> Dict[str, object]:
-        now = time.monotonic()
-        cameras = []
-        with self.camera_frame_lock:
-            for camera in self.cameras:
-                frame = self.latest_camera_frames.get(camera.name)
-                frame_times = list(self.camera_frame_times.get(camera.name, []))
-                recent_times = [item for item in frame_times if now - item <= 2.0]
-                fps = 0.0
-                if len(recent_times) >= 2:
-                    span = max(recent_times[-1] - recent_times[0], 1e-6)
-                    fps = (len(recent_times) - 1) / span
-                stale = frame is None or (now - frame.received_monotonic) > self.camera_stale_timeout_sec
-                cameras.append(
-                    {
-                        "name": camera.name,
-                        "label": camera.label,
-                        "topic": camera.topic,
-                        "type": camera.topic_type,
-                        "visible": frame is not None,
-                        "stale": stale,
-                        "stamp_ns": 0 if frame is None else frame.stamp_ns,
-                        "age_ms": None if frame is None else (now - frame.received_monotonic) * 1000.0,
-                        "fps": fps,
-                        "width": 0 if frame is None else frame.width,
-                        "height": 0 if frame is None else frame.height,
-                        "version": 0 if frame is None else frame.version,
-                        "frame_url": f"/api/cameras/{quote(camera.name, safe='')}/frame",
-                        "webrtc_available": self._webrtc_available_cached,
-                        "webrtc_port": self.webrtc_port,
-                        "rotation_deg": camera.rotation_deg,
-                        "row": camera.row,
-                        "column": camera.column,
-                        "row_span": camera.row_span,
-                        "column_span": camera.column_span,
-                    }
-                )
-        return {
-            "type": "camera_update",
-            "timestamp_ms": int(time.time() * 1000),
-            "cameras": cameras,
-        }
+        return self._payload_builder.build_camera_payload()
+
 
     def latest_camera_frame(self, camera_name: str) -> Optional[CameraFrame]:
-        with self.camera_frame_lock:
-            return self.latest_camera_frames.get(camera_name)
+        return self._payload_builder.latest_camera_frame(camera_name)
+
 
     def model_asset_url(self, avatar_model: Optional[str]) -> Optional[str]:
-        if not avatar_model:
-            return None
-        return f"/asset?path={quote(avatar_model, safe='')}"
+        return self._payload_builder.model_asset_url(avatar_model)
+
 
     def build_settings_payload(self) -> Dict[str, object]:
-        hand_cameras = set(getattr(self, "gripper_calibrations", {}).keys())
-        poses = []
-        for pose in self.poses:
-            model_name = Path(pose.avatar_model).name if pose.avatar_model else None
-            entry = {
-                "name": pose.name,
-                "role": pose.teleop_role,
-                "avatar_model": model_name,
-            }
-            if pose.name in hand_cameras:
-                entry["gripper_tracking_available"] = True
-                entry["gripper_tracking_enabled"] = pose.name in self.gripper_tracking_cameras
-            if pose.name in getattr(self, "hand_overlay_available", set()):
-                entry["hand_overlay_available"] = True
-                entry["hand_overlay_enabled"] = pose.name in self.hand_overlay_enabled
-            poses.append(entry)
-        return {
-            "poses": poses,
-            "available_models": AVAILABLE_AVATAR_MODELS,
-            "stick_figure_mode": bool(self.stick_figure_mode),
-        }
+        return self._payload_builder.build_settings_payload()
+
 
     def set_pose_avatar_model(self, pose_name: str, model_file: str) -> PoseSpec:
         pose = next((p for p in self.poses if p.name == pose_name), None)
