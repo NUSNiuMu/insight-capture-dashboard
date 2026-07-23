@@ -2238,9 +2238,9 @@ class WebDashboardServer:
             if elements.get(candidate):
                 software_encoder = candidate
                 break
-        # What the display path actually runs today (JPEG frames over HTTP);
-        # the H.264/webrtc entries above are readiness reporting for the
-        # planned WebRTC transport, not an active pipeline.
+        # active_path is the JPEG fallback capability. Live H.264 transport
+        # runs in the separate webrtc_worker process and is reported per
+        # camera by /api/cameras.
         hw_jpeg = getattr(self.node, "_hw_jpeg", None)
         active_path = "jpeg-hardware-nvjpeg" if hw_jpeg is not None else "jpeg-software"
         notes = []
@@ -2249,11 +2249,11 @@ class WebDashboardServer:
         else:
             notes.append("Display frames are encoded in software (cv2); NVJPEG path unavailable.")
         if hardware_encoder:
-            notes.append(f"Hardware video encoder available for a future WebRTC path: {hardware_encoder}.")
+            notes.append(f"Hardware video encoder available to the WebRTC worker: {hardware_encoder}.")
         else:
             notes.append("No Jetson hardware H.264/H.265 encoder detected on this device.")
         if has_webrtc:
-            notes.append("WebRTC transport dependencies are present (not yet wired up).")
+            notes.append("WebRTC transport dependencies are present; signaling runs in the worker process.")
         else:
             notes.append("WebRTC transport is incomplete; install gstreamer1.0-nice if nice is missing.")
         return {

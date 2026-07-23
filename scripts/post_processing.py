@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import contextlib
 import json
 import os
 import re
@@ -13,8 +14,6 @@ import time
 from collections import deque
 from pathlib import Path
 from typing import Callable, Deque, Dict, List, Optional, Sequence, Set, Tuple
-
-import yaml
 
 from camera_setup import camera_base, camera_info_topic, enabled_cameras, image_topic
 from check_bag import nominal_for
@@ -580,7 +579,7 @@ class RecordingManager:
                     break
                 self._output_lines.append(f"[{label}] {line.rstrip()}")
         finally:
-            with contextlib_suppress():
+            with contextlib.suppress(Exception):
                 stream.close()
 
     def refresh_topic_catalog(self, force: bool = False) -> Dict[str, object]:
@@ -768,7 +767,7 @@ class RecordingManager:
                 except ProcessLookupError:
                     pass
             for process in still_running:
-                with contextlib_suppress(subprocess.TimeoutExpired):
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=3.0)
 
         with self._lock:
@@ -1162,17 +1161,6 @@ class RecordingManager:
                 "sync_to_host_on_stop": self.sync_to_host_on_stop,
                 "sync_status": dict(self.last_sync_status),
             }
-
-
-class contextlib_suppress:
-    def __init__(self, *exceptions):
-        self.exceptions = exceptions or (Exception,)
-
-    def __enter__(self):
-        return None
-
-    def __exit__(self, exc_type, exc, _tb):
-        return exc_type is not None and issubclass(exc_type, self.exceptions)
 
 
 def _read_bag_topics(bag_path: Path) -> List[str]:
