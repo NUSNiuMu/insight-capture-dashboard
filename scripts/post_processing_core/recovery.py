@@ -1,0 +1,183 @@
+"""Power-loss staging recovery, reindex, salvage, and merge."""
+
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from typing import List, Sequence
+
+try:
+    import yaml
+except Exception:  # pragma: no cover - recovery degrades gracefully
+    yaml = None
+
+
+class RecordingRecovery:
+    def __init__(self, owner) -> None:
+        self.owner = owner
+
+    def _recover_orphaned_stagings(self) -> None:
+        """A graceful stop merges rosbags/_staging/<name>/ into rosbags/<name>
+        and removes the staging dir. A power cut leaves the staging dir behind
+        with part bags that hold data but are invisible to the bag list --
+        usually without metadata.yaml (written on clean close), sometimes with
+        a malformed sqlite file (recordings made before the WAL config).
+        For each part: reindex if only the metadata is missing, salvage via
+        `sqlite3 .recover` if the database itself is broken, then merge
+        whatever survived into a normal bag. Data that can't be salvaged is
+        left in place for manual forensics, never deleted.
+        """
+        staging_root = self.owner.rosbag_root / "_staging"
+        if not staging_root.is_dir():
+            return
+        for staging_dir in sorted(p for p in staging_root.iterdir() if p.is_dir()):
+            if staging_dir.name.endswith(".leftover"):
+                continue  # already partially recovered on an earlier boot
+            with self.owner._lock:
+                if self.owner._staging_dir == staging_dir:
+                    continue  # active recording, not an orphan
+            try:
+                self.owner._recover_one_staging(staging_dir)
+            except Exception as exc:  # noqa: BLE001 - one bad orphan must not stop the rest
+                self.owner._recovery_log(f"{staging_dir.name}: recovery failed, leaving data in place: {exc}")
+
+    def _recover_one_staging(self, staging_dir: Path) -> None:
+        part_dirs = sorted(
+            p for p in staging_dir.iterdir() if p.is_dir() and list(p.glob("*.db3"))
+        )
+        if not part_dirs:
+            self.owner._recovery_log(f"{staging_dir.name}: no bag data at all, removing empty leftover")
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            return
+        self.owner._recovery_log(f"{staging_dir.name}: adopting interrupted recording ({len(part_dirs)} part bags)")
+        good_parts: List[Path] = []
+        for part in part_dirs:
+            if (part / "metadata.yaml").is_file() or self.owner._reindex_part(part):
+                good_parts.append(part)
+                continue
+            if self.owner._salvage_part(part) and self.owner._reindex_part(part):
+                good_parts.append(part)
+            else:
+                self.owner._recovery_log(f"{staging_dir.name}/{part.name}: unrecoverable, leaving for forensics")
+        if not good_parts:
+            self.owner._recovery_log(f"{staging_dir.name}: nothing recoverable; staging dir kept")
+            return
+        output_path = self.owner.rosbag_root / staging_dir.name
+        if output_path.exists():
+            output_path = self.owner.rosbag_root / f"{staging_dir.name}_recovered_{time.strftime('%Y%m%d_%H%M%S')}"
+        try:
+            self.owner._convert_merge(good_parts, output_path)
+        except Exception:
+            # A single poisoned part can segfault `ros2 bag convert` (observed
+            # with one salvaged image bag, exit -11). Probe each part alone and
+            # merge only the ones convert can actually read; the poisoned parts
+            # stay behind in staging.
+            self.owner._recovery_log(f"{staging_dir.name}: merged convert failed; probing parts individually")
+            probed = [p for p in good_parts if self.owner._part_converts_cleanly(p)]
+            dropped = [p.name for p in good_parts if p not in probed]
+            if dropped:
+                self.owner._recovery_log(f"{staging_dir.name}: excluding poisoned part(s): {', '.join(dropped)}")
+            if not probed:
+                self.owner._recovery_log(f"{staging_dir.name}: no part survives conversion; staging dir kept")
+                return
+            good_parts = probed
+            self.owner._convert_merge(good_parts, output_path)
+        if len(good_parts) == len(part_dirs):
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        else:
+            # Partial salvage: keep the unrecovered parts for forensics but
+            # drop the merged ones, and mark the dir so the next boot's scan
+            # does not adopt the remainder again (each pass would mint yet
+            # another _recovered_ bag from the same leftovers).
+            for part in good_parts:
+                shutil.rmtree(part, ignore_errors=True)
+            staging_dir.rename(staging_dir.with_name(f"{staging_dir.name}.leftover"))
+        self.owner._recovery_log(
+            f"{staging_dir.name}: recovered {len(good_parts)}/{len(part_dirs)} part bags -> {output_path.name}"
+        )
+
+    def _part_converts_cleanly(self, part: Path) -> bool:
+        probe_dir = part.parent / f".{part.name}.convert_probe"
+        shutil.rmtree(probe_dir, ignore_errors=True)
+        try:
+            self.owner._convert_merge([part], probe_dir)
+            return True
+        except Exception:
+            return False
+        finally:
+            shutil.rmtree(probe_dir, ignore_errors=True)
+
+    def _reindex_part(self, part: Path) -> bool:
+        env = os.environ.copy()
+        env["ROS_DOMAIN_ID"] = str(self.owner.ros_domain_id)
+        result = subprocess.run(
+            ["ros2", "bag", "reindex", "-s", "sqlite3", str(part)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
+        )
+        return result.returncode == 0 and (part / "metadata.yaml").is_file()
+
+    def _salvage_part(self, part: Path) -> bool:
+        """Rebuild a malformed sqlite database from its readable pages.
+
+        Streams `sqlite3 old .recover | sqlite3 new` (the dump can be GBs,
+        so no shell and no buffering the SQL in memory), then swaps the
+        rebuilt file in. The corrupt original is only deleted after the
+        rebuilt one opens and contains messages.
+        """
+        db_files = sorted(part.glob("*.db3"))
+        if not db_files:
+            return False
+        source = db_files[0]
+        rebuilt = source.with_suffix(".db3.rebuilt")
+        rebuilt.unlink(missing_ok=True)
+        dump = subprocess.Popen(["sqlite3", str(source), ".recover"], stdout=subprocess.PIPE)
+        load = subprocess.Popen(["sqlite3", str(rebuilt)], stdin=dump.stdout)
+        dump.stdout.close()
+        load.wait()
+        dump.wait()
+        try:
+            import sqlite3 as _sqlite3
+
+            conn = _sqlite3.connect(f"file:{rebuilt}?mode=ro", uri=True)
+            messages = conn.execute("SELECT count(*) FROM messages").fetchone()[0]
+            conn.close()
+        except Exception:
+            messages = 0
+        if messages <= 0:
+            rebuilt.unlink(missing_ok=True)
+            return False
+        # Clear stale WAL/journal companions along with the corrupt db --
+        # they belong to the old file and would poison the rebuilt one.
+        for leftover in part.glob(f"{source.name}-*"):
+            leftover.unlink(missing_ok=True)
+        source.unlink()
+        rebuilt.rename(source)
+        self.owner._recovery_log(f"{part.parent.name}/{part.name}: salvaged {messages} messages from malformed database")
+        return True
+
+    def _recovery_log(self, message: str) -> None:
+        line = f"[recovery] {message}"
+        self.owner._output_lines.append(line)
+        print(line, flush=True)
+
+    def _convert_merge(self, part_bags: Sequence[Path], output_path: Path) -> None:
+        if output_path.exists():
+            shutil.rmtree(output_path)
+        config_path = output_path.parent / f".{output_path.name}.convert.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            yaml.safe_dump({"output_bags": [{"uri": str(output_path), "storage_id": "sqlite3", "all": True}]})
+            if yaml is not None
+            else f'output_bags:\n  - uri: "{output_path}"\n    storage_id: sqlite3\n    all: true\n'
+        )
+        cmd = ["ros2", "bag", "convert"]
+        for bag in part_bags:
+            cmd += ["-i", str(bag)]
+        cmd += ["-o", str(config_path)]
+        env = os.environ.copy()
+        env["ROS_DOMAIN_ID"] = str(self.owner.ros_domain_id)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        config_path.unlink(missing_ok=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ros2 bag convert failed (exit {result.returncode}): {result.stdout[-2000:]}")

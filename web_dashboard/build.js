@@ -55,6 +55,7 @@ copyFile(path.join(srcDir, "optimization.html"), path.join(distDir, "optimizatio
 copyFile(path.join(srcDir, "settings.html"), path.join(distDir, "settings.html"));
 copyTree(path.join(srcDir, "shared"), path.join(staticDir, "shared"));
 copyTree(path.join(srcDir, "camera"), path.join(staticDir, "camera"));
+copyTree(path.join(srcDir, "spatial"), path.join(staticDir, "spatial"));
 copyTree(path.join(srcDir, "pages"), path.join(staticDir, "pages"));
 copyFile(path.join(srcDir, "styles.css"), path.join(staticDir, "styles.css"));
 copyFile(path.join(srcDir, "fonts", "InterVariable.woff2"), path.join(staticDir, "fonts", "InterVariable.woff2"));
