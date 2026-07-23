@@ -2328,53 +2328,15 @@ class WebDashboardServer:
             return web.json_response({"error": "Access denied."}, status=403)
         if not bag_path.exists():
             return web.json_response({"error": "Bag not found."}, status=404)
-        # Image streams are audited while recording from their original
-        # headers, so this result is immediate even for a multi-GB bag.  Do
-        # not launch the expensive all-topic scan again when the user only
-        # needs the camera-capture verdict at stop time.
-        live_audit_path = bag_path / "image_header_audit.json"
-        if live_audit_path.is_file():
-            try:
-                audit = json.loads(live_audit_path.read_text())
-                raw_topics = audit.get("topics", {})
-                topics = []
-                for name, item in sorted(raw_topics.items()):
-                    frames = int(item.get("frames", 0))
-                    missing = int(item.get("missing", 0))
-                    total = frames + missing
-                    loss_pct = missing / total * 100 if total else 100.0
-                    topics.append({
-                        "name": name,
-                        "ok": bool(item.get("ok")),
-                        "msgs": frames,
-                        "avg_hz": item.get("observed_hz"),
-                        "nominal_hz": item.get("nominal_hz"),
-                        "missing": missing,
-                        "loss_pct": round(loss_pct, 2),
-                        "gap_events": int(item.get("gap_events", 0)),
-                    })
-                failed = [item["name"] for item in topics if not item["ok"]]
-                report = {
-                    "bag": bag_name,
-                    "path": str(bag_path),
-                    "ok": bool(audit.get("ok")) and not failed,
-                    "failed_topics": failed,
-                    "topics": topics,
-                    "method": "live_image_header_audit",
-                    "scope": "image_streams",
-                    "max_loss_pct": 0.0,
-                    "checked_at_epoch_s": time.time(),
-                }
-            except (OSError, ValueError, TypeError) as exc:
-                return web.json_response({"error": f"Invalid live image audit: {exc}"}, status=422)
-        else:
-            loop = asyncio.get_event_loop()
-            try:
-                # Exact mode scans header-stamp continuity. It runs off the
-                # event loop so multi-GB verification does not stall live video.
-                report = await loop.run_in_executor(None, analyze_bag, bag_path)
-            except ValueError as exc:
-                return web.json_response({"error": str(exc)}, status=422)
+        loop = asyncio.get_event_loop()
+        try:
+            # SQLite aggregates provide each topic's count and active time
+            # window without reading any frame payloads.
+            report = await loop.run_in_executor(
+                None, lambda: analyze_bag(bag_path, deep=False)
+            )
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=422)
         # Persisted next to scores/optimized so list_rosbags can surface a
         # per-bag integrity badge without re-scanning gigabytes per listing.
         integrity_dir = self.results_root / "integrity"

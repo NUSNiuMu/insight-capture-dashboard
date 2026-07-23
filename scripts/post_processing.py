@@ -201,12 +201,8 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         topics.append(image_topic(namespace, image_stream))
         cov_stream = str(camera.get("dashboard_cov_stream", "vio_image_cov"))
         topics.append(f"{camera_base(namespace)}/{cov_stream}")
-        # HandEngine landmarks (device-side detection, e.g. insight9_a). Only
-        # cameras that actually run HandEngine publish these; for the rest the
-        # topic simply records nothing. Recorded by default so replayed
-        # sessions can drive the hand-skeleton overlays (2D image + 3D scene).
-        topics.append(f"{camera_base(namespace)}/hand")
-        topics.append(f"{camera_base(namespace)}/hand_keypoints")
+        # HandEngine streams remain available for explicit selection in the
+        # Recording page, but are optional analysis data and not default.
     return _normalize_topics(topics)
 
 

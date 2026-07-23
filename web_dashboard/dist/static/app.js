@@ -99,6 +99,7 @@ const cameraPollState = new Map();
 let maximizedCameraName = null;
 let alignmentBusy = false;
 let recordingBusy = false;
+let recordingActive = false;
 let scoringBusy = false;
 let scoringPollTimer = null;
 let recordTopicRefreshBusy = false;
@@ -124,6 +125,7 @@ const keptPoints = new Map();
 const POSE_STREAM_STALE_MS = 4000;
 let activeWs = null;
 let lastPoseMessageAt = 0;
+let pageUnloading = false;
 
 const CAMERA_FPS_WINDOW_MS = 1500;
 const CAMERA_POLL_INTERVAL_MS = 50;
@@ -389,6 +391,9 @@ function connect() {
   ws.onclose = () => {
     if (activeWs === ws) {
       activeWs = null;
+    }
+    if (pageUnloading) {
+      return;
     }
     if (modelStatus) {
       modelStatus.textContent = "Pose stream disconnected, retrying...";
@@ -762,6 +767,7 @@ function collectSelectedRecordTopics() {
 
 function renderRecordingStatus(status) {
   const active = Boolean(status && status.recording);
+  recordingActive = active;
   const outputPath = (status && status.output_path) || "";
   if (recordingStatus) {
     recordingStatus.textContent = active ? `Recording to ${outputPath}` : "Recording idle";
@@ -1632,6 +1638,9 @@ function maybeStartCameraWebRtc(camera, panel) {
 // scheduleWebRtcRetry's retries call back in without it, so it falls back
 // to whatever the previous attempt already cached in cameraWebRtc's state.
 function startCameraWebRtc(cameraName, panel, webrtcPort) {
+  if (pageUnloading) {
+    return;
+  }
   const previous = cameraWebRtc.get(cameraName);
   const port = webrtcPort || (previous && previous.webrtcPort);
   if (!port) {
@@ -1736,6 +1745,9 @@ function startCameraWebRtc(cameraName, panel, webrtcPort) {
 }
 
 function scheduleWebRtcRetry(cameraName, panel) {
+  if (pageUnloading) {
+    return;
+  }
   const state = cameraWebRtc.get(cameraName);
   if (!state || state.retryTimer) {
     return;
@@ -1788,6 +1800,32 @@ function stopCameraWebRtc(cameraName) {
   try { if (state.ws) state.ws.close(); } catch {}
   cameraWebRtc.delete(cameraName);
 }
+
+// Prevent an old page's WebRTC retries and sockets from overlapping the
+// sessions started by the destination page during navigation.
+window.addEventListener("pagehide", () => {
+  pageUnloading = true;
+  if (activeWs) {
+    try { activeWs.close(); } catch {}
+    activeWs = null;
+  }
+  for (const cameraName of Array.from(cameraWebRtc.keys())) {
+    stopCameraWebRtc(cameraName);
+  }
+  if (engine) {
+    engine.stopRenderLoop();
+  }
+});
+
+// Recording continues in the backend after the tab closes. Warn before a
+// tab/window close or full-page navigation so it is not mistaken for Stop.
+window.addEventListener("beforeunload", (event) => {
+  if (!recordingActive) {
+    return;
+  }
+  event.preventDefault();
+  event.returnValue = "";
+});
 
 function updateCameraFps(cameraName, fps) {
   const pollState = cameraPollState.get(cameraName);

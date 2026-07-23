@@ -22,14 +22,11 @@ Two modes:
     cameras themselves out. Keep --deep for that kind of triage; it also
     reports per-gap detail (gap_events / worst_gaps).
 
-  - --fast: per-topic message counts and whole-bag duration from
-    metadata.yaml only. This is useful for a quick estimate, but it is not
-    an integrity verdict: independently stopped recorders can leave a
-    trailing IMU/VIO-only interval, which makes whole-bag duration falsely
-    report missing image frames even when every image header is continuous.
-
-    Bags without a readable metadata.yaml (e.g. power-loss orphans before
-    recovery) automatically use exact mode even when --fast was requested.
+  - --fast: a SQLite aggregate query per topic (message count plus each
+    topic's first/last recorder timestamp).  It never reads message payloads
+    and therefore stays quick for large image bags.  Each topic is compared
+    with its own active time window, so a topic that ends late cannot make
+    another topic look as if it dropped frames.
 
 Used two ways:
   - CLI (host or `docker exec`):
@@ -72,7 +69,6 @@ NOMINAL_HZ = [
     # additional drop below it.
     ("vio_100hz", 99.0),
     ("vio_image_cov", 20.0),
-    ("tf_static", None),
 ]
 
 DEFAULT_MAX_LOSS_PCT = 0.5
@@ -99,6 +95,28 @@ def nominal_for(topic: str) -> Optional[float]:
     return None
 
 
+def is_latched_static_topic(topic: str) -> bool:
+    """True for static TF: a latched one-shot stream, not a periodic one."""
+    return topic.rstrip("/").endswith("/tf_static")
+
+
+def latched_static_result(name: str, msgs: int) -> Dict[str, object]:
+    """Presence check for tf_static; an FPS expectation would be invalid."""
+    ok = msgs >= 1
+    return {
+        "name": name,
+        "ok": ok,
+        "msgs": msgs,
+        "avg_hz": 0.0,
+        "audit": "latched_static_presence",
+        "expected_messages_min": 1,
+        "error": (
+            "static transform recorded; latched topic requires at least 1 message (no FPS applies)"
+            if ok else "missing static transform; latched topic requires at least 1 message"
+        ),
+    }
+
+
 def header_stamp_ns(blob: bytes) -> int:
     sec, nsec = struct.unpack_from("<iI", blob, 4)
     return sec * 1_000_000_000 + nsec
@@ -116,52 +134,82 @@ def gap_stats(ts, nominal_hz):
     ]
 
 
-def _read_metadata_counts(bag_dir: Path):
-    """(duration_s, {topic: count}) from metadata.yaml, or None if unusable."""
-    meta_file = bag_dir / "metadata.yaml"
-    if not meta_file.is_file():
-        return None
-    try:
-        import yaml
-        info = yaml.safe_load(meta_file.read_text())["rosbag2_bagfile_information"]
-        duration_s = info["duration"]["nanoseconds"] / 1e9
-        counts = {
-            entry["topic_metadata"]["name"]: int(entry["message_count"])
-            for entry in info["topics_with_message_count"]
-        }
-    except Exception:
-        return None
-    if duration_s <= 0 or not counts:
-        return None
-    return duration_s, counts
+def _read_topic_windows(bag_dir: Path) -> Dict[str, Dict[str, int]]:
+    """Return count and first/last recorder timestamps for every topic.
+
+    SQLite evaluates these aggregates without returning the CDR ``data``
+    blobs, making this suitable for a fast dashboard check even on large
+    image bags.  All split bag files are combined by topic name.
+    """
+    db3_files = sorted(glob.glob(str(bag_dir / "*.db3")))
+    if not db3_files:
+        raise ValueError(f"no .db3 file in {bag_dir}")
+    windows: Dict[str, Dict[str, int]] = {}
+    for db3 in db3_files:
+        try:
+            conn = sqlite3.connect(f"file:{db3}?mode=ro", uri=True)
+            with conn:
+                rows = conn.execute(
+                    "SELECT topics.name, COUNT(*), MIN(messages.timestamp), MAX(messages.timestamp) "
+                    "FROM messages JOIN topics ON messages.topic_id = topics.id "
+                    "GROUP BY messages.topic_id"
+                ).fetchall()
+            conn.close()
+        except sqlite3.Error as exc:
+            raise ValueError(f"cannot read {db3}: {exc}") from exc
+        for name, count, first_ns, last_ns in rows:
+            item = windows.setdefault(name, {"msgs": 0, "first_ns": first_ns, "last_ns": last_ns})
+            item["msgs"] += int(count)
+            item["first_ns"] = min(item["first_ns"], int(first_ns))
+            item["last_ns"] = max(item["last_ns"], int(last_ns))
+    return windows
 
 
 def _analyze_fast(
-    bag_dir: Path, duration_s: float, counts: Dict[str, int],
-    max_loss_pct: float, warmup_s: float,
+    bag_dir: Path, max_loss_pct: float, warmup_s: float,
 ) -> List[Dict[str, object]]:
-    """Rate + loss %% per topic from counts alone (no database read)."""
+    """Fast per-topic loss estimate using count and each topic's own span."""
+    windows = _read_topic_windows(bag_dir)
     topics: List[Dict[str, object]] = []
-    for name in sorted(counts):
+    for name in sorted(windows):
+        item = windows[name]
+        msgs = item["msgs"]
+        span_s = max(0.0, (item["last_ns"] - item["first_ns"]) / 1e9)
+        avg_hz = (msgs - 1) / span_s if span_s > 0 and msgs > 1 else 0.0
+        if is_latched_static_topic(name):
+            topics.append(latched_static_result(name, msgs))
+            continue
         nominal = nominal_for(name)
         if nominal is None:
+            # Keep event-driven and unconfigured custom streams visible in
+            # an all-topic report.  Counts alone have no expected-rate
+            # baseline for these streams, so a missing message cannot be
+            # distinguished from an event that was never published.
+            topics.append({
+                "name": name,
+                "ok": True,
+                "msgs": msgs,
+                "avg_hz": round(avg_hz, 2),
+                "audit": "unconfigured_rate",
+                "error": "recorded; no nominal rate configured, so drops cannot be calculated",
+            })
             continue
-        msgs = counts[name]
         if msgs < 2:
             topics.append({
                 "name": name, "ok": False, "msgs": msgs,
                 "error": f"only {msgs} message(s)",
             })
             continue
-        avg_hz = msgs / duration_s
-        # Expected over the whole duration, minus a warmup allowance (frames
-        # a settling subscription may legitimately have missed at the start).
-        expected = duration_s * nominal
-        missing = max(0, round(expected - warmup_s * nominal) - msgs)
+        # Include both endpoints: a 30 Hz topic spanning 10 seconds should
+        # have roughly 301 samples, not 300.  Crucially this is the topic's
+        # own span, never the bag-wide duration.
+        expected = max(1, round(span_s * nominal + 1 - warmup_s * nominal))
+        missing = max(0, expected - msgs)
         loss_pct = missing / expected * 100 if expected > 0 else 0.0
         topics.append({
             "name": name,
             "ok": loss_pct <= max_loss_pct,
+            "audit": "timestamp_aggregate",
             "msgs": msgs,
             "avg_hz": round(avg_hz, 2),
             "nominal_hz": nominal,
@@ -187,6 +235,12 @@ def _analyze_deep(
     topics: List[Dict[str, object]] = []
     with conn:
         for tid, name in sorted(topic_names.items(), key=lambda kv: kv[1]):
+            if is_latched_static_topic(name):
+                msgs = int(conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE topic_id=?", (tid,)
+                ).fetchone()[0])
+                topics.append(latched_static_result(name, msgs))
+                continue
             nominal = nominal_for(name)
             if nominal is None:
                 continue
@@ -236,22 +290,17 @@ def analyze_bag(
     Raises ValueError when the bag has no readable .db3 file (deep mode /
     fallback) or no usable metadata.
 
-    Exact mode (default) scans header stamps. Fast mode is an explicitly
-    requested metadata estimate; bags without readable metadata fall back
-    to the exact scan.
+    Exact mode (default) scans header stamps. Fast mode uses timestamp
+    aggregates; it lists every recorded topic, while only topics with a
+    nominal-rate baseline can receive a loss verdict.
     """
     bag_dir = Path(bag_dir)
     method = "deep_scan"
     if deep:
         topics = _analyze_deep(bag_dir, max_loss_pct, warmup_s)
     else:
-        meta = _read_metadata_counts(bag_dir)
-        if meta is not None:
-            duration_s, counts = meta
-            topics = _analyze_fast(bag_dir, duration_s, counts, max_loss_pct, warmup_s)
-            method = "metadata_counts"
-        else:
-            topics = _analyze_deep(bag_dir, max_loss_pct, warmup_s)
+        topics = _analyze_fast(bag_dir, max_loss_pct, warmup_s)
+        method = "timestamp_aggregates"
 
     failed = [t["name"] for t in topics if not t["ok"]]
     return {
@@ -289,7 +338,7 @@ def main():
     parser.add_argument("--warmup", type=float, default=DEFAULT_WARMUP_S,
                         help=f"seconds forgiven at each topic's start (default {DEFAULT_WARMUP_S})")
     parser.add_argument("--fast", action="store_true",
-                        help="metadata-only rate estimate; not an exact integrity verdict")
+                        help="fast per-topic timestamp aggregate; does not read message payloads")
     parser.add_argument("--deep", action="store_true",
                         help="deprecated compatibility alias; exact mode is already the default")
     args = parser.parse_args()
@@ -303,8 +352,6 @@ def main():
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)
 
-    if report["method"] == "deep_scan" and args.fast:
-        print("(no usable metadata.yaml -- fell back to the exact scan)\n")
     for topic in report["topics"]:
         verdict = "ok  " if topic["ok"] else "FAIL"
         print(f"{verdict}  {topic['name']}")
