@@ -78,18 +78,18 @@ class PayloadBuilder:
         }
 
     def build_alignment_payload(self) -> Dict[str, object]:
-        target_camera = getattr(self, "live_alignment_target_camera", None)
-        inlier_counts = getattr(self, "live_alignment_inlier_counts", {})
+        target_camera = getattr(self.owner, "live_alignment_target_camera", None)
+        inlier_counts = getattr(self.owner, "live_alignment_inlier_counts", {})
         return {
             "available": bool(self.owner.live_alignment_available and not self.owner.fake_pose),
             "active": bool(self.owner.live_alignment_active),
             "status_text": self.owner.alignment_status_text(),
             "lock_on_first_solution": bool(self.owner.live_alignment_lock_on_first_solution),
             "required_samples": int(self.owner.live_alignment_required_samples),
-            "visible_cameras": int(getattr(self, "live_alignment_visible_cameras", 0)),
+            "visible_cameras": int(getattr(self.owner, "live_alignment_visible_cameras", 0)),
             "camera_count": len(self.owner.cameras),
             "inlier_count": int(0 if target_camera is None else inlier_counts.get(target_camera, 0)),
-            "last_status": str(getattr(self, "live_alignment_last_status", "")),
+            "last_status": str(getattr(self.owner, "live_alignment_last_status", "")),
             "has_solution": bool(self.owner.world_to_reference),
             "camera_names": [camera.name for camera in self.owner.cameras],
         }
@@ -147,7 +147,7 @@ class PayloadBuilder:
         return f"/asset?path={quote(avatar_model, safe='')}"
 
     def build_settings_payload(self) -> Dict[str, object]:
-        hand_cameras = set(getattr(self, "gripper_calibrations", {}).keys())
+        hand_cameras = set(getattr(self.owner, "gripper_calibrations", {}).keys())
         poses = []
         for pose in self.owner.poses:
             model_name = Path(pose.avatar_model).name if pose.avatar_model else None
@@ -159,7 +159,7 @@ class PayloadBuilder:
             if pose.name in hand_cameras:
                 entry["gripper_tracking_available"] = True
                 entry["gripper_tracking_enabled"] = pose.name in self.owner.gripper_tracking_cameras
-            if pose.name in getattr(self, "hand_overlay_available", set()):
+            if pose.name in getattr(self.owner, "hand_overlay_available", set()):
                 entry["hand_overlay_available"] = True
                 entry["hand_overlay_enabled"] = pose.name in self.owner.hand_overlay_enabled
             poses.append(entry)

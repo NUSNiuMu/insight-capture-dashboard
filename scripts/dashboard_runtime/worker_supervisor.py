@@ -101,7 +101,7 @@ class WorkerSupervisor:
         return proc
 
     def stop_webrtc_worker(self) -> None:
-        proc = getattr(self, "_webrtc_proc", None)
+        proc = getattr(self.owner, "_webrtc_proc", None)
         if proc is None:
             return
         proc.terminate()
@@ -133,7 +133,7 @@ class WorkerSupervisor:
         return proc
 
     def stop_hand_overlay_worker(self) -> None:
-        proc = getattr(self, "_hand_overlay_proc", None)
+        proc = getattr(self.owner, "_hand_overlay_proc", None)
         if proc is None:
             return
         proc.terminate()
