@@ -745,7 +745,9 @@ class RecordingManager:
                     audit_topics = self._image_header_audit.get("topics", {})
                     verdict = "PASS" if self._image_header_audit.get("ok") else "FAIL"
                     details = ", ".join(
-                        f"{topic}: {item.get('frames', 0)} frames, {item.get('missing', 0)} missing"
+                        f"{topic}: {item.get('frames', 0)} frames, "
+                        f"{item.get('missing', 0)} missing, "
+                        f"{item.get('writer_queue_dropped', 0)} writer drops"
                         for topic, item in sorted(audit_topics.items())
                     )
                     self._output_lines.append(f"[_images] live header audit {verdict} -- {details}")

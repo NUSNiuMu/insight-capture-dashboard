@@ -36,6 +36,7 @@ try:
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
     from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
+    from rclpy.qos_event import SubscriptionEventCallbacks
     from sensor_msgs.msg import CameraInfo
     from sensor_msgs.msg import CompressedImage, Image as RosImage
     from vision_msgs.msg import Detection2DArray
@@ -49,6 +50,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     ReliabilityPolicy = None
     HistoryPolicy = None
     DurabilityPolicy = None
+    SubscriptionEventCallbacks = None
     CameraInfo = None
     CompressedImage = None
     RosImage = None
@@ -320,6 +322,19 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self.live_alignment_image_lock = threading.Lock()
         self.live_alignment_solution_lock = threading.Lock()
         self.ros_callback_group = ReentrantCallbackGroup()
+        # Humble creates one default "incompatible QoS" waitable for every
+        # subscription. On this Jetson/rmw_fastrtps combination the rclpy
+        # executor has repeatedly segfaulted while enumerating those
+        # QoSEventHandler objects (qos_event.py get_num_entities/is_ready/
+        # __enter__), especially while rosbag recorder participants are
+        # leaving during stop/merge. We do not consume QoS event callbacks;
+        # the explicit profiles below are fixed and validated at startup.
+        # Disable only the unused default handlers so normal subscription
+        # data callbacks remain unchanged and the crashing waitables are not
+        # added to the executor at all.
+        self.subscription_event_callbacks = SubscriptionEventCallbacks(
+            use_default_callbacks=False
+        )
         self.dashboard_subscriptions = []
         # Recording feeds off this node's own image subscriptions instead of
         # a second `ros2 bag record` reader -- see inprocess_bag_writer.py
@@ -425,6 +440,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 self._make_pose_callback(pose.name, is_live=True),
                 pose_qos,
                 callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.append(sub)
             # See _make_dashboard_image_callback: same live/playback topic
@@ -435,6 +451,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 self._make_pose_callback(pose.name, is_live=False),
                 pose_qos,
                 callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.append(playback_sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
@@ -469,6 +486,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 self._make_dashboard_image_callback(camera.name, camera.topic_type, also_alignment=also_alignment),
                 image_qos,
                 callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.append(sub)
             # Playback shadow: PlaybackManager remaps `ros2 bag play` onto
@@ -482,6 +500,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 ),
                 image_qos,
                 callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.append(playback_sub)
             threading.Thread(
@@ -510,6 +529,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 lambda msg, name=camera.name: self._on_hand_boxes(name, msg),
                 hand_qos,
                 callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
             )
             kp_sub = self.create_subscription(
                 Detection2DArray,
@@ -517,6 +537,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 lambda msg, name=camera.name: self._on_hand_keypoints(name, msg),
                 hand_qos,
                 callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
             )
             # Playback shadow: same live/bagplay dual-subscription split as
             # images/poses, so replayed hand landmarks drive the overlays
@@ -527,6 +548,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 lambda msg, name=camera.name: self._on_hand_boxes(name, msg, is_live=False),
                 hand_qos,
                 callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
             )
             kp_playback_sub = self.create_subscription(
                 Detection2DArray,
@@ -534,6 +556,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 lambda msg, name=camera.name: self._on_hand_keypoints(name, msg, is_live=False),
                 hand_qos,
                 callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.extend(
                 [box_sub, kp_sub, box_playback_sub, kp_playback_sub]
@@ -572,6 +595,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                     self._make_live_alignment_image_callback(camera_name, calib_type),
                     image_qos,
                     callback_group=self.ros_callback_group,
+                    event_callbacks=self.subscription_event_callbacks,
                 )
                 self.dashboard_subscriptions.append(calib_sub)
             else:
@@ -586,6 +610,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 self._make_camera_info_callback(camera_name),
                 make_qos(depth=2),
                 callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.append(info_sub)
             self.get_logger().info(
@@ -787,8 +812,21 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             for topic, output_path in topic_output_paths.items():
                 writer = writers_by_path.get(output_path)
                 if writer is None:
+                    # The compressed Insight9 stream averages ~133 KiB at
+                    # 30 Hz. Its two 128-entry writer stages only absorb
+                    # about 8.5s total; a measured transient SQLite/writeback
+                    # stall exceeded that and rejected 109 otherwise
+                    # continuous frames. A later shared writeback stall also
+                    # overflowed both 20 Hz raw writers at depth 128 (86
+                    # frames each) while their received header sequences
+                    # remained continuous. Use 512 for every image writer:
+                    # about 34s of two-stage headroom for the compressed
+                    # stream and 51s for each raw stream. The two raw streams'
+                    # worst-case combined backlog is about 1 GiB, within this
+                    # machine's measured memory headroom.
                     writer = InProcessBagWriter(
                         output_path,
+                        max_queue=512,
                         storage_config_uri=str(STORAGE_CONFIG_PATH) if STORAGE_CONFIG_PATH.is_file() else "",
                     )
                     writers_by_path[output_path] = writer
@@ -811,12 +849,20 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             audit = self._finalize_image_header_audit()
             self._recording_header_audit = {}
         dropped = 0
+        dropped_by_topic: Dict[str, int] = {}
         for writer in writers.values():
             writer.close()
             dropped += writer.dropped_count
+            for topic, count in writer.dropped_by_topic.items():
+                dropped_by_topic[topic] = dropped_by_topic.get(topic, 0) + int(count)
         # A continuous received-header sequence is not sufficient if the
         # bounded disk queue rejected a frame after this callback observed it.
         audit["writer_queue_dropped"] = dropped
+        audit["writer_queue_dropped_by_topic"] = dropped_by_topic
+        for topic, topic_audit in audit.get("topics", {}).items():
+            topic_dropped = int(dropped_by_topic.get(topic, 0))
+            topic_audit["writer_queue_dropped"] = topic_dropped
+            topic_audit["ok"] = bool(topic_audit.get("ok")) and topic_dropped == 0
         audit["ok"] = bool(audit["ok"]) and dropped == 0
         return {"dropped": dropped, "image_header_audit": audit}
 

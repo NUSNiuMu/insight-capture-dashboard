@@ -16,7 +16,7 @@ blips):
                fleet-wide stats (2026-07-14, 192.168.19.222: 53 samples,
                vio_image_cov across every locally recorded bag x camera
                with duration >= 5s, short smoke-test recordings excluded):
-               median_L = -3.9195 (trace ~1.2e-4) is set to score 80 (not
+               median_L = -3.9195 (trace ~1.2e-4) is set to score 88 (not
                ~75 as an untouched median would under this logistic curve)
                -- a typical/"fair" recording on this hardware is meant to
                read as a solidly good score, with headroom above it for
@@ -24,10 +24,14 @@ blips):
                scale. Sigma (spread) is kept at the prior value, 0.412
                decades -- re-deriving it needs many more samples than we
                had to be reliable, and changing the anchor alone already
-               satisfies the goal here. Recalibrate by recomputing the
-               median over a fresh batch of representative recordings if
-               the hardware or environment changes materially -- scores
-               are only comparable within one calibration.
+               satisfies the goal here. The base covariance standard was
+               relaxed on 2026-07-23: the logistic calibration centre moved
+               from -3.8212 to -3.61310 (1.51e-4 to 2.44e-4), raising a
+               typical local median's base score from 80.0 to 88.0.
+               Recalibrate by
+               recomputing the median over a fresh batch of representative
+               recordings if the hardware or environment changes materially
+               -- scores are only comparable within one calibration.
 
   spike terms  samples above 8 x the bag's own median trace, grouped
                into consecutive runs:
@@ -68,7 +72,7 @@ from rosidl_runtime_py.utilities import get_message
 DEFAULT_TOPIC = "/insight7_a/camera/vio_image_cov"
 
 # Local-machine calibration (see module docstring for provenance).
-DEFAULT_CAL_MEDIAN_L = -3.8212
+DEFAULT_CAL_MEDIAN_L = -3.61310
 DEFAULT_CAL_SIGMA_L = 0.412
 
 SPIKE_FACTOR = 8.0            # spike threshold = SPIKE_FACTOR * median trace
@@ -286,8 +290,8 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_CAL_MEDIAN_L,
         help=(
-            "Calibration: log10 covariance-trace level that maps to 80 points "
-            f"(a typical/'fair' local recording). Default: {DEFAULT_CAL_MEDIAN_L}"
+            "Calibration centre for the base-score logistic in log10 covariance-trace units "
+            f"(higher is more lenient). Default: {DEFAULT_CAL_MEDIAN_L}"
         ),
     )
     parser.add_argument(

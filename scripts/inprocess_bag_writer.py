@@ -18,7 +18,7 @@ means recording never adds a second reader for these topics at all.
 import multiprocessing
 import queue
 import threading
-from typing import Optional
+from typing import Dict, Optional
 
 import rosbag2_py
 from rclpy.serialization import serialize_message
@@ -80,6 +80,8 @@ class InProcessBagWriter:
         self._storage_config_uri = storage_config_uri
         self._queue: "queue.Queue[object]" = queue.Queue(maxsize=max_queue)
         self._dropped = 0
+        self._dropped_by_topic: Dict[str, int] = {}
+        self._drop_lock = threading.Lock()
         self._stop_sentinel = object()
         context = multiprocessing.get_context("spawn")
         self._storage_entries = context.Queue(maxsize=max_queue)
@@ -107,15 +109,29 @@ class InProcessBagWriter:
         try:
             self._queue.put_nowait((topic, msg, stamp_ns))
         except queue.Full:
-            self._dropped += 1
+            with self._drop_lock:
+                self._dropped += 1
+                self._dropped_by_topic[topic] = self._dropped_by_topic.get(topic, 0) + 1
 
     @property
     def dropped_count(self) -> int:
-        return self._dropped
+        with self._drop_lock:
+            return self._dropped
 
-    def close(self, timeout: float = 10.0) -> None:
+    @property
+    def dropped_by_topic(self) -> Dict[str, int]:
+        with self._drop_lock:
+            return dict(self._dropped_by_topic)
+
+    def close(self, timeout: float = 60.0) -> None:
         self._queue.put(self._stop_sentinel)
         self._thread.join(timeout=timeout)
+        if self._thread.is_alive():
+            self._storage_process.terminate()
+            self._storage_process.join(timeout=1.0)
+            raise RuntimeError(
+                f"Timed out draining image serialization queue after {timeout:.0f}s"
+            )
         self._storage_entries.put(None)
         self._storage_process.join(timeout=timeout)
         if self._storage_process.is_alive():
