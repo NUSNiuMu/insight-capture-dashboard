@@ -20,6 +20,18 @@ function copyFile(source, target) {
   fs.copyFileSync(source, target);
 }
 
+function copyTree(source, target) {
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const sourcePath = path.join(source, entry.name);
+    const targetPath = path.join(target, entry.name);
+    if (entry.isDirectory()) {
+      copyTree(sourcePath, targetPath);
+    } else {
+      copyFile(sourcePath, targetPath);
+    }
+  }
+}
+
 // Preserve large vendored files that are not rebuilt from source
 const preserved = {};
 for (const name of PRESERVE_STATIC) {
@@ -41,7 +53,9 @@ copyFile(path.join(srcDir, "recording.html"), path.join(distDir, "recording.html
 copyFile(path.join(srcDir, "scoring.html"), path.join(distDir, "scoring.html"));
 copyFile(path.join(srcDir, "optimization.html"), path.join(distDir, "optimization.html"));
 copyFile(path.join(srcDir, "settings.html"), path.join(distDir, "settings.html"));
-copyFile(path.join(srcDir, "app.js"), path.join(staticDir, "app.js"));
+copyTree(path.join(srcDir, "shared"), path.join(staticDir, "shared"));
+copyTree(path.join(srcDir, "camera"), path.join(staticDir, "camera"));
+copyTree(path.join(srcDir, "pages"), path.join(staticDir, "pages"));
 copyFile(path.join(srcDir, "styles.css"), path.join(staticDir, "styles.css"));
 copyFile(path.join(srcDir, "fonts", "InterVariable.woff2"), path.join(staticDir, "fonts", "InterVariable.woff2"));
 
