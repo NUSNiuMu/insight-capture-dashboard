@@ -7,11 +7,12 @@ POC_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 export DISPLAY="${DISPLAY:-:0}"
 if [[ "$(id -u)" == "0" ]] && id kiosk >/dev/null 2>&1; then
-  export HOME="/home/kiosk"
-  exec runuser -u kiosk --preserve-environment -- "$0" "$@"
+  exec runuser -u kiosk -- "$0" "$@"
 fi
 
 export XDG_RUNTIME_DIR="${INSIGHT_WEBKIT_RUNTIME_DIR:-/tmp/insight-webkit-runtime-$(id -u)}"
+export GST_GL_PLATFORM="${GST_GL_PLATFORM:-egl}"
+export GST_GL_API="${GST_GL_API:-gles2}"
 export GST_PLUGIN_FEATURE_RANK="${GST_PLUGIN_FEATURE_RANK:-nvv4l2decoder:MAX,avdec_h264:NONE,openh264dec:NONE}"
 export GST_DEBUG="${GST_DEBUG:-3,webkit*:6,decodebin*:6,v4l2*:6,nvv4l2decoder:6}"
 export GST_DEBUG_FILE="${GST_DEBUG_FILE:-/tmp/insight-webkit-hwdecode-$(id -u).log}"

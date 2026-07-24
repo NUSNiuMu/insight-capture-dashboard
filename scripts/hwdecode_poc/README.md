@@ -78,6 +78,31 @@ The configuration keeps JIT, Skia, WebGL, GStreamer-GL, and the GTK3
 MiniBrowser, while disabling documentation, introspection, GTK4, and unrelated
 PoC features. `-j2` is deliberate on the 8 GB Jetson NX.
 
+## 4. Inspect the NVMM-to-DMA-BUF boundary
+
+Build the read-only buffer probe against Jetson Multimedia API headers:
+
+```bash
+gcc -O2 -Wall -Wextra -Werror \
+  -I/usr/src/jetson_multimedia_api/include \
+  scripts/hwdecode_poc/inspect_nvmm_buffer.c \
+  -o /tmp/inspect_nvmm_buffer \
+  $(pkg-config --cflags --libs \
+    gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 \
+    gstreamer-allocators-1.0 gstreamer-gl-1.0)
+
+GST_GL_PLATFORM=egl GST_GL_API=gles2 \
+  /tmp/inspect_nvmm_buffer /tmp/hwdecode-test.mp4
+```
+
+The probe decodes through `nvv4l2decoder`, converts to pitch-linear NVMM with
+VIC, prints the underlying `NvBufSurface` plane metadata, duplicates its
+DMA-BUF file descriptor without copying pixels, and feeds that wrapper to
+`glupload`. A successful run must report `fd_valid=yes` and
+`dmabuf_to_glmemory=yes`. Use `GST_DEBUG=glupload:7` to additionally require
+`DirectDmabuf`, `DirectDmabufExternal`, or `Dmabuf`; `Raw Data` is a CPU
+upload and is not a zero-copy pass.
+
 Seeing `nvv4l2decoder` in a log or DOT graph only proves hardware decode
 selection. A zero-copy result additionally requires inspecting the negotiated
 buffers at the WebKit sink for DMA-BUF/GLMemory import, plane metadata,

@@ -66,6 +66,34 @@ Result: `nvv4l2decoder` selection proves NVDEC availability but not browser
 hardware decode. This stack needs an explicit NVMM-to-DMA-BUF/GLMemory bridge,
 or at minimum an NVMM-to-system-memory conversion if performance is sufficient.
 
+## NVMM-to-DMA-BUF bridge feasibility
+
+A read-only C probe decoded the same clip and inserted
+`nvvidconv bl-output=false` before inspecting the NVMM buffer. The resulting
+`NvBufSurface` was pitch-linear `NVBUF_MEM_SURFACE_ARRAY` with:
+
+- a valid DMA-BUF file descriptor in `bufferDesc`;
+- one NV12 allocation shared by both planes;
+- luma offset/stride `0/768`;
+- chroma offset/stride `393216/768`;
+- no DRM modifier.
+
+The probe duplicated only the file descriptor, attached matching
+`GstVideoMeta`, and passed the wrapper to `glupload`. With the default GLX
+selection, GStreamer produced GLMemory but its debug log selected the
+`Raw Data` uploader, which is a CPU upload and therefore not acceptable.
+
+With `GST_GL_PLATFORM=egl`, `GST_GL_API=gles2`, and NVIDIA's EGL vendor
+selected, the context reported `OpenGL ES 3.2 NVIDIA 540.4.0` on
+`NVIDIA Tegra Orin`. `glupload` then selected `DirectDmabufExternal` and
+successfully produced GLMemory. This demonstrates a working no-pixel-copy
+NVMM FD -> DMA-BUF -> EGL external texture boundary on this machine.
+
+Result: a small bridge is technically viable. It must force pitch-linear NVMM,
+wrap the DMA-BUF with correct per-plane metadata, retain the source
+`GstBuffer` until the GL consumer releases it, and run WebKit on EGL/GLES.
+This is not yet an end-to-end browser result.
+
 ## Next go/no-go experiment
 
 Build WebKitGTK/WPE with WebRTC enabled, then test one stream in this order:
@@ -74,8 +102,8 @@ Build WebKitGTK/WPE with WebRTC enabled, then test one stream in this order:
 2. Confirm `nvv4l2decoder` without a software decoder in the pipeline.
 3. Inspect decoder output memory, planes, stride, offsets, DRM modifier, and
    synchronization.
-4. If NVMM is rejected, insert a small bridge that exports the underlying
-   NvBufSurface as standard `GstDmaBufMemory` with complete video metadata.
+4. Insert the validated pitch-linear NVMM-to-DMA-BUF wrapper as a GStreamer
+   element that WebKit's decodebin can autoplug.
 5. Require the browser compositor to import the resulting DMA-BUF/GLMemory.
 6. Only then expand from one stream to three streams plus Babylon.
 
