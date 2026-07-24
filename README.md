@@ -121,7 +121,7 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 3D 页面右上角 `Start Alignment / Stop Alignment` 按钮：不需要命令行参数，随时可以开始/停止标定，适合左边看 RGB、右边控制标定。
 
-Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，支持整组勾选），`Start` 只录勾选的 topic，`Stop` 优雅结束 `ros2 bag record`。输出目录优先级：CLI `--rosbag-dir` > 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
+Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，支持整组勾选），`Start` 只录勾选的 topic，`Stop` 优雅结束 `ros2 bag record`。Insight9 同时检测到双手“拇指向上、四指握拳”持续 0.8 秒时，会用服务器默认 topics 开始手势录制；解除 2 秒后再次保持同一手势可停止，且不会停止网页手动开始的录制。输出目录优先级：CLI `--rosbag-dir` > 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
 
 Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小、duration、message/topic 数量，以及 `outputs/results/{labels,scores,optimized}` 里对应的 label/scoring/optimization 状态。
 

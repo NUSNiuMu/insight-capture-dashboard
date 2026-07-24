@@ -313,6 +313,9 @@ class HandOverlayMixin:
                 stamp_ns=self._stamp_to_ns(msg.header.stamp),
                 hands=hands,
             )
+            gesture_handler = getattr(self, "_handle_hand_gesture_snapshot", None)
+            if gesture_handler is not None:
+                gesture_handler(camera_name, hands, is_live=is_live)
 
             # Update 3D tracks using positional role matching.
             for entry, role in self._assign_hand_roles(camera_name, hands, time.monotonic()):

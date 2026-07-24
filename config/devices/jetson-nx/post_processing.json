@@ -5,5 +5,15 @@
   "sync_rosbag_to_host": true,
   "results_dir": "outputs/results",
   "max_cache_size": 104857600,
-  "record_topics": []
+  "record_topics": [],
+  "gesture_recording": {
+    "enabled": true,
+    "camera": "insight9_a",
+    "hold_sec": 0.8,
+    "hold_gap_sec": 0.15,
+    "release_sec": 2.0,
+    "snapshot_timeout_sec": 0.35,
+    "min_keypoint_score": 0.35,
+    "min_free_ratio": 0.1
+  }
 }

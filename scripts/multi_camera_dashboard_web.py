@@ -68,6 +68,7 @@ from dashboard_web import WebDashboardServer, bagplay_topic
 from dashboard_runtime import (
     CameraFrame,
     CameraSpec,
+    GestureRecordingController,
     ImagePipeline,
     ParticipantWatchdog,
     PayloadBuilder,
@@ -213,6 +214,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         }
         self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
         self._configure_hand_overlay()
+        self._gesture_recording_controller: Optional[GestureRecordingController] = None
         # NVJPEG is optional; call sites retain their cv2 fallback.
         self._hw_jpeg = HwJpegCodec.create(log=self.get_logger().info)
         # WebRTC runs out of process to avoid GIL contention with pose broadcasts.
@@ -539,6 +541,37 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
     def stop_hand_overlay_worker(self) -> None:
         self._worker_supervisor.stop_hand_overlay_worker()
 
+    def configure_gesture_recording(
+        self, recording_manager: RecordingManager, config: Dict[str, object]
+    ) -> None:
+        self.stop_gesture_recording()
+        self._gesture_recording_controller = GestureRecordingController(
+            recording_manager,
+            config,
+            self.get_logger().info,
+        )
+
+    def _handle_hand_gesture_snapshot(
+        self, camera_name: str, hands: List[Dict[str, object]], *, is_live: bool
+    ) -> None:
+        controller = self._gesture_recording_controller
+        if controller is not None:
+            controller.handle_snapshot(camera_name, hands, is_live=is_live)
+
+    def gesture_recording_status(
+        self, recording_status: Optional[Dict[str, object]] = None
+    ) -> Dict[str, object]:
+        controller = self._gesture_recording_controller
+        if controller is None:
+            return {"enabled": False, "state": "disabled", "message": "Gesture recording disabled"}
+        return controller.status(recording_status)
+
+    def stop_gesture_recording(self) -> None:
+        controller = getattr(self, "_gesture_recording_controller", None)
+        if controller is not None:
+            controller.close()
+            self._gesture_recording_controller = None
+
 
     def _dispatch_hand_overlay(self, camera_name: str, version: int, jpeg_bytes: bytes, hands: list) -> None:
         self._worker_supervisor._dispatch_hand_overlay(camera_name, version, jpeg_bytes, hands)
@@ -827,6 +860,10 @@ def main() -> None:
     # (reindex/salvage + merge into a normal bag, in the background).
     recording_manager.start_orphan_recovery()
     node.recording_manager = recording_manager
+    node.configure_gesture_recording(
+        recording_manager,
+        dict(post_processing_config.get("gesture_recording") or {}),
+    )
     if args.start_alignment and node.live_alignment_available and not args.fake_pose:
         node.start_live_alignment()
     executor = MultiThreadedExecutor()
@@ -848,6 +885,7 @@ def main() -> None:
     finally:
         server.stop()
         executor.shutdown()
+        node.stop_gesture_recording()
         node.stop_webrtc_worker()
         node.stop_hand_overlay_worker()
         node.destroy_node()
