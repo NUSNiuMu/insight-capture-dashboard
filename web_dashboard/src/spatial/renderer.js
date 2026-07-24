@@ -38,17 +38,19 @@ const modelWarnings = new Set();
 const trailStates = new Map();
 const handRigs = new Map();
 const keptPoints = new Map();
+const pendingTrailPoses = new Map();
 let keepTrajectory = false;
 let stickFigureMode = false;
+let sceneFrameIntervalMs = 1000 / 20;
 
 if (engine && scene) {
-  const sceneFrameIntervalMs = 1000 / 20;
   let sceneRenderBudgetMs = 0;
   engine.setHardwareScalingLevel(1.4);
   engine.runRenderLoop(() => {
     sceneRenderBudgetMs += engine.getDeltaTime();
     if (sceneRenderBudgetMs < sceneFrameIntervalMs) return;
     sceneRenderBudgetMs %= sceneFrameIntervalMs;
+    flushPendingTrailUpdates();
     updateTrails();
     scene.render();
   });
@@ -66,6 +68,7 @@ export function clearKeptTrajectory() {
 
 export function clearRenderedTrajectories() {
   keptPoints.clear();
+  pendingTrailPoses.clear();
   for (const trail of trailStates.values()) clearTrail(trail);
 }
 
@@ -132,6 +135,7 @@ export async function applyPoseUpdate(payload) {
   if (!enable3d || !scene) {
     return;
   }
+  setDisplayFpsLimit(payload.display_fps_limit);
   // Toggled from the Settings page; buildAssetKey folds it in, so flipping
   // it makes ensurePoseVisual dispose the GLB/marker and rebuild the other.
   stickFigureMode = Boolean(payload.stick_figure_mode);
@@ -179,15 +183,22 @@ export async function applyPoseUpdate(payload) {
     node.setEnabled(Boolean(pose.visible));
     node.position.copyFromFloats(scenePosition.x, scenePosition.y, scenePosition.z);
     node.rotationQuaternion.copyFromFloats(sceneQuaternion.x, sceneQuaternion.y, sceneQuaternion.z, sceneQuaternion.w);
+    pendingTrailPoses.set(pose.role, pose);
     await ensurePoseVisual(pose, node);
     applyGripperOpening(pose, node);
-    updateTrailFromPose(pose);
     updateHandRig(pose, node);
     if (legend) {
       const row = legend.querySelector(`[data-legend-role="${CSS.escape(pose.role)}"] .legend-meta`);
       if (row) row.textContent = pose.visible ? pose.name : `${pose.name} hidden`;
     }
   }));
+}
+
+function setDisplayFpsLimit(value) {
+  const fps = Number(value);
+  if (Number.isFinite(fps) && fps > 0) {
+    sceneFrameIntervalMs = 1000 / Math.min(120, fps);
+  }
 }
 
 function ensurePoseNode(pose) {
@@ -586,6 +597,15 @@ function updateTrails() {
   }
 }
 
+function flushPendingTrailUpdates() {
+  if (pendingTrailPoses.size === 0) {
+    return;
+  }
+  const poses = Array.from(pendingTrailPoses.values());
+  pendingTrailPoses.clear();
+  poses.forEach((pose) => updateTrailFromPose(pose));
+}
+
 function ensureTrailState(role) {
   if (trailStates.has(role)) {
     return trailStates.get(role);
@@ -685,7 +705,7 @@ function refreshTrailMesh(trail) {
   }
 
   const roleColor = BABYLON.Color3.FromHexString((ROLE_STYLE[trail.role] || ROLE_STYLE.head).color);
-  const points = trail.points.map((point) => point.clone());
+  const points = trail.points;
   const radius = TRAIL_RADIUS_BY_ROLE[trail.role] || 0.016;
   // Babylon.js tube instance update requires identical path length; dispose and recreate on change.
   if (trail.mesh && trail._meshPointCount !== points.length) {

@@ -34,9 +34,13 @@ class PoseWebSocketService:
 
     async def _broadcast_loop(self) -> None:
         loop = asyncio.get_running_loop()
+        publish_interval = 1.0 / self.context.node.pose_publish_hz
+        next_publish_at = loop.time() + publish_interval
         while True:
-            await asyncio.sleep(1.0 / self.context.node.pose_publish_hz)
+            await asyncio.sleep(max(0.0, next_publish_at - loop.time()))
+            next_publish_at += publish_interval
             if not self.clients:
+                next_publish_at = loop.time() + publish_interval
                 continue
             # Build the CPU-heavy trace payload off the event loop.
             payload_json = await loop.run_in_executor(None, self._build_pose_broadcast_json)
@@ -48,6 +52,9 @@ class PoseWebSocketService:
                     stale.append(ws)
             for ws in stale:
                 self.clients.discard(ws)
+            if loop.time() >= next_publish_at:
+                # Drop missed deadlines instead of bursting stale pose frames.
+                next_publish_at = loop.time() + publish_interval
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=20.0)

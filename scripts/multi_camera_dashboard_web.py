@@ -135,6 +135,10 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # Reliable image QoS prevents whole-frame loss from fragmented UDP samples.
         self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
         self.pose_publish_hz = max(1.0, float(trajectory_config.get("pose_publish_hz", pose_publish_hz)))
+        self.display_fps_limit = min(
+            120.0,
+            max(1.0, float(trajectory_config.get("display_fps_limit", 20.0))),
+        )
         self.pose_timeout_sec = max(0.2, float(trajectory_config.get("pose_timeout_sec", 2.0)))
         self.camera_stale_timeout_sec = max(0.2, float(trajectory_config.get("camera_stale_timeout_sec", 2.0)))
         self._configure_live_alignment(raw_config, config)

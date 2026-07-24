@@ -64,6 +64,7 @@ class PayloadBuilder:
             "fake_pose": self.owner.fake_pose,
             "playback_mode": self.owner._playback_mode,
             "stick_figure_mode": bool(self.owner.stick_figure_mode),
+            "display_fps_limit": self.owner.display_fps_limit,
             "alignment": self.owner.build_alignment_payload(),
             "poses": poses,
         }
