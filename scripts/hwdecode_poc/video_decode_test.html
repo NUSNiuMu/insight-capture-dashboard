@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>WebKitGTK H.264 decode test</title>
+    <style>
+      html, body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        color: #e5e7eb;
+        background: #111827;
+        font-family: sans-serif;
+      }
+      main {
+        display: grid;
+        width: 100%;
+        height: 100%;
+        place-items: center;
+      }
+      video {
+        width: min(90vw, 1280px);
+        border: 2px solid #4ade80;
+      }
+      output {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        padding: 8px;
+        background: rgb(0 0 0 / 75%);
+        font: 14px/1.4 monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <video src="hwdecode-test.mp4" autoplay muted loop playsinline></video>
+    </main>
+    <output>waiting for video</output>
+    <script>
+      const video = document.querySelector("video");
+      const output = document.querySelector("output");
+      let frames = 0;
+      let startedAt = performance.now();
+
+      function onFrame(now) {
+        frames += 1;
+        const elapsed = (now - startedAt) / 1000;
+        if (elapsed >= 1) {
+          const quality = video.getVideoPlaybackQuality();
+          output.textContent = [
+            `${(frames / elapsed).toFixed(1)} presented fps`,
+            `${quality.totalVideoFrames} total frames`,
+            `${quality.droppedVideoFrames} dropped frames`,
+            `${video.videoWidth}x${video.videoHeight}`,
+          ].join("\n");
+          frames = 0;
+          startedAt = now;
+        }
+        video.requestVideoFrameCallback(onFrame);
+      }
+
+      video.requestVideoFrameCallback(onFrame);
+    </script>
+  </body>
+</html>
