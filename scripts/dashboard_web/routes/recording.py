@@ -10,7 +10,7 @@ from aiohttp import web
 
 from check_bag import analyze_bag
 from post_processing import list_rosbags
-from dashboard_web.support import read_system_load
+from dashboard_web.support import read_disk_space, read_system_load
 
 from dashboard_web.context import DashboardContext
 
@@ -22,6 +22,7 @@ class RecordingRoutes:
     async def _handle_recording_status(self, _request: web.Request) -> web.Response:
         payload = self.context.recording_manager.status()
         payload["system_load"] = read_system_load()
+        payload["disk_space"] = read_disk_space(self.context.recording_manager.rosbag_root)
         return web.json_response(payload)
 
     async def _handle_recording_topics(self, _request: web.Request) -> web.Response:

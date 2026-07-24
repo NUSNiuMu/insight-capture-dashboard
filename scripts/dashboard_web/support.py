@@ -1,6 +1,7 @@
 """Small web-facing helpers shared by route modules and the ROS node."""
 
 import os
+import shutil
 from pathlib import Path
 from typing import Dict
 
@@ -53,6 +54,27 @@ def read_system_load() -> Dict[str, object]:
         "cpu_count": cpu_count,
         "cpu_quota_cores": cpu_quota_cores,
         "load_ratio": (load_1min / budget) if load_1min is not None else None,
+    }
+
+
+def read_disk_space(path: Path) -> Dict[str, object]:
+    """Return capacity and free space for the filesystem containing path."""
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return {
+            "path": str(path),
+            "total_bytes": None,
+            "used_bytes": None,
+            "free_bytes": None,
+            "free_ratio": None,
+        }
+    return {
+        "path": str(path),
+        "total_bytes": usage.total,
+        "used_bytes": usage.used,
+        "free_bytes": usage.free,
+        "free_ratio": usage.free / usage.total if usage.total else None,
     }
 
 

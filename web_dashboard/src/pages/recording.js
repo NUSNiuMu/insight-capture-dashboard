@@ -2,7 +2,7 @@ import { escapeHtml } from "../shared/format.js";
 
 const recordingPanel = document.getElementById("recording-panel");
 const recordingStatus = document.getElementById("recording-status");
-const systemLoadPill = document.getElementById("system-load-pill");
+const storageSpacePill = document.getElementById("storage-space-pill");
 const startRecordingButton = document.getElementById("start-recording-button");
 const stopRecordingButton = document.getElementById("stop-recording-button");
 const refreshRecordTopicsButton = document.getElementById("refresh-record-topics-button");
@@ -318,32 +318,44 @@ function renderRecordingStatus(status) {
   if (status && status.topic_catalog && !recordTopicsInitialized) {
     renderTopicCatalog(status.topic_catalog, { resetSelection: true });
   }
-  renderSystemLoad(status && status.system_load);
+  renderDiskSpace(status && status.disk_space);
   setRecordingBusy(recordingBusy, { active });
 }
 
-function renderSystemLoad(load) {
-  if (!systemLoadPill) {
+function renderDiskSpace(space) {
+  if (!storageSpacePill) {
     return;
   }
-  if (!load || load.load_1min === null || load.load_1min === undefined) {
-    systemLoadPill.textContent = "load: unknown";
-    systemLoadPill.className = "system-load-pill";
+  if (!space || typeof space.free_bytes !== "number" || typeof space.free_ratio !== "number") {
+    storageSpacePill.textContent = "disk: unknown";
+    storageSpacePill.className = "storage-space-pill";
     return;
   }
-  const budget = load.cpu_quota_cores || load.cpu_count;
-  const ratio = typeof load.load_ratio === "number" ? load.load_ratio : load.load_1min / budget;
-  systemLoadPill.textContent = `load ${load.load_1min.toFixed(2)} / ${budget.toFixed(1)} cores`;
+  const freePercent = space.free_ratio * 100;
+  storageSpacePill.textContent = `disk ${formatByteSize(space.free_bytes)} free · ${freePercent.toFixed(0)}%`;
   let level = "ok";
-  if (ratio >= 0.9) {
+  if (space.free_ratio < 0.1) {
     level = "critical";
-  } else if (ratio >= 0.7) {
+  } else if (space.free_ratio < 0.3) {
     level = "warning";
   }
-  systemLoadPill.className = `system-load-pill system-load-${level}`;
-  systemLoadPill.title = level === "ok"
-    ? "System has headroom -- recording should keep full frame rate."
-    : "System is near its CPU quota -- recording may drop frames. Close anything non-essential (extra browser tabs, other SSH sessions) before a critical recording.";
+  storageSpacePill.className = `storage-space-pill storage-space-${level}`;
+  storageSpacePill.title = `${formatByteSize(space.free_bytes)} free of ${formatByteSize(space.total_bytes)} on the recording filesystem.`;
+}
+
+function formatByteSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "--";
+  }
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const digits = value >= 100 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(digits)} ${units[unitIndex]}`;
 }
 
 function setRecordingBusy(isBusy, { active } = {}) {
