@@ -47,10 +47,7 @@ class CameraRoutes:
         return web.json_response(payload)
 
     async def _handle_image_capabilities(self, _request: web.Request) -> web.Response:
-        # Installed GStreamer elements can't change without a restart, and
-        # probing them shells out to gst-inspect-1.0 up to 10 times (2s
-        # timeout each) -- cache for the process lifetime so only the first
-        # diagnostic request pays that.
+        # GStreamer capabilities are stable for the process lifetime.
         if self.context._image_capabilities_cache is None:
             self.context._image_capabilities_cache = self._build_image_capabilities()
         return web.json_response(self.context._image_capabilities_cache)
@@ -82,9 +79,7 @@ class CameraRoutes:
             if elements.get(candidate):
                 software_encoder = candidate
                 break
-        # active_path is the JPEG fallback capability. Live H.264 transport
-        # runs in the separate webrtc_worker process and is reported per
-        # camera by /api/cameras.
+        # Live H.264 status comes from the worker; this reports JPEG fallback.
         hw_jpeg = getattr(self.context.node, "_hw_jpeg", None)
         active_path = "jpeg-hardware-nvjpeg" if hw_jpeg is not None else "jpeg-software"
         notes = []

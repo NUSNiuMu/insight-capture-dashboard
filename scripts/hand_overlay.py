@@ -1,19 +1,6 @@
 #!/usr/bin/env python3
 
-"""Relay hand-landmark detections for the web dashboard's optional overlay.
-
-Detection runs on the camera device itself (HandEngine, e.g. insight9_a
-publishing <namespace>/camera/hand + <namespace>/camera/hand_keypoints as
-vision_msgs/Detection2DArray) -- this module only parses and buffers the two
-topics per camera for the API to serve; no CV work happens on this side.
-Message shape mirrors visualize_hand_landmarks.py (a PC-side OpenCV
-reference tool that lives outside this repo -- not something to look for
-under scripts/; this module is a browser-side port of its drawing logic):
-  hand           : one Detection2D per hand, id=handIdx, bbox=tight box,
-                   results[].hypothesis.class_id="hand_left"/"hand_right"
-  hand_keypoints : one Detection2D per landmark, id="handIdx:kpIdx",
-                   bbox.center = pixel location
-"""
+"""Parse, stabilize, and render camera-published hand landmarks."""
 
 import math
 import time
@@ -26,9 +13,7 @@ import numpy as np
 
 from perf_tracker import track
 
-# MediaPipe 21-point hand skeleton, grouped by finger for coloring -- same
-# topology and colors as FINGER_COLORS/HAND_EDGES in visualize_hand_landmarks.py
-# (the PC-side OpenCV reference tool, lives outside this repo).
+# MediaPipe 21-point hand skeleton grouped by finger.
 FINGER_COLORS = {
     "thumb": (0, 0, 255),     # red
     "index": (0, 165, 255),   # orange
@@ -45,133 +30,42 @@ HAND_EDGES = [
     (13, 17, "palm"), (0, 17, "palm"), (17, 18, "pinky"), (18, 19, "pinky"), (19, 20, "pinky"),
 ]
 
-# Matches visualize_hand_landmarks.py's --min-score default: keypoints below
-# this confidence are dropped before drawing (not before storing -- the raw
-# /api/cameras/{name}/hand JSON keeps everything).
+# Drawing threshold; raw API payloads retain all keypoints.
 MIN_KEYPOINT_SCORE = 0.3
 
-# If no fresh hand_keypoints message has arrived in this long, the overlay
-# API reports stale=True so the frontend can fade/hide it instead of
-# freezing a stale skeleton on screen.
+# Mark the API overlay stale after this interval.
 HAND_DATA_TIMEOUT_SEC = 2.0
 
-# Matches visualize_hand_landmarks.py's --max-sync-ms default: how fresh a
-# hand_keypoints message must be, relative to right now, for
-# compose_hand_overlay_jpeg to draw it onto the frame currently being
-# encoded. Deliberately much tighter than HAND_DATA_TIMEOUT_SEC above --
-# that one answers "has the topic gone dead", this one answers "would
-# drawing this keypoints snapshot onto the current frame look visibly
-# misaligned" (a moving hand can drift several pixels within even 100ms).
-#
-# This used to compare the image's own header.stamp against the keypoints'
-# header.stamp directly (matching the reference tool, which buffers images
-# and picks whichever is closest to the keypoints' stamp). That assumes
-# both stamps share a zero point, which does not hold here: measured
-# 2026-07-22 with a real hand in view, image_stamp_ns vs. the
-# hand_keypoints stamp_ns sat at a *stable* ~430-500ms gap (not jitter --
-# HandEngine apparently timestamps relative to its own clock, not the
-# camera driver's), which made this check reject every single frame and
-# silently blocked the overlay from ever drawing. Comparing against
-# received_monotonic instead -- both messages' arrival time on this
-# process's own clock -- sidesteps the cross-clock-domain mismatch
-# entirely and is what HAND_DATA_TIMEOUT_SEC above already does.
+# Overlay freshness uses local receive time because source clocks differ.
 MAX_SYNC_SEC = 0.12
 
-# Which dashboard teleop role each HandEngine class_id anchors to in the 3D
-# scene. UNVERIFIED against real data: insight9_a is an outward-looking head
-# camera, so whether its "hand_left" is the wearer's physical left hand (the
-# insight7_b wrist pose) or mirrored depends on HandEngine's own convention.
-# If skeletons show up on the wrong wrist during a real replay, swap the two
-# values here -- this dict is the single flip point.
+# Single mapping point between HandEngine labels and dashboard roles.
 HAND_CLASS_TO_ROLE = {
     "hand_left": "left_hand",
     "hand_right": "right_hand",
 }
 
-# Fresh-seeding order for _assign_hand_roles' stage 3 (a role with no recent
-# position at all -- track birth, or both hands appearing at once): the
-# first hand detected this session claims the first role in this list, the
-# second claims the second. Deliberately NOT based on HandEngine's class_id
-# -- per user request 2026-07-22, since that label is what was causing the
-# instability in the first place. This makes no claim about true anatomical
-# left/right; it only guarantees the pairing is stable once made (stages
-# 1-2's positional continuity keep it pinned from there). Swap the order
-# here if hand shapes consistently land on the wrong wrist.
+# Seed roles by arrival order; positional continuity keeps them stable afterward.
 HAND_ROLE_SEED_ORDER = ("right_hand", "left_hand")
 
-# HandEngine's per-frame left/right classification of a single hand is not
-# stable -- observed flip-flopping between hand_left/hand_right frame to
-# frame, which made the 3D skeleton jump between the two wrist nodes. The
-# effective label is smoothed by majority vote over a sliding window with
-# hysteresis: it only flips once the challenger label holds this fraction
-# of the recent votes, so a 50/50 jitter stays put on the incumbent.
+# Smooth unstable handedness labels with vote hysteresis.
 HAND_LABEL_VOTE_WINDOW = 15
 HAND_LABEL_FLIP_FRACTION = 0.7
-# A flip also needs this many absolute challenger votes, so a short burst of
-# one label while the window is still filling (message drops make runs) can't
-# flip the incumbent -- ~0.5s of consistent evidence at HandEngine's 15Hz.
+# Require sustained challenger votes before switching labels.
 HAND_LABEL_FLIP_MIN_VOTES = 8
-# MediaPipe's handedness score is P(predicted label), always >= 0.5 -- near
-# that floor the model is essentially guessing (confirmed flip-flopping
-# reported near score~0.5 in google/mediapipe#3047), so votes that unsure
-# are excluded from the window instead of diluting the real signal.
+# Ignore near-random handedness votes.
 HAND_LABEL_MIN_CONFIDENCE = 0.6
-# How far (in multiples of hand size) a role's hand may move between
-# messages and still count as the same physical hand for _assign_hand_roles.
-# Generous on purpose -- it only needs to reject "this is obviously a
-# different hand", not track precisely; the classifier fallback covers the
-# rest. See _assign_hand_roles for why this replaces trusting class_id
-# directly: two simultaneously visible hands can swap HandEngine's
-# hand_index between messages (and MediaPipe is known to sometimes label
-# both hands the same, google/mediapipe#3902), which made the 3D skeleton
-# jump between physical hands even though each hand's own label was stable.
-#
-# This alone turned out to still oscillate in practice: with two hands
-# ~2-3 hand-widths apart (a normal, not-especially-close pose), BOTH fall
-# within HAND_POSITION_JUMP_FACTOR of BOTH roles' last position, so it's a
-# pure greedy nearest-of-4-pairs match every frame with no preference for
-# "what it was last frame" -- ordinary per-frame detection jitter can make
-# the wrong pairing marginally closer than the right one, and just as
-# easily flip back the frame after, i.e. continuous back-and-forth, not a
-# one-off swap. HAND_POSITION_STICKY_FACTOR below is the fix: a much
-# tighter radius, checked first and in isolation per role (not a joint
-# nearest-of-N match), so a role that hasn't moved much keeps its hand
-# without ever being offered the other hand as an alternative. Must stay
-# comfortably smaller than a typical inter-hand gap (so the *other* hand
-# can't also land inside it) and comfortably bigger than frame-to-frame
-# jitter of a hand that's actually just sitting still.
+# Use a tight sticky radius before wider positional reassignment.
 HAND_POSITION_JUMP_FACTOR = 6.0
 HAND_POSITION_STICKY_FACTOR = 1.0
-# How long _hand_role_anchor's last-known-position memory stays usable for
-# stages 1-2, deliberately much longer than HAND_TRACK_COAST_SEC (which only
-# controls when the *rendered skeleton* fades -- a separate concern). Real
-# per-frame recall is well below 100% (see HAND_TRACK_* comments below), so
-# both hands going briefly undetected at once -- occlusion, a fast head
-# turn, a frame drop -- is common enough that tying position memory to the
-# same short 0.5s timer meant it routinely expired for both roles together,
-# forcing stage 3's memory-less hand_index tiebreak (an effective coin
-# flip) far more often than "the hand was actually gone for good" would
-# justify -- this is what was still causing repeated flips after the
-# sticky-hysteresis fix, reported 2026-07-22. A short, real gap should
-# resolve via positional continuity, not a fresh guess.
+# Keep role anchors longer than rendered tracks to bridge detection gaps.
 HAND_ROLE_ANCHOR_MAX_AGE_SEC = 3.0
 
-# Per-role track lifecycle for the 3D skeleton (hand_landmarks_for_role).
-# HandEngine's per-frame recall is well below 100%: with a hand steadily in
-# view it still misses individual frames, and it publishes an *empty*
-# detection array on those (not "no message"), so "render only frames with a
-# fresh detection" made the 3D rig blink several times a second. The 2D
-# image overlay deliberately does NOT use these tracks -- drawing held-over
-# keypoints onto a newer image frame would be visibly misaligned (see
-# MAX_SYNC_SEC); a missing overlay frame there is invisible, not a blink.
-#   birth: this many consecutive detections before the skeleton appears,
-#          filtering single-frame false positives;
+# Require consecutive hits before showing a 3D hand track.
 HAND_TRACK_BIRTH_MIN_HITS = 3
-#   consecutive = gaps shorter than this between hits (~4 frame periods at
-#          HandEngine's 15Hz, so one dropped frame doesn't restart the count);
+# Maximum gap that still counts toward track birth.
 HAND_TRACK_BIRTH_MAX_GAP_SEC = 0.30
-#   coast: after birth, dropout frames keep showing the last-seen hand shape
-#          (held, not extrapolated) up to this long before the track dies.
+# Hold the last shape briefly across missed detections.
 HAND_TRACK_COAST_SEC = 0.5
 
 
@@ -186,8 +80,7 @@ class HandRoleTrack:
 
 
 def smooth_hand_label(votes: Deque[str], current: Optional[str]) -> Optional[str]:
-    """Return the smoothed label given the raw-vote history and the current
-    smoothed label (None on first sight -> adopt the newest raw vote)."""
+    """Apply vote hysteresis to the current handedness label."""
     if not votes:
         return current
     if current is None:
@@ -206,11 +99,7 @@ def smooth_hand_label(votes: Deque[str], current: Optional[str]) -> Optional[str
         return challenger
     return current
 
-# Synthetic per-landmark depth (hand-plane normal) offsets, in the normalized
-# units of normalize_hand_landmarks (wrist->middle-MCP distance == 1). The 2D
-# detections carry no depth at all; these constants only keep the rendered
-# hand from being perfectly flat -- thumb arcs out of the palm plane, finger
-# joints lift slightly toward the fingertips. Purely cosmetic, tune freely.
+# Cosmetic depth offsets for otherwise-flat 2D landmarks.
 _LANDMARK_Z = [
     0.00,                       # 0 wrist
     0.06, 0.12, 0.18, 0.24,     # 1-4 thumb
@@ -224,14 +113,7 @@ _LANDMARK_Z = [
 def normalize_hand_landmarks(
     keypoints: List[Dict[str, object]], min_score: float = MIN_KEYPOINT_SCORE
 ) -> Optional[List[Optional[List[float]]]]:
-    """Convert 21 pixel-space keypoints into a wrist-local normalized frame
-    for the 3D scene: origin at landmark 0 (wrist), scaled so the wrist->
-    middle-MCP (landmark 9) distance is 1 (cancels how close the hand is to
-    the detecting camera's lens), axes a=along-hand toward the fingers,
-    b=lateral in the hand plane, z=synthetic depth from _LANDMARK_Z. Returns
-    a 21-entry list ([a, b, z] or None for below-score landmarks), or None
-    when the two anchor landmarks aren't confidently detected.
-    """
+    """Normalize 21 keypoints to a wrist-local 3D frame."""
     points: Dict[int, Tuple[float, float]] = {}
     for kp in keypoints:
         if float(kp.get("score", 0.0)) < min_score:
@@ -262,12 +144,7 @@ def normalize_hand_landmarks(
 
 
 def _hand_entry_anchor(entry: Dict[str, object]) -> Optional[Tuple[float, float, float]]:
-    """(center_x, center_y, hand_scale) in pixel space for _assign_hand_roles'
-    positional matching -- a continuity signal independent of HandEngine's
-    per-frame handedness guess. Prefers the tight bbox (hand_scale = its
-    longer side); falls back to the wrist/middle-MCP keypoints (hand_scale
-    approximated the same way normalize_hand_landmarks scales the skeleton)
-    when the box message is stale or missing."""
+    """Return a pixel-space center and scale for positional role matching."""
     bbox = entry.get("bbox")
     if bbox:
         x, y, w, h = bbox
@@ -291,13 +168,7 @@ def _hand_entry_anchor(entry: Dict[str, object]) -> Optional[Tuple[float, float,
 def draw_hands_on_frame(
     frame: np.ndarray, hands: List[Dict[str, object]], min_score: float = MIN_KEYPOINT_SCORE
 ) -> int:
-    """Port of HandLandmarkVisualizer._draw (visualize_hand_landmarks.py),
-    drawing directly onto `frame`'s pixels (BGR, mutated in place) instead of
-    a PC-side cv2 window. Takes already-parsed hand_overlay_payload() data
-    rather than raw Detection2DArray messages, since that parsing already
-    happened once in HandOverlayMixin._on_hand_keypoints. Returns the number
-    of hands drawn.
-    """
+    """Draw parsed hand landmarks onto a BGR frame in place."""
     drawn = 0
     for hand in hands:
         points: Dict[int, Tuple[int, int, float]] = {}
@@ -354,37 +225,23 @@ def _best_result(det) -> Tuple[str, float]:
 
 
 class HandOverlayMixin:
-    """Mixin providing live hand-landmark overlay data, keyed by camera name.
-
-    Expected host attributes: self.cameras (iterable with .name/.namespace)
-    and self._stamp_to_ns (PoseBridgeNode already defines this staticmethod).
-    """
+    """Provide camera-keyed hand overlay and 3D landmark state."""
 
     def _configure_hand_overlay(self) -> None:
         self.hand_overlay_enabled: set = set()
         self.hand_overlay_available: set = set()
         self._hand_latest_boxes: Dict[str, object] = {}
         self.hand_latest_snapshot: Dict[str, HandOverlaySnapshot] = {}
-        # Per (camera, hand_index) label-vote history and smoothed label --
-        # see smooth_hand_label. Bounded: cameras x the few hand indexes
-        # HandEngine ever assigns.
+        # Bounded handedness vote state per camera and detected hand.
         self._hand_label_votes: Dict[Tuple[str, int], Deque[str]] = {}
         self._hand_label_current: Dict[Tuple[str, int], str] = {}
-        # Per-role 3D skeleton tracks -- see HandRoleTrack / the lifecycle
-        # constants above. Written from ROS callbacks, read from the asyncio
-        # broadcast loop; individual attribute reads/writes are GIL-atomic,
-        # same unsynchronized pattern as hand_latest_snapshot.
+        # Per-role 3D skeleton lifecycle state.
         self._hand_role_tracks: Dict[str, HandRoleTrack] = {}
-        # Last (x, y, hand_scale, monotonic_ts) seen for each (camera, role)
-        # -- the positional-continuity memory _assign_hand_roles matches new
-        # detections against. Bounded: cameras x 2 roles.
+        # Last positional anchor for each camera-role pair.
         self._hand_role_anchor: Dict[Tuple[str, str], Tuple[float, float, float, float]] = {}
 
     def _on_hand_boxes(self, camera_name: str, msg, is_live: bool = True) -> None:
-        # Live and playback are two separate subscriptions (playback's is
-        # remapped to /bagplay/... -- see bagplay_topic / PlaybackManager),
-        # gated exactly like the image/pose callbacks: is_live ==
-        # self._playback_mode means "wrong source for the current mode".
+        # Gate separate live and /bagplay subscriptions by playback mode.
         if is_live == self._playback_mode:
             return
         self.hand_overlay_available.add(camera_name)
@@ -394,11 +251,7 @@ class HandOverlayMixin:
         if is_live == self._playback_mode:
             return
         self.hand_overlay_available.add(camera_name)
-        # Parsed regardless of the Settings 2D-overlay toggle: the snapshot
-        # also feeds the 3D hand skeleton via hand_landmarks_for_role, which
-        # has no per-camera toggle. Only cameras actually running HandEngine
-        # publish here, and a Detection2DArray walk (~42 entries) is cheap
-        # next to the per-frame image work.
+        # Always parse because snapshots also feed the 3D skeleton.
         with track(f"hand_parse:{camera_name}"):
             boxes_by_hand: Dict[int, Dict[str, object]] = {}
             boxes_msg = self._hand_latest_boxes.get(camera_name)
@@ -461,9 +314,7 @@ class HandOverlayMixin:
                 hands=hands,
             )
 
-            # Feed the per-role 3D skeleton tracks -- see _assign_hand_roles
-            # for why this is positional matching rather than "whichever hand
-            # HandEngine's label says is left/right this frame".
+            # Update 3D tracks using positional role matching.
             for entry, role in self._assign_hand_roles(camera_name, hands, time.monotonic()):
                 landmarks = normalize_hand_landmarks(entry.get("keypoints", []))
                 if landmarks is None:
@@ -473,33 +324,7 @@ class HandOverlayMixin:
     def _assign_hand_roles(
         self, camera_name: str, hands: List[Dict[str, object]], now: float
     ) -> List[Tuple[Dict[str, object], str]]:
-        """Decide which detected hand feeds which teleop role this message.
-
-        HandEngine's hand_index is not a persistent track: with two hands in
-        view it can swap between them message to message, and MediaPipe is
-        known to sometimes label both hands the same (google/mediapipe
-        #3902) -- either way, trusting class_id directly made the 3D
-        skeleton jump between physical hands even when each hand's own
-        label was internally stable. Prefer positional continuity instead,
-        in three stages: (1) sticky -- each role independently checks only
-        "is my own last hand still right here" (HAND_POSITION_STICKY_FACTOR,
-        no comparison against the other role), which is what prevents
-        continuous back-and-forth flipping between two hands that are both
-        just sitting within the old single wide threshold of each other;
-        (2) wider nearest-neighbor competition (HAND_POSITION_JUMP_FACTOR)
-        for a role stickiness didn't resolve; (3) fixed arrival-order
-        seeding (HAND_ROLE_SEED_ORDER) for a role with no recent position at
-        all -- track birth, or both hands genuinely gone for
-        HAND_ROLE_ANCHOR_MAX_AGE_SEC. Stage 3 does NOT use class_id: it's
-        unreliable enough on its own (see above) that even
-        confidence-gated/smoothed it could still seed a role backward, and
-        the whole point of stages 1-2 is that once seeded, position -- not
-        class_id -- is what keeps a role pinned to the right physical hand.
-        Stages 1-2 use HAND_ROLE_ANCHOR_MAX_AGE_SEC (not the shorter
-        HAND_TRACK_COAST_SEC the rendered skeleton uses) for how long a
-        position stays trustworthy, so a brief mutual detection gap doesn't
-        force stage 3's memory-less tiebreak.
-        """
+        """Assign roles by sticky, wider, then arrival-order positional matching."""
         candidates = [
             (entry, anchor)
             for entry in hands
@@ -519,12 +344,7 @@ class HandOverlayMixin:
                 idx_taken.add(idx)
                 assignments.append((candidates[idx][0], role))
 
-        # Stage 1 -- sticky continuity: each role independently looks for
-        # its own closest candidate within the tight radius, never
-        # comparing against the other role's distance. A hand that hasn't
-        # moved much wins its role outright here and is never put up
-        # against the other hand's distance at all, which is what stops
-        # per-frame jitter from flipping the pairing.
+        # Stage 1: preserve each role within the tight sticky radius.
         sticky_pairs = []
         for role in HAND_CLASS_TO_ROLE.values():
             prev = self._hand_role_anchor.get((camera_name, role))
@@ -541,12 +361,7 @@ class HandOverlayMixin:
                 sticky_pairs.append(best)
         _apply(sticky_pairs)
 
-        # Stage 2 -- wider competition, only for a role stickiness didn't
-        # resolve (its hand moved further than a jitter, or briefly wasn't
-        # detected). This is the plain nearest-of-remaining-candidates match
-        # from before; it can still occasionally pick wrong when a role's
-        # position is genuinely stale, but it no longer runs every single
-        # frame against a hand that never left.
+        # Stage 2: match unresolved roles within the wider movement radius.
         wide_pairs = []
         for role in HAND_CLASS_TO_ROLE.values():
             if role in role_taken:
@@ -563,13 +378,7 @@ class HandOverlayMixin:
                     wide_pairs.append((dist, role, idx))
         _apply(wide_pairs)
 
-        # Stage 3 -- fixed arrival-order seeding for a hand with no
-        # continuity at all (track birth, or both hands appearing at once).
-        # hand_index ordering is the closest thing to "which hand this
-        # message saw first" available; not a strong signal on its own, but
-        # it only matters for this one-time seed -- stages 1-2 hold the
-        # pairing steady from the next frame on regardless of what
-        # hand_index does afterward.
+        # Stage 3: seed unmatched roles by stable arrival order.
         remaining = sorted(
             (idx for idx in range(len(candidates)) if idx not in idx_taken),
             key=lambda idx: candidates[idx][0].get("hand_index", idx),
@@ -590,14 +399,11 @@ class HandOverlayMixin:
     def _hand_track_hit(
         self, role: str, landmarks: List[Optional[List[float]]]
     ) -> None:
-        """Record one confident detection of `role`; births the track once
-        HAND_TRACK_BIRTH_MIN_HITS consecutive hits accumulate."""
+        """Record a role hit and birth its track after enough consecutive hits."""
         now = time.monotonic()
         track = self._hand_role_tracks.setdefault(role, HandRoleTrack())
         if now - track.last_hit_monotonic > HAND_TRACK_BIRTH_MAX_GAP_SEC:
-            # Too long since the previous hit: an unborn streak restarts. A
-            # visible track is unaffected -- its death is coast-timeout only
-            # (in hand_landmarks_for_role), and any hit refreshes it.
+            # Restart only an unborn streak; visible tracks use coast timeout.
             track.streak = 0
         track.streak += 1
         track.last_hit_monotonic = now
@@ -614,12 +420,7 @@ class HandOverlayMixin:
             self.hand_overlay_enabled.discard(camera_name)
 
     def hand_landmarks_for_role(self, role: str) -> Optional[List[Optional[List[float]]]]:
-        """Normalized 21-point landmarks for a teleop role ("left_hand" /
-        "right_hand") from that role's lifecycle track (fed by every
-        HandEngine camera -- any of them may see either hand). During a
-        detection dropout the last-seen shape is held for up to
-        HAND_TRACK_COAST_SEC, so per-frame recall misses don't blink the 3D
-        skeleton. Returns None while the track is unborn or dead."""
+        """Return normalized role landmarks while its lifecycle track is alive."""
         track = self._hand_role_tracks.get(role)
         if track is None or not track.visible:
             return None
@@ -645,34 +446,14 @@ class HandOverlayMixin:
     def compose_hand_overlay_jpeg(
         self, camera_name: str, jpeg_bytes: bytes, version: int = 0
     ) -> bool:
-        """Gate + dispatch: decides whether this frame is worth overlaying
-        (cheap -- payload lookup, staleness, sync-window checks) and, if so,
-        hands the actual decode/draw/encode off to the hand_overlay_worker.py
-        process instead of doing it inline. Returns True only when work was
-        dispatched. The caller's passthrough JPEG for that tick is left
-        undecorated; the worker's result lands asynchronously and patches
-        into the display and WebRTC paths once ready (see
-        PoseBridgeNode._hand_overlay_ipc_loop). Only called when
-        hand_overlay_enabled for this camera, so cameras without it on keep
-        the cheap passthrough path in _encode_dashboard_frame untouched.
-
-        Moving the decode/draw/encode off this process was necessary, not
-        just tidy: it round-trips through the same GStreamer
-        appsrc->nvjpegdec/nvjpegenc->appsink pipeline (hw_jpeg.py) that
-        webrtc_worker.py's docstring documents fighting this process's GIL
-        for -- and unlike the plain image-encode path, this one only fires
-        once a hand is actually visible, which is exactly why fps used to
-        collapse only "once a hand is detected" (see wiki changelog).
-        """
+        """Dispatch a fresh overlay frame to the worker process."""
         snapshot = self.hand_latest_snapshot.get(camera_name)
         if snapshot is None:
             return False
         now = time.monotonic()
         if now - snapshot.received_monotonic > HAND_DATA_TIMEOUT_SEC or not snapshot.hands:
             return False
-        # See MAX_SYNC_SEC's comment: freshness is judged against this
-        # process's own receive clock, not the two messages' own stamps
-        # (which measured 2026-07-22 as sitting on incomparable clocks).
+        # Compare freshness on the local receive clock.
         if now - snapshot.received_monotonic > MAX_SYNC_SEC:
             return False
         dispatch = getattr(self, "_dispatch_hand_overlay", None)

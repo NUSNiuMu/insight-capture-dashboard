@@ -1,28 +1,6 @@
 #!/usr/bin/env python3
 
-"""Per-viewer WebRTC camera streams (nvv4l2h264enc + webrtcbin).
-
-The polling display path (JSON poll + per-frame HTTP GET + browser JPEG
-decode) caps the UI at the poll rate and jitters under load. This module
-streams H.264 instead: raw NV12/GRAY8 frames go appsrc -> nvvidconv ->
-nvv4l2h264enc (hardware) -> rtph264pay -> webrtcbin, and compressed
-(JPEG passthrough) cameras decode on the NVJPEG engine first. The browser
-decodes H.264 natively -- usually in hardware -- so both ends of the wire
-are accelerated.
-
-One session per (viewer, camera): sessions are cheap (the encoder is the
-scarce resource, and NVENC handles a handful of 1080p sessions), and
-per-viewer encoders sidestep keyframe/bitrate coordination between
-viewers. Nobody watching means zero cost: push_ros_frame() returns before
-touching the message bytes when a camera has no sessions.
-
-Everything degrades to the existing polling path: create() returns None
-when elements are missing, and a browser that can't decode H.264 (the
-vendored kiosk Chromium has no proprietary codecs) simply never reaches
-the 'playing' state, so the frontend keeps polling. A session's pipeline
-is built lazily on the first frame because the appsrc caps need the
-camera's real format/size.
-"""
+"""Per-viewer hardware H.264 WebRTC streams with polling fallback."""
 
 import threading
 from typing import Callable, Dict, List, Optional, Tuple
@@ -54,12 +32,7 @@ _REQUIRED_ELEMENTS = (
 _MIN_BITRATE = 1_500_000
 _MAX_BITRATE = 10_000_000
 
-# Streams are downscaled on the VIC (the nvvidconv already in the pipeline,
-# zero CPU) before encoding. The dashboard's camera wall renders ~300px-wide
-# thumbnails, so encoding at the sensor's native 1088x1920 made the browser
-# software-decode ~13x more pixels than it displayed -- measured as a full
-# core of decoder (Firefox RDD) time on the kiosk. Cost of the cap: a
-# maximized panel upscales from this width and looks softer.
+# Downscale on VIC to match dashboard thumbnail sizes.
 STREAM_MAX_WIDTH = 540
 
 
@@ -83,24 +56,7 @@ _mdns_cache: Dict[str, str] = {}
 
 
 def _resolve_mdns(hostname: str, timeout: float = 2.0) -> Optional[str]:
-    """Resolve a .local mDNS hostname to an IPv4 address, no external deps.
-
-    Browsers obfuscate their WebRTC host candidates as <uuid>.local mDNS
-    names (privacy default in both Chrome and Firefox). libnice cannot
-    resolve those in this container (no avahi/nss-mdns), so every candidate
-    pair was unusable: ICE sat in `checking` forever, the frontend's
-    first-frame watchdog gave up, and every viewer silently fell back to
-    JPEG polling (~14.7fps, the 50ms-poll ceiling) -- diagnosed 2026-07-12,
-    root cause of "WebRTC only reaches 15fps".
-
-    Sends a standard multicast A query from a socket that is itself a
-    member of the mDNS group on port 5353. SO_REUSEADDR lets it coexist
-    with any avahi/browser responders sharing the host network namespace
-    (this container runs with network_mode: host). Responders answer to
-    the multicast group, which we receive as a member; a plain
-    unicast-response (QU) query was tried first and went unanswered --
-    Firefox's responder only replies to the group.
-    """
+    """Resolve browser-obfuscated .local ICE candidates via multicast DNS."""
     import socket
     import struct
     import time
@@ -184,13 +140,7 @@ def _resolve_mdns(hostname: str, timeout: float = 2.0) -> Optional[str]:
 
 
 class WebRtcSession:
-    """One viewer's H.264 stream for one camera.
-
-    Signaling flows through send_signal (thread-safe, provided by the
-    websocket handler); frames arrive on the camera's worker thread;
-    webrtcbin callbacks arrive on GStreamer threads. self._lock guards
-    pipeline construction/teardown across all three.
-    """
+    """One locked H.264 pipeline for a viewer-camera pair."""
 
     def __init__(
         self,
@@ -334,12 +284,7 @@ class WebRtcSession:
         # rewritten to real IPs before webrtcbin/libnice sees them.
         parts = candidate.split()
         if len(parts) > 4 and parts[4].endswith(".local"):
-            # This method runs on the aiohttp event loop; a blocking mDNS
-            # query here stalls every websocket and HTTP handler in the
-            # process (observed: one slow remote viewer's 2s resolution
-            # timeouts starved the kiosk's own signaling past its 8s
-            # first-frame watchdog). Resolve in the background and trickle
-            # the candidate in when done -- late candidates are fine.
+            # Resolve mDNS off the event loop so signaling remains responsive.
             threading.Thread(
                 target=self._resolve_and_add,
                 args=(int(mline_index), parts),
@@ -392,15 +337,7 @@ class WebRtcSession:
 
 
 class WebRtcStreams:
-    """Registry of live sessions, keyed by camera. Use create().
-
-    Runs inside webrtc_worker.py, a separate process from the main
-    dashboard backend (see wiki changelog 2026-07): the main process owns
-    ROS/rclpy and resolves each frame down to (fmt, width, height, data)
-    itself (it already has the ROS message and the encoded CameraFrame in
-    hand), then ships that tuple over here via IPC -- this module never
-    touches rclpy, HwJpegCodec, or a ROS message type.
-    """
+    """Registry of worker-process WebRTC sessions keyed by camera."""
 
     def __init__(
         self,
@@ -462,14 +399,7 @@ class WebRtcStreams:
         return bool(sessions)
 
     def push_resolved_frame(self, camera_name: str, fmt: str, width: int, height: int, data: bytes) -> None:
-        """Fan an already-resolved frame out to every session on this camera.
-
-        Called from the IPC reader loop for every frame the main process
-        decided was worth sending (it already checked has_sessions() over
-        there before doing any work) -- resolving topic_type/HwJpegCodec
-        layout to (fmt, width, height, data) happens on the sender side now,
-        since that's where the ROS message and CameraFrame already live.
-        """
+        """Fan a resolved frame out to all sessions for its camera."""
         with self._lock:
             sessions = list(self._sessions.get(camera_name, ()))
         if not sessions:

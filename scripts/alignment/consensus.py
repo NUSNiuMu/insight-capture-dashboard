@@ -42,10 +42,7 @@ class AlignmentConsensus:
 
     @staticmethod
     def _pose_delta_metrics(reference: np.ndarray, candidate: np.ndarray) -> Tuple[float, float]:
-        # Direct translation distance + rotation angle. NOT the twist-style
-        # delta (ref @ inv(cand)): for anchor transforms with metre-scale
-        # translations that mixes rotation error into the translation metric
-        # (1 deg of yaw at |t|=2m reads as ~3.5cm of translation).
+        # Keep translation distance independent from rotation error.
         translation_norm_m = float(np.linalg.norm(reference[:3, 3] - candidate[:3, 3]))
         trace = float(np.trace(reference[:3, :3] @ candidate[:3, :3].T))
         cos_theta = max(-1.0, min(1.0, (trace - 1.0) * 0.5))

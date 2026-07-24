@@ -304,14 +304,7 @@ class AlignmentLifecycle:
             self.owner.live_alignment_samples_by_camera[camera_name] = []
             self.owner.live_alignment_inlier_counts[camera_name] = 0
 
-        # Per-sample anchoring: pair THIS detection with the VIO pose
-        # interpolated at THIS detection's stamp, yielding one anchor candidate
-        # per frame. The anchor is (ideally) constant even while the camera
-        # moves, so gating and averaging happen on anchor candidates rather
-        # than on board->camera poses -- the old board-pose scatter gate
-        # conflated camera motion with noise (forcing a stay-still
-        # calibration), and the old single-VIO-sample anchoring baked that one
-        # instant's VIO noise into the whole session.
+        # Pair each detection with its interpolated VIO pose to form a stable anchor.
         board_to_camera = detection.marker_transform
         base_transform = self.owner._dashboard_transform_from_optical(board_to_camera)
         dashboard_yaw_deg = self.owner._dashboard_horizontal_yaw_deg_from_transforms({camera_name: base_transform})
@@ -351,10 +344,7 @@ class AlignmentLifecycle:
         if anchor_transform is None:
             return
 
-        # Hard spread ceiling: the MAD filter adapts its threshold to the
-        # data, so a uniformly-noisy window still yields "inliers". RMS
-        # deviation from the averaged anchor is the real quality number --
-        # refuse to publish a solution above the configured ceiling.
+        # Enforce an RMS ceiling because adaptive MAD alone accepts uniform noise.
         deviations = [self.owner._pose_delta_metrics(anchor_transform, anchor) for anchor in selected_anchors]
         anchor_translation_rms_m = float(np.sqrt(np.mean([d[0] ** 2 for d in deviations])))
         anchor_rotation_rms_deg = float(np.sqrt(np.mean([d[1] ** 2 for d in deviations])))
@@ -368,9 +358,7 @@ class AlignmentLifecycle:
             self.owner._log_live_alignment_status()
             return
 
-        # Averaged board/display transforms of the same selected samples, for
-        # logging and the result txt (display only -- the anchor is what
-        # matters).
+        # Average matching board/display transforms for diagnostics.
         averaged_board_to_camera = average_transforms([anchored[index][1] for index in selected])
         averaged_display = average_transforms([anchored[index][2] for index in selected])
         if averaged_board_to_camera is None or averaged_display is None:

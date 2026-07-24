@@ -1,17 +1,6 @@
 #!/usr/bin/env bash
-# Build a customer release: the docker image tarball (the thing customers get
-# for every upgrade) plus the deploy bundle (one-time first-install package
-# with the compose file, update.sh, run_dashboard.sh and README).
-#
-# Run on a Jetson (arm64) from anywhere inside the repo:
-#   ./scripts/build_release.sh v1.2.0
-#
-# Produces:
-#   release/insight-dashboard-v1.2.0.tar.gz          # image; every upgrade
-#   release/insight-dashboard-deploy-v1.2.0.tar.gz   # bundle; first install only
-#
-# Delivery: first install = send both; upgrade = send just the image tarball,
-# customer runs ./update.sh insight-dashboard-v1.2.0.tar.gz
+# Build the customer image tarball and first-install deployment bundle.
+# Usage: ./scripts/build_release.sh v1.2.0
 
 set -euo pipefail
 
@@ -28,11 +17,7 @@ mkdir -p release
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
-# Only jetson-nx ships as a customer release (deploy/lite, deploy/lite-779 are
-# dev-only device profiles, see config/devices/). config/ is baked into the
-# image verbatim by the Dockerfile's `COPY .`, so if a developer left the
-# checkout pointed at a different device profile (scripts/select_device.sh)
-# and forgot to switch back, this would silently ship the wrong cameras.json.
+# Customer releases must contain the jetson-nx live profile.
 selected_device="$(cat config/.device 2>/dev/null || echo "<none>")"
 [[ "${selected_device}" == "jetson-nx" ]] \
     || { echo "ERROR: config/ is currently set to '${selected_device}', not 'jetson-nx' -- run ./scripts/select_device.sh jetson-nx first" >&2; exit 1; }
@@ -46,12 +31,7 @@ log "Saving image to ${image_tarball} (several GB; takes a while)..."
 docker save "${IMAGE_NAME}:${version}" | gzip > "${image_tarball}"
 
 log "Assembling deploy bundle..."
-# The bundle's top-level dir is deliberately version-less: it becomes the
-# customer's permanent install dir (holding .env, config/, rosbags/ ...), so
-# its name must stay stable across releases -- only the tarball filename and
-# the image tag carry the version. A versioned dir name here meant every
-# fresh install landed in a different path, breaking anything that pointed
-# at the previous one (the camera-reboot systemd unit, muscle memory, docs).
+# Keep the installed directory stable; only artifacts and image tags vary.
 bundle_dir="release/${IMAGE_NAME}-deploy"
 rm -rf "${bundle_dir}"
 mkdir -p "${bundle_dir}/scripts/systemd"
@@ -61,12 +41,7 @@ cp deploy/docker-compose.yml deploy/update.sh deploy/README.md "${bundle_dir}/"
 cp scripts/run_dashboard.sh "${bundle_dir}/scripts/"
 chmod +x "${bundle_dir}/update.sh" "${bundle_dir}/scripts/run_dashboard.sh"
 
-# Host-level setup (sysctl DDS receive buffers + boot-time camera-reboot
-# unit) used to only happen via scripts/setup_host.sh, which needs the full
-# source checkout -- the end-user path (this bundle) had no way to apply
-# either, silently missing both the documented 10-24% frame-drop fix and the
-# stale-DDS-participant boot race fix. Bundle host_setup.sh (thin wrapper
-# around the same two steps setup_host.sh does) plus what it needs.
+# Bundle the same host tuning used by source-checkout installations.
 cp scripts/host_setup.sh "${bundle_dir}/scripts/"
 cp scripts/reboot_cameras.sh "${bundle_dir}/scripts/"
 cp scripts/systemd/insight-camera-reboot.service "${bundle_dir}/scripts/systemd/"

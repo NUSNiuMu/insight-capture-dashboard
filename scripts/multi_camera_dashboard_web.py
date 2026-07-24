@@ -132,12 +132,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self.project_root = config_path.resolve().parents[1]
         self.window_title = config.get("window_title", "Insight Web Dashboard")
         trajectory_config = config.get("trajectory", {})
-        # config/cameras.json sets this to "reliable" on this fleet: measured
-        # 2026-07-13 that "best_effort" silently drops a whole image sample
-        # on a single lost UDP fragment (no retransmission), causing ~1-4%
-        # scattered single-frame loss in recordings with 0 kernel-level
-        # errors to show for it -- "reliable" measured 0.0% loss across
-        # repeated trials with no regression to the other topics.
+        # Reliable image QoS prevents whole-frame loss from fragmented UDP samples.
         self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
         self.pose_publish_hz = max(1.0, float(trajectory_config.get("pose_publish_hz", pose_publish_hz)))
         self.pose_timeout_sec = max(0.2, float(trajectory_config.get("pose_timeout_sec", 2.0)))
@@ -177,18 +172,12 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         if self.reference_camera is None and self.poses:
             self.reference_camera = self.poses[0].name
 
-        # Set by main() once RecordingManager exists (constructed after this
-        # node) -- consulted by the stale-participant watchdog so it doesn't
-        # kill an in-progress recording over one camera dropping out.
+        # Wired by main() after RecordingManager is constructed.
         self.recording_manager: Optional[RecordingManager] = None
         self._playback_mode: bool = False
-        # Settings toggle: render poses as large role-colored dots instead of
-        # loading the GLB avatar models -- the clean stick-figure look for the
-        # skeleton overlays. In-memory only, like the rest of Settings.
+        # In-memory settings toggle for primitive pose rendering.
         self.stick_figure_mode: bool = False
-        # Bounded deque: append is O(1) and old points fall off automatically.
-        # A plain list needed an O(max_points) slice-delete per pose message,
-        # which at 100Hz x 3 poses was ~300 full-list shifts per second.
+        # Bounded deques avoid per-message trace slicing.
         self.raw_traces: Dict[str, Deque[Tuple[float, float, float]]] = {
             pose.name: deque(maxlen=self.max_points) for pose in self.poses
         }
@@ -205,60 +194,28 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self.live_alignment_image_lock = threading.Lock()
         self.live_alignment_solution_lock = threading.Lock()
         self.ros_callback_group = ReentrantCallbackGroup()
-        # Humble creates one default "incompatible QoS" waitable for every
-        # subscription. On this Jetson/rmw_fastrtps combination the rclpy
-        # executor has repeatedly segfaulted while enumerating those
-        # QoSEventHandler objects (qos_event.py get_num_entities/is_ready/
-        # __enter__), especially while rosbag recorder participants are
-        # leaving during stop/merge. We do not consume QoS event callbacks;
-        # the explicit profiles below are fixed and validated at startup.
-        # Disable only the unused default handlers so normal subscription
-        # data callbacks remain unchanged and the crashing waitables are not
-        # added to the executor at all.
+        # Unused default QoS waitables can crash this Jetson/rmw_fastrtps executor.
         self.subscription_event_callbacks = SubscriptionEventCallbacks(
             use_default_callbacks=False
         )
         self.dashboard_subscriptions = []
-        # Recording feeds off this node's own image subscriptions instead of
-        # a second `ros2 bag record` reader -- see inprocess_bag_writer.py
-        # for why a second reader on the same image topic causes drops.
-        # Keyed by output path (one writer/thread per camera, see
-        # start_image_recording) so cameras don't serialize behind each
-        # other on a single writer thread.
+        # Reuse image subscriptions and keep one writer per camera to avoid drops.
         self._recording_writers: Dict[str, InProcessBagWriter] = {}
         self._recording_writer_by_topic: Dict[str, InProcessBagWriter] = {}
-        # Camera header stamps are monotonic in the camera's boot-relative
-        # clock, while rosbag2 requires epoch-ish timestamps in the shared
-        # recording timeline.  Each recording establishes one fixed mapping
-        # per image topic at its first frame; later frames must retain the
-        # camera cadence rather than inheriting Python executor jitter.
+        # Map boot-relative image stamps once while preserving camera cadence.
         self._recording_timestamp_offsets_ns: Dict[str, Optional[int]] = {}
         self._recording_header_audit: Dict[str, Dict[str, object]] = {}
         self._recording_writer_lock = threading.Lock()
-        # Latest-frame handoff from the (near-zero-cost) image subscription
-        # callbacks to the per-camera worker threads that do the heavy
-        # per-frame work (gripper detect, alignment, display encode). Plain
-        # dict item set/pop is atomic under the GIL -- no lock needed for a
-        # single-producer single-consumer latest-value slot.
+        # GIL-atomic latest-frame slots keep heavy work out of ROS callbacks.
         self._pending_frames: Dict[str, object] = {}
         self._pending_frame_events: Dict[str, threading.Event] = {
             camera.name: threading.Event() for camera in self.cameras
         }
         self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
         self._configure_hand_overlay()
-        # NVJPEG hardware encode for raw NV12/mono8 display frames and the
-        # hand-overlay decode/re-encode; None on non-Jetson hosts, and every
-        # call site keeps its cv2 path as fallback (see hw_jpeg.py).
+        # NVJPEG is optional; call sites retain their cv2 fallback.
         self._hw_jpeg = HwJpegCodec.create(log=self.get_logger().info)
-        # Hardware H.264 WebRTC (GStreamer/webrtcbin) runs in its own process
-        # (webrtc_worker.py) now, not in this one -- see wiki changelog
-        # 2026-07-22: with the 3D pose broadcast and all 3 WebRTC sessions
-        # active together (the real "3 camera panels + 3D on one screen"
-        # case), the two were measured fighting over this process's GIL with
-        # idle CPU sitting unused, dropping every camera's fps 12-30%. The
-        # frontend keeps its polling fallback either way (webrtc_available
-        # false when the worker isn't up/ready or lacks the hardware
-        # elements -- e.g. the lite/lite-779 dev profiles).
+        # WebRTC runs out of process to avoid GIL contention with pose broadcasts.
         self.webrtc_port = webrtc_port
         self._webrtc_ipc_path = os.path.join(tempfile.gettempdir(), f"insight_webrtc_{os.getpid()}.sock")
         self._webrtc_authkey = secrets.token_bytes(32)
@@ -271,18 +228,12 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self._webrtc_proc = self._start_webrtc_worker()
         threading.Thread(target=self._webrtc_ipc_loop, daemon=True, name="webrtc_ipc").start()
         threading.Thread(target=self._webrtc_healthz_loop, daemon=True, name="webrtc_healthz").start()
-        # Hand-overlay JPEG compositing also runs in its own process now,
-        # same reason and same shape as the WebRTC split above (see
-        # hand_overlay.compose_hand_overlay_jpeg's docstring): its
-        # hw_jpeg.py round trip shares this GStreamer/GIL contention but
-        # only fires once a hand is actually detected.
+        # Hand-overlay JPEG compositing also runs out of process.
         self._hand_overlay_ipc_path = os.path.join(tempfile.gettempdir(), f"insight_hand_overlay_{os.getpid()}.sock")
         self._hand_overlay_authkey = secrets.token_bytes(32)
         self._pending_hand_overlay_frames: Dict[str, Tuple[int, bytes, list]] = {}
         self._hand_overlay_frame_event = threading.Event()
-        # Highest composited version actually applied per camera so far --
-        # see _apply_composited_hand_overlay for why this replaces an exact
-        # camera_frame_versions match.
+        # Reject only composites older than the last applied result.
         self._hand_overlay_last_applied: Dict[str, int] = {}
         self._hand_overlay_proc = self._start_hand_overlay_worker()
         threading.Thread(target=self._hand_overlay_ipc_loop, daemon=True, name="hand_overlay_ipc").start()
@@ -343,16 +294,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         return camera.alignment_image_stream or self.live_alignment_image_stream
 
     def _create_dashboard_image_subscriptions(self) -> None:
-        # depth>1 matters once recording feeds off this subscription: with
-        # KEEP_LAST depth=1, any executor scheduling hiccup overwrites the
-        # not-yet-delivered frame and the recording loses it, even under
-        # RELIABLE (reliability guarantees delivery into the history, not
-        # that history won't be overwritten). depth=20 (~666ms-1s of slack)
-        # costs at most ~20 * ~510KB per raw camera -- cheap defensive
-        # headroom against executor scheduling stalls, raised from 5 while
-        # investigating the insight9_a loss below (measured to make no
-        # difference on its own -- see image_qos_reliability for the actual
-        # fix -- but kept since it's free insurance against a slower one).
+        # Depth 20 absorbs executor stalls without overwriting recording frames.
         image_qos = make_image_qos(depth=20, reliability=self.image_qos_reliability)
         for camera in self.cameras:
             namespace = camera.namespace
@@ -397,10 +339,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
     def _create_hand_overlay_subscriptions(self) -> None:
         if Detection2DArray is None:
             return
-        # Subscribed for every camera, not just insight9_a: hand detection is
-        # entirely device-side (HandEngine), so whether a camera actually
-        # publishes these topics is data-driven -- hand_overlay_available
-        # only flips true once a message actually arrives (see hand_overlay.py).
+        # Subscribe all cameras; availability becomes true after the first message.
         hand_qos = make_image_qos(depth=5, reliability="best_effort")
         for camera in self.cameras:
             namespace = camera.namespace
@@ -464,12 +403,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             calib_type = IMAGE_STREAMS[alignment_stream]["type"]
             self.live_alignment_topic_by_camera[camera_name] = calib_topic
 
-            # Avoid duplicate subscription: if the alignment stream is the same topic
-            # as the display stream, piggyback on the display callback rather than
-            # creating a second RELIABLE subscriber to the same publisher.  Having two
-            # simultaneous RELIABLE subscribers from the same node to the same topic
-            # can trigger a DDS backpressure loop (depth=1 + slow Python GIL) that
-            # permanently stalls one camera's entire participant.
+            # Reuse the display subscription to avoid duplicate reliable readers.
             if calib_topic != camera.topic:
                 calib_msg_type = CompressedImage if calib_type == "compressed" else RosImage
                 calib_sub = self.create_subscription(
@@ -546,10 +480,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
 
     def _make_camera_info_callback(self, camera_name: str):
         def callback(msg: CameraInfo) -> None:
-            # Live-only: calibration doesn't change bag-to-bag, and this
-            # feeds live board alignment, not the playback display -- no
-            # shadow /bagplay subscription needed, just stay inert while
-            # viewing a replay.
+            # Camera info feeds live alignment and stays inert during playback.
             if self._playback_mode:
                 return
             self.live_alignment_camera_matrix[camera_name] = np.array(msg.k, dtype=np.float64).reshape((3, 3))
@@ -696,10 +627,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 self.last_pose_received_time[name] = 0.0
 
     def set_playback_mode(self, enabled: bool) -> None:
-        # Live vs. playback is now decided structurally by which topic a
-        # message arrived on (see bagplay_topic / _make_dashboard_image_callback),
-        # not by comparing header timestamps to the bag's time range -- Insight
-        # camera stamps are boot-relative and can't carry that comparison.
+        # Topic remapping, not boot-relative timestamps, separates playback.
         self._playback_mode = enabled
         self.get_logger().info(f"Playback mode {'ON' if enabled else 'OFF'}")
 
@@ -789,13 +717,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--web-root", default=str(Path(__file__).resolve().parents[1] / "web_dashboard" / "dist"))
     parser.add_argument("--view-mode", choices=("3d",), default="3d")
     parser.add_argument("--fake-pose", action="store_true")
-    # Fallback only -- overridden by dashboard.trajectory.pose_publish_hz in
-    # cameras.json when present (see PoseBridgeNode.__init__). Raised to 50Hz
-    # 2026-07-22; be aware this broadcast worker measurably competes with
-    # concurrent WebRTC sessions for the GIL with idle CPU sitting unused
-    # (see wiki changelog) -- the webrtc_stream.py process split is meant to
-    # remove that specific interaction, re-verify fps under load if either
-    # side of that split changes.
+    # Fallback; cameras.json may override this broadcast rate.
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument("--start-alignment", action="store_true")
     parser.add_argument("--post-processing-config", default=str(Path(__file__).resolve().parents[1] / "config" / "post_processing.json"))
@@ -804,13 +726,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _run_executor(executor: "MultiThreadedExecutor", node: "PoseBridgeNode") -> None:
-    # executor.spin() runs in a daemon thread: if it raises (observed in the
-    # wild as rclpy's RCLError "failed to initialize wait set" on a startup
-    # race), the exception is otherwise silently swallowed -- the process
-    # keeps running, the HTTP server keeps answering healthz, but every ROS
-    # callback (pose/image/camera_info) is dead forever with no visible
-    # signal that anything is wrong. Exit hard so `restart: unless-stopped`
-    # actually gets a chance to recover instead of leaving a zombie backend.
+    # Exit on executor failure so Docker can recover a dead ROS callback loop.
     try:
         executor.spin()
     except Exception:
@@ -822,11 +738,7 @@ def _run_executor(executor: "MultiThreadedExecutor", node: "PoseBridgeNode") -> 
 
 
 def main() -> None:
-    # Crash forensics: docker's stdout capture loses the final unflushed
-    # buffer on os._exit/segfault, so post-mortems from `docker logs` are
-    # unreliable. Dump native crashes and every thread's stack on
-    # SIGINT/SIGTERM to a host-mounted file instead (chain=True keeps
-    # rclpy's own signal handling intact).
+    # Persist native crash and signal thread dumps outside Docker stdout.
     import faulthandler
     import signal
 

@@ -1,62 +1,5 @@
 #!/usr/bin/python3
-"""
-traj_score - trajectory quality evaluator for VIO / SLAM systems.
-
-Reads PoseWithCovarianceStamped messages from a ROS2 bag, computes the
-6x6 covariance trace for each pose, and summarises trajectory quality as
-a 0-100 score built for training-data curation (episodes are consumed
-whole, so sustained tracking degradation matters far more than isolated
-blips):
-
-  base score   log-domain logistic over the bulk covariance level
-               L = (log10(p50) + log10(p90)) / 2:
-                   base = 100 / (1 + exp(-(1.1 + 1.2 * z)))
-                   z    = (cal_median_L - L) / cal_sigma_L
-               Calibration anchor is this machine's own bag history, not
-               fleet-wide stats (2026-07-14, 192.168.19.222: 53 samples,
-               vio_image_cov across every locally recorded bag x camera
-               with duration >= 5s, short smoke-test recordings excluded):
-               median_L = -3.9195 (trace ~1.2e-4) is set to score 88 (not
-               ~75 as an untouched median would under this logistic curve)
-               -- a typical/"fair" recording on this hardware is meant to
-               read as a solidly good score, with headroom above it for
-               genuinely tight trajectories, not sit at the midpoint of the
-               scale. Sigma (spread) is kept at the prior value, 0.412
-               decades -- re-deriving it needs many more samples than we
-               had to be reliable, and changing the anchor alone already
-               satisfies the goal here. The base covariance standard was
-               relaxed on 2026-07-23: the logistic calibration centre moved
-               from -3.8212 to -3.61310 (1.51e-4 to 2.44e-4), raising a
-               typical local median's base score from 80.0 to 88.0.
-               Recalibrate by
-               recomputing the median over a fresh batch of representative
-               recordings if the hardware or environment changes materially
-               -- scores are only comparable within one calibration.
-
-  spike terms  samples above 8 x the bag's own median trace, grouped
-               into consecutive runs:
-               - transient runs (<= 2 frames): bounded nuisance penalty,
-                 1.5 pts each, capped at 5 total. A lone blip cannot
-                 tank an otherwise good recording.
-               - sustained runs (>= 3 frames): 35 pts per second of
-                 bad time, uncapped -- temporally correlated pose
-                 corruption poisons behaviour-cloning labels, so it
-                 must not hide behind a cap. The penalty is absolute
-                 (per second, not per fraction of the recording): the
-                 damage a corrupted segment does to training data does
-                 not shrink because the bag happens to be longer. Any
-                 run longer than 1 s additionally caps the score at 40
-                 (episode-level consumption: that segment invalidates
-                 the whole demonstration).
-
-Higher score = tighter, steadier uncertainty = better VIO performance.
-
-Usage:
-    traj_score <bag_path> [OPTIONS]
-
-Requires:
-    source /opt/ros/humble/setup.bash
-"""
+"""Score VIO trajectory quality from pose covariance and sustained spikes."""
 
 import argparse
 import json
@@ -71,7 +14,7 @@ from rosidl_runtime_py.utilities import get_message
 
 DEFAULT_TOPIC = "/insight7_a/camera/vio_image_cov"
 
-# Local-machine calibration (see module docstring for provenance).
+# Local calibration; recompute after material hardware or environment changes.
 DEFAULT_CAL_MEDIAN_L = -3.61310
 DEFAULT_CAL_SIGMA_L = 0.412
 

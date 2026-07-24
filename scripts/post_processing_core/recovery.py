@@ -18,16 +18,7 @@ class RecordingRecovery:
         self.owner = owner
 
     def _recover_orphaned_stagings(self) -> None:
-        """A graceful stop merges rosbags/_staging/<name>/ into rosbags/<name>
-        and removes the staging dir. A power cut leaves the staging dir behind
-        with part bags that hold data but are invisible to the bag list --
-        usually without metadata.yaml (written on clean close), sometimes with
-        a malformed sqlite file (recordings made before the WAL config).
-        For each part: reindex if only the metadata is missing, salvage via
-        `sqlite3 .recover` if the database itself is broken, then merge
-        whatever survived into a normal bag. Data that can't be salvaged is
-        left in place for manual forensics, never deleted.
-        """
+        """Recover orphaned staging parts and retain anything unsalvageable."""
         staging_root = self.owner.rosbag_root / "_staging"
         if not staging_root.is_dir():
             return
@@ -69,10 +60,7 @@ class RecordingRecovery:
         try:
             self.owner._convert_merge(good_parts, output_path)
         except Exception:
-            # A single poisoned part can segfault `ros2 bag convert` (observed
-            # with one salvaged image bag, exit -11). Probe each part alone and
-            # merge only the ones convert can actually read; the poisoned parts
-            # stay behind in staging.
+            # Probe parts individually because one corrupt part can crash conversion.
             self.owner._recovery_log(f"{staging_dir.name}: merged convert failed; probing parts individually")
             probed = [p for p in good_parts if self.owner._part_converts_cleanly(p)]
             dropped = [p.name for p in good_parts if p not in probed]
@@ -86,10 +74,7 @@ class RecordingRecovery:
         if len(good_parts) == len(part_dirs):
             shutil.rmtree(staging_dir, ignore_errors=True)
         else:
-            # Partial salvage: keep the unrecovered parts for forensics but
-            # drop the merged ones, and mark the dir so the next boot's scan
-            # does not adopt the remainder again (each pass would mint yet
-            # another _recovered_ bag from the same leftovers).
+            # Mark partial leftovers so later boots do not recover them again.
             for part in good_parts:
                 shutil.rmtree(part, ignore_errors=True)
             staging_dir.rename(staging_dir.with_name(f"{staging_dir.name}.leftover"))
@@ -118,13 +103,7 @@ class RecordingRecovery:
         return result.returncode == 0 and (part / "metadata.yaml").is_file()
 
     def _salvage_part(self, part: Path) -> bool:
-        """Rebuild a malformed sqlite database from its readable pages.
-
-        Streams `sqlite3 old .recover | sqlite3 new` (the dump can be GBs,
-        so no shell and no buffering the SQL in memory), then swaps the
-        rebuilt file in. The corrupt original is only deleted after the
-        rebuilt one opens and contains messages.
-        """
+        """Stream readable SQLite pages into a validated replacement database."""
         db_files = sorted(part.glob("*.db3"))
         if not db_files:
             return False

@@ -49,10 +49,7 @@ class AlignmentConfigurator:
         self.owner.live_alignment_detection_max_age_ns = int(
             float(calibration_config.get("detection_max_age_ms", 500.0)) * 1_000_000
         )
-        # Uncapped above 1.0: mono/IR streams can have markers only ~40-50px
-        # wide at native resolution (too small for reliable quad extraction),
-        # and upscaling before detection measurably recovers detections in
-        # that case (verified against real insight3 footage).
+        # Allow upscaling because small mono/IR markers need it for detection.
         self.owner.live_alignment_image_scale = max(
             0.1,
             float(calibration_config.get("alignment_image_scale", 1.0)),
@@ -84,18 +81,11 @@ class AlignmentConfigurator:
         ).lower()
         if self.owner.live_alignment_anchor_rotation_mode not in {"none", "yaw", "full"}:
             self.owner.live_alignment_anchor_rotation_mode = "yaw"
-        # Per-frame detection quality gate: RMS reprojection error (px) of the
-        # RANSAC-inlier board corners. Frames above this are dropped before
-        # they ever become anchor candidates.
+        # Reject frames with excessive inlier reprojection error.
         self.owner.live_alignment_max_reprojection_error_px = float(
             calibration_config.get("max_reprojection_error_px", 2.0)
         )
-        # Anchor-candidate gates. These replace the old max_translation_std_m /
-        # max_rotation_std_deg board-pose-scatter gates: board->camera scatter
-        # conflates camera motion with noise (forcing a stay-still calibration),
-        # whereas the anchor is constant under motion, so its spread measures
-        # actual solution quality. Used both as the MAD inlier floor and as a
-        # hard RMS ceiling below which a solution may be published.
+        # Anchor spread gates measure solution quality without penalizing motion.
         self.owner.live_alignment_anchor_max_translation_std_m = float(
             calibration_config.get("anchor_max_translation_std_m", 0.05)
         )
@@ -133,15 +123,7 @@ class AlignmentConfigurator:
         self.owner.live_alignment_aruco_dict = cv2.aruco.getPredefinedDictionary(dictionary_id)
         self.owner.live_alignment_detector = None
         detector_params = cv2.aruco.DetectorParameters()
-        # Default is CORNER_REFINE_NONE (coarse polygon-approximation corners).
-        # CORNER_REFINE_APRILTAG gives the best corners on clean/high-res
-        # images but was verified (against real insight3 mono footage where
-        # markers are only ~40-50px wide) to detect *zero* markers where NONE
-        # and SUBPIX both still work — its internal refinement apparently
-        # needs more pixels-per-module than this fleet's cameras provide.
-        # SUBPIX is the safer middle ground: still meaningfully better than
-        # NONE on well-resolved images, without APRILTAG's total failure mode
-        # on marginal-resolution ones.
+        # SUBPIX remains reliable on the fleet's small mono markers.
         detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
         if hasattr(cv2.aruco, "ArucoDetector"):
             self.owner.live_alignment_detector = cv2.aruco.ArucoDetector(
@@ -181,13 +163,7 @@ class AlignmentConfigurator:
                 marker_separation_m,
                 self.owner.live_alignment_aruco_dict,
             )
-        # The physical board in this fleet has its ids running RIGHT-TO-LEFT
-        # within each row (relative to the tags' own orientation), i.e. a
-        # row-mirrored version of what GridBoard assumes. A mirrored id layout
-        # cannot be fit by any rigid pose, so with the standard board every
-        # solver "converges" to a garbage pose (~110px reprojection residual,
-        # verified against a live insight7_b frame on 2026-07-09) -- which is
-        # what the old, gate-less estimatePoseBoard silently produced.
+        # Support the fleet's right-to-left marker IDs within each board row.
         board_id_layout = str(calibration_config.get("board_id_layout", "standard")).lower()
         if board_id_layout == "row_mirrored" and hasattr(grid_board, "getObjPoints"):
             grid_obj = grid_board.getObjPoints()

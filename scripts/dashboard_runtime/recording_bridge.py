@@ -14,13 +14,7 @@ class RecordingBridge:
         self.owner = owner
 
     def start_image_recording(self, topic_output_paths: Dict[str, str]) -> None:
-        """topic_output_paths maps each image topic to its own bag output
-        path -- one InProcessBagWriter (and background thread) per distinct
-        path, so e.g. insight3_a's and insight3_b's large uncompressed
-        streams don't serialize behind each other on a single writer thread
-        (measured: sharing one writer capped both around 13-16Hz instead of
-        their ~20Hz native rate, while insight9_a's much smaller compressed
-        stream alone kept up fine)."""
+        """Start one image writer per output path to avoid cross-camera blocking."""
         with self.owner._recording_writer_lock:
             if self.owner._recording_writers:
                 raise RuntimeError("Image recording writer is already running.")
@@ -29,18 +23,7 @@ class RecordingBridge:
             for topic, output_path in topic_output_paths.items():
                 writer = writers_by_path.get(output_path)
                 if writer is None:
-                    # The compressed Insight9 stream averages ~133 KiB at
-                    # 30 Hz. Its two 128-entry writer stages only absorb
-                    # about 8.5s total; a measured transient SQLite/writeback
-                    # stall exceeded that and rejected 109 otherwise
-                    # continuous frames. A later shared writeback stall also
-                    # overflowed both 20 Hz raw writers at depth 128 (86
-                    # frames each) while their received header sequences
-                    # remained continuous. Use 512 for every image writer:
-                    # about 34s of two-stage headroom for the compressed
-                    # stream and 51s for each raw stream. The two raw streams'
-                    # worst-case combined backlog is about 1 GiB, within this
-                    # machine's measured memory headroom.
+                    # Depth 512 covers measured transient SQLite/writeback stalls.
                     writer = InProcessBagWriter(
                         output_path,
                         max_queue=512,
@@ -72,8 +55,7 @@ class RecordingBridge:
             dropped += writer.dropped_count
             for topic, count in writer.dropped_by_topic.items():
                 dropped_by_topic[topic] = dropped_by_topic.get(topic, 0) + int(count)
-        # A continuous received-header sequence is not sufficient if the
-        # bounded disk queue rejected a frame after this callback observed it.
+        # Include disk-queue drops that header continuity cannot detect.
         audit["writer_queue_dropped"] = dropped
         audit["writer_queue_dropped_by_topic"] = dropped_by_topic
         for topic, topic_audit in audit.get("topics", {}).items():
@@ -113,9 +95,7 @@ class RecordingBridge:
         stamp = getattr(header, "stamp", None)
         source_ns = int(getattr(stamp, "sec", 0)) * 1_000_000_000 + int(getattr(stamp, "nanosec", 0))
         if source_ns <= 0:
-            # This is not expected for our image messages, but retaining a
-            # usable fallback keeps recording compatible with a malformed or
-            # headerless custom image message.
+            # Keep malformed or headerless custom messages recordable.
             writer.write(topic, msg, now_ns)
             return
 
@@ -136,11 +116,7 @@ class RecordingBridge:
 
         offset_ns = self.owner._recording_timestamp_offsets_ns.get(topic)
         if offset_ns is None:
-            # The source clocks are boot-relative.  Anchor each stream once,
-            # then write subsequent samples using source time so a 30-80 ms
-            # Python/DDS scheduling pause cannot look like a dropped frame in
-            # the resulting bag (the complete frames are often delivered in
-            # a short burst immediately afterwards).
+            # Anchor boot-relative clocks once; retain source cadence thereafter.
             offset_ns = now_ns - source_ns
             self.owner._recording_timestamp_offsets_ns[topic] = offset_ns
         writer.write(topic, msg, source_ns + offset_ns)

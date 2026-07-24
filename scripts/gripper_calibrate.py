@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
 
-"""Interactive live calibration for gripper open/close tracking.
-
-Subscribes to one camera's image stream, prints the live pixel distance
-between the two ArUco finger markers, and on your cue captures the "fully
-open" and "fully closed" readings. Writes both into
-config/gripper_calibration.json for GripperTrackingMixin to consume.
-
-Usage:
-  python3 scripts/gripper_calibrate.py --camera insight7_a
-"""
+"""Interactively calibrate gripper open and closed marker distances."""
 
 import argparse
 import json
@@ -121,9 +112,7 @@ def main() -> None:
     if camera_entry is None:
         raise SystemExit(f"Camera '{args.camera}' not found in {args.config}")
 
-    # Must be set before rclpy.init() — DDS reads it at participant creation time.
-    # Matches multi_camera_dashboard_web.py's own os.environ.setdefault call so this
-    # standalone script joins the same DDS domain as the running dashboard/cameras.
+    # DDS reads the configured domain when rclpy initializes.
     ros_domain_id = int(raw_config.get("ros_domain_id", 10))
     os.environ.setdefault("ROS_DOMAIN_ID", str(ros_domain_id))
     print(f"Using ROS_DOMAIN_ID={os.environ['ROS_DOMAIN_ID']}")

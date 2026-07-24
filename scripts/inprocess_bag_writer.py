@@ -1,19 +1,6 @@
 #!/usr/bin/env python3
 
-"""Write already-received ROS messages straight into a rosbag2 bag, in the
-same process that already subscribes to them for the live dashboard view.
-
-Why this exists: `ros2 bag record` opens its own independent DDS reader for
-every topic it records. For the big image topics, that means two RELIABLE
-readers (the dashboard's own display subscription + the recorder's) end up
-attached to the same publisher at once. Measured on this fleet, that second
-reader triggers a backpressure stall on the publisher's reliable writer
-history that starves *both* readers -- image topics dropped to ~3% of native
-rate during recording while every other (small-message) topic stayed near
-full rate, and an isolated recorder with zero other readers hit full native
-rate every time. Routing the already-received message straight to disk here
-means recording never adds a second reader for these topics at all.
-"""
+"""Write dashboard-received image messages without adding another DDS reader."""
 
 import multiprocessing
 import queue
@@ -62,13 +49,7 @@ def _storage_writer_process(
 
 
 class InProcessBagWriter:
-    """One DDS subscription, with serialization and sqlite writes off its callback.
-
-    Serialization remains in a local background thread because it consumes
-    rclpy message objects directly. The expensive rosbag2/SQLite calls run in
-    a spawned process, so they cannot monopolize the dashboard's GIL and
-    delay the image subscription callback.
-    """
+    """Serialize in a thread and write rosbag2/SQLite in a spawned process."""
 
     def __init__(
         self,

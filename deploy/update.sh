@@ -1,22 +1,12 @@
 #!/usr/bin/env bash
-# Install or upgrade the Insight dashboard from a docker image tarball.
-# Runs on the CUSTOMER machine, from the deploy bundle directory.
+# Install, upgrade, or roll back a customer deployment.
 #
 # Usage:
-#   ./update.sh insight-dashboard-v1.2.0.tar.gz            # install / upgrade
-#   ./update.sh --rollback v1.1.0                          # switch back to an
-#                                                          # already-loaded tag
-#
-# What it does:
-#   1. docker load the tarball (skipped for --rollback)
-#   2. First install only: seed config/ out of the image so the app's
-#      editable settings/calibration live on the host and survive upgrades
-#   3. Point .env's INSIGHT_VERSION at the new tag and `docker compose up -d`
-#   4. Wait for the backend /healthz to come up and report the result
+#   ./update.sh insight-dashboard-v1.2.0.tar.gz
+#   ./update.sh --rollback v1.1.0
 #
 # Refuses to restart while a recording is in progress (override: --force).
-# Old images are kept for rollback; clean up manually with `docker image ls
-# insight-dashboard` + `docker rmi` when disk gets tight.
+# Old images remain available for rollback.
 
 set -euo pipefail
 

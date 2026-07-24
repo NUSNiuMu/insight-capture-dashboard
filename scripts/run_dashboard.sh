@@ -1,34 +1,8 @@
 #!/usr/bin/env bash
-# Start (or ensure running) the Insight dashboard backend, then stay in the
-# foreground so Ctrl-C can stop it cleanly. Default mode waits quietly (no
-# log spam); --logs follows the backend logs instead; --jetson launches the
-# on-device browser kiosk window. The two flags combine (--jetson --logs): the
-# kiosk launches in the background and the backend logs (including the
-# perf_tracker CPU breakdown, see scripts/perf_tracker.py) stream in this
-# same terminal.
-#
-# Run from the host, this manages the container's whole lifecycle via
-# docker compose. Run from inside the container (e.g. already `docker exec`'d
-# in, or a devcontainer shell), it skips compose entirely and just waits on
-# the backend that's already running, launching the kiosk directly in-process
-# -- Ctrl-C only stops what this script started, not the backend. --logs
-# isn't available in-container (no docker CLI to read the container's own
-# stdout from inside itself).
+# Start the dashboard, optionally follow logs or launch the Jetson kiosk.
 #
 # Usage:
-#   ./scripts/run_dashboard.sh                    # quiet; Ctrl-C stops the backend
-#   ./scripts/run_dashboard.sh --logs             # same, but follows backend logs
-#   ./scripts/run_dashboard.sh --jetson           # also pull up the local kiosk
-#                                                  # window (only if a monitor is
-#                                                  # attached to this machine);
-#                                                  # Ctrl-C closes the kiosk window
-#                                                  # (backend keeps running --
-#                                                  # `docker compose down` to stop it,
-#                                                  # from the host)
-#   ./scripts/run_dashboard.sh --jetson --logs    # both: kiosk runs in the
-#                                                  # background, backend logs
-#                                                  # stream here; Ctrl-C stops
-#                                                  # both (and the backend)
+#   ./scripts/run_dashboard.sh [--jetson] [--logs]
 
 set -euo pipefail
 
@@ -122,21 +96,7 @@ log "Waiting for backend to become healthy on :${PORT}..."
 wait_for_backend_health
 log "Backend is up."
 
-# /healthz only proves the HTTP server is listening -- ROS2 discovery still
-# needs a few seconds to actually start receiving camera/pose data after
-# that. Launching --jetson (or opening the page) before real data is
-# flowing showed an empty 3D view / no image stream even though everything
-# was otherwise fine a few seconds later. Wait here instead of leaving that
-# race to whoever's watching the screen.
-#
-# Wait for ALL cameras (per config/cameras.json) to go live, not just one:
-# a Fast DDS participant created before some camera's USB-ethernet link
-# existed never sees that camera (interfaces are enumerated only at
-# participant creation, and it does NOT self-heal -- observed fully stale
-# >15min while a fresh `ros2 topic list` in the same container saw every
-# topic instantly). The only fix is recreating the participant, i.e.
-# restarting the backend, so on timeout restart and wait again, up to
-# ALL_LIVE_MAX_RESTARTS times before giving up and continuing anyway.
+# Wait for ROS data; restarting recreates DDS after late USB links appear.
 ALL_LIVE_WAIT_SEC="${INSIGHT_ALL_LIVE_WAIT_SEC:-30}"
 ALL_LIVE_MAX_RESTARTS="${INSIGHT_ALL_LIVE_MAX_RESTARTS:-3}"
 log "Waiting for all cameras to report live data..."
@@ -185,37 +145,16 @@ if [[ "${jetson_mode}" == "true" ]]; then
     log "Launching on-device kiosk window..."
     export DISPLAY="${DISPLAY:-:0}"
     if [[ "${in_container}" == "true" ]]; then
-        # Already inside the image that has the kiosk browser -- run the
-        # kiosk directly instead of hopping back out through `docker exec`.
-        # xhost (host-side X access control) isn't installed in this image
-        # and isn't needed here: if you can already reach this shell with a
-        # working DISPLAY, the host already granted access.
-        # --logs was already rejected in-container above, so this is always
-        # the last thing this script does when in_container.
+        # Run the bundled kiosk directly when already inside the container.
         exec "${SCRIPT_DIR}/open_web_3d_right.sh"
     fi
-    # The container connects to the host's X server as root, which the X
-    # server's access control will reject by default unless the host
-    # explicitly allows it. Harmless no-op if xhost isn't installed or
-    # this DISPLAY has no server (`|| true` keeps `set -e` from tripping).
+    # Grant the container access to the host X server.
     xhost +SI:localuser:root >/dev/null 2>&1 || true
-    # open_web_3d_right.sh actually runs Firefox as the unprivileged
-    # `kiosk` user inside the container (uid 1000), not root -- Firefox
-    # won't enable its content sandbox for uid 0 and shows a permanent
-    # warning bar instead. No docker userns-remap is configured, so
-    # container uid 1000 is this host's uid 1000 (whoever is invoking this
-    # script); grant that same uid the same X access as root above.
+    # Firefox runs as the unprivileged kiosk user.
     xhost +SI:localuser:"$(id -un)" >/dev/null 2>&1 || true
-    # The kiosk browser only exists inside the image, not necessarily on a
-    # fresh host, so this runs via `docker exec` rather than directly here.
-    # -e DISPLAY overrides whatever was baked in at `docker compose up`
-    # time, in case this shell's X session differs (e.g. it was started
-    # over SSH without X, and you're now running --jetson from a local
-    # desktop session instead).
+    # Run the bundled browser with the current desktop's DISPLAY.
     if [[ "${logs_mode}" == "true" ]]; then
-        # Can't exec here -- need control back to fall through to the log
-        # tail below. -d (detached) instead of -it: the kiosk is a GUI app
-        # talking to DISPLAY, not this terminal, so it doesn't need a tty.
+        # Detach the GUI so this shell can continue following logs.
         docker exec -d -e DISPLAY="${DISPLAY}" insight-dashboard \
             /workspaces/insight_capture/scripts/open_web_3d_right.sh
         log "Kiosk launched in the background; following backend logs below."
@@ -245,15 +184,7 @@ else
     echo "Press Ctrl-C to stop the backend."
 fi
 
-# Stay in the foreground so Ctrl-C has something to interrupt. On the host
-# this actually tears the backend down, instead of `up -d` leaving it running
-# detached with no way to stop it from this script; inside the container
-# there's no compose to tear down (and it keeps running the image's own main
-# process either way), so Ctrl-C here just stops watching. The blocking
-# command runs backgrounded + `wait`ed rather than plain foreground: bash
-# only runs traps between commands, and a foreground external command can
-# otherwise delay signal handling until *it* exits (which "sleep infinity"
-# never does).
+# Background the waiter so Bash handles Ctrl-C traps promptly.
 if [[ "${in_container}" == "true" ]]; then
     trap 'echo; log "Ctrl-C received, exiting (backend keeps running)."; exit 0' INT TERM
 else

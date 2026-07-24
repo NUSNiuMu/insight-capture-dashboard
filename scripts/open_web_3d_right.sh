@@ -15,29 +15,14 @@ export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUN
 export XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-x11}"
 unset WAYLAND_DISPLAY
 
-# Firefox is the kiosk browser (baked into the Dockerfile at /opt/firefox --
-# see its comment there for why: the vendored Playwright Chromium used
-# previously has no H.264 decoder at all, so it could never show the WebRTC
-# camera streams and was permanently stuck on the JPEG-polling fallback.
-# Firefox bundles Cisco's OpenH264 plugin specifically for WebRTC).
+# Firefox provides the H.264 support required by the WebRTC kiosk.
 FIREFOX_BIN="/opt/firefox/firefox"
 if [[ ! -x "${FIREFOX_BIN}" ]]; then
   echo "Kiosk Firefox binary not found at ${FIREFOX_BIN} -- rebuild the image (docker compose build)." >&2
   exit 1
 fi
 
-# --kiosk: true fullscreen, no window chrome. --profile points at the
-# baked-in profile (Dockerfile) that suppresses first-run dialogs, which
-# would otherwise sit on top of the dashboard with no one at the keyboard
-# to dismiss them.
-#
-# Run as the unprivileged `kiosk` user (Dockerfile), not root: Firefox
-# refuses its content sandbox for uid 0 and shows a permanent "security
-# sandbox is disabled" bar instead that can't be turned off short of not
-# running as root (Mozilla hardcodes the warning). `su` resets the
-# environment, so DISPLAY/XAUTHORITY are threaded through explicitly; X11
-# access for this uid is granted host-side by run_dashboard.sh's
-# `xhost +SI:localuser:$(id -un)`.
+# The baked profile suppresses dialogs; an unprivileged user keeps sandboxing.
 FIREFOX_PROFILE="/opt/firefox-kiosk-profile"
 KIOSK_LOG="${INSIGHT_KIOSK_LOG:-/tmp/insight-kiosk-firefox.log}"
 

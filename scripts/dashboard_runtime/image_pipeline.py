@@ -33,25 +33,8 @@ class ImagePipeline:
         camera_topic = next(c.topic for c in self.owner.cameras if c.name == camera_name)
         event = self.owner._pending_frame_events[camera_name]
 
-        # The subscription callback must stay near-zero cost: anything heavy
-        # here (gripper ArUco detection alone was measured at 35-48% of a
-        # core per camera) pushes per-frame handling past the 50ms frame
-        # period, the DDS receive queue overflows, and messages are dropped
-        # before recording ever sees them. So this only feeds the recording
-        # writer (a queue put) and stashes the latest message for the
-        # per-camera worker thread, which does gripper/alignment/encode at
-        # whatever rate it can manage -- skipping display frames is fine,
-        # losing recorded frames is not.
-        #
-        # Live and playback are two SEPARATE subscriptions on two different
-        # topics (playback's is remapped to /bagplay/... by PlaybackManager),
-        # both funneling into this same per-camera pending-frame slot. Exactly
-        # one side is ever authoritative: is_live == self.owner._playback_mode means
-        # "wrong source for the current mode" -- a live camera still
-        # connected during playback, or a stray playback message lingering
-        # after playback stopped -- so it's dropped before display, never
-        # blended by timestamp guessing (camera header stamps are boot-
-        # relative, not epoch, so they can't disambiguate the two).
+        # Keep callbacks near-zero cost so recording frames reach the queue.
+        # Live and /bagplay sources share a slot but are gated by playback mode.
         def callback(msg) -> None:
             if is_live == self.owner._playback_mode:
                 return
@@ -73,14 +56,7 @@ class ImagePipeline:
             if msg is None:
                 continue
             try:
-                # The subscription callback above has already put this frame
-                # on the recording queue. During a recording, rendering and
-                # copying every 1080p JPEG into the WebRTC IPC channel can
-                # monopolize the Python process long enough for DDS history
-                # to backpressure the publisher. Keep a responsive preview
-                # but deliberately sacrifice preview cadence before capture
-                # cadence. This is only relevant while a browser has a
-                # WebRTC session; without one the existing fallback is cheap.
+                # Throttle WebRTC previews before allowing capture backpressure.
                 preview_now = time.monotonic()
                 if self.owner._recording_active() and self.owner._webrtc_has_sessions.get(camera_name):
                     min_interval = 1.0 / RECORDING_WEBRTC_PREVIEW_FPS
@@ -90,14 +66,7 @@ class ImagePipeline:
                     self.owner._last_recording_preview_at[camera_name] = preview_now
                 if alignment_cb is not None:
                     alignment_cb(msg)
-                # Decode once and share: the display path and the gripper
-                # detector both work on the same pixels (the detector accepts
-                # 2-D grayscale directly and converts BGR itself otherwise),
-                # so a second full decode of the identical message is waste.
-                # When NVJPEG will encode the raw NV12/mono8 bytes directly
-                # and no gripper detector needs BGR pixels, skip the CPU
-                # decode entirely -- nvvidconv does the color conversion in
-                # hardware on the way into the encoder.
+                # Share one decode; skip CPU decode when NVJPEG can consume raw data.
                 display_image = None
                 if topic_type != "compressed" and (
                     camera_name in self.owner.gripper_tracking_cameras
@@ -114,10 +83,7 @@ class ImagePipeline:
                     if gripper_image is not None:
                         self.owner._process_gripper_image(camera_name, gripper_image)
                 now = time.monotonic()
-                # Compressed input is already a JPEG, but raw input would
-                # otherwise pay an NVJPEG encode for every frame solely for
-                # an HTTP fallback hidden behind an active WebRTC <video>.
-                # Refresh that fallback twice a second instead.
+                # Refresh the hidden HTTP fallback at low rate during WebRTC.
                 refresh_fallback = (
                     topic_type == "compressed"
                     or not self.owner._webrtc_has_sessions.get(camera_name)
@@ -130,12 +96,7 @@ class ImagePipeline:
                     else None
                 )
                 with self.owner.camera_frame_lock:
-                    # Once an overlay has been dispatched, keep the last
-                    # composited frame onscreen until its replacement returns
-                    # from the worker. Replacing it with every raw source
-                    # frame made the overlay visible only for the fraction of
-                    # a frame between the asynchronous result and the next
-                    # camera callback.
+                    # Keep the prior composite visible until its replacement returns.
                     if frame is not None and not frame.hand_overlay_pending:
                         self.owner.latest_camera_frames[camera_name] = frame
                         if topic_type != "compressed":
@@ -161,14 +122,7 @@ class ImagePipeline:
             data = bytes(msg.data)
             hand_overlay_pending = False
             if camera_name in self.owner.hand_overlay_enabled:
-                # Gates the frame and, if worth overlaying, dispatches the
-                # actual decode/draw/re-encode to hand_overlay_worker.py --
-                # see compose_hand_overlay_jpeg's docstring for why that work
-                # can't happen inline here anymore. This tick still serves
-                # the plain passthrough `data`; the composited version lands
-                # asynchronously and patches into latest_camera_frames once
-                # ready (_hand_overlay_ipc_loop), so a served frame is
-                # undecorated for at most one IPC round trip.
+                # Dispatch overlay work asynchronously and serve the source meanwhile.
                 hand_overlay_pending = self.owner.compose_hand_overlay_jpeg(camera_name, data, version)
             width, height = self.owner._jpeg_dimensions(data)
             return CameraFrame(
@@ -214,14 +168,7 @@ class ImagePipeline:
         )
 
     def _decode_display_image(self, msg: object) -> Optional[np.ndarray]:
-        # Display-only decode for raw (non-compressed) streams. mono8/8uc1
-        # is genuinely single-channel at the format level (no chroma exists
-        # to discard), so that shortcut stays. NV12 previously took the same
-        # Y-plane-only shortcut on the assumption its chroma was always
-        # neutral -- live insight3_b samples confirmed real per-frame U/V
-        # content, so that assumption doesn't hold in general. Route it
-        # through the shared full YUV->BGR decoder instead so no color data
-        # is silently dropped.
+        # Keep mono8 direct; route NV12 through full YUV-to-BGR conversion.
         if isinstance(msg, RosImage) and msg.width > 0:
             encoding = msg.encoding.lower()
             if encoding in ("mono8", "8uc1"):

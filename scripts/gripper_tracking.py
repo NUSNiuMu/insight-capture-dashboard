@@ -1,17 +1,6 @@
 #!/usr/bin/env python3
 
-"""Live gripper open/close tracking from two ArUco stickers on the jaw tips.
-
-The physical UMI-style gripper has one 4x4_50 ArUco marker per finger
-(stock stickers; IDs are fixed by the manufacturer, not by us). We track the
-pixel distance between the two marker centers on the same wrist camera frame
-already used for display/alignment, and normalize it against calibrated
-open/closed pixel-distance extremes captured live (see GripperCalibration).
-Pixel space is used deliberately instead of a metric 3D pose: we only need a
-0..1 knob to drive the avatar's finger nodes, not a physical measurement, and
-staying in pixel space avoids depending on per-camera intrinsics being
-available/accurate for this secondary feature.
-"""
+"""Track normalized gripper opening from two calibrated ArUco markers."""
 
 import json
 import time
@@ -34,9 +23,7 @@ RIGHT_MARKER_ID = 0
 # stale reading indefinitely.
 DETECTION_HOLD_TIMEOUT_SEC = 2.0
 
-# Resolved relative to this file, not the caller's CWD — a plain relative
-# string here previously caused silent (non-crashing) calibration-load
-# failures when a script was launched from outside the repo root.
+# Resolve calibration relative to this module, not the caller's CWD.
 DEFAULT_CALIBRATION_PATH = str(Path(__file__).resolve().parent.parent / "config" / "gripper_calibration.json")
 
 
@@ -103,25 +90,14 @@ class GripperMarkerDetector:
 
 
 class GripperTrackingMixin:
-    """Mixin providing live gripper-opening tracking, one instance per hand camera.
-
-    Expected host attributes (matches the LiveAlignmentMixin convention used
-    by PoseBridgeNode/DashboardNode): self.cameras (iterable with .name and
-    .teleop_role), and a way to receive decoded BGR frames per camera name.
-    """
+    """Provide live gripper-opening state for configured hand cameras."""
 
     def _configure_gripper_tracking(self, calibration_path: str = DEFAULT_CALIBRATION_PATH) -> None:
-        # teleop_role lives on PoseSpec, not CameraSpec — but pose.name == camera.name
-        # (both built from the same camera_setup.build_dashboard_config entries), so
-        # this set of names is directly usable to key camera-frame callbacks.
+        # Pose and camera names share the same configuration keys.
         hand_camera_names = {
             pose.name for pose in self.poses if getattr(pose, "teleop_role", None) in ("left_hand", "right_hand")
         }
-        # gripper_calibrations' keys are the fixed "this camera can track a
-        # gripper" set (never shrinks); gripper_tracking_cameras is the live
-        # on/off switch, checked per-frame by _process_gripper_image and
-        # toggled by set_gripper_tracking_enabled. Starts empty -- off by
-        # default until the user opts in per camera via the Settings page.
+        # Calibration keys are capabilities; tracking membership is the live toggle.
         self.gripper_tracking_cameras: set = set()
         self.gripper_detector = GripperMarkerDetector() if hand_camera_names else None
         self.gripper_calibration_path = Path(calibration_path)
@@ -160,11 +136,7 @@ class GripperTrackingMixin:
             self.gripper_last_opening[camera_name] = opening
 
     def set_gripper_tracking_enabled(self, camera_name: str, enabled: bool) -> None:
-        # self.gripper_calibrations is fixed at _configure_gripper_tracking time
-        # (one entry per hand camera) and never shrinks, so its keys are the
-        # authoritative "this camera can track a gripper" set; membership in
-        # gripper_tracking_cameras is the live on/off switch checked per-frame
-        # by _process_gripper_image and by the caller in multi_camera_dashboard_web.py.
+        # Calibration keys define which cameras support tracking.
         if camera_name not in self.gripper_calibrations:
             raise ValueError(f"'{camera_name}' is not a hand camera with gripper tracking configured")
         if enabled:
@@ -173,13 +145,7 @@ class GripperTrackingMixin:
             self.gripper_tracking_cameras.discard(camera_name)
 
     def gripper_opening_percent(self, camera_name: str) -> Optional[float]:
-        """Returns 0 (closed) .. 1 (open), or None if never detected / not a hand camera.
-
-        Holds the last known value across brief detection dropouts (occlusion,
-        motion blur) rather than snapping back to "unknown", per the same
-        reasoning as the live alignment status text: a momentarily-lost
-        marker shouldn't visibly jerk the avatar.
-        """
+        """Return 0..1 opening, holding brief detection dropouts."""
         result = self.gripper_latest_result.get(camera_name)
         if result is not None and (time.monotonic() - result.stamp_monotonic) > DETECTION_HOLD_TIMEOUT_SEC:
             return None

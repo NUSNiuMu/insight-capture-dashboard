@@ -91,13 +91,7 @@ def get_device_version(device_base_url: str, timeout: float = 5.0) -> Optional[s
 
 
 def resolve_device_base_url(configured_url: Optional[str] = None) -> str:
-    # An explicitly configured URL must win deterministically, not race the
-    # defaults: DEFAULT_DEVICE_BASE_URLS contains 169.254.10.1, so on a
-    # multi-camera host, "--device-base-url http://169.254.30.1" used to
-    # resolve to whichever camera answered first -- observed sending camera
-    # 30.1's reboot to 10.1 (twice) while 30.1 got nothing. Defaults remain
-    # the fallback for when the configured address is stale (e.g. the
-    # segment was changed via `network set`).
+    # Probe the configured device first; defaults only recover stale addresses.
     if configured_url:
         normalized = normalize_device_base_url(configured_url)
         version = get_device_version(normalized, DEVICE_DETECTION_TIMEOUT)

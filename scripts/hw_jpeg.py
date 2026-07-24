@@ -1,25 +1,6 @@
 #!/usr/bin/env python3
 
-"""Jetson hardware JPEG codec (nvjpegenc/nvjpegdec) behind a CPU-fallback API.
-
-The display encode path previously paid two CPU costs per raw frame:
-NV12->BGR cvtColor plus cv2.imencode. The NVJPEG engine takes the ROS
-message's NV12 (or mono8) bytes directly -- color conversion happens in
-nvvidconv on the way into NVMM memory -- so the CPU's only remaining work
-is one buffer copy. Same idea for the hand-overlay path, which decodes and
-re-encodes a JPEG per frame while the Settings toggle is on.
-
-Every entry point returns None on any failure and the caller keeps its
-existing cv2 path, so a PC without NVIDIA GStreamer elements (or a broken
-pipeline mid-run) degrades to exactly the old behavior. A pipeline that
-fails repeatedly is torn down and its key disabled for the process
-lifetime rather than retried every frame.
-
-Pipelines are persistent (appsrc -> ... -> appsink, one per caller key +
-caps) because building one costs ~100ms while pushing a buffer through an
-existing one costs ~1-3ms; per-key also means the two infrared cameras
-never serialize behind a shared pipeline lock.
-"""
+"""Persistent Jetson NVJPEG pipelines with a caller-managed CPU fallback."""
 
 import threading
 from typing import Dict, Optional, Tuple
@@ -35,20 +16,13 @@ except Exception:  # pragma: no cover - non-Jetson dev machines
     Gst = None
 
 _REQUIRED_ELEMENTS = ("nvjpegenc", "nvjpegdec", "nvvidconv")
-# Consecutive per-key failures before the key is disabled for good. One
-# rebuild attempt happens in between, so a transient EOS/flush hiccup
-# recovers but a systematically broken caps combination stops spamming.
+# Rebuild once, then disable a repeatedly failing pipeline key.
 _MAX_KEY_FAILURES = 3
 _PULL_TIMEOUT_NS = int(1e9)
 
 
 class _Pipeline:
-    """One persistent appsrc->appsink pipeline plus the lock guarding it.
-
-    GStreamer elements are not thread-safe for interleaved push/pull from
-    multiple threads; each camera worker owns its own key so in practice
-    the lock is uncontended.
-    """
+    """One locked, persistent appsrc-to-appsink pipeline."""
 
     def __init__(self, description: str, out_caps_note: str) -> None:
         self.lock = threading.Lock()
@@ -130,9 +104,7 @@ class HwJpegCodec:
                 return ("GRAY8", width, int(msg.height))
             return None
         if encoding == "nv12":
-            # Mirror _decode_calibration_message: some drivers report
-            # msg.height as the full Y+UV buffer height, so derive the luma
-            # height from the data length instead of trusting msg.height.
+            # Derive NV12 luma height because some drivers report total rows.
             total_rows, remainder = divmod(data_len, width)
             if remainder == 0 and total_rows > 0 and total_rows % 3 == 0:
                 return ("NV12", width, total_rows * 2 // 3)
@@ -147,10 +119,7 @@ class HwJpegCodec:
         return self._failures.get(("enc", key, fmt, width, height), 0) < _MAX_KEY_FAILURES
 
     def encode_ros_image(self, key: str, msg, quality: int = 82) -> Optional[Tuple[bytes, int, int]]:
-        """Encode a mono8/NV12 sensor_msgs/Image straight from msg.data.
-
-        Returns (jpeg_bytes, width, height) or None (caller falls back).
-        """
+        """Encode mono8/NV12 image data, returning JPEG dimensions on success."""
         layout = self.ros_image_layout(msg)
         if layout is None:
             return None

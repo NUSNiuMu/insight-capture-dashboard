@@ -1,24 +1,12 @@
 #!/usr/bin/env bash
-# Discover Looper camera devices on any 169.254.0.0/16 link, reboot them in
-# parallel, and wait for them to come back online.
-#
-# Camera IPs are not hardcoded because the network segment (the "n" in
-# 169.254.n.1) can be changed at any time via `looper_cli.py network set
-# --segment n`. Instead, each camera connects to this host over its own
-# dedicated point-to-point link (one interface per camera, see `ip addr`),
-# so devices are discovered by looking at which interfaces currently carry a
-# 169.254.x.y address and deriving the camera's IP from the project's
-# master/slave convention (device == <prefix>.1, host == <prefix>.2 — see
-# looper_cli/README.md "network set").
+# Discover cameras on point-to-point links, reboot them, and await recovery.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI="python3 ${SCRIPT_DIR}/../looper_cli/looper_cli.py"
 
-# Env-overridable: the boot-time systemd unit (scripts/systemd/
-# insight-camera-reboot.service) sets a longer discovery window, since USB
-# interface enumeration right after boot can outlast the interactive default.
+# Boot-time callers can extend discovery while USB links enumerate.
 DISCOVERY_TIMEOUT="${INSIGHT_DISCOVERY_TIMEOUT:-40}"   # seconds to wait for at least one camera interface to appear
 DISCOVERY_INTERVAL=2   # seconds between discovery attempts
 WAIT_TIMEOUT="${INSIGHT_CAMERA_WAIT_TIMEOUT:-120}"      # seconds to wait for each device to come back
@@ -26,16 +14,9 @@ PING_INTERVAL=3         # seconds between ping attempts
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
-# All deadlines below use bash's SECONDS (monotonic since script start), not
-# `date +%s`: at boot a Jetson without a live NTP sync still runs on a stale
-# RTC-less clock, and the forward jump when chrony/systemd-timesyncd corrects
-# it (observed ~20h on 2026-07-13) instantly expires wall-clock deadlines,
-# cutting discovery/wait windows to zero.
+# Use monotonic SECONDS because boot-time clock synchronization can jump.
 
-# How many cameras this fleet should have -- discovery keeps polling until it
-# sees all of them (or the window runs out), because USB links enumerate one
-# by one at boot and stopping at the first hit used to skip late links
-# entirely (insight3_b missed its post-boot reboot that way).
+# Wait for the configured camera count because USB links enumerate gradually.
 expected_camera_count() {
     python3 - "${SCRIPT_DIR}/../config/cameras.json" 2>/dev/null <<'PY' || echo 0
 import json, sys

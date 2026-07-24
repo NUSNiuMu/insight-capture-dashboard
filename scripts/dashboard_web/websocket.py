@@ -38,12 +38,7 @@ class PoseWebSocketService:
             await asyncio.sleep(1.0 / self.context.node.pose_publish_hz)
             if not self.clients:
                 continue
-            # build_pose_payload() rounds/serializes a full ~300-point trace
-            # per pose every tick -- CPU-bound Python that used to run
-            # in-line on this event loop and block pending camera-frame HTTP
-            # responses for its duration. Running it (plus the json.dumps,
-            # so send_str below doesn't re-serialize) in the default executor
-            # keeps the loop free to answer other requests while it computes.
+            # Build the CPU-heavy trace payload off the event loop.
             payload_json = await loop.run_in_executor(None, self._build_pose_broadcast_json)
             stale = []
             for ws in list(self.clients):

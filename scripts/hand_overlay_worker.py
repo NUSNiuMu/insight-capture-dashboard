@@ -1,38 +1,6 @@
 #!/usr/bin/env python3
 
-"""Standalone hand-overlay JPEG compositing process, split out of
-multi_camera_dashboard_web.py.
-
-Why a separate process: same GIL-contention pattern already diagnosed and
-fixed for WebRTC (see webrtc_worker.py's docstring and the wiki changelog
-2026-07-22 entry) -- the main backend runs rclpy callbacks, per-camera JPEG
-worker threads, and the 3D pose-broadcast loop all in one Python process,
-sharing one GIL. compose_hand_overlay_jpeg's hw_jpeg.py round trip
-(GStreamer appsrc->nvjpegdec/nvjpegenc->appsink, PyGObject push-buffer/
-try-pull-sample calls) holds that GIL for its duration exactly like
-webrtcbin's signaling did, but only fires once a hand is actually visible
-(compose_hand_overlay_jpeg's early-outs keep the no-hand case free) --
-which is why the fps collapse was reported as "only once a hand is
-detected". This process removes that round trip from the shared GIL
-entirely, mirroring webrtc_worker.py's split.
-
-Unlike webrtc_worker.py, this process never talks to a browser, only to
-the main process, so there's no HTTP server here -- plain threads plus one
-AF_UNIX multiprocessing.connection.
-
-IPC with the main process is one persistent multiprocessing.connection
-(AF_UNIX, authenticated) carrying two message shapes:
-  main -> worker: (camera_name, version, jpeg_bytes, hands) -- gating
-      (stale/no-hands/out-of-sync checks) has already happened on the main
-      side (see hand_overlay.py's compose_hand_overlay_jpeg), so every
-      message here is worth compositing.
-  worker -> main: (camera_name, version, composited_jpeg_bytes) -- sent
-      only on a successful composite; a dropped/failed frame sends
-      nothing, which the main side treats exactly like today's "no overlay
-      this tick" (see PoseBridgeNode._hand_overlay_ipc_loop).
-`version` round-trips unchanged so the main process can tell whether a
-newer raw frame has already superseded this result before applying it.
-"""
+"""Out-of-process hand-overlay JPEG compositing over authenticated AF_UNIX IPC."""
 
 import argparse
 import ctypes
@@ -54,9 +22,7 @@ _PR_SET_PDEATHSIG = 1
 
 
 def _die_with_parent() -> None:
-    """See webrtc_worker.py's _die_with_parent -- same rationale, copied
-    rather than shared since it's ~10 lines and this module already carries
-    the same Linux-only assumption."""
+    """Use Linux PDEATHSIG to prevent an orphaned worker."""
     try:
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
         libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
@@ -71,9 +37,7 @@ def _log(message: str) -> None:
 def _composite(
     hw_jpeg: Optional[HwJpegCodec], camera_name: str, jpeg_bytes: bytes, hands: List[Dict[str, object]]
 ) -> Optional[bytes]:
-    """Decode -> draw -> re-encode. Body moved verbatim from
-    hand_overlay.compose_hand_overlay_jpeg (see that function's docstring
-    for the hw/cv2 fallback rationale)."""
+    """Decode, draw, and re-encode with hardware and cv2 fallback paths."""
     if hw_jpeg is not None:
         image = hw_jpeg.decode_jpeg_bgrx(camera_name, jpeg_bytes)
         if image is not None:
@@ -93,12 +57,7 @@ def _composite(
 
 
 class _CameraWorker:
-    """One composite thread per camera, fed through a single-slot pending
-    mailbox -- mirrors _pending_frames/_frame_worker_loop in
-    multi_camera_dashboard_web.py: only the newest dispatched frame for a
-    camera is ever composited, older ones are dropped silently rather than
-    queued, so one slow/busy camera can't back up another's compositing or
-    stall the IPC accept loop."""
+    """Composite only the newest pending frame for one camera."""
 
     def __init__(self, camera_name: str, hw_jpeg: Optional[HwJpegCodec], send: Callable[[Tuple], None]) -> None:
         self._camera_name = camera_name
@@ -147,9 +106,7 @@ def main() -> None:
     if not authkey_hex:
         print(f"hand_overlay_worker: missing {_AUTHKEY_ENV} env var; refusing to start", file=sys.stderr)
         sys.exit(1)
-    # Hex-encoded by the main process (see _start_hand_overlay_worker in
-    # multi_camera_dashboard_web.py); decode back to raw bytes -- Listener's
-    # authkey here must match Client's authkey exactly, byte for byte.
+    # Decode the main process's hex-encoded IPC auth key.
     authkey = bytes.fromhex(authkey_hex)
 
     hw_jpeg = HwJpegCodec.create(log=_log)

@@ -31,44 +31,7 @@ except Exception:  # pragma: no cover - recovery degrades gracefully
     yaml = None
 
 def _trim_startup_skew(bag_dir: Path) -> Dict[str, object]:
-    """Cut the ragged startup window from a freshly-merged bag.
-
-    Each subprocess-recorded topic (IMU/VIO/camera_info/image) begins
-    capturing at a slightly different wall-clock instant -- DDS discovery
-    for a fresh `ros2 bag record` process takes anywhere from ~0.1s to
-    occasionally 1.5-2s depending on that camera's own timing (measured
-    2026-07-14 on 192.168.19.151), so right after "Start" some topics are
-    already flowing while others haven't matched their publisher yet. A
-    per-topic rate check reads that stagger as "loss" even though nothing
-    was ever dropped -- there's just no data to lose because that camera's
-    recorder wasn't listening yet.
-
-    Fix: find the latest of every frame topic's own first-message time
-    (the slowest-starting camera/stream), then delete every frame-topic
-    row before that instant. What's left is either complete from its own
-    true start or entirely absent -- never "started but already missing
-    its first N samples". Also rewrites metadata.yaml's starting_time /
-    duration / per-topic message_count so an explicitly requested
-    `check_bag.py --fast` metadata estimate reports the same corrected
-    picture. The default integrity check verifies individual header stamps.
-
-    Latched/one-shot topics (tf_static -- nominal_for() returns None,
-    they're not in check_bag.NOMINAL_HZ) are left untouched: they're not
-    frame streams, and dropping their only sample to align with a camera
-    topic would lose real static data for no completeness benefit. The
-    bag-level starting_time is computed from frame topics only for the
-    same reason -- otherwise an untouched tf_static sample published
-    before any camera connected would drag the reported start time back
-    to the exact skew this function exists to remove.
-
-    Capped at MAX_TRIM_NS (2s): normal per-camera discovery jitter measured
-    2026-07-14 topped out around 1.8s, so a skew beyond 2s means something
-    actually wrong (a stalled/wedged camera, not ordinary startup variance)
-    -- silently eating an unbounded amount of the front of the recording to
-    paper over that would hide a real problem instead of just smoothing a
-    harmless one. Past the cap, the still-lagging topic(s) keep whatever
-    real gap they have and it surfaces normally in check_bag/integrity.
-    """
+    """Align frame-topic starts, preserve latched topics, and cap trimming at 2s."""
     MAX_TRIM_NS = 2_000_000_000
     metadata_path = bag_dir / "metadata.yaml"
     info = yaml.safe_load(metadata_path.read_text())["rosbag2_bagfile_information"]
@@ -137,10 +100,7 @@ def _trim_startup_skew(bag_dir: Path) -> Dict[str, object]:
     }
 
 
-# Crash-safe sqlite pragmas (WAL) for every recording writer; without this
-# a power cut mid-recording leaves malformed .db3 files. See the yaml for
-# details. Shared by the `ros2 bag record` subprocesses here and the
-# in-process image writers (multi_camera_dashboard_web.py).
+# Shared crash-tolerant SQLite settings for subprocess and in-process writers.
 
 STORAGE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "rosbag_storage_sqlite3.yaml"
 
@@ -176,19 +136,13 @@ class RecordingManager:
         self.host_sync_ssh_target = str(host_sync_ssh_target or "").strip()
         self.sync_to_host_on_stop = bool(sync_to_host_on_stop)
         self.publisher_checker = publisher_checker
-        # Image topics are routed to the dashboard's own already-open
-        # subscription instead of a second `ros2 bag record` reader -- see
-        # inprocess_bag_writer.py for why a second reader on these topics
-        # causes drops. Falls back to the normal subprocess path (grouped in
-        # with everything else) if no node is wired in, e.g. under test.
+        # Reuse dashboard image subscriptions; tests may fall back to subprocesses.
         self._image_topics: Set[str] = set(_normalize_topics(image_topics or []))
         self._start_image_recording = start_image_recording
         self._stop_image_recording = stop_image_recording
         self._image_writer_active = False
         self._image_header_audit: Optional[Dict[str, object]] = None
-        # One `ros2 bag record` per camera (see _topic_group) instead of one
-        # process for every selected topic -- keyed by group name so start/
-        # stop/status can address them individually.
+        # Group recorder processes by camera namespace.
         self.processes: Dict[str, subprocess.Popen] = {}
         self._staging_dir: Optional[Path] = None
         self.output_path: Optional[str] = None
@@ -299,10 +253,7 @@ class RecordingManager:
 
             image_writer_active = False
             if image_topics:
-                # One writer/thread per camera group (mirrors the per-camera
-                # `ros2 bag record` split above) -- a single shared writer
-                # was measured to bottleneck the large uncompressed streams
-                # behind each other (~13-16Hz instead of ~20Hz native).
+                # Keep large camera streams on independent writers.
                 topic_output_paths = {
                     topic: str(staging_dir / f"_images_{_topic_group(topic)}") for topic in image_topics
                 }
@@ -374,13 +325,7 @@ class RecordingManager:
             if not processes and not image_writer_active:
                 return self.status()
 
-        # Signal every per-camera recorder up front (not one-at-a-time) so
-        # their shutdown/flush windows overlap instead of serializing the
-        # wait across N processes. Do this before detaching the in-process
-        # image writers: otherwise their queue is closed first while these
-        # subprocesses keep recording IMU/VIO for another ~0.2s, which makes
-        # the merged bag's whole-duration rate look as though image frames
-        # were missing.
+        # Stop subprocesses together before detaching image writers.
         for process in processes.values():
             try:
                 os.killpg(os.getpgid(process.pid), signal.SIGINT)
@@ -491,8 +436,7 @@ class RecordingManager:
     # ── power-loss recovery ──────────────────────────────────────────────────
 
     def start_orphan_recovery(self) -> None:
-        """Adopt recordings interrupted by power loss or a crash, in the
-        background (reindex/salvage of multi-GB bags takes a while)."""
+        """Recover interrupted staging bags in the background."""
         threading.Thread(
             target=self._recover_orphaned_stagings, daemon=True, name="staging_recovery"
         ).start()

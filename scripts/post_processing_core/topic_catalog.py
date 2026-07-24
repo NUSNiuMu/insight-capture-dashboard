@@ -214,16 +214,5 @@ def discover_live_topics(
 
 
 def _topic_group(topic: str) -> str:
-    """Group a topic by its ROS namespace (first path segment) -- this is
-    how recording is split into one `ros2 bag record` process per camera:
-    /insight3_a/camera/imu -> "insight3_a"; /tf_static -> "tf_static".
-
-    A single `ros2 bag record` handling all cameras' topics at once was
-    measured to drop the large image messages under load (each camera's
-    high-rate IMU crowding out the recorder's ability to service the bigger,
-    less frequent image callbacks in time) even though CPU and disk
-    throughput both had headroom -- three independent processes each only
-    have to keep up with one camera's own topics, which is well within the
-    proven-fine workload of two cameras sharing a single recorder.
-    """
+    """Group a topic by its first namespace segment for recorder isolation."""
     return topic.strip("/").split("/", 1)[0]

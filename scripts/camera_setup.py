@@ -14,10 +14,7 @@ IMAGE_STREAMS = {
     "color_compressed": {"topic": "color/image_rect_raw/compressed", "type": "compressed"},
 }
 
-# Per-model default scale/rotation/offset, keyed by the model's filename (not full path).
-# A camera entry that omits avatar_scale/avatar_rotation_deg_xyz/avatar_offset_xyz picks
-# these up automatically based on its avatar_model; setting the field explicitly in
-# cameras.json still overrides the model default.
+# Model defaults apply when cameras.json omits an explicit transform.
 AVATAR_MODEL_DEFAULTS = {
     "MaleBaseModel_BravFG.glb": {
         "avatar_scale": 0.024,
@@ -48,10 +45,7 @@ def avatar_model_defaults(avatar_model) -> Dict:
     return AVATAR_MODEL_DEFAULTS.get(Path(avatar_model).name, {})
 
 
-# Curated subset of assets/models/*.glb offered as choices in the dashboard's
-# Settings page. Limited to filenames with an AVATAR_MODEL_DEFAULTS entry:
-# without a tuned scale/rotation a model renders at scale=1.0 with no
-# rotation, which looks wrong out of the box.
+# Settings only offers models with tuned transforms.
 AVAILABLE_AVATAR_MODELS = [
     {"file": "vis_assembly.glb", "label": "Vis Assembly (hand)"},
     {"file": "MaleBaseModel_BravFG.glb", "label": "Male Base Model"},
@@ -121,11 +115,7 @@ def build_dashboard_config(config: Dict) -> Dict:
                 "column": int(camera.get("dashboard_column", 0)),
                 "column_span": int(camera.get("dashboard_column_span", 1)),
                 "row_span": int(camera.get("dashboard_row_span", 1)),
-                # Per-camera override for which stream live_alignment detects
-                # AprilTags on. Falls back to session_alignment.calibration.image_stream
-                # when unset — needed once the fleet mixes camera types (e.g. a
-                # mono/IR camera with no color stream alongside an RGB-only one),
-                # since they can't all share a single global stream name.
+                # Per-camera AprilTag stream overrides the global alignment stream.
                 "alignment_image_stream": camera.get("alignment_image_stream"),
             }
         )

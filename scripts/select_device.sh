@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-# Activates one device's config in this checkout -- copies
-# config/devices/<name>/{cameras.json,board_calibration.json,post_processing.json}
-# over the live config/ files the running backend actually reads.
-#
-# This replaced the old per-device git branch model (main/deploy/lite/
-# deploy/lite-779): all three devices' code now lives on main, and only
-# these three files differ between them. Run this once whenever you switch
-# which physical device you're developing against; `docker restart
-# insight-dashboard` picks up the change without a rebuild.
+# Activate config/devices/<name> as this checkout's live device profile.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

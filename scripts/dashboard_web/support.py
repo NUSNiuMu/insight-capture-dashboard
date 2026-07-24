@@ -27,12 +27,7 @@ def _read_tum_points(path: Path, max_points: int = 2000) -> list:
 
 
 def read_system_load() -> Dict[str, object]:
-    """Host-wide load average (not container-scoped -- /proc/loadavg isn't
-    namespaced) plus this container's own cgroup v2 CPU quota, so the UI can
-    show "how close to the ceiling are we" rather than a raw core count that
-    doesn't mean much once the container is itself capped below the host's
-    physical cores (see docker-compose.yml's `cpus:` limit).
-    """
+    """Return host load and container CPU-quota utilization."""
     load_1min = load_5min = None
     try:
         with open("/proc/loadavg") as f:
@@ -62,8 +57,5 @@ def read_system_load() -> Dict[str, object]:
 
 
 def bagplay_topic(topic: str) -> str:
-    """Where PlaybackManager remaps a live topic to during `ros2 bag play`,
-    so replayed data never shares a topic (and never blends) with a
-    still-connected live publisher. Single source of truth for both the
-    dashboard's shadow subscriptions and the remap args passed to bag play."""
+    """Return the isolated playback topic for a live ROS topic."""
     return f"/bagplay{topic}"

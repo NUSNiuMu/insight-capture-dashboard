@@ -1,35 +1,6 @@
 #!/usr/bin/env python3
 
-"""Standalone WebRTC/GStreamer process, split out of multi_camera_dashboard_web.py.
-
-Why a separate process: the main backend runs rclpy callbacks, per-camera
-JPEG/hand-overlay worker threads, and the 3D pose-broadcast loop all in one
-Python process, sharing one GIL. Measured 2026-07-22 (see wiki changelog):
-with the 3D view's pose broadcast AND all three WebRTC sessions active at
-once (i.e. the real "3 camera panels + 3D view on one screen" scenario),
-all three camera streams lost 12-30% fps -- reproducible purely on the
-backend with no browser involved, and CPU stayed around ~30% across 6
-cores the whole time (no core saturated), which is the signature of GIL
-contention wasting idle hardware rather than genuine compute exhaustion.
-This process removes GStreamer/webrtcbin's Python-side bookkeeping (pipeline
-management, push-buffer calls, ICE/DTLS signaling) from that shared GIL
-entirely.
-
-IPC with the main process is one persistent multiprocessing.connection
-(AF_UNIX, authenticated) carrying two message shapes in each direction:
-  main -> worker: (camera_name, fmt, width, height, data) -- a frame the
-      main process has already decided is worth sending (see
-      IpcServer/_accept_loop below for why that decision has to be made on
-      this side and echoed back, not assumed).
-  worker -> main: ("session_state", camera_name, has_sessions: bool) --
-      fired on every 0->1 / 1->0 transition (WebRtcStreams.create_session/
-      close_session), plus a full snapshot resent right after every
-      (re)connect so a restarted main process is never missing state.
-This lets the main process skip all per-frame work (encoding lookups,
-byte copies) for a camera nobody is actually watching over WebRTC --
-mirroring the "nobody watching = zero cost" property push_ros_frame() used
-to provide in-process (see push_resolved_frame in webrtc_stream.py).
-"""
+"""Standalone WebRTC/GStreamer worker with authenticated AF_UNIX IPC."""
 
 import argparse
 import asyncio
@@ -53,16 +24,7 @@ _PR_SET_PDEATHSIG = 1
 
 
 def _die_with_parent() -> None:
-    """Ask the kernel to SIGTERM us if our parent exits, however it exits.
-
-    The main process has multiple shutdown paths (settings-page restart,
-    ROS executor crash handler) that call os._exit() and skip Python
-    finally blocks entirely -- PDEATHSIG is delivered by the kernel
-    independent of how the parent died, so this is the only reliable way
-    to avoid an orphaned worker without patching every one of those exit
-    sites individually. Linux-only; this whole module already requires
-    Jetson/Linux GStreamer elements, so that's not a new constraint.
-    """
+    """Use Linux PDEATHSIG to prevent an orphaned worker."""
     try:
         libc = ctypes.CDLL("libc.so.6", use_errno=True)
         libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
@@ -71,15 +33,7 @@ def _die_with_parent() -> None:
 
 
 class IpcServer:
-    """Owns the single AF_UNIX connection to the main process.
-
-    One accept loop thread services (re)connects one at a time -- only
-    this thread ever calls conn.recv()/listener.accept(), and
-    on_session_state_change() (called from the aiohttp event-loop thread
-    when sessions are created/closed) only ever calls conn.send() guarded
-    by _lock, so there's no concurrent-send/concurrent-recv hazard to
-    worry about.
-    """
+    """Own the single reconnectable AF_UNIX connection to the main process."""
 
     def __init__(self, address: str, authkey: bytes, camera_names: Iterable[str], log) -> None:
         self._address = address
@@ -123,9 +77,7 @@ class IpcServer:
             with self._lock:
                 self._conn = conn
             try:
-                # A (re)connect must never leave the main process without
-                # gating state for a camera -- resend the full picture, not
-                # just future deltas.
+                # Resend all session state after every connection.
                 for name, has_sessions in list(self._session_state.items()):
                     conn.send(("session_state", name, has_sessions))
                 while True:
@@ -217,10 +169,7 @@ def main() -> None:
     if not authkey_hex:
         print(f"webrtc_worker: missing {_AUTHKEY_ENV} env var; refusing to start", file=sys.stderr)
         sys.exit(1)
-    # The main process hands this over hex-encoded (see _start_webrtc_worker
-    # in multi_camera_dashboard_web.py); decode back to the original raw
-    # bytes -- Listener's authkey here must match Client's authkey exactly,
-    # byte for byte, not the hex string's own ASCII bytes.
+    # Decode the main process's hex-encoded IPC auth key.
     authkey = bytes.fromhex(authkey_hex)
 
     raw_config = load_setup(Path(args.config))

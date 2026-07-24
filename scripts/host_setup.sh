@@ -1,39 +1,5 @@
 #!/usr/bin/env bash
-# One-time host-level tuning shared by both deployment paths: the developer
-# path (scripts/setup_host.sh, full source checkout) and the end-user path
-# (this same file is bundled into the deploy package by build_release.sh, see
-# docs/DEPLOYMENT.md §3.2) -- both need identical host OS setup regardless of
-# whether the image was built locally or imported from a tarball.
-# Idempotent: safe to re-run any time (e.g. after a JetPack reflash).
-#
-# What it does:
-#   1. write /etc/sysctl.d/99-dds-rx-buffers.conf (needs sudo) -- without
-#      this, best-effort image samples (~510KB each) overflow the kernel's
-#      208KB default UDP receive buffer and recordings silently lose
-#      10-24% of image frames (verified 2026-07-07, see docs/USAGE.md).
-#      Same file also raises net.core.netdev_max_backlog: all 3 cameras'
-#      USB-ethernet IRQs land on a single CPU core (no irqbalance/RPS on
-#      this platform -- confirmed via /proc/interrupts, one core handling
-#      100% of xhci-hcd traffic), and that core's default 1000-slot NAPI
-#      backlog queue overflows under combined bursts even though the socket
-#      buffers above are plenty big -- a different kernel layer entirely.
-#      Symptom: small BEST_EFFORT topics (400Hz IMU) losing ~0.5-0.9% of
-#      samples throughout a recording, invisible at the socket/DDS layer
-#      (`/proc/net/softnet_stat` col 2 = drops, col 3 = time_squeeze was
-#      always 0, i.e. not a CPU/budget problem, purely queue depth).
-#      Verified 2026-07-14 on 192.168.19.151: raising to 8192 took IMU loss
-#      from 0.47-0.94% (four separate storage configs, none of which moved
-#      the needle) to 0.0% (400.00Hz, 0 missing) across two 60-100s trials,
-#      with the per-camera NIC "dropped" counters not incrementing at all
-#      during the recording window (verified via `ip -s link`).
-#   2. install + enable the boot-time camera reboot unit (cameras boot
-#      faster than the Jetson and come up with stale DDS participants;
-#      see scripts/systemd/insight-camera-reboot.service). The unit's
-#      WorkingDirectory/ExecStart are rewritten to this checkout's actual
-#      path at install time (not hardcoded in the source unit file), so the
-#      same unit works whether this lands in a dev clone or a deploy bundle.
-#
-# Usage: ./scripts/host_setup.sh
+# Apply shared, idempotent Jetson network and camera boot tuning.
 
 set -euo pipefail
 
@@ -57,31 +23,14 @@ if [[ -f "${SYSCTL_FILE}" ]] \
 else
     log "writing ${SYSCTL_FILE} (sudo password may be prompted)..."
     sudo tee "${SYSCTL_FILE}" >/dev/null <<'EOF'
-# DDS large-image paths (insight cameras -> dashboard, and bag playback).
-# A single infra frame is a 510KB best-effort sample; the 208KB kernel
-# default buffers silently drop them on BOTH sides:
-# - receive (rmem): incoming camera frames overflow under CPU bursts and
-#   recordings lose 10-24% of image frames (verified 2026-07-07)
-# - send (wmem): `ros2 bag play` publishes from THIS host, and its bursts
-#   overflow the send buffer -- playback delivered 4-8fps instead of the
-#   recorded 20/30fps until this was raised (verified 2026-07-12; live
-#   view was never affected because live frames are SENT by the cameras,
-#   not by this host)
-# FastDDS uses the kernel defaults when no XML override is set, so the
-# *_default values matter, not just *_max.
-# Written by scripts/host_setup.sh -- re-run it after a reflash.
+# Buffer large DDS image samples in both recording and playback directions.
 net.core.rmem_max = 67108864
 net.core.rmem_default = 67108864
 net.core.wmem_max = 67108864
 net.core.wmem_default = 67108864
 # IP fragment reassembly headroom for the fragmented UDP datagrams.
 net.ipv4.ipfrag_high_thresh = 134217728
-# NAPI per-CPU backlog depth: all camera USB-ethernet IRQs land on one CPU
-# core on this platform, and the default 1000-slot queue overflows under
-# combined camera traffic bursts before packets ever reach a DDS socket --
-# a small BEST_EFFORT stream (400Hz IMU) silently loses ~0.5-0.9% of samples
-# throughout a recording with zero errors visible anywhere above this layer.
-# Verified 2026-07-14: eliminated that loss entirely (400.00Hz, 0 missing).
+# Increase NAPI backlog for camera USB-ethernet bursts.
 net.core.netdev_max_backlog = 8192
 EOF
     sudo sysctl -p "${SYSCTL_FILE}"
@@ -89,9 +38,7 @@ EOF
 fi
 
 # ── boot-time camera reboot unit ─────────────────────────────────────────────
-# Cameras power on with the Jetson but boot faster, so their DDS participants
-# bind before the Jetson's USB links exist and never recover -- see the
-# comment header in scripts/systemd/insight-camera-reboot.service.
+# Reboot cameras after host links exist to refresh their DDS participants.
 UNIT_SRC="${SCRIPT_DIR}/systemd/insight-camera-reboot.service"
 UNIT_DST=/etc/systemd/system/insight-camera-reboot.service
 if [[ -f "${UNIT_SRC}" ]]; then
@@ -111,13 +58,7 @@ else
 fi
 
 # ── CPU power mode ────────────────────────────────────────────────────────────
-# docker-compose.yml's cpus limit assumes all 6 Orin NX cores are online.
-# nvpmodel can leave the device in a lower-power mode (e.g. 15W = 4 cores)
-# from a previous provisioning step, which docker's CPU cgroup rejects
-# outright at container-create time ("range of CPUs is from 0.01 to 4.00")
-# rather than just running slower -- confirmed 2026-07-12 on a freshly
-# flashed unit. Not auto-fixed here (changing power mode needs a reboot,
-# too disruptive to do silently); just warn.
+# Warn when the compose CPU limit exceeds the active nvpmodel core count.
 if command -v nvpmodel >/dev/null 2>&1; then
     online_cpus="$(nproc)"
     if (( online_cpus < 6 )); then

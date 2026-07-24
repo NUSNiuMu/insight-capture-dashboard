@@ -1,30 +1,8 @@
 #!/usr/bin/env bash
-# Batch OTA-upgrade every Insight camera currently connected to this host
-# (the two insight3_* infrared cameras + insight9_a on this device, or
-# whatever set is physically plugged in at run time).
+# List or sequentially upgrade all cameras on local point-to-point links.
 #
-# looper_cli.py's own upgrade/current/list commands only ever target ONE
-# device per invocation (--device-base-url, or its own single-endpoint
-# auto-detect if omitted -- see looper_cli/looper_cli/device.py's
-# resolve_device_base_url, which explicitly warns it isn't safe to rely on
-# with more than one camera attached). This script is the fan-out: discover
-# every camera's IP the same way scripts/reboot_cameras.sh already does
-# (each camera sits on its own dedicated 169.254.x.x point-to-point link,
-# so devices are found by inspecting which local interfaces currently carry
-# an address in that range -- not a brute-force /16 scan), then invoke
-# looper_cli.py once per discovered device.
-#
-# NOT executed as part of writing this script -- run manually when ready:
-#   ./scripts/ota_upgrade_all_cameras.sh                # list only (current versions), no changes
-#   ./scripts/ota_upgrade_all_cameras.sh --upgrade       # actually upgrade every discovered camera
-#   ./scripts/ota_upgrade_all_cameras.sh --upgrade --version 1.2.3   # pin a version instead of --latest
-#
-# Cameras are upgraded ONE AT A TIME, not in parallel: an OTA reboots the
-# camera, and rebooting all three simultaneously would drop every camera
-# link at once (recording/live view goes dark fleet-wide) instead of just
-# the one currently mid-upgrade. Each device gets its own log line; one
-# camera's failure does not abort the rest of the batch (summarized at the
-# end instead).
+# Usage:
+#   ./scripts/ota_upgrade_all_cameras.sh [--upgrade] [--version=X.Y.Z]
 
 set -uo pipefail  # NOT -e: one camera's failure must not kill the loop
 
@@ -51,8 +29,7 @@ done
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
-# Identical discovery convention to scripts/reboot_cameras.sh: each camera
-# is the ".1" or ".2" peer on its own 169.254.x.x/24 point-to-point link.
+# Cameras are the peer address on each 169.254.x.x point-to-point link.
 discover_devices() {
     local line iface cidr ip prefix last device_ip
     ip -4 -o addr show up 2>/dev/null | while read -r line; do

@@ -54,10 +54,7 @@ class StaticRoutes:
             raise web.HTTPForbidden(text="path outside allowed roots")
         if not candidate.is_file():
             raise web.HTTPNotFound(text="asset not found")
-        # Only ever serves avatar_model .glb/.gltf files (see model_asset_url),
-        # which can be several MB — let the browser cache them across page
-        # navigations (each dashboard page, incl. /3d, is a separate full
-        # page load, so without this every visit re-downloads the model).
+        # Cache large avatar models across full-page navigation.
         response = web.FileResponse(candidate)
         response.headers["Cache-Control"] = "public, max-age=3600"
         return response

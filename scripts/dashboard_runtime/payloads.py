@@ -31,20 +31,11 @@ class PayloadBuilder:
                     position = [0.0, 0.0, 0.0]
                     quaternion = [0.0, 0.0, 0.0, 1.0]
                 else:
-                    # Rounded to 0.01mm (position) / 1e-5 (quaternion, unitless) --
-                    # this stream broadcasts at ~20Hz with a full trace history
-                    # (up to max_points) resent every tick, so untruncated
-                    # float64 repr (~17 sig figs) was bloating each message to
-                    # ~60KB and both server-side json.dumps and client-side
-                    # parse/render of that at 20Hz was the actual source of
-                    # the trajectory lag -- far beyond what this visualization
-                    # needs precision-wise.
+                    # Truncate visualization precision to keep broadcasts compact.
                     position = [round(float(value), 5) for value in transformed.position]
                     quaternion = [round(float(value), 5) for value in transformed.orientation_xyzw]
                 trace_points = self.owner.transformed_trace(pose.name)
-                # np.round over the whole trace in C instead of a 300-iteration
-                # Python loop -- measured ~2x faster, and less GIL hold time
-                # per broadcast tick.
+                # Vectorized rounding shortens GIL hold time.
                 trace = np.round(np.asarray(trace_points, dtype=np.float64), 4).tolist() if trace_points else []
                 entry = {
                     "name": pose.name,

@@ -166,11 +166,7 @@ export async function applyPoseUpdate(payload) {
     bindTrailToggles();
   }
 
-  // Fire all poses' model loads concurrently instead of a sequential
-  // `for...await`: without this, a slow first-time model fetch (e.g. the
-  // ~14MB Iron Man helmet) blocked position/trail updates for the *other*
-  // cameras until it finished, since the loop couldn't reach their
-  // iteration until the previous await resolved.
+  // Load pose models concurrently so one large asset cannot block the others.
   await Promise.all(poses.map(async (pose) => {
     const node = ensurePoseNode(pose);
     if (!node) return;
@@ -281,10 +277,7 @@ async function ensurePoseVisual(pose, node) {
       );
     }
     const container = await modelPromises.get(key);
-    // Babylon's instantiateModelsToScene renames EVERY node (not just roots) via this
-    // callback, discarding original names unless the source name is folded back in —
-    // findGripperFingerNodes below depends on recovering the original glTF node names
-    // (e.g. "left_finger_holder") to find the animatable finger nodes.
+    // Preserve glTF node names for gripper-finger lookup.
     const instantiated = container.instantiateModelsToScene((sourceName) => `${pose.name}-instance-${sourceName}`);
     const rootNode = new BABYLON.TransformNode(`${pose.name}-visual`, scene);
     rootNode.parent = node;
@@ -433,14 +426,7 @@ function findGripperFingerNodes(rootNodes, poseName) {
   if (!left || !right) {
     return null;
   }
-  // Each finger node's rest (fully-open) local X is its distance from the
-  // model's own mirror-symmetry center plane (X=0)
-  // centers each finger group on its own mesh centroid, not its inner (pad) face.
-  // Driving local X all the way to 0 therefore over-closes: the pad's own half-
-  // thickness extends past the centroid, so the two fingers interpenetrate by
-  // about that much before the centroids actually meet. GRIPPER_FINGER_TOUCH_CLEARANCE_M
-  // backs off the travel by that thickness so "closed" stops at first contact
-  // instead of driving through it (tuned from visual feedback: 1cm/side of overshoot).
+  // Stop at pad contact instead of moving both finger centroids to X=0.
   return {
     left,
     right,
@@ -466,20 +452,7 @@ function applyGripperOpening(pose, node) {
 }
 
 function handLandmarkToLocal(landmark) {
-  // Server landmarks are [along-fingers, lateral, synthetic-normal] in units
-  // of wrist->middle-MCP == 1 (see normalize_hand_landmarks). Position
-  // mapping elsewhere (mapDashboardPositionToScene) puts ROS body-forward
-  // on local/scene Z, and the original version here followed that and put
-  // "along the fingers" on local Z too -- but a real replay showed the
-  // rendered hand sitting 90 degrees off from the insight3 wrist camera's
-  // actual forward direction (reported 2026-07-22), i.e. empirically
-  // "along the fingers" needs local X, not Z, on this rig. Rotated this
-  // mapping by 90 degrees about the up axis to compensate (along -> x,
-  // lateral -> z, keeping y as the synthetic depth/up axis); rotate
-  // further about Y (not just flip a sign) if a real replay still shows an
-  // offset in the other direction. Separate concern from mirroring/
-  // chirality, which is whatever the original "-lateral" sign was about --
-  // preserved here (didn't touch that), see updateHandRig for that context.
+  // Map [along, lateral, normal] to this rig's empirically aligned local axes.
   return new BABYLON.Vector3(
     landmark[0] * HAND_RIG_SCALE,
     landmark[2] * HAND_RIG_SCALE,

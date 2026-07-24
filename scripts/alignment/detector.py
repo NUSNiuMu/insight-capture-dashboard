@@ -21,14 +21,7 @@ class AlignmentDetector:
         camera_matrix: np.ndarray,
         dist_coeffs: np.ndarray,
     ) -> Optional[Tuple[np.ndarray, np.ndarray, Optional[float]]]:
-        """Solve board->camera pose. Returns (rvec, tvec, rms_reproj_px or None).
-
-        RANSAC over the matched board corners (a single mis-detected tag no
-        longer skews the whole solution), LM refinement on the inliers, and an
-        RMS reprojection error the caller gates on. Falls back to
-        estimatePoseBoard (no reprojection metric) on OpenCV builds without
-        GridBoard.matchImagePoints.
-        """
+        """Solve board-to-camera pose with RANSAC, LM refinement, and RMS error."""
         board = self.owner.live_alignment_board
         if not hasattr(board, "matchImagePoints"):
             return self.owner._solve_board_pose_legacy(corners, ids, camera_matrix, dist_coeffs)
@@ -48,22 +41,14 @@ class AlignmentDetector:
             )
         except cv2.error:
             return None
-        # Half the corners of the min tag count may be RANSAC-rejected before
-        # the frame itself is considered unusable (4 corners per tag).
+        # Permit up to half the minimum tag corners to be rejected.
         min_corner_inliers = 2 * self.owner.live_alignment_min_detected_tags
         if not ok or rvec is None or tvec is None or inlier_idx is None or len(inlier_idx) < min_corner_inliers:
             return None
         inlier_idx = inlier_idx.reshape(-1)
         obj_in = obj[inlier_idx]
         img_in = img[inlier_idx]
-        # Planar boards have a two-fold pose ambiguity; the iterative solver
-        # returns only one branch and at oblique view angles it frequently
-        # lands in the wrong one (verified by Monte-Carlo sweep: >50% flipped
-        # poses at 55deg tilt, and the flipped pose still passes the
-        # reprojection gate). IPPE returns BOTH branches, so re-solve on the
-        # RANSAC inliers with IPPE, pick the branch by residual, and drop the
-        # frame entirely when the two branches are rotationally distinct yet
-        # fit equally well (genuinely ambiguous view).
+        # Use IPPE to resolve planar ambiguity; reject equally plausible branches.
         resolved = self.owner._disambiguate_planar_pose(obj_in, img_in, camera_matrix, dist_coeffs)
         if resolved is None:
             return None
@@ -84,12 +69,7 @@ class AlignmentDetector:
         camera_matrix: np.ndarray,
         dist_coeffs: np.ndarray,
     ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-        """Pick the correct branch of the planar two-fold pose ambiguity.
-
-        Returns (rvec, tvec) of the better IPPE branch, or None when the view
-        is genuinely ambiguous (both branches fit within the reprojection gate
-        but disagree in rotation) so the caller skips the frame.
-        """
+        """Return the better IPPE branch, or None for an ambiguous view."""
         try:
             solution_count, rvecs, tvecs, errors = cv2.solvePnPGeneric(
                 obj_in.reshape(-1, 1, 3),

@@ -1,23 +1,8 @@
 #!/usr/bin/env bash
-# One-time host setup for a fresh Jetson, then hand off to run_dashboard.sh.
-# Idempotent: safe to re-run any time (e.g. after a JetPack reflash, or when
-# diagnosing "it worked on the other device" differences).
-#
-# What it does, in order:
-#   0. select the device's config profile (scripts/select_device.sh), if
-#      --device was passed or none is selected yet
-#   1. sanity-check docker + the NVIDIA container runtime (hardware JPEG
-#      encode needs the runtime's GStreamer plugin injection)
-#   2/3. sysctl DDS receive buffers + boot-time camera reboot unit + CPU
-#      power mode check -- see scripts/host_setup.sh (shared with the
-#      end-user deploy path, bundled there by build_release.sh)
-#   4. docker compose build
-#   5. ./scripts/run_dashboard.sh  (skipped with --no-start)
+# Configure a Jetson host, build the image, and optionally start the dashboard.
 #
 # Usage:
-#   ./scripts/setup_host.sh                        # full setup + start
-#   ./scripts/setup_host.sh --device jetson-nx     # select a device profile first
-#   ./scripts/setup_host.sh --no-start             # setup only (CI / pre-provisioning)
+#   ./scripts/setup_host.sh [--device jetson-nx] [--no-start]
 
 set -euo pipefail
 
@@ -63,9 +48,7 @@ if ! grep -qs "libgstnvjpeg" /etc/nvidia-container-runtime/host-files-for-contai
     log "         encode will fall back to CPU inside the container (dashboard still works)."
 fi
 
-# ── 2/3. sysctl DDS buffers + boot-time camera reboot unit + CPU power mode ──
-# Shared with the end-user path (build_release.sh bundles this same file into
-# the deploy package) so both paths get identical host tuning.
+# Shared host tuning is also bundled for customer deployments.
 "${SCRIPT_DIR}/host_setup.sh"
 
 # ── 4. build the dashboard image ────────────────────────────────────────────

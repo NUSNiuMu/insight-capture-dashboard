@@ -86,11 +86,7 @@ class PlaybackManager:
             env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
             cmd = ["ros2", "bag", "play", str(bag_path)]
             if remap_topics:
-                # rosbag2's own --remap (not a generic `ros2 run` --ros-args
-                # -r): renames recorded topic names on the way out, so a
-                # live publisher still active on the original name never
-                # collides with replayed data on the same subscription --
-                # see bagplay_topic() / the dashboard's shadow subscriptions.
+                # Remap playback topics so live publishers cannot collide.
                 cmd += ["--remap"] + [f"{old}:={new}" for old, new in remap_topics.items()]
             process = subprocess.Popen(
                 cmd,

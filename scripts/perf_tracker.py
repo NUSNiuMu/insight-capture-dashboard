@@ -1,20 +1,6 @@
 #!/usr/bin/env python3
 
-"""Lightweight, always-on per-section CPU-time tracker.
-
-Not a substitute for a real profiler (py-spy, perf) -- this only times the
-specific code sections wrapped in track() below. The point is that it needs
-no special container capabilities (unlike py-spy, which needed SYS_PTRACE)
-and its output goes straight into the same log stream
-`run_dashboard.sh --logs` / `docker compose logs -f` already show, so "which
-of our own hot paths is busy right now" is visible on any deployment without
-attaching a profiler first.
-
-Percentages are seconds-of-work / seconds-of-wall-clock-window, i.e. "percent
-of one CPU core" -- if two cameras' work happens to overlap across threads,
-their percentages both count in full and the total can exceed 100%, same as
-per-process CPU% in top/htop on a multi-core box.
-"""
+"""Track selected hot paths as percentages of one CPU core."""
 
 import threading
 import time

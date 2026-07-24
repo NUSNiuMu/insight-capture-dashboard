@@ -29,11 +29,7 @@ class OptimizationManager:
     # Regexes for fine-grained COLMAP sub-progress
     _RE_FEATURE = re.compile(r'Processed file \[(\d+)/(\d+)\]')
     _RE_MATCH   = re.compile(r'Matching image \[(\d+)/(\d+)\]')
-    # Sub-progress fractions within the COLMAP step:
-    #   0.00–0.45  feature extraction
-    #   0.45–0.70  feature matching
-    #   0.70–0.95  mapper
-    #   0.95–1.00  post (model_converter, tum conversion, summary)
+    # COLMAP phases map to extraction, matching, mapper, and post-processing.
     _COLMAP_FEATURE_END  = 0.45
     _COLMAP_MATCH_START  = 0.45
     _COLMAP_MATCH_END    = 0.70

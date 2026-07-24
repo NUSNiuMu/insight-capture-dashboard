@@ -1,28 +1,5 @@
 #!/usr/bin/env python3
-"""Visualize insight_full hand-landmark results on the RGB stream (PC side).
-
-Subscribes to the compressed RGB image plus the two Detection2DArray topics the
-HandEngine publishes and overlays, per detected hand:
-  * the 21-point MediaPipe skeleton (per-finger colored bones + joints)
-  * the tight hand bounding box
-  * a handedness + score label
-
-Topics (defaults match topic_prefix = /{camera_namespace}/{camera_name}/,
-i.e. /camera/camera/):
-  RGB           : /camera/camera/color/image_rect_raw/compressed  (CompressedImage)
-  hand boxes    : /camera/camera/hand                             (Detection2DArray)
-  hand keypoints: /camera/camera/hand_keypoints                   (Detection2DArray)
-
-The keypoints message carries one Detection2D per landmark, id="handIdx:kpIdx",
-bbox.center = the pixel location, hypothesis.score = the hand score. The hand
-message carries one Detection2D per hand, id="handIdx", class_id="hand_left"/
-"hand_right", bbox = tight box.
-
-Usage:
-  ros2 launch foxglove_bridge foxglove_bridge_launch.xml   # not needed; this uses rclpy directly
-  python3 tools/visualize_hand_landmarks.py                # needs a ROS 2 env with rclpy
-  python3 tools/visualize_hand_landmarks.py --record out.mp4
-"""
+"""Visualize camera hand landmarks on the compressed RGB stream."""
 
 import argparse
 import threading
@@ -101,7 +78,6 @@ class HandLandmarkVisualizer(Node):
             f"keypoints={args.keypoints_topic}"
         )
 
-    # ---- subscriptions ----
     def _on_image(self, msg: CompressedImage) -> None:
         arr = np.frombuffer(msg.data, dtype=np.uint8)
         image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -123,7 +99,6 @@ class HandLandmarkVisualizer(Node):
             self._latest_kps_stamp_ns = stamp_to_ns(msg.header.stamp)
             self._recv_kps_ns = time.monotonic_ns()
 
-    # ---- rendering ----
     def _pick_image(self, target_stamp_ns: int) -> Optional[Tuple[int, np.ndarray]]:
         """Image whose stamp is closest to the keypoints stamp, else latest."""
         if not self._image_buffer:

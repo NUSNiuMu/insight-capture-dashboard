@@ -52,10 +52,7 @@ def _read_bag_metadata(metadata_path: Path) -> Dict[str, object]:
     if yaml is None or not metadata_path.exists():
         return {}
     try:
-        # CSafeLoader (libyaml) parses ~10x faster than the pure-Python
-        # SafeLoader; the bag list re-parses every metadata.yaml per request,
-        # which dominated /api/rosbags latency (~34ms vs ~3ms per bag on
-        # Jetson). Fall back if PyYAML was built without libyaml.
+        # Prefer libyaml because every bag-list request parses all metadata.
         loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
         payload = yaml.load(metadata_path.read_text(encoding="utf-8"), Loader=loader) or {}
     except Exception:
@@ -86,9 +83,7 @@ def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object
         )
         scored = _result_exists(results_root, "scores", bag_dir.name) or _result_exists(results_root, "scoring", bag_dir.name)
         optimized = _result_exists(results_root, "optimized", bag_dir.name) or _result_exists(results_root, "optimization", bag_dir.name)
-        # Unlike labeled/scored, mere file existence isn't enough here: the
-        # persisted report (written by /api/integrity/run) says pass or
-        # fail, and the badge must show which. None = never checked.
+        # The persisted report distinguishes pass, fail, and never checked.
         integrity: Optional[bool] = None
         integrity_path = results_root / "integrity" / f"{bag_dir.name}.json"
         if integrity_path.exists():

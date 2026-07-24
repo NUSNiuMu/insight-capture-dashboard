@@ -1,48 +1,6 @@
 #!/usr/bin/env python3
 
-"""Frame-drop / completeness check for a rosbag2 (sqlite3) recording.
-
-Two modes:
-
-  - default (exact): per-message scan. Reads message receive times AND
-    sensor header stamps (parsed from the first 12 bytes of the CDR blob:
-    4-byte encapsulation header, then int32 sec + uint32 nsec) so the two
-    failure modes can be told apart:
-
-      - gaps in *header stamps*  -> those frames never reached this process
-        (camera-side stall, or DDS/UDP loss on the way here)
-      - gaps only in *recv times* while stamps are complete -> delivery was
-        bursty but nothing was lost (normal for batched IMU delivery)
-
-    The 2026-07-07 investigation used exactly this distinction to pin
-    10-24% image loss on the kernel's 208KB default UDP receive buffer vs
-    510KB best-effort image samples (fix: /etc/sysctl.d/
-    99-dds-rx-buffers.conf, written by scripts/setup_host.sh). camera_info
-    (tiny, RELIABLE) arriving complete while images dropped ruled the
-    cameras themselves out. Keep --deep for that kind of triage; it also
-    reports per-gap detail (gap_events / worst_gaps).
-
-  - --fast: a SQLite aggregate query per topic (message count plus each
-    topic's first/last recorder timestamp).  It never reads message payloads
-    and therefore stays quick for large image bags.  Each topic is compared
-    with its own active time window, so a topic that ends late cannot make
-    another topic look as if it dropped frames.
-
-Used two ways:
-  - CLI (host or `docker exec`):
-      python3 scripts/check_bag.py                      # newest bag in rosbags/
-      python3 scripts/check_bag.py rosbags/<bag_dir>    # specific bag
-      python3 scripts/check_bag.py --fast ...           # metadata estimate only
-      python3 scripts/check_bag.py --max-loss 1.0 ...   # exit 1 above this %
-  - imported by the dashboard backend (analyze_bag) for the Scoring page's
-    "Verify Integrity" button and the Bags page integrity badge. These use
-    the exact default mode.
-
-Exit code: 0 = every checked topic within --max-loss, 1 = drops found,
-2 = bag unreadable. Suitable for scripting after important recordings.
-
-No ROS dependencies -- plain sqlite3/struct/yaml, runs on host or container.
-"""
+"""Check rosbag completeness by exact stamp gaps or fast SQLite aggregates."""
 
 import argparse
 import glob
@@ -60,29 +18,13 @@ NOMINAL_HZ = [
     ("image_rect_raw/compressed", 30.0),
     ("image_rect_raw", 20.0),
     ("camera_info", None),  # follows its image stream; resolved below
-    # Labeled 100Hz but the VIO estimator's own compute cycle never quite
-    # hits that: a bare `ros2 topic hz` with zero recorder/dashboard code
-    # attached measures a steady 99.19-99.31Hz on all 3 cameras (verified
-    # 2026-07-14, std dev ~0.0025s -- not sporadic loss, a real cycle-time
-    # floor). 99.0 leaves headroom under the observed floor so hitting that
-    # ceiling isn't reported as loss, while still catching a genuine
-    # additional drop below it.
+    # VIO's measured steady-state ceiling is slightly below its 100 Hz label.
     ("vio_100hz", 99.0),
     ("vio_image_cov", 20.0),
 ]
 
 DEFAULT_MAX_LOSS_PCT = 0.5
-# Subscriptions settling right after recording start used to produce
-# harmless gaps that this allowance forgave -- but it did so by subtracting
-# a flat allowance from the expected count regardless of WHERE the shortfall
-# actually fell, so it just as easily masked real mid-recording loss as it
-# forgave startup jitter (e.g. IMU averaging 395-398Hz still read 0% loss).
-# RecordingManager._trim_startup_skew (post_processing.py) now cuts that
-# startup window out of the merged bag at merge time instead, up to a 2s
-# cap, so every topic reaching check_bag has either fully started or is
-# fully absent -- no more startup-jitter class of gap to forgive here.
-# Default 0 so loss is reported honestly; pass --warmup for bags recorded
-# before 2026-07-14 (no trim applied) if they show stale startup-only gaps.
+# New bags are startup-trimmed; --warmup remains for legacy recordings.
 DEFAULT_WARMUP_S = 0.0
 
 
@@ -135,12 +77,7 @@ def gap_stats(ts, nominal_hz):
 
 
 def _read_topic_windows(bag_dir: Path) -> Dict[str, Dict[str, int]]:
-    """Return count and first/last recorder timestamps for every topic.
-
-    SQLite evaluates these aggregates without returning the CDR ``data``
-    blobs, making this suitable for a fast dashboard check even on large
-    image bags.  All split bag files are combined by topic name.
-    """
+    """Aggregate topic counts and recorder windows without reading payloads."""
     db3_files = sorted(glob.glob(str(bag_dir / "*.db3")))
     if not db3_files:
         raise ValueError(f"no .db3 file in {bag_dir}")
@@ -181,10 +118,7 @@ def _analyze_fast(
             continue
         nominal = nominal_for(name)
         if nominal is None:
-            # Keep event-driven and unconfigured custom streams visible in
-            # an all-topic report.  Counts alone have no expected-rate
-            # baseline for these streams, so a missing message cannot be
-            # distinguished from an event that was never published.
+            # Event streams remain visible but cannot be checked for drops.
             topics.append({
                 "name": name,
                 "ok": True,
@@ -200,9 +134,7 @@ def _analyze_fast(
                 "error": f"only {msgs} message(s)",
             })
             continue
-        # Include both endpoints: a 30 Hz topic spanning 10 seconds should
-        # have roughly 301 samples, not 300.  Crucially this is the topic's
-        # own span, never the bag-wide duration.
+        # Include both endpoints and use this topic's span, not the bag's.
         expected = max(1, round(span_s * nominal + 1 - warmup_s * nominal))
         missing = max(0, expected - msgs)
         loss_pct = missing / expected * 100 if expected > 0 else 0.0
@@ -244,8 +176,7 @@ def _analyze_deep(
             nominal = nominal_for(name)
             if nominal is None:
                 continue
-            # substr(): only the 12 stamp bytes leave sqlite instead of
-            # full image blobs -- measured 11.6s -> 8.2s cold on a 3GB bag.
+            # Read only the 12-byte stamp instead of full image payloads.
             rows = conn.execute(
                 "SELECT timestamp, substr(data,1,12) FROM messages "
                 "WHERE topic_id=? ORDER BY timestamp",
@@ -285,15 +216,7 @@ def analyze_bag(
     warmup_s: float = DEFAULT_WARMUP_S,
     deep: bool = True,
 ) -> Dict[str, object]:
-    """Analyze one bag directory; returns a JSON-serializable report.
-
-    Raises ValueError when the bag has no readable .db3 file (deep mode /
-    fallback) or no usable metadata.
-
-    Exact mode (default) scans header stamps. Fast mode uses timestamp
-    aggregates; it lists every recorded topic, while only topics with a
-    nominal-rate baseline can receive a loss verdict.
-    """
+    """Return a JSON-ready exact or fast integrity report for one bag."""
     bag_dir = Path(bag_dir)
     method = "deep_scan"
     if deep:

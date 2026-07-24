@@ -204,10 +204,7 @@ function updateCameraStream(panel, camera) {
   pollState.version = version;
   cameraPollState.set(camera.name, pollState);
   if (!camera.visible || version <= 0) {
-    // No frame has ever arrived (camera unplugged/not publishing): the
-    // frame endpoint would 404 and the <img> would render the browser's
-    // broken-image glyph. An src-less <img> renders nothing; the panel's
-    // stale badge already tells the story.
+    // Avoid a broken-image glyph before the first frame arrives.
     img.removeAttribute("src");
     return;
   }
@@ -230,11 +227,7 @@ function maybeStartCameraWebRtc(camera, panel) {
   startCameraWebRtc(camera.name, panel, camera.webrtc_port);
 }
 
-// webrtc_worker.py (a separate process from this backend, see wiki
-// changelog 2026-07-22) serves WebRTC signaling on its own port -- webrtcPort
-// is only passed in on the first dial (from the camera-status payload);
-// scheduleWebRtcRetry's retries call back in without it, so it falls back
-// to whatever the previous attempt already cached in cameraWebRtc's state.
+// Cache the worker port so retries can reconnect without a fresh payload.
 function startCameraWebRtc(cameraName, panel, webrtcPort) {
   if (pageUnloading) {
     return;
