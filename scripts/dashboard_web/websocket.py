@@ -14,6 +14,7 @@ class PoseWebSocketService:
     def __init__(self, context: DashboardContext) -> None:
         self.context = context
         self.clients: Set[web.WebSocketResponse] = set()
+        self._trace_cursor = None
 
     async def _on_startup(self, app: web.Application) -> None:
         app["broadcast_task"] = asyncio.create_task(self._broadcast_loop())
@@ -27,17 +28,33 @@ class PoseWebSocketService:
         self.context.recording_manager.stop()
 
     def _build_pose_broadcast_json(self) -> str:
-        payload = self.context.node.build_pose_payload()
+        payload = self.context.node.build_pose_payload(trace_cursor=self._trace_cursor)
+        self._trace_cursor = {
+            "generation": payload["trace_generation"],
+            "sequences": {
+                pose["name"]: pose["trace_update"]["to_seq"]
+                for pose in payload["poses"]
+            },
+        }
         for pose in payload["poses"]:
             pose["asset_url"] = self.context.node.model_asset_url(pose.get("avatar_model"))
         return json.dumps(payload)
 
     async def _broadcast_loop(self) -> None:
         loop = asyncio.get_running_loop()
+        publish_interval = 1.0 / self.context.node.pose_publish_hz
+        next_publish_at = loop.time() + publish_interval
+        next_trace_snapshot_at = loop.time() + 2.0
         while True:
-            await asyncio.sleep(1.0 / self.context.node.pose_publish_hz)
+            await asyncio.sleep(max(0.0, next_publish_at - loop.time()))
+            next_publish_at += publish_interval
             if not self.clients:
+                next_publish_at = loop.time() + publish_interval
+                next_trace_snapshot_at = loop.time() + 2.0
                 continue
+            if loop.time() >= next_trace_snapshot_at:
+                self._trace_cursor = None
+                next_trace_snapshot_at = loop.time() + 2.0
             # Build the CPU-heavy trace payload off the event loop.
             payload_json = await loop.run_in_executor(None, self._build_pose_broadcast_json)
             stale = []
@@ -48,6 +65,9 @@ class PoseWebSocketService:
                     stale.append(ws)
             for ws in stale:
                 self.clients.discard(ws)
+            if loop.time() >= next_publish_at:
+                # Drop missed deadlines instead of bursting stale pose frames.
+                next_publish_at = loop.time() + publish_interval
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse(heartbeat=20.0)

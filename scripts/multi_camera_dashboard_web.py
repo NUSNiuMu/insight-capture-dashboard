@@ -136,6 +136,10 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         # Reliable image QoS prevents whole-frame loss from fragmented UDP samples.
         self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
         self.pose_publish_hz = max(1.0, float(trajectory_config.get("pose_publish_hz", pose_publish_hz)))
+        self.display_fps_limit = min(
+            120.0,
+            max(1.0, float(trajectory_config.get("display_fps_limit", 20.0))),
+        )
         self.pose_timeout_sec = max(0.2, float(trajectory_config.get("pose_timeout_sec", 2.0)))
         self.camera_stale_timeout_sec = max(0.2, float(trajectory_config.get("camera_stale_timeout_sec", 2.0)))
         self._configure_live_alignment(raw_config, config)
@@ -182,6 +186,11 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self.raw_traces: Dict[str, Deque[Tuple[float, float, float]]] = {
             pose.name: deque(maxlen=self.max_points) for pose in self.poses
         }
+        self.raw_trace_sequences: Dict[str, Deque[int]] = {
+            pose.name: deque(maxlen=self.max_points) for pose in self.poses
+        }
+        self.trace_sequences: Dict[str, int] = {pose.name: 0 for pose in self.poses}
+        self.trace_generation = 0
         self.latest_pose: Dict[str, Optional[Tuple[float, float, float]]] = {pose.name: None for pose in self.poses}
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
@@ -650,14 +659,22 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self.latest_pose_sample[pose_name] = pose_sample
             self.latest_pose[pose_name] = self._transform_pose_point(pose_name, pose_sample.position)
             self.last_pose_received_time[pose_name] = time.monotonic()
+            self.trace_sequences[pose_name] += 1
             self.raw_traces[pose_name].append(pose_sample.position)
+            self.raw_trace_sequences[pose_name].append(self.trace_sequences[pose_name])
 
     def clear_traces(self) -> None:
         with self.pose_lock:
             for name in self.raw_traces:
                 self.raw_traces[name].clear()
+                self.raw_trace_sequences[name].clear()
             for name in self.last_pose_received_time:
                 self.last_pose_received_time[name] = 0.0
+            self.trace_generation += 1
+
+    def invalidate_trace_snapshots(self) -> None:
+        with self.pose_lock:
+            self.trace_generation += 1
 
     def set_playback_mode(self, enabled: bool) -> None:
         # Topic remapping, not boot-relative timestamps, separates playback.
@@ -687,8 +704,10 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             )
             self._record_pose_sample(pose.name, sample)
 
-    def build_pose_payload(self) -> Dict[str, object]:
-        return self._payload_builder.build_pose_payload()
+    def build_pose_payload(
+        self, trace_cursor: Optional[Dict[str, object]] = None
+    ) -> Dict[str, object]:
+        return self._payload_builder.build_pose_payload(trace_cursor=trace_cursor)
 
 
     def build_alignment_payload(self) -> Dict[str, object]:

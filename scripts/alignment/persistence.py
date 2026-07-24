@@ -99,4 +99,5 @@ class AlignmentPersistence:
             for camera_name, transform in loaded_transforms.items()
         }
         self.owner._refresh_transformed_poses()
+        self.owner.invalidate_trace_snapshots()
         self.owner._emit_alignment_log(f"alignment state loaded: {self.owner.live_alignment_state_path}")

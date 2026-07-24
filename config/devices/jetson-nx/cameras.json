@@ -15,7 +15,7 @@
       "view_pitch_deg": 28,
       "ui_refresh_ms": 50,
       "image_decode_reduction": 0,
-      "display_fps_limit": 20,
+      "display_fps_limit": 50,
       "image_qos_reliability": "reliable",
       "pose_timeout_sec": 2.0,
       "camera_stale_timeout_sec": 2.0,

@@ -93,7 +93,13 @@ class AlignmentLifecycle:
                 # a plain unbounded list.
                 raw_trace.clear()
                 raw_trace.append(last_point)
+                trace_sequences = self.owner.raw_trace_sequences.get(pose.name)
+                if trace_sequences:
+                    last_sequence = trace_sequences[-1]
+                    trace_sequences.clear()
+                    trace_sequences.append(last_sequence)
                 self.owner.latest_pose[pose.name] = self.owner._transform_pose_point(pose.name, last_point)
+            self.owner.invalidate_trace_snapshots()
         self.owner._persist_alignment_state()
         self.owner._log_live_alignment_status(force=True)
 
@@ -386,6 +392,7 @@ class AlignmentLifecycle:
             anchor_quality={camera_name: quality_text},
         )
         self.owner._refresh_transformed_poses()
+        self.owner.invalidate_trace_snapshots()
         self.owner.live_alignment_last_status = "tracking"
         self.owner._log_live_alignment_status()
         raw_translation = averaged_board_to_camera[:3, 3]

@@ -1,4 +1,5 @@
 import { escapeHtml } from "../shared/format.js";
+import { applyTraceUpdate } from "./trace-buffer.js";
 
 const enable3d = true;
 const canvas = document.getElementById("render-canvas");
@@ -38,17 +39,23 @@ const modelWarnings = new Set();
 const trailStates = new Map();
 const handRigs = new Map();
 const keptPoints = new Map();
+const traceCaches = new Map();
+const pendingTrailPoses = new Map();
+let pendingPosePayload = null;
 let keepTrajectory = false;
 let stickFigureMode = false;
+let sceneFrameIntervalMs = 1000 / 20;
+let traceCapacity = 300;
 
 if (engine && scene) {
-  const sceneFrameIntervalMs = 1000 / 20;
   let sceneRenderBudgetMs = 0;
   engine.setHardwareScalingLevel(1.4);
   engine.runRenderLoop(() => {
     sceneRenderBudgetMs += engine.getDeltaTime();
     if (sceneRenderBudgetMs < sceneFrameIntervalMs) return;
     sceneRenderBudgetMs %= sceneFrameIntervalMs;
+    flushPendingPoseUpdate();
+    flushPendingTrailUpdates();
     updateTrails();
     scene.render();
   });
@@ -66,6 +73,9 @@ export function clearKeptTrajectory() {
 
 export function clearRenderedTrajectories() {
   keptPoints.clear();
+  traceCaches.clear();
+  pendingPosePayload = null;
+  pendingTrailPoses.clear();
   for (const trail of trailStates.values()) clearTrail(trail);
 }
 
@@ -128,15 +138,34 @@ function createAxes(sceneRef, size) {
   });
 }
 
-export async function applyPoseUpdate(payload) {
+export function queuePoseUpdate(payload) {
+  setDisplayFpsLimit(payload.display_fps_limit);
+  const configuredCapacity = Number(payload.trace_capacity);
+  if (Number.isInteger(configuredCapacity) && configuredCapacity >= 2) {
+    traceCapacity = configuredCapacity;
+  }
+  let traceStateValid = true;
+  for (const pose of payload.poses || []) {
+    traceStateValid = applyTraceUpdate(
+      traceCaches,
+      pose,
+      traceCapacity,
+      mapDashboardPositionToScene
+    ) && traceStateValid;
+  }
+  pendingPosePayload = payload;
+  return traceStateValid;
+}
+
+function applyPoseUpdate(payload) {
   if (!enable3d || !scene) {
     return;
   }
   // Toggled from the Settings page; buildAssetKey folds it in, so flipping
   // it makes ensurePoseVisual dispose the GLB/marker and rebuild the other.
   stickFigureMode = Boolean(payload.stick_figure_mode);
-  // Every payload carries the full trace, so skipped updates self-heal on
-  // the first message after the tab becomes visible again.
+  // Trace deltas are accumulated in queuePoseUpdate while hidden; rendering
+  // resumes from the latest pose and the complete local trace cache.
   if (document.hidden) {
     return;
   }
@@ -166,10 +195,9 @@ export async function applyPoseUpdate(payload) {
     bindTrailToggles();
   }
 
-  // Load pose models concurrently so one large asset cannot block the others.
-  await Promise.all(poses.map(async (pose) => {
+  for (const pose of poses) {
     const node = ensurePoseNode(pose);
-    if (!node) return;
+    if (!node) continue;
     if (!node.position) node.position = new BABYLON.Vector3(0, 0, 0);
     if (!node.rotationQuaternion) node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
     const position = Array.isArray(pose.position) ? pose.position : [0, 0, 0];
@@ -179,15 +207,39 @@ export async function applyPoseUpdate(payload) {
     node.setEnabled(Boolean(pose.visible));
     node.position.copyFromFloats(scenePosition.x, scenePosition.y, scenePosition.z);
     node.rotationQuaternion.copyFromFloats(sceneQuaternion.x, sceneQuaternion.y, sceneQuaternion.z, sceneQuaternion.w);
-    await ensurePoseVisual(pose, node);
-    applyGripperOpening(pose, node);
-    updateTrailFromPose(pose);
+    pendingTrailPoses.set(pose.role, {
+      pose,
+      tracePoints: traceCaches.get(pose.role)?.points || [],
+    });
+    if (!node.metadata || node.metadata.assetKey !== buildAssetKey(pose)) {
+      void ensurePoseVisual(pose, node).then(() => {
+        applyGripperOpening(pose, node);
+      });
+    } else {
+      applyGripperOpening(pose, node);
+    }
     updateHandRig(pose, node);
     if (legend) {
       const row = legend.querySelector(`[data-legend-role="${CSS.escape(pose.role)}"] .legend-meta`);
       if (row) row.textContent = pose.visible ? pose.name : `${pose.name} hidden`;
     }
-  }));
+  }
+}
+
+function flushPendingPoseUpdate() {
+  if (!pendingPosePayload || document.hidden) {
+    return;
+  }
+  const payload = pendingPosePayload;
+  pendingPosePayload = null;
+  applyPoseUpdate(payload);
+}
+
+function setDisplayFpsLimit(value) {
+  const fps = Number(value);
+  if (Number.isFinite(fps) && fps > 0) {
+    sceneFrameIntervalMs = 1000 / Math.min(120, fps);
+  }
 }
 
 function ensurePoseNode(pose) {
@@ -586,6 +638,15 @@ function updateTrails() {
   }
 }
 
+function flushPendingTrailUpdates() {
+  if (pendingTrailPoses.size === 0) {
+    return;
+  }
+  const updates = Array.from(pendingTrailPoses.values());
+  pendingTrailPoses.clear();
+  updates.forEach(({ pose, tracePoints }) => updateTrailFromPose(pose, tracePoints));
+}
+
 function ensureTrailState(role) {
   if (trailStates.has(role)) {
     return trailStates.get(role);
@@ -594,7 +655,10 @@ function ensureTrailState(role) {
     role,
     enabled: DEFAULT_TRAIL_ENABLED[role] !== false,
     points: [],
-    mesh: null
+    mesh: null,
+    meshCapacity: 0,
+    basePoints: [],
+    offsets: null
   };
   trailStates.set(role, state);
   return state;
@@ -614,14 +678,16 @@ function isTrailEnabled(role) {
 
 function clearTrail(trail) {
   trail.points = [];
-  trail._meshPointCount = 0;
+  trail.meshCapacity = 0;
+  trail.basePoints = [];
+  trail.offsets = null;
   if (trail.mesh) {
     trail.mesh.dispose(false, true);
     trail.mesh = null;
   }
 }
 
-function updateTrailFromPose(pose) {
+function updateTrailFromPose(pose, tracePoints) {
   const trail = ensureTrailState(pose.role);
   if (!trail.enabled) {
     clearTrail(trail);
@@ -657,7 +723,7 @@ function updateTrailFromPose(pose) {
     clearTrail(trail);
     return;
   }
-  const sourcePoints = (pose.trace || []).map((sample) => mapDashboardPositionToScene(sample));
+  const sourcePoints = tracePoints;
   if (sourcePoints.length < 2) {
     clearTrail(trail);
     return;
@@ -685,37 +751,65 @@ function refreshTrailMesh(trail) {
   }
 
   const roleColor = BABYLON.Color3.FromHexString((ROLE_STYLE[trail.role] || ROLE_STYLE.head).color);
-  const points = trail.points.map((point) => point.clone());
   const radius = TRAIL_RADIUS_BY_ROLE[trail.role] || 0.016;
-  // Babylon.js tube instance update requires identical path length; dispose and recreate on change.
-  if (trail.mesh && trail._meshPointCount !== points.length) {
+  const capacity = keepTrajectory
+    ? Math.max(traceCapacity, Math.ceil(trail.points.length / traceCapacity) * traceCapacity)
+    : traceCapacity;
+  const points = padTrailPoints(trail.points, capacity);
+  if (trail.mesh && trail.meshCapacity !== capacity) {
     trail.mesh.dispose(false, true);
     trail.mesh = null;
+    trail.basePoints = [];
+    trail.offsets = null;
   }
-  if (trail.mesh) {
-    BABYLON.MeshBuilder.CreateTube(
-      null,
-      { path: points, radius, tessellation: 10, instance: trail.mesh, updatable: true },
-      scene
-    );
-  } else {
-    trail.mesh = BABYLON.MeshBuilder.CreateTube(
+  if (!trail.mesh) {
+    trail.basePoints = points.map((point) => point.clone());
+    const flattenedPoints = trail.basePoints.flatMap((point) => [point.x, point.y, point.z]);
+    trail.mesh = BABYLON.CreateGreasedLine(
       `trail-${trail.role}`,
-      { path: points, radius, tessellation: 10, updatable: true },
+      { points: flattenedPoints, updatable: true },
+      {
+        width: radius * 2,
+        sizeAttenuation: true,
+        color: roleColor,
+      },
       scene
     );
     trail.mesh.isPickable = false;
     trail.mesh.alwaysSelectAsActiveMesh = true;
     trail.mesh.renderingGroupId = 1;
+    trail.meshCapacity = capacity;
+    trail.offsets = new Float32Array(capacity * 6);
+  } else {
+    const offsets = trail.offsets;
+    for (let index = 0; index < capacity; index += 1) {
+      const point = points[index];
+      const basePoint = trail.basePoints[index];
+      const offsetIndex = index * 6;
+      const offsetX = point.x - basePoint.x;
+      const offsetY = point.y - basePoint.y;
+      const offsetZ = point.z - basePoint.z;
+      offsets[offsetIndex] = offsetX;
+      offsets[offsetIndex + 1] = offsetY;
+      offsets[offsetIndex + 2] = offsetZ;
+      offsets[offsetIndex + 3] = offsetX;
+      offsets[offsetIndex + 4] = offsetY;
+      offsets[offsetIndex + 5] = offsetZ;
+    }
+    trail.mesh.offsets = offsets;
   }
-  trail._meshPointCount = points.length;
-  if (!trail.mesh.material) {
-    const material = new BABYLON.StandardMaterial(`trail-mat-${trail.role}`, scene);
-    material.disableLighting = true;
-    material.emissiveColor = roleColor;
-    material.diffuseColor = roleColor;
-    material.specularColor = BABYLON.Color3.Black();
-    trail.mesh.material = material;
+  if (trail.mesh.material) trail.mesh.material.alpha = 0.96;
+}
+
+function padTrailPoints(points, capacity) {
+  const firstPoint = points[0];
+  const paddingCount = Math.max(0, capacity - points.length);
+  const padded = new Array(capacity);
+  for (let index = 0; index < paddingCount; index += 1) {
+    padded[index] = firstPoint;
   }
-  trail.mesh.material.alpha = 0.96;
+  for (let index = 0; index < points.length; index += 1) {
+    padded[paddingCount + index] = points[index];
+  }
+  return padded;
 }
