@@ -11,9 +11,9 @@ const ROLE_STYLE = {
   right_hand: { label: "Right Hand", color: "#cf7f6f", primitive: "box", modelColor: "#9f8569" }
 };
 const TRAIL_SCREEN_WIDTH_BY_ROLE = {
-  head: 0.006,
-  left_hand: 0.005,
-  right_hand: 0.005
+  head: 0.012,
+  left_hand: 0.01,
+  right_hand: 0.01
 };
 const HAND_RIG_EDGES = [
   [0, 1, "thumb"], [1, 2, "thumb"], [2, 3, "thumb"], [3, 4, "thumb"],
@@ -755,7 +755,7 @@ function refreshTrailMesh(trail) {
   const capacity = keepTrajectory
     ? Math.max(traceCapacity, Math.ceil(trail.points.length / traceCapacity) * traceCapacity)
     : traceCapacity;
-  const points = padTrailPoints(trail.points, capacity);
+  const points = resampleTrailPoints(trail.points, capacity);
   if (trail.mesh && trail.meshCapacity !== capacity) {
     trail.mesh.dispose(false, true);
     trail.mesh = null;
@@ -801,15 +801,45 @@ function refreshTrailMesh(trail) {
   if (trail.mesh.material) trail.mesh.material.alpha = 0.96;
 }
 
-function padTrailPoints(points, capacity) {
-  const firstPoint = points[0];
-  const paddingCount = Math.max(0, capacity - points.length);
-  const padded = new Array(capacity);
-  for (let index = 0; index < paddingCount; index += 1) {
-    padded[index] = firstPoint;
+function resampleTrailPoints(points, targetCount) {
+  const compacted = [points[0]];
+  for (let index = 1; index < points.length; index += 1) {
+    if (BABYLON.Vector3.DistanceSquared(points[index], compacted.at(-1)) > 1e-8) {
+      compacted.push(points[index]);
+    }
   }
-  for (let index = 0; index < points.length; index += 1) {
-    padded[paddingCount + index] = points[index];
+  if (compacted.length < 2) {
+    return Array.from({ length: targetCount }, () => points[0].clone());
   }
-  return padded;
+
+  const cumulativeDistances = [0];
+  for (let index = 1; index < compacted.length; index += 1) {
+    cumulativeDistances.push(
+      cumulativeDistances[index - 1]
+      + BABYLON.Vector3.Distance(compacted[index - 1], compacted[index])
+    );
+  }
+  const totalDistance = cumulativeDistances.at(-1);
+  const resampled = new Array(targetCount);
+  let segmentIndex = 1;
+  for (let index = 0; index < targetCount; index += 1) {
+    const targetDistance = totalDistance * index / (targetCount - 1);
+    while (
+      segmentIndex < cumulativeDistances.length - 1
+      && cumulativeDistances[segmentIndex] < targetDistance
+    ) {
+      segmentIndex += 1;
+    }
+    const segmentStartDistance = cumulativeDistances[segmentIndex - 1];
+    const segmentLength = cumulativeDistances[segmentIndex] - segmentStartDistance;
+    const amount = segmentLength > 0
+      ? (targetDistance - segmentStartDistance) / segmentLength
+      : 0;
+    resampled[index] = BABYLON.Vector3.Lerp(
+      compacted[segmentIndex - 1],
+      compacted[segmentIndex],
+      amount
+    );
+  }
+  return resampled;
 }
