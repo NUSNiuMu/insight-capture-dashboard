@@ -70,7 +70,7 @@
       "dashboard_pose_stream": "vio_100hz",
       "dashboard_rotation_deg": 0,
       "teleop_role": "head",
-      "avatar_model": "assets/models/iron-man_helmet_mk3_clean.glb",
+      "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",
       "dashboard_color": "#57d67c",
       "dashboard_row": 0,
       "dashboard_column": 1,

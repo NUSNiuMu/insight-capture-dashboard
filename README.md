@@ -137,12 +137,12 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 ```json
 {
   "name": "insight9_a",
-  "avatar_model": "assets/models/iron-man_helmet_mk3_clean.glb",
+  "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",
   "avatar_scale": 0.5
 }
 ```
 
-模型文件走 `/asset?path=...` 接口提供，带 `Cache-Control` 长缓存，重复打开 3D 页面不会重新下载大模型。
+模型文件走 `/asset?path=...` 接口提供，带版本化长缓存。3D 页面先显示轻量姿态标记，再依次启动相机、轨迹和模型；优化后的头盔模型为 2.7MB，旧配置会自动迁移。
 
 ## 在线轨迹标定（Live Alignment）
 

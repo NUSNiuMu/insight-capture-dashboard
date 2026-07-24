@@ -13,8 +13,12 @@ const cameraPollState = new Map();
 const cameraWebRtc = new Map();
 let maximizedCameraName = null;
 let pageUnloading = false;
+let cameraStartupAt = 0;
+let cameraStaggerMs = 0;
 
-export function startCameraDashboard() {
+export function startCameraDashboard(options = {}) {
+  cameraStartupAt = performance.now();
+  cameraStaggerMs = Math.max(0, Number(options.cameraStaggerMs) || 0);
   startCameraPolling();
 }
 
@@ -77,18 +81,21 @@ function renderCameraPanels(cameras, isPlayback = false) {
     .forEach((camera, index) => {
     seen.add(camera.name);
     const panel = ensureCameraPanel(camera);
+    const streamReady = performance.now() >= cameraStartupAt + index * cameraStaggerMs;
     panel.classList.toggle("is-stale", Boolean(camera.stale));
     updateCameraPanelAspect(panel, camera);
     updateCameraPanelLayout(panel, index);
     const status = panel.querySelector("[data-camera-status]");
-    status.textContent = camera.stale ? "stale" : camera.visible ? (isPlayback ? "playback" : "live") : "waiting";
+    status.textContent = !streamReady ? "starting" : camera.stale ? "stale" : camera.visible ? (isPlayback ? "playback" : "live") : "waiting";
     const topic = panel.querySelector("[data-camera-topic]");
     if (topic && camera.topic) {
       topic.textContent = camera.topic;
     }
-    updateCameraStream(panel, camera);
+    if (streamReady) {
+      updateCameraStream(panel, camera);
+      maybeStartCameraWebRtc(camera, panel);
+    }
     updateCameraFps(camera.name, Number(camera.fps || 0));
-    maybeStartCameraWebRtc(camera, panel);
     });
   for (const [name, panel] of cameraPanels.entries()) {
     if (!seen.has(name)) {

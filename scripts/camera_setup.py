@@ -14,6 +14,10 @@ IMAGE_STREAMS = {
     "color_compressed": {"topic": "color/image_rect_raw/compressed", "type": "compressed"},
 }
 
+LEGACY_AVATAR_MODELS = {
+    "iron-man_helmet_mk3_clean.glb": "iron-man_helmet_mk3_optimized.glb",
+}
+
 # Model defaults apply when cameras.json omits an explicit transform.
 AVATAR_MODEL_DEFAULTS = {
     "MaleBaseModel_BravFG.glb": {
@@ -28,7 +32,7 @@ AVATAR_MODEL_DEFAULTS = {
         "avatar_scale": 3.0,
         "avatar_rotation_deg_xyz": [0.0, 90.0, 0.0],
     },
-    "iron-man_helmet_mk3_clean.glb": {
+    "iron-man_helmet_mk3_optimized.glb": {
         "avatar_scale": 0.5,
         "avatar_rotation_deg_xyz": [90.0, 0.0, -90.0],
     },
@@ -45,12 +49,20 @@ def avatar_model_defaults(avatar_model) -> Dict:
     return AVATAR_MODEL_DEFAULTS.get(Path(avatar_model).name, {})
 
 
+def canonical_avatar_model(avatar_model):
+    if not avatar_model:
+        return avatar_model
+    path = Path(avatar_model)
+    replacement = LEGACY_AVATAR_MODELS.get(path.name)
+    return str(path.with_name(replacement)) if replacement else avatar_model
+
+
 # Settings only offers models with tuned transforms.
 AVAILABLE_AVATAR_MODELS = [
     {"file": "vis_assembly.glb", "label": "Vis Assembly (hand)"},
     {"file": "MaleBaseModel_BravFG.glb", "label": "Male Base Model"},
     {"file": "ArmBaseModel_BravFG.glb", "label": "Arm Base Model"},
-    {"file": "iron-man_helmet_mk3_clean.glb", "label": "Iron Man Helmet (head)"},
+    {"file": "iron-man_helmet_mk3_optimized.glb", "label": "Iron Man Helmet (head)"},
     {"file": "glove.glb", "label": "Glove (hand)"},
 ]
 
@@ -59,6 +71,9 @@ def load_setup(config_path: Path) -> Dict:
     config_path = Path(config_path)
     with config_path.open("r", encoding="utf-8") as f:
         config = json.load(f)
+
+    for camera in config.get("cameras", []):
+        camera["avatar_model"] = canonical_avatar_model(camera.get("avatar_model"))
 
     session_alignment = config.get("session_alignment")
     calibration_file = session_alignment.get("calibration_file") if session_alignment else None

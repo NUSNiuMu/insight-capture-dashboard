@@ -5,7 +5,9 @@ import {
   clearKeptTrajectory,
   clearRenderedTrajectories,
   queuePoseUpdate,
+  setAvatarLoadStage,
   setKeepTrajectory,
+  setTrajectoriesEnabled,
   stopSpatialRenderer,
 } from "../spatial/renderer.js";
 
@@ -31,19 +33,41 @@ let keepTrajectory = false;
 let pageUnloading = false;
 let activeWs = null;
 let lastPoseMessageAt = 0;
+const startupTimers = new Set();
 
 connect();
-fetchAlignmentStatus();
-startCameraDashboard();
-initializeRosbags();
+scheduleStartup();
 window.addEventListener("pagehide", () => {
   pageUnloading = true;
+  startupTimers.forEach((timer) => window.clearTimeout(timer));
+  startupTimers.clear();
   if (activeWs) {
     try { activeWs.close(); } catch {}
     activeWs = null;
   }
   stopSpatialRenderer();
 });
+
+function scheduleStartup() {
+  // The WebSocket makes the lightweight pose markers visible immediately.
+  // Heavier camera, trace, and avatar work follows after the first paint.
+  scheduleStartupTask(() => {
+    fetchAlignmentStatus();
+    startCameraDashboard({ cameraStaggerMs: 450 });
+  }, 250);
+  scheduleStartupTask(() => setTrajectoriesEnabled(true), 1200);
+  scheduleStartupTask(() => initializeRosbags(), 1500);
+  scheduleStartupTask(() => setAvatarLoadStage(1), 1900);
+  scheduleStartupTask(() => setAvatarLoadStage(2), 3600);
+}
+
+function scheduleStartupTask(callback, delayMs) {
+  const timer = window.setTimeout(() => {
+    startupTimers.delete(timer);
+    if (!pageUnloading) callback();
+  }, delayMs);
+  startupTimers.add(timer);
+}
 
 if (alignmentToggle) {
   alignmentToggle.addEventListener("click", () => { void toggleAlignment(); });

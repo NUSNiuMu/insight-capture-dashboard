@@ -43,8 +43,11 @@ const keptPoints = new Map();
 const traceCaches = new Map();
 const pendingTrailPoses = new Map();
 let pendingPosePayload = null;
+let latestPosePayload = null;
 let keepTrajectory = false;
 let stickFigureMode = false;
+let avatarLoadStage = 0;
+let trajectoriesEnabled = false;
 let sceneFrameIntervalMs = 1000 / 20;
 let traceCapacity = 300;
 
@@ -66,6 +69,24 @@ if (engine && scene) {
 export function setKeepTrajectory(enabled) {
   keepTrajectory = Boolean(enabled);
   if (!keepTrajectory) keptPoints.clear();
+}
+
+export function setAvatarLoadStage(stage) {
+  const nextStage = Math.max(0, Math.min(2, Number(stage) || 0));
+  if (nextStage === avatarLoadStage) return;
+  avatarLoadStage = nextStage;
+  if (latestPosePayload) pendingPosePayload = latestPosePayload;
+}
+
+export function setTrajectoriesEnabled(enabled) {
+  trajectoriesEnabled = Boolean(enabled);
+  if (trajectoriesEnabled) {
+    if (latestPosePayload) pendingPosePayload = latestPosePayload;
+    return;
+  }
+  traceCaches.clear();
+  pendingTrailPoses.clear();
+  for (const trail of trailStates.values()) clearTrail(trail);
 }
 
 export function clearKeptTrajectory() {
@@ -146,14 +167,20 @@ export function queuePoseUpdate(payload) {
     traceCapacity = configuredCapacity;
   }
   let traceStateValid = true;
-  for (const pose of payload.poses || []) {
-    traceStateValid = applyTraceUpdate(
-      traceCaches,
-      pose,
-      traceCapacity,
-      mapDashboardPositionToScene
-    ) && traceStateValid;
+  if (trajectoriesEnabled) {
+    for (const pose of payload.poses || []) {
+      const update = pose.trace_update;
+      const existing = traceCaches.get(pose.role);
+      if (update && update.mode !== "snapshot" && !existing) continue;
+      traceStateValid = applyTraceUpdate(
+        traceCaches,
+        pose,
+        traceCapacity,
+        mapDashboardPositionToScene
+      ) && traceStateValid;
+    }
   }
+  latestPosePayload = payload;
   pendingPosePayload = payload;
   return traceStateValid;
 }
@@ -208,10 +235,12 @@ function applyPoseUpdate(payload) {
     node.setEnabled(Boolean(pose.visible));
     node.position.copyFromFloats(scenePosition.x, scenePosition.y, scenePosition.z);
     node.rotationQuaternion.copyFromFloats(sceneQuaternion.x, sceneQuaternion.y, sceneQuaternion.z, sceneQuaternion.w);
-    pendingTrailPoses.set(pose.role, {
-      pose,
-      tracePoints: traceCaches.get(pose.role)?.points || [],
-    });
+    if (trajectoriesEnabled) {
+      pendingTrailPoses.set(pose.role, {
+        pose,
+        tracePoints: traceCaches.get(pose.role)?.points || [],
+      });
+    }
     if (!node.metadata || node.metadata.assetKey !== buildAssetKey(pose)) {
       void ensurePoseVisual(pose, node).then(() => {
         applyGripperOpening(pose, node);
@@ -296,6 +325,11 @@ async function ensurePoseVisual(pose, node) {
 
   if (stickFigureMode) {
     attachStickMarker(pose, node);
+    return;
+  }
+
+  if (usesStartupPrimitive(pose)) {
+    attachPrimitive(pose, node, "loading avatar");
     return;
   }
 
@@ -605,9 +639,16 @@ function buildAssetKey(pose) {
   if (stickFigureMode) {
     return `stick-marker:${pose.role}`;
   }
+  if (usesStartupPrimitive(pose)) {
+    return `startup-primitive:${pose.role}:${avatarLoadStage}`;
+  }
   const rotation = Array.isArray(pose.avatar_rotation_deg_xyz) ? pose.avatar_rotation_deg_xyz.join(",") : "0,0,0";
   const offset = Array.isArray(pose.avatar_offset_xyz) ? pose.avatar_offset_xyz.join(",") : "0,0,0";
   return String(pose.avatar_model || "primitive") + ":" + String(pose.avatar_scale || 1) + ":" + rotation + ":" + offset;
+}
+
+function usesStartupPrimitive(pose) {
+  return avatarLoadStage === 0 || (avatarLoadStage === 1 && pose.role === "head");
 }
 
 function warnOnce(key, message) {

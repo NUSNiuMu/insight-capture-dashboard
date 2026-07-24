@@ -54,7 +54,9 @@ class StaticRoutes:
             raise web.HTTPForbidden(text="path outside allowed roots")
         if not candidate.is_file():
             raise web.HTTPNotFound(text="asset not found")
-        # Cache large avatar models across full-page navigation.
         response = web.FileResponse(candidate)
-        response.headers["Cache-Control"] = "public, max-age=3600"
+        if request.query.get("v"):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "public, max-age=3600"
         return response

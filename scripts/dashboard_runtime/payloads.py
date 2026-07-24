@@ -192,7 +192,12 @@ class PayloadBuilder:
     def model_asset_url(self, avatar_model: Optional[str]) -> Optional[str]:
         if not avatar_model:
             return None
-        return f"/asset?path={quote(avatar_model, safe='')}"
+        asset_path = (self.owner.project_root / avatar_model).resolve()
+        try:
+            version = asset_path.stat().st_mtime_ns
+        except OSError:
+            version = 0
+        return f"/asset?path={quote(avatar_model, safe='')}&v={version}"
 
     def build_settings_payload(self) -> Dict[str, object]:
         hand_cameras = set(getattr(self.owner, "gripper_calibrations", {}).keys())
