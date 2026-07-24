@@ -798,7 +798,11 @@ function refreshTrailMesh(trail) {
     }
     trail.mesh.offsets = offsets;
   }
-  if (trail.mesh.material) trail.mesh.material.alpha = 0.96;
+  if (trail.mesh.material) {
+    trail.mesh.material.alpha = 0.96;
+    trail.mesh.material.backFaceCulling = false;
+    trail.mesh.material.twoSidedLighting = true;
+  }
 }
 
 function resampleTrailPoints(points, targetCount) {
