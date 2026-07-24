@@ -18,11 +18,21 @@ class PayloadBuilder:
     def __init__(self, owner) -> None:
         self.owner = owner
 
-    def build_pose_payload(self) -> Dict[str, object]:
+    def build_pose_payload(
+        self, trace_cursor: Optional[Dict[str, object]] = None
+    ) -> Dict[str, object]:
         now = time.monotonic()
         poses = []
         hand_entries = []  # payload dicts for visible hands
+        cursor_sequences = {} if trace_cursor is None else trace_cursor.get("sequences", {})
+        if not isinstance(cursor_sequences, dict):
+            cursor_sequences = {}
         with self.owner.pose_lock:
+            trace_generation = int(self.owner.trace_generation)
+            cursor_generation = (
+                -1 if trace_cursor is None else int(trace_cursor.get("generation", -1))
+            )
+            force_trace_snapshot = cursor_generation != trace_generation
             for pose in self.owner.poses:
                 transformed = self.owner.transformed_pose_sample(pose.name)
                 raw_sample = self.owner.latest_pose_sample.get(pose.name)
@@ -34,16 +44,60 @@ class PayloadBuilder:
                     # Truncate visualization precision to keep broadcasts compact.
                     position = [round(float(value), 5) for value in transformed.position]
                     quaternion = [round(float(value), 5) for value in transformed.orientation_xyzw]
-                trace_points = self.owner.transformed_trace(pose.name)
-                # Vectorized rounding shortens GIL hold time.
-                trace = np.round(np.asarray(trace_points, dtype=np.float64), 4).tolist() if trace_points else []
+                raw_trace = list(self.owner.raw_traces[pose.name])
+                trace_sequences = list(self.owner.raw_trace_sequences[pose.name])
+                latest_trace_sequence = int(self.owner.trace_sequences[pose.name])
+                first_trace_sequence = (
+                    trace_sequences[0] if trace_sequences else latest_trace_sequence + 1
+                )
+                cursor_sequence = int(cursor_sequences.get(pose.name, -1))
+                trace_mode = "delta"
+                if (
+                    force_trace_snapshot
+                    or cursor_sequence < first_trace_sequence - 1
+                    or cursor_sequence > latest_trace_sequence
+                ):
+                    trace_mode = "snapshot"
+                    selected_trace = raw_trace
+                    selected_sequences = trace_sequences
+                else:
+                    first_new_index = len(trace_sequences)
+                    for index, sequence in enumerate(trace_sequences):
+                        if sequence > cursor_sequence:
+                            first_new_index = index
+                            break
+                    selected_trace = raw_trace[first_new_index:]
+                    selected_sequences = trace_sequences[first_new_index:]
+                transformed_trace = self.owner.transform_trace_points(
+                    pose.name, selected_trace
+                )
+                if len(transformed_trace) > 32:
+                    trace_points = np.round(
+                        np.asarray(transformed_trace, dtype=np.float64), 4
+                    ).tolist()
+                else:
+                    trace_points = [
+                        [round(float(value), 4) for value in point]
+                        for point in transformed_trace
+                    ]
                 entry = {
                     "name": pose.name,
                     "role": pose.teleop_role,
                     "visible": visible,
                     "position": position,
                     "quaternion_xyzw": quaternion,
-                    "trace": trace,
+                    "trace_update": {
+                        "mode": trace_mode,
+                        "generation": trace_generation,
+                        "from_seq": (
+                            int(selected_sequences[0])
+                            if selected_sequences
+                            else latest_trace_sequence + 1
+                        ),
+                        "to_seq": latest_trace_sequence,
+                        "drop_before_seq": int(first_trace_sequence),
+                        "points": trace_points,
+                    },
                     "avatar_model": pose.avatar_model,
                     "avatar_scale": pose.avatar_scale,
                     "avatar_rotation_deg_xyz": [float(value) for value in pose.avatar_rotation_deg_xyz],
@@ -65,6 +119,8 @@ class PayloadBuilder:
             "playback_mode": self.owner._playback_mode,
             "stick_figure_mode": bool(self.owner.stick_figure_mode),
             "display_fps_limit": self.owner.display_fps_limit,
+            "trace_capacity": self.owner.max_points,
+            "trace_generation": trace_generation,
             "alignment": self.owner.build_alignment_payload(),
             "poses": poses,
         }

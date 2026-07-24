@@ -37,6 +37,13 @@ class AlignmentTransforms:
 
     def transformed_trace(self, pose_name: str) -> List[Tuple[float, float, float]]:
         raw_trace = list(self.owner.raw_traces[pose_name])
+        return self.transform_trace_points(pose_name, raw_trace)
+
+    def transform_trace_points(
+        self,
+        pose_name: str,
+        raw_trace: List[Tuple[float, float, float]],
+    ) -> List[Tuple[float, float, float]]:
         if not self.owner.session_alignment_enabled or not raw_trace:
             return raw_trace
         lock = getattr(self.owner, "live_alignment_solution_lock", None)
@@ -47,9 +54,8 @@ class AlignmentTransforms:
                 transform = self.owner.world_to_reference.get(pose_name)
         if transform is None:
             return raw_trace
-        # One vectorized (N,3) pass instead of a per-point 4x4 matmul + fresh
-        # 4-vector allocation: this runs per websocket broadcast tick (20Hz x
-        # 3 poses x up to 300 points), which measured ~18k matmuls/sec.
+        # Full websocket snapshots still transform up to 300 points at once;
+        # ordinary broadcasts pass only the newly appended delta points.
         points = np.asarray(raw_trace, dtype=np.float64)
         mapped = points @ transform[:3, :3].T + transform[:3, 3]
         return mapped.tolist()

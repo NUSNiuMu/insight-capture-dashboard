@@ -2,9 +2,9 @@ import { startCameraDashboard } from "../camera/dashboard.js";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 import {
-  applyPoseUpdate,
   clearKeptTrajectory,
   clearRenderedTrajectories,
+  queuePoseUpdate,
   setKeepTrajectory,
   stopSpatialRenderer,
 } from "../spatial/renderer.js";
@@ -107,7 +107,9 @@ function connect() {
     if (payload.type !== "pose_update") {
       return;
     }
-    applyPoseUpdate(payload);
+    if (!queuePoseUpdate(payload)) {
+      ws.close();
+    }
   };
 
   ws.onerror = () => {

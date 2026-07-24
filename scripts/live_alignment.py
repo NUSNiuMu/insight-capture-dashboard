@@ -27,6 +27,15 @@ class LiveAlignmentMixin:
     def transformed_trace(self, pose_name: str) -> List[Tuple[float, float, float]]:
         return self._alignment_controller_instance().transforms.transformed_trace(pose_name)
 
+    def transform_trace_points(
+        self,
+        pose_name: str,
+        points: List[Tuple[float, float, float]],
+    ) -> List[Tuple[float, float, float]]:
+        return self._alignment_controller_instance().transforms.transform_trace_points(
+            pose_name, points
+        )
+
     def transformed_pose_sample(self, pose_name: str):
         return self._alignment_controller_instance().transforms.transformed_pose_sample(pose_name)
 
