@@ -10,11 +10,12 @@ const ROLE_STYLE = {
   left_hand: { label: "Left Hand", color: "#79adc2", primitive: "box", modelColor: "#9f8569" },
   right_hand: { label: "Right Hand", color: "#cf7f6f", primitive: "box", modelColor: "#9f8569" }
 };
-const TRAIL_SCREEN_WIDTH_BY_ROLE = {
+const TRAIL_RADIUS_BY_ROLE = {
   head: 0.012,
   left_hand: 0.01,
   right_hand: 0.01
 };
+const TRAIL_TESSELLATION = 6;
 const HAND_RIG_EDGES = [
   [0, 1, "thumb"], [1, 2, "thumb"], [2, 3, "thumb"], [3, 4, "thumb"],
   [0, 5, "palm"], [5, 6, "index"], [6, 7, "index"], [7, 8, "index"],
@@ -657,8 +658,8 @@ function ensureTrailState(role) {
     points: [],
     mesh: null,
     meshCapacity: 0,
-    basePoints: [],
-    offsets: null
+    vertexPositions: null,
+    vertexNormals: null
   };
   trailStates.set(role, state);
   return state;
@@ -679,8 +680,8 @@ function isTrailEnabled(role) {
 function clearTrail(trail) {
   trail.points = [];
   trail.meshCapacity = 0;
-  trail.basePoints = [];
-  trail.offsets = null;
+  trail.vertexPositions = null;
+  trail.vertexNormals = null;
   if (trail.mesh) {
     trail.mesh.dispose(false, true);
     trail.mesh = null;
@@ -751,7 +752,7 @@ function refreshTrailMesh(trail) {
   }
 
   const roleColor = BABYLON.Color3.FromHexString((ROLE_STYLE[trail.role] || ROLE_STYLE.head).color);
-  const screenWidth = TRAIL_SCREEN_WIDTH_BY_ROLE[trail.role] || 0.005;
+  const radius = TRAIL_RADIUS_BY_ROLE[trail.role] || 0.01;
   const capacity = keepTrajectory
     ? Math.max(traceCapacity, Math.ceil(trail.points.length / traceCapacity) * traceCapacity)
     : traceCapacity;
@@ -759,49 +760,136 @@ function refreshTrailMesh(trail) {
   if (trail.mesh && trail.meshCapacity !== capacity) {
     trail.mesh.dispose(false, true);
     trail.mesh = null;
-    trail.basePoints = [];
-    trail.offsets = null;
+    trail.vertexPositions = null;
+    trail.vertexNormals = null;
   }
   if (!trail.mesh) {
-    trail.basePoints = points.map((point) => point.clone());
-    const flattenedPoints = trail.basePoints.flatMap((point) => [point.x, point.y, point.z]);
-    trail.mesh = BABYLON.CreateGreasedLine(
-      `trail-${trail.role}`,
-      { points: flattenedPoints, updatable: true },
-      {
-        width: screenWidth,
-        sizeAttenuation: false,
-        color: roleColor,
-      },
-      scene
+    // Keep topology fixed so 50 Hz updates only replace GPU vertex buffers.
+    trail.mesh = new BABYLON.Mesh(`trail-${trail.role}`, scene);
+    trail.meshCapacity = capacity;
+    trail.vertexPositions = new Float32Array(capacity * TRAIL_TESSELLATION * 3);
+    trail.vertexNormals = new Float32Array(capacity * TRAIL_TESSELLATION * 3);
+    updateTrailTubeGeometry(trail, points, radius, false);
+    trail.mesh.setVerticesData(
+      BABYLON.VertexBuffer.PositionKind,
+      trail.vertexPositions,
+      true,
+      3
     );
+    trail.mesh.setVerticesData(
+      BABYLON.VertexBuffer.NormalKind,
+      trail.vertexNormals,
+      true,
+      3
+    );
+    trail.mesh.setIndices(createTrailTubeIndices(capacity));
     trail.mesh.isPickable = false;
     trail.mesh.alwaysSelectAsActiveMesh = true;
     trail.mesh.renderingGroupId = 1;
-    trail.meshCapacity = capacity;
-    trail.offsets = new Float32Array(capacity * 6);
+    const material = new BABYLON.StandardMaterial(`trail-mat-${trail.role}`, scene);
+    material.diffuseColor = roleColor;
+    material.emissiveColor = roleColor.scale(0.3);
+    material.specularColor = BABYLON.Color3.Black();
+    material.alpha = 1;
+    trail.mesh.material = material;
   } else {
-    const offsets = trail.offsets;
-    for (let index = 0; index < capacity; index += 1) {
-      const point = points[index];
-      const basePoint = trail.basePoints[index];
-      const offsetIndex = index * 6;
-      const offsetX = point.x - basePoint.x;
-      const offsetY = point.y - basePoint.y;
-      const offsetZ = point.z - basePoint.z;
-      offsets[offsetIndex] = offsetX;
-      offsets[offsetIndex + 1] = offsetY;
-      offsets[offsetIndex + 2] = offsetZ;
-      offsets[offsetIndex + 3] = offsetX;
-      offsets[offsetIndex + 4] = offsetY;
-      offsets[offsetIndex + 5] = offsetZ;
-    }
-    trail.mesh.offsets = offsets;
+    updateTrailTubeGeometry(trail, points, radius, true);
   }
-  if (trail.mesh.material) {
-    trail.mesh.material.alpha = 0.96;
-    trail.mesh.material.backFaceCulling = false;
-    trail.mesh.material.twoSidedLighting = true;
+}
+
+function createTrailTubeIndices(pointCount) {
+  const indices = new Uint32Array((pointCount - 1) * TRAIL_TESSELLATION * 6);
+  let offset = 0;
+  for (let pointIndex = 0; pointIndex < pointCount - 1; pointIndex += 1) {
+    const ringStart = pointIndex * TRAIL_TESSELLATION;
+    const nextRingStart = ringStart + TRAIL_TESSELLATION;
+    for (let side = 0; side < TRAIL_TESSELLATION; side += 1) {
+      const nextSide = (side + 1) % TRAIL_TESSELLATION;
+      indices[offset] = ringStart + side;
+      indices[offset + 1] = nextRingStart + side;
+      indices[offset + 2] = ringStart + nextSide;
+      indices[offset + 3] = ringStart + nextSide;
+      indices[offset + 4] = nextRingStart + side;
+      indices[offset + 5] = nextRingStart + nextSide;
+      offset += 6;
+    }
+  }
+  return indices;
+}
+
+function updateTrailTubeGeometry(trail, points, radius, upload) {
+  const positions = trail.vertexPositions;
+  const normals = trail.vertexNormals;
+  let previousNormalX = 0;
+  let previousNormalY = 0;
+  let previousNormalZ = 0;
+
+  for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
+    const point = points[pointIndex];
+    const previousPoint = points[Math.max(0, pointIndex - 1)];
+    const nextPoint = points[Math.min(points.length - 1, pointIndex + 1)];
+    let tangentX = nextPoint.x - previousPoint.x;
+    let tangentY = nextPoint.y - previousPoint.y;
+    let tangentZ = nextPoint.z - previousPoint.z;
+    const tangentLength = Math.hypot(tangentX, tangentY, tangentZ) || 1;
+    tangentX /= tangentLength;
+    tangentY /= tangentLength;
+    tangentZ /= tangentLength;
+
+    let normalX;
+    let normalY;
+    let normalZ;
+    if (pointIndex === 0) {
+      const referenceX = Math.abs(tangentY) < 0.9 ? 0 : 1;
+      const referenceY = Math.abs(tangentY) < 0.9 ? 1 : 0;
+      normalX = tangentY * 0 - tangentZ * referenceY;
+      normalY = tangentZ * referenceX - tangentX * 0;
+      normalZ = tangentX * referenceY - tangentY * referenceX;
+    } else {
+      const projection = previousNormalX * tangentX
+        + previousNormalY * tangentY
+        + previousNormalZ * tangentZ;
+      normalX = previousNormalX - tangentX * projection;
+      normalY = previousNormalY - tangentY * projection;
+      normalZ = previousNormalZ - tangentZ * projection;
+    }
+    let normalLength = Math.hypot(normalX, normalY, normalZ);
+    if (normalLength < 1e-6) {
+      normalX = -tangentZ;
+      normalY = 0;
+      normalZ = tangentX;
+      normalLength = Math.hypot(normalX, normalZ) || 1;
+    }
+    normalX /= normalLength;
+    normalY /= normalLength;
+    normalZ /= normalLength;
+    previousNormalX = normalX;
+    previousNormalY = normalY;
+    previousNormalZ = normalZ;
+
+    const binormalX = tangentY * normalZ - tangentZ * normalY;
+    const binormalY = tangentZ * normalX - tangentX * normalZ;
+    const binormalZ = tangentX * normalY - tangentY * normalX;
+    for (let side = 0; side < TRAIL_TESSELLATION; side += 1) {
+      const angle = side * Math.PI * 2 / TRAIL_TESSELLATION;
+      const cosine = Math.cos(angle);
+      const sine = Math.sin(angle);
+      const outwardX = normalX * cosine + binormalX * sine;
+      const outwardY = normalY * cosine + binormalY * sine;
+      const outwardZ = normalZ * cosine + binormalZ * sine;
+      const vertexOffset = (pointIndex * TRAIL_TESSELLATION + side) * 3;
+      positions[vertexOffset] = point.x + outwardX * radius;
+      positions[vertexOffset + 1] = point.y + outwardY * radius;
+      positions[vertexOffset + 2] = point.z + outwardZ * radius;
+      normals[vertexOffset] = outwardX;
+      normals[vertexOffset + 1] = outwardY;
+      normals[vertexOffset + 2] = outwardZ;
+    }
+  }
+
+  if (upload) {
+    trail.mesh.getVertexBuffer(BABYLON.VertexBuffer.PositionKind).updateDirectly(positions, 0);
+    trail.mesh.getVertexBuffer(BABYLON.VertexBuffer.NormalKind).updateDirectly(normals, 0);
   }
 }
 
