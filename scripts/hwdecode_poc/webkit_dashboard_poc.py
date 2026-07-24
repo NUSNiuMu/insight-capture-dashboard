@@ -193,6 +193,7 @@ class PocWindow:
         settings.set_enable_webgl(True)
         settings.set_enable_media(True)
         settings.set_enable_media_stream(True)
+        settings.set_enable_webrtc(True)
         settings.set_enable_media_capabilities(True)
         settings.set_media_playback_requires_user_gesture(False)
         settings.set_media_playback_allows_inline(True)

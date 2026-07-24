@@ -30,13 +30,15 @@ GLVND registration for them. Pointing
 `/usr/lib/aarch64-linux-gnu/tegra-egl/nvidia.json` made WebKitGTK launch and
 render WebGL.
 
-The Jammy WebKitGTK build exposes `navigator.mediaDevices` but not
-`RTCPeerConnection`, even with media-stream settings enabled. The dashboard
-therefore cannot use its current WebRTC transport with this distribution
-build.
+WebRTC uses a separate WebKit setting from media-stream capture. The PoC now
+enables both settings, but `RTCPeerConnection` remains absent. Source and build
+configuration inspection explains the result: WebKitGTK 2.50.4 treats
+`ENABLE_WEB_RTC` as an experimental compile-time feature, and the Ubuntu
+package does not enable it.
 
-Result: a WebKit build with WebRTC enabled is required. Installing the Jammy
-package alone is not a deployable kiosk solution.
+Result: the distribution package cannot exercise the dashboard's current
+WebRTC transport. A custom WebKitGTK build with `ENABLE_WEB_RTC=ON` is required
+before the decoder path can be tested against the real dashboard.
 
 ## H.264 decoder and memory negotiation
 
@@ -66,8 +68,7 @@ or at minimum an NVMM-to-system-memory conversion if performance is sufficient.
 
 ## Next go/no-go experiment
 
-Build WebKitGTK/WPE with WebRTC enabled against GStreamer 1.24 or newer, then
-test one stream in this order:
+Build WebKitGTK/WPE with WebRTC enabled, then test one stream in this order:
 
 1. Confirm `RTCPeerConnection` and H.264 capabilities in JavaScript.
 2. Confirm `nvv4l2decoder` without a software decoder in the pipeline.
@@ -78,7 +79,12 @@ test one stream in this order:
 5. Require the browser compositor to import the resulting DMA-BUF/GLMemory.
 6. Only then expand from one stream to three streams plus Babylon.
 
+WebKitGTK 2.50.4 configures its system GStreamer WebRTC backend successfully
+against the current GStreamer 1.20 and OpenSSL 3 packages. GStreamer 1.24 is
+still worth testing later because it may remove WebKit's
+`webkitappsinkwithworkarounds`, but it is not a prerequisite for the first
+WebRTC transport test.
+
 The bridge must not merely rename the caps. It must preserve multi-plane NV12
 layout, pitch or block-linear modifier, fences, buffer lifetime, and decoder
 surface recycling.
-

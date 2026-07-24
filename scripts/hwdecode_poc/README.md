@@ -60,6 +60,24 @@ against `http://127.0.0.1:8877/video_decode_test.html`.
 See [RESULTS.md](RESULTS.md) for the measurements and failure boundaries from
 the Jetson NX test on 2026-07-24.
 
+## 3. Configure a WebRTC-enabled WebKitGTK build
+
+Distribution WebKitGTK builds leave `ENABLE_WEB_RTC` disabled because it is an
+experimental port feature. After installing WebKit's build dependencies and
+extracting the matching source release:
+
+```bash
+scripts/hwdecode_poc/configure_webkitgtk_webrtc.sh \
+  /tmp/webkitgtk-2.50.4-src \
+  /tmp/webkitgtk-2.50.4-build \
+  /opt/webkitgtk-webrtc
+ninja -C /tmp/webkitgtk-2.50.4-build -j2 MiniBrowser
+```
+
+The configuration keeps JIT, Skia, WebGL, GStreamer-GL, and the GTK3
+MiniBrowser, while disabling documentation, introspection, GTK4, and unrelated
+PoC features. `-j2` is deliberate on the 8 GB Jetson NX.
+
 Seeing `nvv4l2decoder` in a log or DOT graph only proves hardware decode
 selection. A zero-copy result additionally requires inspecting the negotiated
 buffers at the WebKit sink for DMA-BUF/GLMemory import, plane metadata,
