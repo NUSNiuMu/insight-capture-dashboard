@@ -53,7 +53,7 @@ def latched_static_result(name: str, msgs: int) -> Dict[str, object]:
         "audit": "latched_static_presence",
         "expected_messages_min": 1,
         "error": (
-            "static transform recorded; latched topic requires at least 1 message (no FPS applies)"
+            "static transform recorded"
             if ok else "missing static transform; latched topic requires at least 1 message"
         ),
     }
