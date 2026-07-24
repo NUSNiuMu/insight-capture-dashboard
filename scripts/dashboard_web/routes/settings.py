@@ -11,6 +11,7 @@ from typing import Dict
 from aiohttp import web
 
 from dashboard_web.context import DashboardContext
+from dashboard_web.support import read_json_body
 
 
 _BOARD_CALIBRATION_FIELDS: Dict[str, type] = {
@@ -33,7 +34,7 @@ class SettingsRoutes:
         self.context = context
 
     async def _handle_settings_hand_overlay(self, request: web.Request) -> web.Response:
-        payload = await self._read_json_body(request)
+        payload = await read_json_body(request)
         name = str(payload.get("name", "")).strip()
         if not name or "enabled" not in payload:
             raise ValueError("Fields 'name' and 'enabled' are required.")
@@ -41,7 +42,7 @@ class SettingsRoutes:
         return web.json_response(self.context.node.build_settings_payload())
 
     async def _handle_settings_stick_figure(self, request: web.Request) -> web.Response:
-        payload = await self._read_json_body(request)
+        payload = await read_json_body(request)
         if "enabled" not in payload:
             raise ValueError("Field 'enabled' is required.")
         self.context.node.stick_figure_mode = bool(payload.get("enabled"))
@@ -50,22 +51,8 @@ class SettingsRoutes:
     async def _handle_settings_get(self, _request: web.Request) -> web.Response:
         return web.json_response(self.context.node.build_settings_payload())
 
-    @staticmethod
-    async def _read_json_body(request: web.Request) -> dict:
-        if not request.can_read_body:
-            return {}
-        try:
-            payload = await request.json()
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"Invalid JSON body: {exc}") from exc
-        if payload is None:
-            return {}
-        if not isinstance(payload, dict):
-            raise ValueError("Request body must be a JSON object.")
-        return payload
-
     async def _handle_settings_avatar_model(self, request: web.Request) -> web.Response:
-        payload = await self._read_json_body(request)
+        payload = await read_json_body(request)
         name = str(payload.get("name", "")).strip()
         model = str(payload.get("model", "")).strip()
         if not name or not model:
@@ -74,7 +61,7 @@ class SettingsRoutes:
         return web.json_response(self.context.node.build_settings_payload())
 
     async def _handle_settings_gripper_tracking(self, request: web.Request) -> web.Response:
-        payload = await self._read_json_body(request)
+        payload = await read_json_body(request)
         name = str(payload.get("name", "")).strip()
         if not name or "enabled" not in payload:
             raise ValueError("Fields 'name' and 'enabled' are required.")
@@ -113,7 +100,7 @@ class SettingsRoutes:
         )
 
     async def _handle_settings_board_calibration_post(self, request: web.Request) -> web.Response:
-        payload = await self._read_json_body(request)
+        payload = await read_json_body(request)
         values = self._write_config_fields("board_calibration.json", _BOARD_CALIBRATION_FIELDS, payload)
         return web.json_response({"values": values, "restart_required": True})
 
@@ -124,7 +111,7 @@ class SettingsRoutes:
         )
 
     async def _handle_settings_rosbag_sync_post(self, request: web.Request) -> web.Response:
-        payload = await self._read_json_body(request)
+        payload = await read_json_body(request)
         values = self._write_config_fields("post_processing.json", _ROSBAG_SYNC_FIELDS, payload)
         return web.json_response({"values": values, "restart_required": True})
 

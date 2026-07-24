@@ -1,9 +1,27 @@
 """Small web-facing helpers shared by route modules and the ROS node."""
 
+import json
 import os
 import shutil
 from pathlib import Path
 from typing import Dict
+
+from aiohttp import web
+
+
+async def read_json_body(request: web.Request) -> dict:
+    if not request.can_read_body:
+        return {}
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid JSON body: {exc}") from exc
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError("Request body must be a JSON object.")
+    return payload
+
 
 def _read_tum_points(path: Path, max_points: int = 2000) -> list:
     """Read a TUM trajectory file and return a downsampled list of [x, y, z] points."""

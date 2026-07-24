@@ -10,7 +10,7 @@ from aiohttp import web
 
 from check_bag import analyze_bag
 from post_processing import list_rosbags
-from dashboard_web.support import read_disk_space, read_system_load
+from dashboard_web.support import read_disk_space, read_json_body, read_system_load
 
 from dashboard_web.context import DashboardContext
 
@@ -83,7 +83,7 @@ class RecordingRoutes:
         return web.json_response({"status": "deleted", "bag_name": bag_name})
 
     async def _handle_integrity_run(self, request: web.Request) -> web.Response:
-        payload = await self._read_json_body(request)
+        payload = await read_json_body(request)
         bag_name = str(payload.get("bag_name", "")).strip()
         if not bag_name or "/" in bag_name or bag_name in (".", ".."):
             return web.json_response({"error": "Invalid bag name."}, status=400)
