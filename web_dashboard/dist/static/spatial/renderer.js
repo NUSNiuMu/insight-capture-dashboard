@@ -10,10 +10,10 @@ const ROLE_STYLE = {
   left_hand: { label: "Left Hand", color: "#79adc2", primitive: "box", modelColor: "#9f8569" },
   right_hand: { label: "Right Hand", color: "#cf7f6f", primitive: "box", modelColor: "#9f8569" }
 };
-const TRAIL_RADIUS_BY_ROLE = {
-  head: 0.01,
-  left_hand: 0.008,
-  right_hand: 0.008
+const TRAIL_SCREEN_WIDTH_BY_ROLE = {
+  head: 0.006,
+  left_hand: 0.005,
+  right_hand: 0.005
 };
 const HAND_RIG_EDGES = [
   [0, 1, "thumb"], [1, 2, "thumb"], [2, 3, "thumb"], [3, 4, "thumb"],
@@ -751,7 +751,7 @@ function refreshTrailMesh(trail) {
   }
 
   const roleColor = BABYLON.Color3.FromHexString((ROLE_STYLE[trail.role] || ROLE_STYLE.head).color);
-  const radius = TRAIL_RADIUS_BY_ROLE[trail.role] || 0.016;
+  const screenWidth = TRAIL_SCREEN_WIDTH_BY_ROLE[trail.role] || 0.005;
   const capacity = keepTrajectory
     ? Math.max(traceCapacity, Math.ceil(trail.points.length / traceCapacity) * traceCapacity)
     : traceCapacity;
@@ -769,8 +769,8 @@ function refreshTrailMesh(trail) {
       `trail-${trail.role}`,
       { points: flattenedPoints, updatable: true },
       {
-        width: radius * 2,
-        sizeAttenuation: true,
+        width: screenWidth,
+        sizeAttenuation: false,
         color: roleColor,
       },
       scene
