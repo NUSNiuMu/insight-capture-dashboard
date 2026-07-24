@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
+
+@dataclass
 class _ScoringJob:
     bag_name: str
     bag_path: str
