@@ -9,7 +9,7 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js";
+} from "../spatial/renderer.js?v=20260724-no-avatar-placeholder";
 
 const modelStatus = document.getElementById("model-status");
 const alignmentPanel = document.getElementById("alignment-panel");
@@ -49,8 +49,7 @@ window.addEventListener("pagehide", () => {
 });
 
 function scheduleStartup() {
-  // The WebSocket makes the lightweight pose markers visible immediately.
-  // Heavier camera, trace, and avatar work follows after the first paint.
+  // Keep the viewport responsive before heavier camera, trace, and avatar work.
   scheduleStartupTask(() => {
     fetchAlignmentStatus();
     startCameraDashboard({ cameraStaggerMs: 450 });

@@ -328,8 +328,10 @@ async function ensurePoseVisual(pose, node) {
     return;
   }
 
-  if (usesStartupPrimitive(pose)) {
-    attachPrimitive(pose, node, "loading avatar");
+  if (isAvatarLoadDeferred(pose)) {
+    if (modelStatus) {
+      modelStatus.textContent = "Models: waiting to load";
+    }
     return;
   }
 
@@ -639,15 +641,15 @@ function buildAssetKey(pose) {
   if (stickFigureMode) {
     return `stick-marker:${pose.role}`;
   }
-  if (usesStartupPrimitive(pose)) {
-    return `startup-primitive:${pose.role}:${avatarLoadStage}`;
+  if (isAvatarLoadDeferred(pose)) {
+    return `avatar-pending:${pose.role}:${avatarLoadStage}`;
   }
   const rotation = Array.isArray(pose.avatar_rotation_deg_xyz) ? pose.avatar_rotation_deg_xyz.join(",") : "0,0,0";
   const offset = Array.isArray(pose.avatar_offset_xyz) ? pose.avatar_offset_xyz.join(",") : "0,0,0";
   return String(pose.avatar_model || "primitive") + ":" + String(pose.avatar_scale || 1) + ":" + rotation + ":" + offset;
 }
 
-function usesStartupPrimitive(pose) {
+function isAvatarLoadDeferred(pose) {
   return avatarLoadStage === 0 || (avatarLoadStage === 1 && pose.role === "head");
 }
 
