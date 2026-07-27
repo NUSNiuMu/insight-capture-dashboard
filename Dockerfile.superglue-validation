@@ -26,10 +26,60 @@ COPY scripts/superglue_tensorrt.py /opt/insight/superglue_tensorrt.py
 COPY scripts/export_superglue_onnx.py /opt/insight/export_superglue_onnx.py
 RUN cd /opt/insight && python3 export_superglue_onnx.py
 
-FROM nvcr.io/nvidia/tensorrt@sha256:cb601071a1fda9248bbad591829f65943bd8dd23d5fe81b7c41f5390d0e1b03e
+FROM nvcr.io/nvidia/tensorrt@sha256:cb601071a1fda9248bbad591829f65943bd8dd23d5fe81b7c41f5390d0e1b03e AS tensorrt-source
+
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libstdc++6 \
+        python3-minimal \
+        python3-numpy \
+    && rm -rf /var/lib/apt/lists/*
+
+# The NGC TensorRT image is a development environment containing CUDA toolkit,
+# HPC-X/NCCL, samples, headers, and profilers. This worker only needs the
+# TensorRT Python binding plus the libraries used for engine construction and
+# inference. Jetson driver/DLA libraries are injected by the NVIDIA runtime.
+COPY --from=tensorrt-source /usr/local/lib/python3.12/dist-packages/tensorrt \
+    /usr/local/lib/python3.12/dist-packages/tensorrt
+COPY --from=tensorrt-source /usr/local/lib/python3.12/dist-packages/tensorrt-10.9.0.34.dist-info \
+    /usr/local/lib/python3.12/dist-packages/tensorrt-10.9.0.34.dist-info
+COPY --from=tensorrt-source /usr/lib/aarch64-linux-gnu/libnvinfer.so.10.9.0 \
+    /usr/lib/aarch64-linux-gnu/libnvinfer.so.10.9.0
+COPY --from=tensorrt-source /usr/lib/aarch64-linux-gnu/libnvinfer_plugin.so.10.9.0 \
+    /usr/lib/aarch64-linux-gnu/libnvinfer_plugin.so.10.9.0
+COPY --from=tensorrt-source /usr/lib/aarch64-linux-gnu/libnvinfer_builder_resource.so.10.9.0 \
+    /usr/lib/aarch64-linux-gnu/libnvinfer_builder_resource.so.10.9.0
+COPY --from=tensorrt-source /usr/lib/aarch64-linux-gnu/libnvonnxparser.so.10.9.0 \
+    /usr/lib/aarch64-linux-gnu/libnvonnxparser.so.10.9.0
+COPY --from=tensorrt-source /usr/local/cuda-12.9/targets/aarch64-linux/lib/libcudart.so.12.9.37 \
+    /usr/local/cuda/targets/aarch64-linux/lib/libcudart.so.12.9.37
+COPY --from=tensorrt-source /usr/local/cuda-12.9/targets/aarch64-linux/lib/libcudla.so.1.0.0 \
+    /usr/local/cuda/targets/aarch64-linux/lib/libcudla.so.1.0.0
+COPY --from=tensorrt-source /usr/local/cuda-12.9/targets/aarch64-linux/lib/libnvrtc.so.12.9.41 \
+    /usr/local/cuda/targets/aarch64-linux/lib/libnvrtc.so.12.9.41
+COPY --from=tensorrt-source /usr/local/cuda-12.9/targets/aarch64-linux/lib/libnvrtc-builtins.so.12.9.41 \
+    /usr/local/cuda/targets/aarch64-linux/lib/libnvrtc-builtins.so.12.9.41
+COPY --from=tensorrt-source /opt/tensorrt/bin/trtexec /opt/tensorrt/bin/trtexec
+RUN ln -s libnvinfer.so.10.9.0 /usr/lib/aarch64-linux-gnu/libnvinfer.so.10 \
+    && ln -s libnvinfer.so.10 /usr/lib/aarch64-linux-gnu/libnvinfer.so \
+    && ln -s libnvinfer_plugin.so.10.9.0 /usr/lib/aarch64-linux-gnu/libnvinfer_plugin.so.10 \
+    && ln -s libnvinfer_plugin.so.10 /usr/lib/aarch64-linux-gnu/libnvinfer_plugin.so \
+    && ln -s libnvonnxparser.so.10.9.0 /usr/lib/aarch64-linux-gnu/libnvonnxparser.so.10 \
+    && ln -s libnvonnxparser.so.10 /usr/lib/aarch64-linux-gnu/libnvonnxparser.so \
+    && ln -s libcudart.so.12.9.37 /usr/local/cuda/targets/aarch64-linux/lib/libcudart.so.12 \
+    && ln -s libcudart.so.12 /usr/local/cuda/targets/aarch64-linux/lib/libcudart.so \
+    && ln -s libcudla.so.1.0.0 /usr/local/cuda/targets/aarch64-linux/lib/libcudla.so.1 \
+    && ln -s libcudla.so.1 /usr/local/cuda/targets/aarch64-linux/lib/libcudla.so \
+    && ln -s libnvrtc.so.12.9.41 /usr/local/cuda/targets/aarch64-linux/lib/libnvrtc.so.12 \
+    && ln -s libnvrtc.so.12 /usr/local/cuda/targets/aarch64-linux/lib/libnvrtc.so \
+    && ln -s libnvrtc-builtins.so.12.9.41 /usr/local/cuda/targets/aarch64-linux/lib/libnvrtc-builtins.so.12.9 \
+    && ln -s libnvrtc-builtins.so.12.9 /usr/local/cuda/targets/aarch64-linux/lib/libnvrtc-builtins.so
 
 COPY --from=onnx-builder /opt/insight/onnx /opt/insight/onnx
-COPY --from=onnx-builder /opt/SuperGluePretrainedNetwork /opt/SuperGluePretrainedNetwork
 COPY scripts/superglue_ipc.py /opt/insight/superglue_ipc.py
 COPY scripts/superglue_inference_worker.py /opt/insight/superglue_inference_worker.py
 COPY scripts/superglue_tensorrt_runtime.py /opt/insight/superglue_tensorrt_runtime.py
@@ -39,5 +89,9 @@ RUN chmod +x /opt/insight/start_superglue_inference.sh
 
 WORKDIR /opt/insight
 
-ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+ENV LD_LIBRARY_PATH=/usr/local/cuda/targets/aarch64-linux/lib:/usr/lib/aarch64-linux-gnu \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    NVIDIA_REQUIRE_JETPACK_HOST_MOUNTS=base-only \
+    NVIDIA_VISIBLE_DEVICES=all
+
 CMD ["/opt/insight/start_superglue_inference.sh"]

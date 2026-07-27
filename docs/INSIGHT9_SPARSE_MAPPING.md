@@ -10,11 +10,13 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图，并发布 RViz 点
   `ddcf11f42e7e0732a0c4607648f9448ea8d73590`。官方许可将使用主体和用途限制为
   符合条件的非商业内部研究，并禁止向第三方分发；使用前仍需由项目方确认适用性。
 - `Dockerfile.superglue-validation` 使用多阶段构建：固定 digest 的 NVIDIA
-  PyTorch 镜像只负责把官方模型导出为 ONNX；最终运行镜像基于固定 digest 的
-  NVIDIA TensorRT `25.04-py3-igpu`。
+  PyTorch 镜像只负责把官方模型导出为 ONNX；固定 digest 的 NVIDIA TensorRT
+  `25.04-py3-igpu` 只作为运行库来源，最终镜像基于 Ubuntu 24.04，仅复制建引擎
+  和推理需要的 TensorRT/CUDA 动态库。
 - 运行镜像不包含 PyTorch、PyTorch wheel、ONNX 导出器或 PyTorch 回退路径。
-  推理时只使用 TensorRT、CUDA runtime 和 NumPy；CUDA 显存与 stream 通过
-  CUDA C API 直接管理。
+  也不包含 CUDA 开发工具、HPC-X/NCCL、TensorRT samples/headers、静态库或
+  Lean/Dispatch 变体。推理时只使用 TensorRT、CUDA runtime 和 NumPy；CUDA
+  显存与 stream 通过 CUDA C API 直接管理。
 - SuperPoint 的卷积、softmax、NMS、边界过滤、Top-K 和描述子采样全部位于
   FP16 TensorRT 引擎内；数值敏感的 SuperGlue/Sinkhorn 使用 FP32。
 - `/insight9_a/camera/hand_keypoints` 使用彩色相机坐标系，不能直接作为红外图像
