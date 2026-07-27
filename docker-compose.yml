@@ -14,6 +14,10 @@ services:
 
     # ── ROS2 requires host network for DDS multicast ─────────────────────────
     network_mode: host
+    # Allow optional ROS workers to join this 2 GiB shared-memory namespace.
+    # Fast DDS otherwise advertises SHM endpoints that sibling containers
+    # discover but cannot consume.
+    ipc: shareable
 
     # ── NVIDIA Container Runtime for CUDA acceleration ───────────────────────
     runtime: nvidia
@@ -55,6 +59,8 @@ services:
       # the host's own CUDA over it would shadow that with whatever happens
       # to be on this specific host, silently breaking on any other device.
       - .:/workspaces/insight_capture
+      # Local IPC shared with the optional SuperGlue validation worker.
+      - superglue-ipc:/run/superglue
 
       # X11 socket for the on-device kiosk window (--jetson). Plain `docker
       # compose` doesn't get VS Code Dev Containers' automatic X11
@@ -77,3 +83,63 @@ services:
       resources:
         limits:
           cpus: '5.8'
+
+  # Internal research validation only. This image contains Magic Leap's
+  # research-licensed official code and weights and must never be shipped in
+  # the customer release bundle.
+  superglue-inference:
+    profiles: ["mapping-validation"]
+    build:
+      context: .
+      dockerfile: Dockerfile.superglue-validation
+      network: host
+    image: insight-superglue-validation:25.04
+    network_mode: host
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - superglue-ipc:/run/superglue
+    shm_size: '1gb'
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - /opt/insight/superglue_ipc.py
+        - /run/superglue/matcher.sock
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 90s
+    restart: unless-stopped
+
+  insight9-sparse-mapper:
+    profiles: ["mapping-validation"]
+    image: insight-dashboard:latest
+    network_mode: host
+    # Fast DDS advertises shared-memory endpoints on the host network. Sharing
+    # the dashboard IPC namespace keeps mapper outputs reachable cross-container.
+    ipc: service:insight-dashboard
+    runtime: nvidia
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - .:/workspaces/insight_capture
+      - superglue-ipc:/run/superglue
+    command:
+      - python3
+      - -u
+      - scripts/insight9_sparse_mapper.py
+      - --backend
+      - ipc
+    depends_on:
+      superglue-inference:
+        condition: service_healthy
+    stop_signal: SIGINT
+    restart: "no"
+
+volumes:
+  superglue-ipc:

@@ -119,6 +119,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rosbag2-storage-default-plugins \
     ros-humble-sensor-msgs \
     ros-humble-geometry-msgs \
+    ros-humble-nav-msgs \
+    ros-humble-std-msgs \
+    ros-humble-tf2-ros \
+    ros-humble-sensor-msgs-py \
     ros-humble-rosidl-runtime-py \
     # Detection2DArray for the insight9_a hand-landmark overlay (Settings page)
     ros-humble-vision-msgs \

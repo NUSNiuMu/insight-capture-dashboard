@@ -1,0 +1,31 @@
+# Internal validation image only. Magic Leap's license limits use to eligible
+# noncommercial internal research and does not permit redistribution.
+FROM nvcr.io/nvidia/pytorch@sha256:d4a2f7f873bf0bbb72c2b15dc07860369c760dfda2348859826947bc71a88248
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG SUPERGLUE_COMMIT=ddcf11f42e7e0732a0c4607648f9448ea8d73590
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --filter=blob:none https://github.com/magicleap/SuperGluePretrainedNetwork.git \
+        /opt/SuperGluePretrainedNetwork \
+    && git -C /opt/SuperGluePretrainedNetwork checkout --detach "${SUPERGLUE_COMMIT}" \
+    && test "$(git -C /opt/SuperGluePretrainedNetwork rev-parse HEAD)" = "${SUPERGLUE_COMMIT}" \
+    && printf '%s  %s\n' \
+        52b6708629640ca883673b5d5c097c4ddad37d8048b33f09c8ca0d69db12c40e \
+        /opt/SuperGluePretrainedNetwork/models/weights/superpoint_v1.pth \
+        0e710469be25ebe1e2ccf68edcae8b2945b0617c8e7e68412251d9d47f5052b1 \
+        /opt/SuperGluePretrainedNetwork/models/weights/superglue_indoor.pth \
+        2f5f5e9bb3febf07b69df633c4c3ff7a17f8af26a023aae2b9303d22339195bd \
+        /opt/SuperGluePretrainedNetwork/models/weights/superglue_outdoor.pth \
+        | sha256sum -c -
+
+COPY scripts/superglue_ipc.py /opt/insight/superglue_ipc.py
+COPY scripts/superglue_inference_worker.py /opt/insight/superglue_inference_worker.py
+
+WORKDIR /opt/insight
+
+ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
+CMD ["python3", "-u", "/opt/insight/superglue_inference_worker.py"]
