@@ -88,10 +88,6 @@ xhost -si:localuser:root
 主要输出：
 
 - `/insight9_sparse_map/points`：经过多关键帧确认的稀疏地图。
-- `/insight9_sparse_map/current_points`：当前关键帧全部几何有效三角化点；
-  红色显示，用于先检查单帧深度形状。
-- `/insight9_sparse_map/debug_matches`：左右图匹配诊断图；绿色连线通过极线、
-  视差、深度和重投影过滤，红色连线被过滤。
 - `/insight9_sparse_map/path`：最多 200 点的左目 VIO 轨迹。
 - `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数和处理耗时 JSON。
 - TF `insight9_map -> insight9_mapping_camera_left`：独立命名，避免与设备 TF 多父冲突。
@@ -101,11 +97,6 @@ xhost -si:localuser:root
 ```bash
 ros2 topic echo /insight9_sparse_map/status
 ```
-
-验收时先看 `Stereo match validation`：静态结构的绿色连线应大致水平，左右
-端点落在同一物体位置；再看红色 `Current triangulated frame` 是否呈现合理
-的单帧场景轮廓；最后比较蓝色 `Confirmed sparse map` 在移动相机后是否仍固定
-在世界坐标。这样可以分别定位匹配、三角化和跨帧融合问题。
 
 停止验证服务：
 

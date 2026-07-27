@@ -96,60 +96,6 @@ def image_to_gray(message: Image) -> np.ndarray:
     raise ValueError(f"unsupported image encoding: {message.encoding}")
 
 
-def render_match_debug(
-    left_gray: np.ndarray,
-    right_gray: np.ndarray,
-    left_points: np.ndarray,
-    right_points: np.ndarray,
-    accepted_indices: np.ndarray,
-) -> np.ndarray:
-    """Render stereo matches, highlighting geometrically accepted pairs."""
-
-    left_color = cv2.cvtColor(left_gray, cv2.COLOR_GRAY2BGR)
-    right_color = cv2.cvtColor(right_gray, cv2.COLOR_GRAY2BGR)
-    canvas = np.concatenate([left_color, right_color], axis=1)
-    right_offset = left_color.shape[1]
-    accepted = np.zeros((len(left_points),), dtype=bool)
-    accepted[np.asarray(accepted_indices, dtype=np.int64)] = True
-
-    for index in np.flatnonzero(~accepted):
-        first = tuple(np.rint(left_points[index]).astype(int))
-        second_raw = np.rint(right_points[index]).astype(int)
-        second = (int(second_raw[0]) + right_offset, int(second_raw[1]))
-        cv2.line(canvas, first, second, (40, 40, 180), 1, cv2.LINE_AA)
-    for index in np.flatnonzero(accepted):
-        first = tuple(np.rint(left_points[index]).astype(int))
-        second_raw = np.rint(right_points[index]).astype(int)
-        second = (int(second_raw[0]) + right_offset, int(second_raw[1]))
-        cv2.line(canvas, first, second, (70, 230, 70), 1, cv2.LINE_AA)
-        cv2.circle(canvas, first, 2, (70, 255, 70), -1, cv2.LINE_AA)
-        cv2.circle(canvas, second, 2, (70, 255, 70), -1, cv2.LINE_AA)
-
-    cv2.line(
-        canvas,
-        (right_offset, 0),
-        (right_offset, canvas.shape[0] - 1),
-        (255, 255, 255),
-        1,
-    )
-    label = (
-        f"green accepted: {int(accepted.sum())}  "
-        f"red rejected: {int((~accepted).sum())}"
-    )
-    cv2.rectangle(canvas, (0, 0), (510, 30), (0, 0, 0), -1)
-    cv2.putText(
-        canvas,
-        label,
-        (8, 21),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
-        (255, 255, 255),
-        1,
-        cv2.LINE_AA,
-    )
-    return canvas
-
-
 def matrix_to_pose_stamped(
     transform: np.ndarray, stamp_ns: int, frame_id: str
 ) -> PoseStamped:
@@ -244,20 +190,11 @@ class Insight9SparseMapper(Node):
         self._path = deque(maxlen=args.path_points)
         self._path_lock = threading.Lock()
         self._map_lock = threading.Lock()
-        self._debug_lock = threading.Lock()
-        self._current_points = np.empty((0, 3), dtype=np.float32)
-        self._latest_match_debug: Optional[np.ndarray] = None
         self._last_path_append_ns = 0
         self._latest_stats = {"state": "waiting_for_inputs"}
 
         self._pointcloud_publisher = self.create_publisher(
             PointCloud2, "insight9_sparse_map/points", 1
-        )
-        self._current_pointcloud_publisher = self.create_publisher(
-            PointCloud2, "insight9_sparse_map/current_points", 1
-        )
-        self._match_debug_publisher = self.create_publisher(
-            Image, "insight9_sparse_map/debug_matches", 1
         )
         self._path_publisher = self.create_publisher(
             PathMsg, "insight9_sparse_map/path", 1
@@ -429,10 +366,7 @@ class Insight9SparseMapper(Node):
             imu_to_left = self._imu_to_left
             pose = self._pose_buffer.lookup(pair.stamp_ns)
             if calibration is None or imu_to_left is None or pose is None:
-                if self._keyframe_id == 0:
-                    self._latest_stats = {
-                        "state": "waiting_for_calibration_tf_or_pose"
-                    }
+                self._latest_stats = {"state": "waiting_for_calibration_tf_or_pose"}
                 continue
             world_to_left = compose_transform(matrix_from_pose(pose), imu_to_left)
             if not self._is_keyframe(world_to_left):
@@ -459,16 +393,6 @@ class Insight9SparseMapper(Node):
                 )
                 source = triangulated.source_indices
                 world_points = transform_points(world_to_left, triangulated.points_left)
-                match_debug = render_match_debug(
-                    left,
-                    right,
-                    matches.left_points,
-                    matches.right_points,
-                    source,
-                )
-                with self._debug_lock:
-                    self._current_points = world_points.astype(np.float32)
-                    self._latest_match_debug = match_debug
                 self._keyframe_id += 1
                 with self._map_lock:
                     update = self._landmarks.update(
@@ -526,29 +450,11 @@ class Insight9SparseMapper(Node):
     def _publish_map(self) -> None:
         with self._map_lock:
             points = self._landmarks.points()
-        with self._debug_lock:
-            current_points = self._current_points
-            match_debug = self._latest_match_debug
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
         header.frame_id = self._map_frame
         cloud = point_cloud2.create_cloud_xyz32(header, points.tolist())
         self._pointcloud_publisher.publish(cloud)
-        current_cloud = point_cloud2.create_cloud_xyz32(
-            header, current_points.tolist()
-        )
-        self._current_pointcloud_publisher.publish(current_cloud)
-        if match_debug is not None:
-            debug_message = Image()
-            debug_message.header.stamp = header.stamp
-            debug_message.header.frame_id = self._args.left_frame
-            debug_message.height = int(match_debug.shape[0])
-            debug_message.width = int(match_debug.shape[1])
-            debug_message.encoding = "bgr8"
-            debug_message.is_bigendian = 0
-            debug_message.step = int(match_debug.shape[1] * 3)
-            debug_message.data = match_debug.tobytes()
-            self._match_debug_publisher.publish(debug_message)
         status = String()
         status.data = json.dumps(self._latest_stats, separators=(",", ":"))
         self._status_publisher.publish(status)
@@ -629,7 +535,7 @@ def main() -> int:
     finally:
         if node is not None:
             node.destroy_node()
-        rclpy.try_shutdown()
+        rclpy.shutdown()
     return 0
 
 
