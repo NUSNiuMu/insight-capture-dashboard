@@ -109,14 +109,12 @@ def build_dashboard_config(config: Dict) -> Dict:
         cameras.append(
             {
                 "name": camera["name"],
-                "label": camera.get("dashboard_label", camera.get("label", camera["name"])),
+                "label": camera.get("dashboard_label", camera["name"]),
                 "topic": image_topic(namespace, image_stream),
                 "type": IMAGE_STREAMS[image_stream]["type"],
                 "rotation_deg": int(camera.get("dashboard_rotation_deg", 0)),
                 "row": int(camera.get("dashboard_row", 0)),
                 "column": int(camera.get("dashboard_column", 0)),
-                "column_span": int(camera.get("dashboard_column_span", 1)),
-                "row_span": int(camera.get("dashboard_row_span", 1)),
             }
         )
 
@@ -132,7 +130,6 @@ def build_dashboard_config(config: Dict) -> Dict:
             {
                 "name": camera["name"],
                 "topic": pose_topic,
-                "color": camera.get("dashboard_color", "#ffffff"),
                 "teleop_role": camera.get("teleop_role", camera["name"]),
                 "avatar_model": avatar_model,
                 "avatar_scale": float(camera.get("avatar_scale", model_defaults.get("avatar_scale", 1.0))),
@@ -146,7 +143,6 @@ def build_dashboard_config(config: Dict) -> Dict:
         )
 
     return {
-        "window_title": dashboard.get("window_title", "Insight Monitoring Dashboard"),
         "trajectory": dashboard.get("trajectory", {}),
         "cameras": cameras,
         "poses": poses,

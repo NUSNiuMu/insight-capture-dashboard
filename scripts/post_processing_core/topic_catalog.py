@@ -43,9 +43,6 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         pose_topic = _camera_pose_topic(namespace, str(camera.get("dashboard_pose_stream", "vio_100hz")))
         if pose_topic:
             topics.append(pose_topic)
-        path_topic = _normalize_topic_name(camera.get("dashboard_path_topic", ""))
-        if path_topic and camera.get("record_dashboard_path", False):
-            topics.append(path_topic)
 
         image_stream = str(camera.get("dashboard_image_stream", "color_compressed"))
         topics.append(f"{camera_base(namespace)}/imu")
@@ -160,7 +157,7 @@ def build_recording_topic_catalog(
             {
                 "name": camera["name"],
                 "namespace": namespace,
-                "label": camera.get("dashboard_label", camera.get("label", camera["name"])),
+                "label": camera.get("dashboard_label", camera["name"]),
                 "detected": bool(entries),
                 "topics": entries,
             }

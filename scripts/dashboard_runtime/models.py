@@ -15,7 +15,6 @@ class PoseSample:
 class PoseSpec:
     name: str
     topic: str
-    color: str
     teleop_role: str
     avatar_model: Optional[str]
     avatar_scale: float
@@ -33,8 +32,6 @@ class CameraSpec:
     rotation_deg: int
     row: int
     column: int
-    column_span: int
-    row_span: int
 
 
 @dataclass

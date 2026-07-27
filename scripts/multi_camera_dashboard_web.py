@@ -125,7 +125,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             camera["name"]: camera for camera in raw_config.get("cameras", []) if camera.get("enabled", True)
         }
         self.project_root = config_path.resolve().parents[1]
-        self.window_title = config.get("window_title", "Insight Web Dashboard")
         trajectory_config = config.get("trajectory", {})
         # Reliable image QoS prevents whole-frame loss from fragmented UDP samples.
         self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
@@ -140,14 +139,12 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             CameraSpec(
                 name=item["name"],
                 namespace=enabled_camera_map[item["name"]]["namespace"],
-                label=item.get("label", item["name"]),
+                label=item["label"],
                 topic=item["topic"],
                 topic_type=item["type"],
                 rotation_deg=int(item.get("rotation_deg", 0)),
                 row=int(item.get("row", 0)),
                 column=int(item.get("column", 0)),
-                column_span=int(item.get("column_span", 1)),
-                row_span=int(item.get("row_span", 1)),
             )
             for item in config.get("cameras", [])
         ]
@@ -155,7 +152,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             PoseSpec(
                 name=item["name"],
                 topic=item["topic"],
-                color=item["color"],
                 teleop_role=str(item.get("teleop_role", item["name"])),
                 avatar_model=item.get("avatar_model"),
                 avatar_scale=float(item.get("avatar_scale", 1.0)),

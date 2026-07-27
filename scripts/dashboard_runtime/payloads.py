@@ -153,8 +153,6 @@ class PayloadBuilder:
                         "rotation_deg": camera.rotation_deg,
                         "row": camera.row,
                         "column": camera.column,
-                        "row_span": camera.row_span,
-                        "column_span": camera.column_span,
                     }
                 )
         return {
