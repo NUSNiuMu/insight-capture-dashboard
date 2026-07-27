@@ -1,6 +1,6 @@
 # Internal validation image only. Magic Leap's license limits use to eligible
 # noncommercial internal research and does not permit redistribution.
-FROM nvcr.io/nvidia/pytorch@sha256:d4a2f7f873bf0bbb72c2b15dc07860369c760dfda2348859826947bc71a88248
+FROM nvcr.io/nvidia/pytorch@sha256:d4a2f7f873bf0bbb72c2b15dc07860369c760dfda2348859826947bc71a88248 AS onnx-builder
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG SUPERGLUE_COMMIT=ddcf11f42e7e0732a0c4607648f9448ea8d73590
@@ -22,9 +22,17 @@ RUN git clone --filter=blob:none https://github.com/magicleap/SuperGluePretraine
         /opt/SuperGluePretrainedNetwork/models/weights/superglue_outdoor.pth \
         | sha256sum -c -
 
+COPY scripts/superglue_tensorrt.py /opt/insight/superglue_tensorrt.py
+COPY scripts/export_superglue_onnx.py /opt/insight/export_superglue_onnx.py
+RUN cd /opt/insight && python3 export_superglue_onnx.py
+
+FROM nvcr.io/nvidia/tensorrt@sha256:cb601071a1fda9248bbad591829f65943bd8dd23d5fe81b7c41f5390d0e1b03e
+
+COPY --from=onnx-builder /opt/insight/onnx /opt/insight/onnx
+COPY --from=onnx-builder /opt/SuperGluePretrainedNetwork /opt/SuperGluePretrainedNetwork
 COPY scripts/superglue_ipc.py /opt/insight/superglue_ipc.py
 COPY scripts/superglue_inference_worker.py /opt/insight/superglue_inference_worker.py
-COPY scripts/superglue_tensorrt.py /opt/insight/superglue_tensorrt.py
+COPY scripts/superglue_tensorrt_runtime.py /opt/insight/superglue_tensorrt_runtime.py
 COPY scripts/prepare_superglue_tensorrt.py /opt/insight/prepare_superglue_tensorrt.py
 COPY scripts/start_superglue_inference.sh /opt/insight/start_superglue_inference.sh
 RUN chmod +x /opt/insight/start_superglue_inference.sh

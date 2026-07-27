@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Prepare and validate the device-specific SuperPoint/SuperGlue engine cache."""
+"""Stage and validate the device-specific pure TensorRT engine cache."""
 
 from __future__ import annotations
 
@@ -8,21 +8,28 @@ import argparse
 import hashlib
 import json
 import platform
-import subprocess
+import shutil
 from pathlib import Path
 
 import tensorrt
-import torch
 
-from superglue_tensorrt import (
+from superglue_tensorrt_runtime import (
+    CudaRuntime,
     IMAGE_HEIGHT,
     IMAGE_WIDTH,
     OFFICIAL_COMMIT,
-    export_onnx,
 )
 
 
-PLAN_NAMES = ("superpoint_dense_fp16.plan", "superglue_fp32.plan")
+ONNX_NAMES = ("superpoint.onnx", "superglue.onnx")
+PLAN_NAMES = ("superpoint_fp16.plan", "superglue_fp32.plan")
+MODEL_PARAMETERS = {
+    "weights": "indoor",
+    "max_keypoints": 1024,
+    "keypoint_threshold": 0.005,
+    "match_threshold": 0.2,
+    "sinkhorn_iterations": 20,
+}
 
 
 def _sha256(path: Path) -> str:
@@ -34,28 +41,28 @@ def _sha256(path: Path) -> str:
 
 
 def expected_manifest(args: argparse.Namespace) -> dict[str, object]:
-    checkout_commit = subprocess.check_output(
-        ["git", "-C", args.checkout, "rev-parse", "HEAD"], text=True
-    ).strip()
-    if checkout_commit != OFFICIAL_COMMIT:
-        raise RuntimeError(
-            f"official checkout is {checkout_commit}, expected {OFFICIAL_COMMIT}"
-        )
-    capability = torch.cuda.get_device_capability(0)
+    cuda = CudaRuntime()
+    try:
+        capability = cuda.compute_capability
+        cuda_version = cuda.runtime_version
+    finally:
+        cuda.close()
+    onnx_dir = Path(args.onnx_dir)
     return {
-        "schema": 1,
+        "schema": 2,
+        "runtime": "tensorrt-cuda",
         "official_commit": OFFICIAL_COMMIT,
-        "weights": args.weights,
-        "max_keypoints": args.max_keypoints,
-        "keypoint_threshold": args.keypoint_threshold,
-        "match_threshold": args.match_threshold,
-        "sinkhorn_iterations": args.sinkhorn_iterations,
+        **MODEL_PARAMETERS,
         "image_height": IMAGE_HEIGHT,
         "image_width": IMAGE_WIDTH,
         "tensorrt": tensorrt.__version__,
-        "cuda": torch.version.cuda,
+        "cuda": cuda_version,
         "compute_capability": list(capability),
         "machine": platform.machine(),
+        "onnx_sha256": {
+            name: _sha256(onnx_dir / name)
+            for name in ONNX_NAMES
+        },
     }
 
 
@@ -80,35 +87,30 @@ def check(args: argparse.Namespace) -> int:
         if not path.is_file() or path.stat().st_size <= 0:
             print(f"TensorRT cache miss: {name} is absent")
             return 1
-        if manifest.get("sha256", {}).get(name) != _sha256(path):
+        if manifest.get("plan_sha256", {}).get(name) != _sha256(path):
             print(f"TensorRT cache miss: {name} checksum differs")
             return 1
     print(
-        f"TensorRT cache ready: TRT {expected['tensorrt']}, "
+        f"TensorRT/CUDA cache ready: TRT {expected['tensorrt']}, "
         f"SM {''.join(str(value) for value in expected['compute_capability'])}"
     )
     return 0
 
 
-def export(args: argparse.Namespace) -> int:
+def stage(args: argparse.Namespace) -> int:
+    source = Path(args.onnx_dir)
     cache = Path(args.engine_dir)
-    export_onnx(
-        Path(args.checkout),
-        cache,
-        weights=args.weights,
-        max_keypoints=args.max_keypoints,
-        keypoint_threshold=args.keypoint_threshold,
-        match_threshold=args.match_threshold,
-        sinkhorn_iterations=args.sinkhorn_iterations,
-    )
-    print(f"exported TensorRT ONNX sources to {cache}")
+    cache.mkdir(parents=True, exist_ok=True)
+    for name in ONNX_NAMES:
+        shutil.copyfile(source / name, cache / name)
+    print(f"staged pre-exported ONNX sources in {cache}")
     return 0
 
 
 def finalize(args: argparse.Namespace) -> int:
     cache = Path(args.engine_dir)
     manifest = expected_manifest(args)
-    manifest["sha256"] = {
+    manifest["plan_sha256"] = {
         name: _sha256(cache / name)
         for name in PLAN_NAMES
     }
@@ -120,14 +122,9 @@ def finalize(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("check", "export", "finalize"))
-    parser.add_argument("--checkout", default="/opt/SuperGluePretrainedNetwork")
+    parser.add_argument("action", choices=("check", "stage", "finalize"))
+    parser.add_argument("--onnx-dir", default="/opt/insight/onnx")
     parser.add_argument("--engine-dir", default="/opt/insight/engines")
-    parser.add_argument("--weights", choices=("indoor", "outdoor"), default="indoor")
-    parser.add_argument("--max-keypoints", type=int, default=1024)
-    parser.add_argument("--keypoint-threshold", type=float, default=0.005)
-    parser.add_argument("--match-threshold", type=float, default=0.2)
-    parser.add_argument("--sinkhorn-iterations", type=int, default=20)
     return parser
 
 
@@ -135,7 +132,7 @@ def main() -> int:
     args = build_parser().parse_args()
     return {
         "check": check,
-        "export": export,
+        "stage": stage,
         "finalize": finalize,
     }[args.action](args)
 

@@ -9,14 +9,14 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图，并发布 RViz 点
 - 官方代码及权重固定到提交
   `ddcf11f42e7e0732a0c4607648f9448ea8d73590`。官方许可将使用主体和用途限制为
   符合条件的非商业内部研究，并禁止向第三方分发；使用前仍需由项目方确认适用性。
-- `Dockerfile.superglue-validation` 基于固定 digest 的 NVIDIA
-  `25.04-py3-igpu`，并将固定版本的官方代码及权重直接构建进内部验证镜像。
-- 不安装临时 PyTorch wheel。固定 digest 的 NVIDIA 容器永久提供匹配的
-  PyTorch、CUDA、ONNX 和 TensorRT 10.9 运行环境。
-- 默认推理后端已经切换为 TensorRT：SuperPoint 使用 FP16，数值敏感的
-  SuperGlue/Sinkhorn 使用 FP32。ROS 同步、几何、地图生命周期和 RViz 接口
-  不依赖具体推理后端；需要排障时可显式设置
-  `SUPERGLUE_BACKEND=pytorch` 回退。
+- `Dockerfile.superglue-validation` 使用多阶段构建：固定 digest 的 NVIDIA
+  PyTorch 镜像只负责把官方模型导出为 ONNX；最终运行镜像基于固定 digest 的
+  NVIDIA TensorRT `25.04-py3-igpu`。
+- 运行镜像不包含 PyTorch、PyTorch wheel、ONNX 导出器或 PyTorch 回退路径。
+  推理时只使用 TensorRT、CUDA runtime 和 NumPy；CUDA 显存与 stream 通过
+  CUDA C API 直接管理。
+- SuperPoint 的卷积、softmax、NMS、边界过滤、Top-K 和描述子采样全部位于
+  FP16 TensorRT 引擎内；数值敏感的 SuperGlue/Sinkhorn 使用 FP32。
 - `/insight9_a/camera/hand_keypoints` 使用彩色相机坐标系，不能直接作为红外图像
   遮罩。当前通过至少三个关键帧的世界坐标一致性过滤移动人手和物体。
 
@@ -49,7 +49,8 @@ docker compose --profile mapping-validation up -d \
 
 验证镜像包含：
 
-- NVIDIA Jetson PyTorch `25.04-py3-igpu`；
+- NVIDIA Jetson TensorRT `25.04-py3-igpu` 运行时；
+- 构建阶段预导出的 `superpoint.onnx` 和 `superglue.onnx`；
 - 官方 SuperPoint/SuperGlue 提交 `ddcf11f...`；
 - `superpoint_v1.pth`；
 - `superglue_indoor.pth`；
@@ -59,12 +60,12 @@ docker compose --profile mapping-validation up -d \
 `insight-superglue-validation:25.04`，禁止推送到镜像仓库或写入
 `scripts/build_release.sh`。
 
-首次启动会从固定官方权重导出 ONNX，并在当前 Jetson 上编译
-`superpoint_dense_fp16.plan` 和 `superglue_fp32.plan`。引擎绑定 TensorRT、
-CUDA、GPU compute capability、输入规格和模型参数，校验结果及 SHA-256
-写入 manifest；不匹配时自动重建。生成物保存在 Docker volume
-`superglue-engines`，后续重启直接加载，不使用临时 wheel，也不把设备专用
-plan 提交到 Git。
+ONNX 在镜像构建阶段一次性导出。首次启动只在当前 Jetson 上编译
+`superpoint_fp16.plan` 和 `superglue_fp32.plan`，不需要也不会加载
+PyTorch。引擎绑定 TensorRT、CUDA、GPU compute capability、输入规格和模型
+参数，校验结果及 SHA-256 写入 manifest；不匹配时自动重建。生成物保存在
+Docker volume `superglue-engines`，后续重启直接加载，也不把设备专用 plan
+提交到 Git。
 
 dashboard 和映射容器使用 host IPC。这是 Fast DDS 跨容器及宿主机 RViz
 传输所需：只有 host network 时可以发现话题，但共享内存数据端点在另一个
@@ -132,6 +133,15 @@ docker compose --profile mapping-validation stop insight9-sparse-mapper superglu
 Jetson Orin NX、544×640 双目红外输入、1024 个最大关键点、官方 indoor
 权重下：
 
+- 纯运行镜像内 `import torch` 不可用，IPC health 返回后端
+  `tensorrt-cuda`、TensorRT 10.9.0.34、CUDA 12.9 和 SM 8.7；
+- Docker 解包占用由 PyTorch 开发镜像的约 17.4 GB 降到 9.48 GB，其中
+  NVIDIA TensorRT 基础层为 8.88 GB；
+- 将完整 SuperPoint 后处理移入引擎后，预热特征提取平均 21.69 ms，双图
+  SuperPoint + SuperGlue 完整匹配平均 68.81 ms；
+- 固定纹理精度对照中，PyTorch 与纯 TensorRT 都检测到 209 个关键点，
+  关键点集合 Jaccard 为 0.8914；匹配数分别为 193 和 187，匹配集合
+  Jaccard 为 0.8537；
 - TensorRT 10.9 引擎缓存校验为 SM 8.7，SuperPoint FP16 纯引擎平均
   10.68 ms；
 - SuperGlue 256/512 点 FP16 纯引擎分别为 47.25/60.05 ms，但 FP16
@@ -145,7 +155,8 @@ Jetson Orin NX、544×640 双目红外输入、1024 个最大关键点、官方 
 - 发布点云宽度达到 982，路径保持在配置的 200 点上限；
 - dashboard 容器已实际收到 mapper 容器发布的完整状态消息。
 
-结论：默认链路已由 TensorRT 执行，且没有为了速度接受 SuperGlue FP16
-精度回归。当前共享 GPU 负载下端到端吞吐仍未达到稳定 5 Hz；下一步性能优化
-应针对 SuperGlue 的受约束混合精度和并发 GPU 负载，不能直接把整个 Sinkhorn
-降为 FP16。世界坐标静态性、动态物体过滤和长时漂移仍需移动相机采集后验收。
+结论：在线进程已是纯 TensorRT/CUDA runtime，PyTorch 只存在于镜像构建阶段，
+且没有为了速度接受 SuperGlue FP16 精度回归。当前共享 GPU 负载下端到端吞吐
+仍未达到稳定 5 Hz；下一步性能优化应针对 SuperGlue 的受约束混合精度和并发
+GPU 负载，不能直接把整个 Sinkhorn 降为 FP16。世界坐标静态性、动态物体过滤
+和长时漂移仍需移动相机采集后验收。

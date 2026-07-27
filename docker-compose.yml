@@ -97,7 +97,6 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - SUPERGLUE_BACKEND=tensorrt
     volumes:
       - superglue-ipc:/run/superglue
       - superglue-engines:/opt/insight/engines

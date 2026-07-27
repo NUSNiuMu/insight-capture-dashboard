@@ -5,117 +5,16 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import os
 import signal
 import socket
-import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import torch
 
 from superglue_ipc import receive_message, send_message
-
-
-OFFICIAL_COMMIT = "ddcf11f42e7e0732a0c4607648f9448ea8d73590"
-
-
-class OfficialMatcher:
-    """Load and run the pinned official model in NVIDIA's Jetson container."""
-
-    def __init__(
-        self,
-        checkout: Path,
-        *,
-        weights: str,
-        max_keypoints: int,
-        keypoint_threshold: float,
-        match_threshold: float,
-    ) -> None:
-        if not torch.cuda.is_available():
-            raise RuntimeError("NVIDIA PyTorch container cannot access the Jetson CUDA device")
-        checkout = checkout.resolve()
-        sys.path.insert(0, str(checkout))
-        try:
-            module = importlib.import_module("models.matching")
-        finally:
-            sys.path.remove(str(checkout))
-        config = {
-            "superpoint": {
-                "nms_radius": 4,
-                "keypoint_threshold": float(keypoint_threshold),
-                "max_keypoints": int(max_keypoints),
-            },
-            "superglue": {
-                "weights": weights,
-                "sinkhorn_iterations": 20,
-                "match_threshold": float(match_threshold),
-            },
-        }
-        self._matching = module.Matching(config).eval().cuda()
-        torch.backends.cudnn.benchmark = True
-        self.backend_name = "pytorch"
-        self.runtime_version = torch.__version__
-
-    @staticmethod
-    def _image_tensor(image: np.ndarray):
-        return torch.from_numpy(image).cuda(non_blocking=True).float().div_(255.0)[
-            None, None
-        ]
-
-    def extract(self, image: np.ndarray):
-        """Extract SuperPoint keypoints, descriptors, and scores."""
-
-        with torch.inference_mode():
-            prediction = self._matching.superpoint({"image": self._image_tensor(image)})
-        keypoints = prediction["keypoints"][0].detach().cpu().numpy()
-        descriptors = prediction["descriptors"][0].detach().cpu().numpy().T
-        scores = prediction["scores"][0].detach().cpu().numpy()
-        return (
-            keypoints.astype(np.float32),
-            descriptors.astype(np.float32),
-            scores.astype(np.float32),
-        )
-
-    def warmup(self, height: int = 640, width: int = 544, runs: int = 2) -> None:
-        """Prime CUDA kernels and cuDNN selection before advertising health."""
-
-        yy, xx = np.indices((height, width))
-        left = (((xx // 32 + yy // 32) % 2) * 180 + 35).astype(np.uint8)
-        right = np.roll(left, -8, axis=1).copy()
-        for index in range(max(1, int(runs))):
-            started = time.perf_counter()
-            result = self.match(left, right)
-            print(
-                f"SuperGlue warmup {index + 1}/{runs}: "
-                f"matches={len(result[0])}, "
-                f"elapsed_ms={(time.perf_counter() - started) * 1000.0:.2f}",
-                flush=True,
-            )
-
-    def match(self, left: np.ndarray, right: np.ndarray):
-        image0 = self._image_tensor(left)
-        image1 = self._image_tensor(right)
-        with torch.inference_mode():
-            prediction = self._matching({"image0": image0, "image1": image1})
-        keypoints0 = prediction["keypoints0"][0].detach().cpu().numpy()
-        keypoints1 = prediction["keypoints1"][0].detach().cpu().numpy()
-        descriptors0 = prediction["descriptors0"][0].detach().cpu().numpy().T
-        matches0 = prediction["matches0"][0].detach().cpu().numpy()
-        scores0 = prediction["matching_scores0"][0].detach().cpu().numpy()
-        left_indices = np.flatnonzero(matches0 >= 0)
-        right_indices = matches0[left_indices].astype(np.int64)
-        return (
-            keypoints0[left_indices].astype(np.float32),
-            keypoints1[right_indices].astype(np.float32),
-            descriptors0[left_indices].astype(np.float32),
-            scores0[left_indices].astype(np.float32),
-            len(keypoints0),
-            len(keypoints1),
-        )
 
 
 class InferenceServer:
@@ -146,7 +45,8 @@ class InferenceServer:
             f"SuperGlue inference ready: socket={self.socket_path}, "
             f"backend={self.matcher.backend_name}, "
             f"runtime={self.matcher.runtime_version}, "
-            f"torch={torch.__version__}, cuda={torch.version.cuda}",
+            f"cuda={self.matcher.cuda_version}, "
+            f"device={self.matcher.device_name}",
             flush=True,
         )
         try:
@@ -179,9 +79,11 @@ class InferenceServer:
                         "ok": True,
                         "backend": self.matcher.backend_name,
                         "runtime": self.matcher.runtime_version,
-                        "torch": torch.__version__,
-                        "cuda": torch.version.cuda,
-                        "device": torch.cuda.get_device_name(0),
+                        "cuda": self.matcher.cuda_version,
+                        "device": self.matcher.device_name,
+                        "compute_capability": list(
+                            self.matcher.compute_capability
+                        ),
                     },
                 )
                 return
@@ -267,44 +169,27 @@ class InferenceServer:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", default="/run/superglue/matcher.sock")
-    parser.add_argument(
-        "--checkout", default="/opt/SuperGluePretrainedNetwork"
-    )
-    parser.add_argument("--weights", choices=("indoor", "outdoor"), default="indoor")
-    parser.add_argument("--max-keypoints", type=int, default=1024)
     parser.add_argument("--keypoint-threshold", type=float, default=0.005)
-    parser.add_argument("--match-threshold", type=float, default=0.2)
-    parser.add_argument(
-        "--backend", choices=("tensorrt", "pytorch"), default="tensorrt"
-    )
     parser.add_argument("--engine-dir", default="/opt/insight/engines")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    if args.backend == "tensorrt":
-        from superglue_tensorrt import TensorRTMatcher
+    from superglue_tensorrt_runtime import TensorRTMatcher
 
-        matcher = TensorRTMatcher(
-            Path(args.checkout),
-            Path(args.engine_dir),
-            max_keypoints=args.max_keypoints,
-            keypoint_threshold=args.keypoint_threshold,
-        )
-    else:
-        matcher = OfficialMatcher(
-            Path(args.checkout),
-            weights=args.weights,
-            max_keypoints=args.max_keypoints,
-            keypoint_threshold=args.keypoint_threshold,
-            match_threshold=args.match_threshold,
-        )
+    matcher = TensorRTMatcher(
+        Path(args.engine_dir),
+        keypoint_threshold=args.keypoint_threshold,
+    )
     matcher.warmup()
     server = InferenceServer(Path(args.socket), matcher)
     signal.signal(signal.SIGTERM, server.request_stop)
     signal.signal(signal.SIGINT, server.request_stop)
-    server.run()
+    try:
+        server.run()
+    finally:
+        matcher.close()
     return 0
 
 

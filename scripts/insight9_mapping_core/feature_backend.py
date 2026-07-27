@@ -176,7 +176,7 @@ class OfficialSuperGlueBackend:
 
 
 class IpcSuperGlueBackend:
-    """Use the NVIDIA PyTorch validation worker through a local Unix socket."""
+    """Use the isolated feature inference worker through a local Unix socket."""
 
     def __init__(self, socket_path: Path, *, timeout_sec: float = 30.0) -> None:
         self._socket_path = Path(socket_path)
