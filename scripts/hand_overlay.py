@@ -419,8 +419,19 @@ class HandOverlayMixin:
             raise ValueError(f"'{camera_name}' has not published any hand-landmark data yet")
         if enabled:
             self.hand_overlay_enabled.add(camera_name)
+            ensure_worker = getattr(self, "ensure_hand_overlay_worker", None)
+            if ensure_worker is not None:
+                try:
+                    ensure_worker()
+                except Exception:
+                    self.hand_overlay_enabled.discard(camera_name)
+                    raise
         else:
             self.hand_overlay_enabled.discard(camera_name)
+            if not self.hand_overlay_enabled:
+                stop_worker = getattr(self, "stop_hand_overlay_worker", None)
+                if stop_worker is not None:
+                    stop_worker()
 
     def hand_landmarks_for_role(self, role: str) -> Optional[List[Optional[List[float]]]]:
         """Return normalized role landmarks while its lifecycle track is alive."""

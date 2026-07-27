@@ -30,9 +30,10 @@ class PlaybackRoutes:
         remap_topics = {camera.topic: bagplay_topic(camera.topic) for camera in self.context.node.cameras}
         remap_topics.update({pose.topic: bagplay_topic(pose.topic) for pose in self.context.node.poses})
         for camera in self.context.node.cameras:
-            for tail in ("hand", "hand_keypoints"):
-                hand_topic = f"/{camera.namespace}/camera/{tail}"
-                remap_topics[hand_topic] = bagplay_topic(hand_topic)
+            if not camera.hand_tracking:
+                continue
+            keypoints_topic = f"/{camera.namespace}/camera/hand_keypoints"
+            remap_topics[keypoints_topic] = bagplay_topic(keypoints_topic)
         self.context.playback_manager.start(bag_name, self.context.recording_manager, remap_topics=remap_topics)
         return web.json_response({"status": "playing", "bag_name": bag_name})
 

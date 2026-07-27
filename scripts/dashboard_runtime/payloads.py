@@ -110,9 +110,6 @@ class PayloadBuilder:
             entry["hand_landmarks"] = self.owner.hand_landmarks_for_role(entry["role"])
         return {
             "type": "pose_update",
-            "timestamp_ms": int(time.time() * 1000),
-            "fake_pose": self.owner.fake_pose,
-            "playback_mode": self.owner._playback_mode,
             "stick_figure_mode": bool(self.owner.stick_figure_mode),
             "display_fps_limit": self.owner.display_fps_limit,
             "trace_capacity": self.owner.max_points,
@@ -138,11 +135,8 @@ class PayloadBuilder:
                         "name": camera.name,
                         "label": camera.label,
                         "topic": camera.topic,
-                        "type": camera.topic_type,
                         "visible": frame is not None,
                         "stale": stale,
-                        "stamp_ns": 0 if frame is None else frame.stamp_ns,
-                        "age_ms": None if frame is None else (now - frame.received_monotonic) * 1000.0,
                         "fps": fps,
                         "width": 0 if frame is None else frame.width,
                         "height": 0 if frame is None else frame.height,
@@ -157,7 +151,6 @@ class PayloadBuilder:
                 )
         return {
             "type": "camera_update",
-            "timestamp_ms": int(time.time() * 1000),
             "cameras": cameras,
         }
 
@@ -176,7 +169,13 @@ class PayloadBuilder:
         return f"/asset?path={quote(avatar_model, safe='')}&v={version}"
 
     def build_settings_payload(self) -> Dict[str, object]:
-        hand_cameras = set(getattr(self.owner, "gripper_calibrations", {}).keys())
+        hand_cameras = {
+            name
+            for name, calibration in getattr(
+                self.owner, "gripper_calibrations", {}
+            ).items()
+            if calibration.is_valid
+        }
         poses = []
         for pose in self.owner.poses:
             model_name = Path(pose.avatar_model).name if pose.avatar_model else None

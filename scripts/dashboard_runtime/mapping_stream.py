@@ -8,11 +8,9 @@ import time
 from typing import Dict
 
 try:
-    from sensor_msgs.msg import PointCloud2
     from std_msgs.msg import String
     from std_srvs.srv import Empty
 except ImportError:  # pragma: no cover - only fake/non-ROS imports use this path
-    PointCloud2 = None
     String = None
     Empty = None
 
@@ -29,7 +27,6 @@ class MappingStream:
         self.owner = owner
         self._lock = threading.Lock()
         self._map_point_count = 0
-        self._map_version = 0
         self._statuses: Dict[str, Dict[str, object]] = {
             name: {"state": "unavailable"} for name in STATUS_TOPICS
         }
@@ -41,25 +38,12 @@ class MappingStream:
         self._localizer_reset_client = None
 
     def start(self) -> None:
-        if (
-            PointCloud2 is None
-            or String is None
-            or Empty is None
-        ):
+        if String is None or Empty is None:
             return
         kwargs = {
             "callback_group": self.owner.ros_callback_group,
             "event_callbacks": self.owner.subscription_event_callbacks,
         }
-        self._subscriptions.append(
-            self.owner.create_subscription(
-                PointCloud2,
-                "/insight9_sparse_map/points",
-                self._on_map,
-                1,
-                **kwargs,
-            )
-        )
         for name, topic in STATUS_TOPICS.items():
             self._subscriptions.append(
                 self.owner.create_subscription(
@@ -74,15 +58,8 @@ class MappingStream:
         )
         self.owner.dashboard_subscriptions.extend(self._subscriptions)
         self.owner.get_logger().info(
-            "Mapping status bridge subscribed without forwarding sparse cloud data"
+            "Mapping status bridge subscribed without receiving sparse cloud data"
         )
-
-    def _on_map(self, message: PointCloud2) -> None:
-        with self._lock:
-            # The web UI only needs the count. Keeping the binary cloud out of
-            # JSON avoids both network traffic and accidental point rendering.
-            self._map_point_count = int(message.width) * int(message.height)
-            self._map_version += 1
 
     def _status_callback(self, name: str):
         def callback(message: String) -> None:
@@ -94,6 +71,13 @@ class MappingStream:
                 status = {"state": "error", "error": "invalid status payload"}
             with self._lock:
                 self._statuses[name] = status
+                if name == "insight9":
+                    try:
+                        self._map_point_count = max(
+                            0, int(status.get("map_point_count", self._map_point_count))
+                        )
+                    except (TypeError, ValueError):
+                        pass
                 self._last_received[name] = time.monotonic()
 
         return callback
@@ -114,7 +98,6 @@ class MappingStream:
                 statuses[name] = status
             payload: Dict[str, object] = {
                 "type": "mapping_update",
-                "map_version": self._map_version,
                 "map_point_count": self._map_point_count,
                 "statuses": statuses,
             }
@@ -136,7 +119,6 @@ class MappingStream:
                 unavailable.append(name)
         with self._lock:
             self._map_point_count = 0
-            self._map_version += 1
             for name in self._statuses:
                 self._statuses[name] = {"state": "resetting"}
         return {

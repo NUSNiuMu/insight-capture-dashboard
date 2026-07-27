@@ -139,6 +139,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             CameraSpec(
                 name=item["name"],
                 namespace=enabled_camera_map[item["name"]]["namespace"],
+                hand_tracking=bool(item.get("hand_tracking", False)),
                 label=item["label"],
                 topic=item["topic"],
                 topic_type=item["type"],
@@ -224,9 +225,10 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._hand_overlay_authkey = secrets.token_bytes(32)
         self._pending_hand_overlay_frames: Dict[str, Tuple[int, bytes, list]] = {}
         self._hand_overlay_frame_event = threading.Event()
+        self._hand_overlay_worker_lock = threading.Lock()
         # Reject only composites older than the last applied result.
         self._hand_overlay_last_applied: Dict[str, int] = {}
-        self._hand_overlay_proc = self._start_hand_overlay_worker()
+        self._hand_overlay_proc: Optional[subprocess.Popen] = None
         threading.Thread(target=self._hand_overlay_ipc_loop, daemon=True, name="hand_overlay_ipc").start()
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
         if self.fake_pose:
@@ -321,9 +323,12 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
     def _create_hand_overlay_subscriptions(self) -> None:
         if Detection2DArray is None:
             return
-        # Subscribe all cameras; availability becomes true after the first message.
+        # Subscribe only configured HandEngine sources; availability becomes
+        # true after the first message.
         hand_qos = make_image_qos(depth=5, reliability="best_effort")
         for camera in self.cameras:
+            if not camera.hand_tracking:
+                continue
             namespace = camera.namespace
             hand_topic = f"/{namespace}/camera/hand"
             keypoints_topic = f"/{namespace}/camera/hand_keypoints"
@@ -343,17 +348,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 callback_group=self.ros_callback_group,
                 event_callbacks=self.subscription_event_callbacks,
             )
-            # Playback shadow: same live/bagplay dual-subscription split as
-            # images/poses, so replayed hand landmarks drive the overlays
-            # without ever blending with a still-connected live camera.
-            box_playback_sub = self.create_subscription(
-                Detection2DArray,
-                bagplay_topic(hand_topic),
-                lambda msg, name=camera.name: self._on_hand_boxes(name, msg, is_live=False),
-                hand_qos,
-                callback_group=self.ros_callback_group,
-                event_callbacks=self.subscription_event_callbacks,
-            )
+            # Replay keypoints for gesture/skeleton behavior. Box metadata is
+            # live-only and intentionally omitted from rosbag playback.
             kp_playback_sub = self.create_subscription(
                 Detection2DArray,
                 bagplay_topic(keypoints_topic),
@@ -363,7 +359,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.extend(
-                [box_sub, kp_sub, box_playback_sub, kp_playback_sub]
+                [box_sub, kp_sub, kp_playback_sub]
             )
 
     def _log_perf_summary(self) -> None:
@@ -397,9 +393,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         def callback(msg: PoseStamped) -> None:
             if is_live == self._playback_mode:
                 return
-            stamp_ns = self._stamp_to_ns(msg.header.stamp)
             pose_sample = PoseSample(
-                stamp_ns=stamp_ns,
                 position=(
                     float(msg.pose.position.x),
                     float(msg.pose.position.y),
@@ -461,6 +455,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
     def _start_hand_overlay_worker(self) -> "subprocess.Popen":
         return self._worker_supervisor._start_hand_overlay_worker()
 
+    def ensure_hand_overlay_worker(self) -> None:
+        self._worker_supervisor.ensure_hand_overlay_worker()
 
     def stop_hand_overlay_worker(self) -> None:
         self._worker_supervisor.stop_hand_overlay_worker()
@@ -577,7 +573,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             yaw = 0.45 * math.sin(phase * 0.7 + self._role_phase(pose.name))
             quaternion = self._yaw_quaternion(yaw)
             sample = PoseSample(
-                stamp_ns=time.time_ns(),
                 position=(x, y, z),
                 orientation_xyzw=quaternion,
             )

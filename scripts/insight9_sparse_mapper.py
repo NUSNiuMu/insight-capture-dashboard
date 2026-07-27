@@ -559,7 +559,9 @@ class Insight9SparseMapper(Node):
             )
             self._last_feature_publish_monotonic = now
         status = String()
-        status.data = json.dumps(self._latest_stats, separators=(",", ":"))
+        status_payload = dict(self._latest_stats)
+        status_payload["map_point_count"] = int(len(points))
+        status.data = json.dumps(status_payload, separators=(",", ":"))
         self._status_publisher.publish(status)
 
     def _publish_path_and_tf(self) -> None:

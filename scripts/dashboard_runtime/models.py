@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 
 @dataclass
 class PoseSample:
-    stamp_ns: int
     position: Tuple[float, float, float]
     orientation_xyzw: Tuple[float, float, float, float]
 
@@ -26,6 +25,7 @@ class PoseSpec:
 class CameraSpec:
     name: str
     namespace: str
+    hand_tracking: bool
     label: str
     topic: str
     topic_type: str

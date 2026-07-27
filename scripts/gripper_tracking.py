@@ -99,12 +99,14 @@ class GripperTrackingMixin:
         }
         # Calibration keys are capabilities; tracking membership is the live toggle.
         self.gripper_tracking_cameras: set = set()
-        self.gripper_detector = GripperMarkerDetector() if hand_camera_names else None
+        self.gripper_detector = None
         self.gripper_calibration_path = Path(calibration_path)
         self.gripper_calibrations: Dict[str, GripperCalibration] = {
             name: GripperCalibration() for name in hand_camera_names
         }
         self._load_gripper_calibration()
+        if any(calibration.is_valid for calibration in self.gripper_calibrations.values()):
+            self.gripper_detector = GripperMarkerDetector()
         self.gripper_latest_result: Dict[str, GripperDetectionResult] = {}
         self.gripper_last_opening: Dict[str, float] = {}
 
@@ -139,6 +141,8 @@ class GripperTrackingMixin:
         # Calibration keys define which cameras support tracking.
         if camera_name not in self.gripper_calibrations:
             raise ValueError(f"'{camera_name}' is not a hand camera with gripper tracking configured")
+        if not self.gripper_calibrations[camera_name].is_valid:
+            raise ValueError(f"'{camera_name}' does not have a valid gripper calibration")
         if enabled:
             self.gripper_tracking_cameras.add(camera_name)
         else:

@@ -27,7 +27,11 @@
 ## WebRTC 与预览
 
 - WebRTC 信令和 H.264 编码运行在独立的 `webrtc_worker.py` 进程，主进程只负责投递经过选择的帧和轮询 health。
-- 手部 JPEG 解码、关键点绘制和重编码运行在独立的 `hand_overlay_worker.py` 进程。
+- 手部 JPEG 解码、关键点绘制和重编码运行在独立的 `hand_overlay_worker.py`
+  进程；首次启用 JPEG 叠加时按需启动，最后一路关闭后退出。
+- Dashboard 只为 `dashboard_hand_tracking: true` 的相机订阅手部数据。rosbag
+  回放保留 keypoint 以支持手势和 3D 骨架，不回放 hand box。
+- 建图点数随 mapper status JSON 发布；Dashboard 不订阅完整稀疏 PointCloud2。
 - JPEG HTTP 轮询仍是 WebRTC 失败或浏览器不支持 H.264 时的 fallback；`/api/images/capabilities` 中的 `active_path` 描述的是该 JPEG fallback 能力。
 - worker 异常应先检查 `outputs/webrtc_worker.log`、`outputs/hand_overlay_worker.log` 和 health，不应仅凭页面卡顿判断主进程故障。
 

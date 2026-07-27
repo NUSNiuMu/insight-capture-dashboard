@@ -109,6 +109,7 @@ def build_dashboard_config(config: Dict) -> Dict:
         cameras.append(
             {
                 "name": camera["name"],
+                "hand_tracking": bool(camera.get("dashboard_hand_tracking", False)),
                 "label": camera.get("dashboard_label", camera["name"]),
                 "topic": image_topic(namespace, image_stream),
                 "type": IMAGE_STREAMS[image_stream]["type"],

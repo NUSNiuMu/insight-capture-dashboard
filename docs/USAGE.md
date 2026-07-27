@@ -76,7 +76,7 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 | `/bags` | 本地录制列表：大小/时长/完整性/评分/优化状态，可删除 |
 | `/scoring` | 轨迹评分 + 录制完整性验证 |
 | `/optimization` | COLMAP 轨迹优化：对录制的彩色图像做三维重建并与 VIO 轨迹对齐 |
-| `/settings` | 逐相机开关手部叠加、夹爪追踪；Stick-figure 模式全局开关（见下）；Avatar 模型下拉框当前暂时锁定，不可更换 |
+| `/settings` | 逐相机开关手部叠加、有效校准的夹爪追踪；Stick-figure 模式全局开关（见下）；Avatar 模型下拉框当前暂时锁定，不可更换 |
 
 > 旧地址 `/images` 现在会自动跳转到 `/3d`（画面已合并进 Spatial 视图，收藏的旧链接不用改）。
 

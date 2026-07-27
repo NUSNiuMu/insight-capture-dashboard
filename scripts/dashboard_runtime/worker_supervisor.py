@@ -78,6 +78,7 @@ class WorkerSupervisor:
             stdout=log_file,
             stderr=subprocess.STDOUT,
         )
+        log_file.close()
         self.owner.get_logger().info(f"webrtc: spawned webrtc_worker.py pid={proc.pid} port={self.owner.webrtc_port}")
         return proc
 
@@ -110,22 +111,34 @@ class WorkerSupervisor:
             stdout=log_file,
             stderr=subprocess.STDOUT,
         )
+        log_file.close()
         self.owner.get_logger().info(f"hand_overlay: spawned hand_overlay_worker.py pid={proc.pid}")
         return proc
 
+    def ensure_hand_overlay_worker(self) -> None:
+        with self.owner._hand_overlay_worker_lock:
+            proc = getattr(self.owner, "_hand_overlay_proc", None)
+            if proc is not None and proc.poll() is None:
+                return
+            self.owner._hand_overlay_proc = self._start_hand_overlay_worker()
+
     def stop_hand_overlay_worker(self) -> None:
-        proc = getattr(self.owner, "_hand_overlay_proc", None)
-        if proc is None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=3.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=3.0)
+        with self.owner._hand_overlay_worker_lock:
+            proc = getattr(self.owner, "_hand_overlay_proc", None)
+            if proc is None:
+                return
+            self.owner._hand_overlay_proc = None
+            proc.terminate()
+            try:
+                proc.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=3.0)
+            self.owner._pending_hand_overlay_frames.clear()
 
     def _dispatch_hand_overlay(self, camera_name: str, version: int, jpeg_bytes: bytes, hands: list) -> None:
         """Keep only the newest overlay request per camera."""
+        self.ensure_hand_overlay_worker()
         self.owner._pending_hand_overlay_frames[camera_name] = (version, jpeg_bytes, hands)
         self.owner._hand_overlay_frame_event.set()
 
@@ -133,6 +146,9 @@ class WorkerSupervisor:
         """Send overlay requests and apply results over one IPC connection."""
         authkey = self.owner._hand_overlay_authkey
         while rclpy is not None and rclpy.ok():
+            if getattr(self.owner, "_hand_overlay_proc", None) is None:
+                time.sleep(0.25)
+                continue
             try:
                 conn = Client(self.owner._hand_overlay_ipc_path, family="AF_UNIX", authkey=authkey)
             except OSError:
@@ -154,7 +170,10 @@ class WorkerSupervisor:
                                 continue
                             conn.send((camera_name,) + payload)
             except (EOFError, OSError) as exc:
-                self.owner.get_logger().warning(f"hand overlay ipc: lost connection to worker ({exc}); reconnecting")
+                if getattr(self.owner, "_hand_overlay_proc", None) is not None:
+                    self.owner.get_logger().warning(
+                        f"hand overlay ipc: lost connection to worker ({exc}); reconnecting"
+                    )
             finally:
                 with contextlib.suppress(Exception):
                     conn.close()
