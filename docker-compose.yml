@@ -14,22 +14,20 @@ services:
 
     # ── ROS2 requires host network for DDS multicast ─────────────────────────
     network_mode: host
-    # Allow optional ROS workers to join this 2 GiB shared-memory namespace.
-    # Fast DDS otherwise advertises SHM endpoints that sibling containers
-    # discover but cannot consume.
-    ipc: shareable
+    # Share Fast DDS transport with sibling ROS containers and host-side RViz.
+    # The Jetson host provides a 3.8 GiB /dev/shm, above the kiosk's 2 GiB need.
+    ipc: host
 
     # ── NVIDIA Container Runtime for CUDA acceleration ───────────────────────
     runtime: nvidia
 
-    # Docker's 64MB default /dev/shm is too small for the kiosk browser's
-    # GPU process (open_web_3d_right.sh): its
+    # A small /dev/shm breaks the kiosk browser's GPU process
+    # (open_web_3d_right.sh): its
     # command-buffer ring allocation fails silently and the WebGL canvas
     # never renders, both with real GPU (context-loss loop) and swiftshader
     # (AllocateRingBuffer failures). tmpfs, so this only costs memory if
     # actually used -- bump further if still flaky, bounded by host RAM
-    # (`free -h`).
-    shm_size: '2gb'
+    # (`free -h`). `ipc: host` above uses the Jetson's larger host tmpfs.
 
     environment:
       - ROS_DOMAIN_ID=20           # Must match devices; override in .env if needed
@@ -118,9 +116,8 @@ services:
     profiles: ["mapping-validation"]
     image: insight-dashboard:latest
     network_mode: host
-    # Fast DDS advertises shared-memory endpoints on the host network. Sharing
-    # the dashboard IPC namespace keeps mapper outputs reachable cross-container.
-    ipc: service:insight-dashboard
+    # Share Fast DDS transport with dashboard and host-side RViz.
+    ipc: host
     runtime: nvidia
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
@@ -139,6 +136,29 @@ services:
       superglue-inference:
         condition: service_healthy
     stop_signal: SIGINT
+    restart: "no"
+
+  insight9-mapping-rviz:
+    profiles: ["mapping-validation"]
+    build:
+      context: .
+      dockerfile: Dockerfile.rviz-validation
+      network: host
+    image: insight-rviz-validation:humble
+    network_mode: host
+    ipc: host
+    runtime: nvidia
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
+      - DISPLAY=${DISPLAY:-:0}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
+    volumes:
+      - .:/workspaces/insight_capture
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    depends_on:
+      insight9-sparse-mapper:
+        condition: service_started
     restart: "no"
 
 volumes:

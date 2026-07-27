@@ -57,9 +57,9 @@ docker compose --profile mapping-validation up -d \
 `insight-superglue-validation:25.04`，禁止推送到镜像仓库或写入
 `scripts/build_release.sh`。
 
-映射容器加入 dashboard 的共享 IPC 命名空间。这是 Fast DDS 跨容器传输所需：
-只有 host network 时可以发现话题，但其共享内存数据端点在另一个 IPC
-命名空间中不可达。
+dashboard 和映射容器使用 host IPC。这是 Fast DDS 跨容器及宿主机 RViz
+传输所需：只有 host network 时可以发现话题，但共享内存数据端点在另一个
+IPC 命名空间中不可达。
 
 查看启动状态：
 
@@ -69,11 +69,21 @@ docker compose --profile mapping-validation logs -f \
   superglue-inference insight9-sparse-mapper
 ```
 
-另一个终端打开 RViz：
+首次构建 RViz 验证镜像：
 
 ```bash
-rviz2 -d config/rviz/insight9_sparse_mapping.rviz
+docker compose --profile mapping-validation build insight9-mapping-rviz
 ```
+
+打开 RViz：
+
+```bash
+xhost +si:localuser:root
+docker compose --profile mapping-validation run --rm insight9-mapping-rviz
+xhost -si:localuser:root
+```
+
+第二条命令保持在前台，关闭 RViz 后才执行第三条以收回临时 X11 授权。
 
 主要输出：
 
