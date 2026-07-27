@@ -48,18 +48,6 @@
                 <button type="button" id="go-live-button" class="quiet-button" hidden>Go live</button>
               </div>
             </section>
-            <section class="trajectory-panel" id="trajectory-panel">
-              <div class="trajectory-copy">
-                <p class="section-kicker">Trajectory control</p>
-                <h2>Global trails</h2>
-                <p class="trajectory-meta">Models and trails follow the same 50 Hz global poses</p>
-              </div>
-              <div class="trajectory-actions">
-                <button type="button" id="clear-trajectory-button" class="quiet-button">Clear trail</button>
-                <button type="button" id="keep-trajectory-toggle" class="quiet-button" aria-pressed="false">Keep trail</button>
-                <button type="button" id="mapping-visible-toggle" class="quiet-button is-active" aria-pressed="true">Trails visible</button>
-              </div>
-            </section>
             <section class="mapping-panel" id="mapping-panel">
               <div class="mapping-copy">
                 <p class="section-kicker">Global sparse mapping</p>
@@ -68,6 +56,8 @@
                 <div class="mapping-camera-states" id="mapping-camera-states"></div>
               </div>
               <div class="mapping-actions">
+                <button type="button" id="clear-trajectory-button" class="quiet-button">Clear trail</button>
+                <button type="button" id="keep-trajectory-toggle" class="quiet-button" aria-pressed="false">Keep trail</button>
                 <button type="button" id="new-map-button" class="primary-button">New map</button>
               </div>
             </section>

@@ -23,7 +23,6 @@ const keepTrajectoryToggle = document.getElementById("keep-trajectory-toggle");
 const mappingStatus = document.getElementById("mapping-status");
 const mappingMeta = document.getElementById("mapping-meta");
 const mappingCameraStates = document.getElementById("mapping-camera-states");
-const mappingVisibleToggle = document.getElementById("mapping-visible-toggle");
 const newMapButton = document.getElementById("new-map-button");
 const POSE_STREAM_STALE_MS = 4000;
 const wsUrl = resolveWebSocketUrl();
@@ -34,7 +33,6 @@ let keepTrajectory = false;
 let pageUnloading = false;
 let activeWs = null;
 let mappingResetBusy = false;
-let mappingVisible = true;
 let lastPoseMessageAt = 0;
 const startupTimers = new Set();
 
@@ -92,15 +90,6 @@ if (keepTrajectoryToggle) {
     setKeepTrajectory(keepTrajectory);
     keepTrajectoryToggle.setAttribute("aria-pressed", String(keepTrajectory));
     keepTrajectoryToggle.classList.toggle("is-active", keepTrajectory);
-  });
-}
-if (mappingVisibleToggle) {
-  mappingVisibleToggle.addEventListener("click", () => {
-    mappingVisible = !mappingVisible;
-    setTrajectoriesEnabled(mappingVisible);
-    mappingVisibleToggle.setAttribute("aria-pressed", String(mappingVisible));
-    mappingVisibleToggle.classList.toggle("is-active", mappingVisible);
-    mappingVisibleToggle.textContent = mappingVisible ? "Trails visible" : "Trails hidden";
   });
 }
 if (newMapButton) {
