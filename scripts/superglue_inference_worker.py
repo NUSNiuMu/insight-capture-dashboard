@@ -57,6 +57,8 @@ class OfficialMatcher:
         }
         self._matching = module.Matching(config).eval().cuda()
         torch.backends.cudnn.benchmark = True
+        self.backend_name = "pytorch"
+        self.runtime_version = torch.__version__
 
     @staticmethod
     def _image_tensor(image: np.ndarray):
@@ -117,7 +119,7 @@ class OfficialMatcher:
 
 
 class InferenceServer:
-    def __init__(self, socket_path: Path, matcher: OfficialMatcher) -> None:
+    def __init__(self, socket_path: Path, matcher) -> None:
         self.socket_path = socket_path
         self.matcher = matcher
         self._stop = False
@@ -142,6 +144,8 @@ class InferenceServer:
         server.settimeout(1.0)
         print(
             f"SuperGlue inference ready: socket={self.socket_path}, "
+            f"backend={self.matcher.backend_name}, "
+            f"runtime={self.matcher.runtime_version}, "
             f"torch={torch.__version__}, cuda={torch.version.cuda}",
             flush=True,
         )
@@ -173,6 +177,8 @@ class InferenceServer:
                     connection,
                     {
                         "ok": True,
+                        "backend": self.matcher.backend_name,
+                        "runtime": self.matcher.runtime_version,
                         "torch": torch.__version__,
                         "cuda": torch.version.cuda,
                         "device": torch.cuda.get_device_name(0),
@@ -268,18 +274,32 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-keypoints", type=int, default=1024)
     parser.add_argument("--keypoint-threshold", type=float, default=0.005)
     parser.add_argument("--match-threshold", type=float, default=0.2)
+    parser.add_argument(
+        "--backend", choices=("tensorrt", "pytorch"), default="tensorrt"
+    )
+    parser.add_argument("--engine-dir", default="/opt/insight/engines")
     return parser
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    matcher = OfficialMatcher(
-        Path(args.checkout),
-        weights=args.weights,
-        max_keypoints=args.max_keypoints,
-        keypoint_threshold=args.keypoint_threshold,
-        match_threshold=args.match_threshold,
-    )
+    if args.backend == "tensorrt":
+        from superglue_tensorrt import TensorRTMatcher
+
+        matcher = TensorRTMatcher(
+            Path(args.checkout),
+            Path(args.engine_dir),
+            max_keypoints=args.max_keypoints,
+            keypoint_threshold=args.keypoint_threshold,
+        )
+    else:
+        matcher = OfficialMatcher(
+            Path(args.checkout),
+            weights=args.weights,
+            max_keypoints=args.max_keypoints,
+            keypoint_threshold=args.keypoint_threshold,
+            match_threshold=args.match_threshold,
+        )
     matcher.warmup()
     server = InferenceServer(Path(args.socket), matcher)
     signal.signal(signal.SIGTERM, server.request_stop)

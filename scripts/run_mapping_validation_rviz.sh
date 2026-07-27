@@ -33,7 +33,7 @@ xhost +si:localuser:root >/dev/null
 XHOST_GRANTED=1
 
 echo "Starting a new sparse localization session; previous maps and paths are discarded."
-docker compose --profile mapping-validation up -d --wait --wait-timeout 180 \
+docker compose --profile mapping-validation up -d --wait --wait-timeout 900 \
     superglue-inference
 docker compose --profile mapping-validation stop insight9-dense-mapper
 docker compose --profile mapping-validation up -d --no-deps --force-recreate \

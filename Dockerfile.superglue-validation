@@ -24,8 +24,12 @@ RUN git clone --filter=blob:none https://github.com/magicleap/SuperGluePretraine
 
 COPY scripts/superglue_ipc.py /opt/insight/superglue_ipc.py
 COPY scripts/superglue_inference_worker.py /opt/insight/superglue_inference_worker.py
+COPY scripts/superglue_tensorrt.py /opt/insight/superglue_tensorrt.py
+COPY scripts/prepare_superglue_tensorrt.py /opt/insight/prepare_superglue_tensorrt.py
+COPY scripts/start_superglue_inference.sh /opt/insight/start_superglue_inference.sh
+RUN chmod +x /opt/insight/start_superglue_inference.sh
 
 WORKDIR /opt/insight
 
 ENTRYPOINT ["/opt/nvidia/nvidia_entrypoint.sh"]
-CMD ["python3", "-u", "/opt/insight/superglue_inference_worker.py"]
+CMD ["/opt/insight/start_superglue_inference.sh"]

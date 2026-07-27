@@ -97,8 +97,10 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - SUPERGLUE_BACKEND=tensorrt
     volumes:
       - superglue-ipc:/run/superglue
+      - superglue-engines:/opt/insight/engines
     shm_size: '1gb'
     healthcheck:
       test:
@@ -109,7 +111,8 @@ services:
       interval: 5s
       timeout: 2s
       retries: 12
-      start_period: 90s
+      # A cold cache compiles device-specific FP16/FP32 engines once.
+      start_period: 900s
     restart: unless-stopped
 
   insight9-sparse-mapper:
@@ -209,3 +212,4 @@ services:
 
 volumes:
   superglue-ipc:
+  superglue-engines:

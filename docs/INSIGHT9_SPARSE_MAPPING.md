@@ -11,10 +11,12 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图，并发布 RViz 点
   符合条件的非商业内部研究，并禁止向第三方分发；使用前仍需由项目方确认适用性。
 - `Dockerfile.superglue-validation` 基于固定 digest 的 NVIDIA
   `25.04-py3-igpu`，并将固定版本的官方代码及权重直接构建进内部验证镜像。
-- JetPack 6.2 没有对应的 NVIDIA PyTorch wheel；不要在 dashboard 镜像中安装普通
-  ARM PyTorch wheel，也不要把它的 CPU 结果当作实时性能结论。
-- 生产后端仍计划使用固定输入规格的 TensorRT FP16 engine。ROS 同步、几何、
-  地图生命周期和 RViz 接口不依赖具体推理后端。
+- 不安装临时 PyTorch wheel。固定 digest 的 NVIDIA 容器永久提供匹配的
+  PyTorch、CUDA、ONNX 和 TensorRT 10.9 运行环境。
+- 默认推理后端已经切换为 TensorRT：SuperPoint 使用 FP16，数值敏感的
+  SuperGlue/Sinkhorn 使用 FP32。ROS 同步、几何、地图生命周期和 RViz 接口
+  不依赖具体推理后端；需要排障时可显式设置
+  `SUPERGLUE_BACKEND=pytorch` 回退。
 - `/insight9_a/camera/hand_keypoints` 使用彩色相机坐标系，不能直接作为红外图像
   遮罩。当前通过至少三个关键帧的世界坐标一致性过滤移动人手和物体。
 
@@ -56,6 +58,13 @@ docker compose --profile mapping-validation up -d \
 构建阶段会校验三份权重的 SHA-256；任一内容不一致即失败。该镜像名为
 `insight-superglue-validation:25.04`，禁止推送到镜像仓库或写入
 `scripts/build_release.sh`。
+
+首次启动会从固定官方权重导出 ONNX，并在当前 Jetson 上编译
+`superpoint_dense_fp16.plan` 和 `superglue_fp32.plan`。引擎绑定 TensorRT、
+CUDA、GPU compute capability、输入规格和模型参数，校验结果及 SHA-256
+写入 manifest；不匹配时自动重建。生成物保存在 Docker volume
+`superglue-engines`，后续重启直接加载，不使用临时 wheel，也不把设备专用
+plan 提交到 Git。
 
 dashboard 和映射容器使用 host IPC。这是 Fast DDS 跨容器及宿主机 RViz
 传输所需：只有 host network 时可以发现话题，但共享内存数据端点在另一个
@@ -123,14 +132,20 @@ docker compose --profile mapping-validation stop insight9-sparse-mapper superglu
 Jetson Orin NX、544×640 双目红外输入、1024 个最大关键点、官方 indoor
 权重下：
 
-- 固定测试帧在 CUDA 预热后为 207–240 ms，约 4.2–4.8 Hz；
+- TensorRT 10.9 引擎缓存校验为 SM 8.7，SuperPoint FP16 纯引擎平均
+  10.68 ms；
+- SuperGlue 256/512 点 FP16 纯引擎分别为 47.25/60.05 ms，但 FP16
+  Sinkhorn 在精度对照中明显漏配，因此没有采用；
+- 最终使用 SuperPoint FP16 + SuperGlue FP32。在固定平移纹理对照中，
+  PyTorch/TensorRT 都得到 21 条匹配，19 条完全相同；
 - 实时帧样本为 202–211 个 SuperGlue 匹配、152–157 个有效三角化点；
-- 实时帧后端推理为 284–301 ms，含几何处理为 308–316 ms；
+- TensorRT 实时链路样本得到 299 个双目匹配、230 个三角化点，后端推理
+  286.16 ms，含几何处理 318.80 ms；
 - 强制静止画面连续关键帧后，170 个关键帧形成 976 个已确认地图点；
 - 发布点云宽度达到 982，路径保持在配置的 200 点上限；
 - dashboard 容器已实际收到 mapper 容器发布的完整状态消息。
 
-结论：官方 PyTorch 实现足以验证数据链和地图生命周期，但实时输入约
-3.2 Hz，未达到稳定 5 Hz。生产化应继续使用相同 ROS/几何接口，替换为固定输入
-规格的 TensorRT FP16 后端。世界坐标静态性、动态物体过滤和长时漂移仍需移动
-相机采集后验收。
+结论：默认链路已由 TensorRT 执行，且没有为了速度接受 SuperGlue FP16
+精度回归。当前共享 GPU 负载下端到端吞吐仍未达到稳定 5 Hz；下一步性能优化
+应针对 SuperGlue 的受约束混合精度和并发 GPU 负载，不能直接把整个 Sinkhorn
+降为 FP16。世界坐标静态性、动态物体过滤和长时漂移仍需移动相机采集后验收。
