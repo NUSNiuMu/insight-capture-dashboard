@@ -171,6 +171,8 @@ services:
       - python3
       - -u
       - scripts/insight3_global_localizer.py
+      - --path-points
+      - "200"
       - --path-publish-hz
       - "20"
       - --path-reset-translation-m

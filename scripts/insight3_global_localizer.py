@@ -593,7 +593,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirmation-frames", type=int, default=3)
     parser.add_argument("--confirmation-translation-m", type=float, default=0.20)
     parser.add_argument("--confirmation-rotation-deg", type=float, default=12.0)
-    parser.add_argument("--path-points", type=int, default=1000)
+    parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
     parser.add_argument("--path-publish-hz", type=float, default=20.0)
     parser.add_argument("--path-reset-translation-m", type=float, default=0.05)
