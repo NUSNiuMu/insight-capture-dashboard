@@ -34,16 +34,15 @@ class PayloadBuilder:
             )
             force_trace_snapshot = cursor_generation != trace_generation
             for pose in self.owner.poses:
-                transformed = self.owner.transformed_pose_sample(pose.name)
                 raw_sample = self.owner.latest_pose_sample.get(pose.name)
                 visible = raw_sample is not None and (self.owner.fake_pose or (now - self.owner.last_pose_received_time[pose.name]) <= self.owner.pose_timeout_sec)
-                if transformed is None:
+                if raw_sample is None:
                     position = [0.0, 0.0, 0.0]
                     quaternion = [0.0, 0.0, 0.0, 1.0]
                 else:
                     # Truncate visualization precision to keep broadcasts compact.
-                    position = [round(float(value), 5) for value in transformed.position]
-                    quaternion = [round(float(value), 5) for value in transformed.orientation_xyzw]
+                    position = [round(float(value), 5) for value in raw_sample.position]
+                    quaternion = [round(float(value), 5) for value in raw_sample.orientation_xyzw]
                 raw_trace = list(self.owner.raw_traces[pose.name])
                 trace_sequences = list(self.owner.raw_trace_sequences[pose.name])
                 latest_trace_sequence = int(self.owner.trace_sequences[pose.name])
@@ -68,17 +67,14 @@ class PayloadBuilder:
                             break
                     selected_trace = raw_trace[first_new_index:]
                     selected_sequences = trace_sequences[first_new_index:]
-                transformed_trace = self.owner.transform_trace_points(
-                    pose.name, selected_trace
-                )
-                if len(transformed_trace) > 32:
+                if len(selected_trace) > 32:
                     trace_points = np.round(
-                        np.asarray(transformed_trace, dtype=np.float64), 4
+                        np.asarray(selected_trace, dtype=np.float64), 4
                     ).tolist()
                 else:
                     trace_points = [
                         [round(float(value), 4) for value in point]
-                        for point in transformed_trace
+                        for point in selected_trace
                     ]
                 entry = {
                     "name": pose.name,
@@ -105,7 +101,7 @@ class PayloadBuilder:
                     "gripper_opening": self.owner.gripper_opening_percent(pose.name),
                 }
                 poses.append(entry)
-                if transformed is not None and visible and pose.teleop_role in ("left_hand", "right_hand"):
+                if raw_sample is not None and visible and pose.teleop_role in ("left_hand", "right_hand"):
                     hand_entries.append(entry)
         # Stick-figure extra: the latest normalized 21-point hand shape (see
         # hand_landmarks_for_role; None until a HandEngine camera has

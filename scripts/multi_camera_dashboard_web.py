@@ -23,7 +23,6 @@ try:
     from rclpy.node import Node
     from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
     from rclpy.qos_event import SubscriptionEventCallbacks
-    from sensor_msgs.msg import CameraInfo
     from sensor_msgs.msg import CompressedImage, Image as RosImage
     from vision_msgs.msg import Detection2DArray
 except Exception:  # pragma: no cover - fake mode can run without ROS imports
@@ -37,18 +36,14 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     HistoryPolicy = None
     DurabilityPolicy = None
     SubscriptionEventCallbacks = None
-    CameraInfo = None
     CompressedImage = None
     RosImage = None
     Detection2DArray = None
 
 from camera_setup import (
     AVAILABLE_AVATAR_MODELS,
-    IMAGE_STREAMS,
     avatar_model_defaults,
     build_dashboard_config,
-    camera_info_topic,
-    image_topic,
     load_setup,
 )
 from gripper_tracking import GripperTrackingMixin
@@ -56,13 +51,11 @@ from hand_overlay import HandOverlayMixin
 from hw_jpeg import HwJpegCodec
 from inprocess_bag_writer import InProcessBagWriter
 import perf_tracker
-from live_alignment import LiveAlignmentMixin
 from post_processing import (
     RecordingManager,
     build_default_topics,
     load_post_processing_config,
 )
-from session_alignment import PoseSample
 from dashboard_web import WebDashboardServer, bagplay_topic
 
 from dashboard_runtime import (
@@ -73,6 +66,7 @@ from dashboard_runtime import (
     MappingStream,
     ParticipantWatchdog,
     PayloadBuilder,
+    PoseSample,
     PoseSpec,
     RecordingBridge,
     WorkerSupervisor,
@@ -104,13 +98,12 @@ def make_image_qos(depth: int = 1, reliability: str = "best_effort") -> QoSProfi
 
 
 
-class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin, Node):
+class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
     def __init__(
         self,
         config_path: Path,
         fake_pose: bool = False,
         pose_publish_hz: float = 50.0,
-        enable_alignment_stream: bool = False,
         webrtc_port: int = 8766,
     ) -> None:
         if rclpy is None:
@@ -124,7 +117,6 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self._mapping_stream = MappingStream(self)
         self.config_path = config_path
         self.fake_pose = bool(fake_pose)
-        self.enable_alignment_stream = bool(enable_alignment_stream)
         self.max_points = 300
 
         raw_config = load_setup(config_path)
@@ -144,22 +136,18 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         )
         self.pose_timeout_sec = max(0.2, float(trajectory_config.get("pose_timeout_sec", 2.0)))
         self.camera_stale_timeout_sec = max(0.2, float(trajectory_config.get("camera_stale_timeout_sec", 2.0)))
-        self._configure_live_alignment(raw_config, config)
-
         self.cameras: List[CameraSpec] = [
             CameraSpec(
                 name=item["name"],
                 namespace=enabled_camera_map[item["name"]]["namespace"],
                 label=item.get("label", item["name"]),
                 topic=item["topic"],
-                camera_info_topic=item["camera_info_topic"],
                 topic_type=item["type"],
                 rotation_deg=int(item.get("rotation_deg", 0)),
                 row=int(item.get("row", 0)),
                 column=int(item.get("column", 0)),
                 column_span=int(item.get("column_span", 1)),
                 row_span=int(item.get("row_span", 1)),
-                alignment_image_stream=item.get("alignment_image_stream") or None,
             )
             for item in config.get("cameras", [])
         ]
@@ -176,9 +164,6 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             )
             for item in config.get("poses", [])
         ]
-        if self.reference_camera is None and self.poses:
-            self.reference_camera = self.poses[0].name
-
         # Wired by main() after RecordingManager is constructed.
         self.recording_manager: Optional[RecordingManager] = None
         self._playback_mode: bool = False
@@ -193,18 +178,13 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         }
         self.trace_sequences: Dict[str, int] = {pose.name: 0 for pose in self.poses}
         self.trace_generation = 0
-        self.latest_pose: Dict[str, Optional[Tuple[float, float, float]]] = {pose.name: None for pose in self.poses}
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
-        self.pose_history: Dict[str, Deque[PoseSample]] = {pose.name: deque(maxlen=160) for pose in self.poses}
-        self.pose_history_lock = threading.Lock()
         self.pose_lock = threading.Lock()
         self.camera_frame_lock = threading.Lock()
         self.latest_camera_frames: Dict[str, Optional[CameraFrame]] = {camera.name: None for camera in self.cameras}
         self.camera_frame_versions: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
         self.camera_frame_times: Dict[str, Deque[float]] = {camera.name: deque(maxlen=90) for camera in self.cameras}
-        self.live_alignment_image_lock = threading.Lock()
-        self.live_alignment_solution_lock = threading.Lock()
         self.ros_callback_group = ReentrantCallbackGroup()
         # Unused default QoS waitables can crash this Jetson/rmw_fastrtps executor.
         self.subscription_event_callbacks = SubscriptionEventCallbacks(
@@ -253,13 +233,6 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self._hand_overlay_proc = self._start_hand_overlay_worker()
         threading.Thread(target=self._hand_overlay_ipc_loop, daemon=True, name="hand_overlay_ipc").start()
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
-        if self.live_alignment_available:
-            self._initialize_live_alignment_state()
-            if self.world_to_reference:
-                self.get_logger().info(
-                    "Loaded persisted live alignment state for web dashboard startup"
-                )
-
         if self.fake_pose:
             self.create_timer(1.0 / self.pose_publish_hz, self._update_fake_pose, callback_group=self.ros_callback_group)
             self.get_logger().info("Running in fake-pose demo mode")
@@ -268,21 +241,11 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self._create_pose_subscriptions()
             self._create_dashboard_image_subscriptions()
             self._create_hand_overlay_subscriptions()
-            if self.live_alignment_available:
-                self._create_alignment_subscriptions()
             threading.Thread(
                 target=self._stale_participant_watchdog_loop,
                 daemon=True,
                 name="stale_dds_watchdog",
             ).start()
-
-        if self.live_alignment_available:
-            self.live_alignment_timer = self.create_timer(
-                1.0 / max(self.live_alignment_processing_hz, 0.5),
-                self._process_live_alignment,
-                callback_group=self.ros_callback_group,
-            )
-            self._set_live_alignment_timer_enabled(False)
 
     def _create_pose_subscriptions(self) -> None:
         pose_qos = make_qos()
@@ -309,25 +272,15 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self.dashboard_subscriptions.append(playback_sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
 
-    def _alignment_stream_for(self, camera: "CameraSpec") -> str:
-        return camera.alignment_image_stream or self.live_alignment_image_stream
-
     def _create_dashboard_image_subscriptions(self) -> None:
         # Depth 20 absorbs executor stalls without overwriting recording frames.
         image_qos = make_image_qos(depth=20, reliability=self.image_qos_reliability)
         for camera in self.cameras:
-            namespace = camera.namespace
-            align_topic = (
-                image_topic(namespace, self._alignment_stream_for(camera))
-                if self.live_alignment_available
-                else None
-            )
-            also_alignment = self.live_alignment_available and align_topic == camera.topic
             msg_type = CompressedImage if camera.topic_type == "compressed" else RosImage
             sub = self.create_subscription(
                 msg_type,
                 camera.topic,
-                self._make_dashboard_image_callback(camera.name, camera.topic_type, also_alignment=also_alignment),
+                self._make_dashboard_image_callback(camera.name, camera.topic_type),
                 image_qos,
                 callback_group=self.ros_callback_group,
                 event_callbacks=self.subscription_event_callbacks,
@@ -340,7 +293,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 msg_type,
                 bagplay_topic(camera.topic),
                 self._make_dashboard_image_callback(
-                    camera.name, camera.topic_type, also_alignment=also_alignment, is_live=False
+                    camera.name, camera.topic_type, is_live=False
                 ),
                 image_qos,
                 callback_group=self.ros_callback_group,
@@ -363,7 +316,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
                 )
             threading.Thread(
                 target=self._frame_worker_loop,
-                args=(camera.name, camera.topic_type, also_alignment),
+                args=(camera.name, camera.topic_type),
                 daemon=True,
                 name=f"frame_worker_{camera.name}",
             ).start()
@@ -423,50 +376,6 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             return
         self.get_logger().info(perf_tracker.format_summary(snapshot))
 
-    def _create_alignment_subscriptions(self) -> None:
-        if not self.live_alignment_available:
-            return
-        image_qos = make_image_qos(reliability=self.image_qos_reliability)
-        for camera in self.cameras:
-            camera_name = camera.name
-            namespace = camera.namespace
-            alignment_stream = self._alignment_stream_for(camera)
-            calib_topic = image_topic(namespace, alignment_stream)
-            calib_info_topic = camera_info_topic(namespace, alignment_stream)
-            calib_type = IMAGE_STREAMS[alignment_stream]["type"]
-            self.live_alignment_topic_by_camera[camera_name] = calib_topic
-
-            # Reuse the display subscription to avoid duplicate reliable readers.
-            if calib_topic != camera.topic:
-                calib_msg_type = CompressedImage if calib_type == "compressed" else RosImage
-                calib_sub = self.create_subscription(
-                    calib_msg_type,
-                    calib_topic,
-                    self._make_live_alignment_image_callback(camera_name, calib_type),
-                    image_qos,
-                    callback_group=self.ros_callback_group,
-                    event_callbacks=self.subscription_event_callbacks,
-                )
-                self.dashboard_subscriptions.append(calib_sub)
-            else:
-                self.get_logger().info(
-                    f"Alignment: {camera_name} shares display topic {calib_topic}; "
-                    "alignment callback will be invoked from display subscription"
-                )
-
-            info_sub = self.create_subscription(
-                CameraInfo,
-                calib_info_topic,
-                self._make_camera_info_callback(camera_name),
-                make_qos(depth=2),
-                callback_group=self.ros_callback_group,
-                event_callbacks=self.subscription_event_callbacks,
-            )
-            self.dashboard_subscriptions.append(info_sub)
-            self.get_logger().info(
-                f"Alignment: {camera_name} image={calib_topic} info={calib_info_topic} type={calib_type}"
-            )
-
     def _any_ros_data_received(self) -> bool:
         return self._participant_watchdog._any_ros_data_received()
 
@@ -511,16 +420,6 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
 
         return callback
 
-    def _make_camera_info_callback(self, camera_name: str):
-        def callback(msg: CameraInfo) -> None:
-            # Camera info feeds live alignment and stays inert during playback.
-            if self._playback_mode:
-                return
-            self.live_alignment_camera_matrix[camera_name] = np.array(msg.k, dtype=np.float64).reshape((3, 3))
-            self.live_alignment_dist_coeffs[camera_name] = np.array(msg.d, dtype=np.float64).reshape((-1, 1))
-
-        return callback
-
     def start_image_recording(self, topic_output_paths: Dict[str, str]) -> None:
         self._recording_bridge.start_image_recording(topic_output_paths)
 
@@ -538,19 +437,17 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
 
 
     def _make_dashboard_image_callback(
-        self, camera_name: str, topic_type: str, also_alignment: bool = False, is_live: bool = True
+        self, camera_name: str, topic_type: str, is_live: bool = True
     ):
         return self._image_pipeline._make_dashboard_image_callback(
-            camera_name, topic_type, also_alignment=also_alignment, is_live=is_live
+            camera_name, topic_type, is_live=is_live
         )
 
 
     def _frame_worker_loop(
-        self, camera_name: str, topic_type: str, also_alignment: bool
+        self, camera_name: str, topic_type: str
     ) -> None:
-        self._image_pipeline._frame_worker_loop(
-            camera_name, topic_type, also_alignment
-        )
+        self._image_pipeline._frame_worker_loop(camera_name, topic_type)
 
 
     def _maybe_queue_webrtc_frame(self, camera_name: str, topic_type: str, msg, frame) -> None:
@@ -641,45 +538,9 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         return ImagePipeline._jpeg_dimensions(data)
 
 
-    def _make_live_alignment_image_callback(self, camera_name: str, topic_type: str):
-        def callback(msg) -> None:
-            # Live-only, same reasoning as _make_camera_info_callback.
-            if self._playback_mode or not self.live_alignment_active:
-                return
-            image = self._decode_calibration_message(topic_type, msg)
-            if image is None:
-                self.live_alignment_last_tag_count[camera_name] = 0
-                self._set_alignment_debug(camera_name, stage="decode_failed", tags=0, shape="-")
-                return
-            stamp_ns = self._stamp_to_ns(msg.header.stamp)
-            received_monotonic_ns = time.monotonic_ns()
-            with self.live_alignment_image_lock:
-                self.live_alignment_latest_image[camera_name] = image
-                self.live_alignment_latest_image_stamp_ns[camera_name] = stamp_ns
-                pending = self.live_alignment_pending_images[camera_name]
-                if not pending or pending[-1][0] != stamp_ns:
-                    pending.append((stamp_ns, received_monotonic_ns, image))
-                    min_received_ns = received_monotonic_ns - self.live_alignment_pending_max_age_ns
-                    pending[:] = [item for item in pending if item[1] >= min_received_ns]
-                    if len(pending) > self.live_alignment_pending_image_limit:
-                        del pending[: len(pending) - self.live_alignment_pending_image_limit]
-            self._set_alignment_debug(
-                camera_name,
-                stage="image_rx",
-                stamp_ns=stamp_ns,
-                shape=f"{image.shape[1]}x{image.shape[0]}",
-                topic=self.live_alignment_topic_by_camera.get(camera_name, "-"),
-                latency_ms=f"{0.0:.1f}",
-            )
-
-        return callback
-
     def _record_pose_sample(self, pose_name: str, pose_sample: PoseSample) -> None:
-        with self.pose_history_lock:
-            self.pose_history[pose_name].append(pose_sample)
         with self.pose_lock:
             self.latest_pose_sample[pose_name] = pose_sample
-            self.latest_pose[pose_name] = self._transform_pose_point(pose_name, pose_sample.position)
             self.last_pose_received_time[pose_name] = time.monotonic()
             self.trace_sequences[pose_name] += 1
             self.raw_traces[pose_name].append(pose_sample.position)
@@ -795,7 +656,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fake-pose", action="store_true")
     # Fallback; cameras.json may override this broadcast rate.
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
-    parser.add_argument("--start-alignment", action="store_true")
     parser.add_argument("--post-processing-config", default=str(Path(__file__).resolve().parents[1] / "config" / "post_processing.json"))
     parser.add_argument("--rosbag-dir", "-rosbag-dir", default=None)
     return parser.parse_args()
@@ -875,16 +735,13 @@ def main() -> None:
     default_record_topics = configured_record_topics if configured_record_topics else build_default_topics(raw_config)
 
     rclpy.init(args=None)
-    # Global mapping/relocalization is now the only spatial alignment source.
-    enable_alignment_stream = False
     node = PoseBridgeNode(
         config_path,
         fake_pose=args.fake_pose,
         pose_publish_hz=args.pose_publish_hz,
-        enable_alignment_stream=enable_alignment_stream,
         webrtc_port=args.webrtc_port,
     )
-    node.get_logger().info(f"View mode={args.view_mode} alignment_stream={enable_alignment_stream}")
+    node.get_logger().info(f"View mode={args.view_mode}")
 
     recording_manager = RecordingManager(
         raw_config=raw_config,
@@ -908,8 +765,6 @@ def main() -> None:
         recording_manager,
         dict(post_processing_config.get("gesture_recording") or {}),
     )
-    if args.start_alignment and node.live_alignment_available and not args.fake_pose:
-        node.start_live_alignment()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
     spin_thread = threading.Thread(

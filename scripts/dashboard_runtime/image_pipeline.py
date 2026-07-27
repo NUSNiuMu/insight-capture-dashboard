@@ -29,7 +29,7 @@ class ImagePipeline:
         self.owner = owner
 
     def _make_dashboard_image_callback(
-        self, camera_name: str, topic_type: str, also_alignment: bool = False, is_live: bool = True
+        self, camera_name: str, topic_type: str, is_live: bool = True
     ):
         camera_topic = next(c.topic for c in self.owner.cameras if c.name == camera_name)
         event = self.owner._pending_frame_events[camera_name]
@@ -61,8 +61,7 @@ class ImagePipeline:
         self.owner._last_localization_image_relay_ns[camera_name] = stamp_ns
         publisher.publish(msg)
 
-    def _frame_worker_loop(self, camera_name: str, topic_type: str, also_alignment: bool) -> None:
-        alignment_cb = self.owner._make_live_alignment_image_callback(camera_name, topic_type) if also_alignment else None
+    def _frame_worker_loop(self, camera_name: str, topic_type: str) -> None:
         event = self.owner._pending_frame_events[camera_name]
         while rclpy is not None and rclpy.ok():
             if not event.wait(timeout=1.0):
@@ -80,8 +79,6 @@ class ImagePipeline:
                     if preview_now - previous < min_interval:
                         continue
                     self.owner._last_recording_preview_at[camera_name] = preview_now
-                if alignment_cb is not None:
-                    alignment_cb(msg)
                 # Share one decode; skip CPU decode when NVJPEG can consume raw data.
                 display_image = None
                 if topic_type != "compressed" and (

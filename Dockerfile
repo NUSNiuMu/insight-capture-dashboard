@@ -209,10 +209,8 @@ RUN cd /workspaces/looper-vio-colmap-handoff && \
     grep -q 'stdbuf", "-oL", "-eL", args.colmap_bin' scripts/run_colmap_from_images.py
 
 # ── Python packages not available as apt ────────────────────────────────────
-# opencv-contrib-python-headless (not apt's python3-opencv): the Ubuntu 22.04 apt
-# build is OpenCV 4.5.4, whose cv2.aruco fails to detect DICT_APRILTAG_36h11 markers
-# that the same code detects fine on the host (OpenCV 4.11 via pip) — see
-# live_alignment.py. Headless avoids the GTK/X11 shared-lib deps of the full wheel;
+# opencv-contrib-python-headless provides the cv2.aruco APIs used by gripper
+# tracking. Headless avoids the GTK/X11 shared-lib deps of the full wheel;
 # nothing here calls cv2.imshow/highgui.
 # matplotlib: only looper-vio-colmap-handoff's plot_trajectories.py needs it
 # (run_pipeline_from_rosbag.py's --make-plots, currently always "false" from

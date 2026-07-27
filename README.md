@@ -60,7 +60,7 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 ## 单一配置入口：config/cameras.json
 
-> `config/cameras.json`、`config/board_calibration.json`、`config/post_processing.json`
+> `config/cameras.json`、`config/post_processing.json`
 > 是按设备生成的产物（`.gitignore` 掉了），源头是 `config/devices/<name>/`，用
 > `scripts/select_device.sh <name>` 切换/生成——直接改 `config/` 下的文件本身没问题
 > （对当前选中的设备生效），但换设备/长期改动要改回 `config/devices/<name>/` 里的源文件，
@@ -69,8 +69,6 @@ python3 scripts/multi_camera_dashboard_web.py &
 **优先只改这一个文件**：[config/cameras.json](config/cameras.json)。它控制：
 
 - dashboard 显示哪几路图像、用哪几路 VIO
-- 在线标定使用的 AprilTag board 参数（`calibration_file` 指向 [config/board_calibration.json](config/board_calibration.json)）
-- 标定输出参考系（当前默认 `board_center`）
 - 默认 `ROS_DOMAIN_ID`
 
 每个 camera 条目的常用字段：
@@ -79,14 +77,11 @@ python3 scripts/multi_camera_dashboard_web.py &
 |---|---|---|
 | `namespace` | 相机的 ROS 命名空间 | `insight3_a` |
 | `dashboard_image_stream` | dashboard 显示用哪路图像流 | `infra1` / `color_compressed` |
-| `alignment_image_stream` | **在线标定**检测 AprilTag 用哪路流，不填则退回全局 `board_calibration.json` 里的 `image_stream` | `infra1` |
-| `dashboard_pose_stream` | VIO pose 流 | `vio_100hz` |
+| `dashboard_pose_stream` | 全局建图/重定位 pose 流 | `/insight_global/insight3_a/pose` |
 | `teleop_role` | 决定 3D 场景里用哪个位置/朝向预设 | `head` / `left_hand` / `right_hand` |
 | `avatar_model` | 3D 场景里这个相机用的模型，见下方"Web avatar 模型配置" | `assets/models/vis_assembly.glb` |
 
-`dashboard_image_stream`/`alignment_image_stream` 的可选值定义在 [camera_setup.py](scripts/camera_setup.py#L9-L15) 的 `IMAGE_STREAMS` 里：`infra1`、`infra2`、`depth`、`color`、`color_compressed`。
-
-**为什么 `alignment_image_stream` 要单独配一个字段**：dashboard 显示和在线标定检测经常需要不同的流——比如同一台相机 dashboard 想看压缩后的彩色图省带宽，但标定检测想用未压缩的原始图提高角点精度；混合机队场景更明显，比如黑白/IR 相机和彩色相机同时在线，标定就不能全局共用一个 stream 名字，必须按相机各自指定。
+`dashboard_image_stream` 的可选值定义在 [camera_setup.py](scripts/camera_setup.py#L9-L15) 的 `IMAGE_STREAMS` 里：`infra1`、`infra2`、`depth`、`color`、`color_compressed`。
 
 ### 当前命名约定
 
@@ -106,20 +101,17 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 - WebSocket: `ws://<host>:8765/ws`
 - pose 快照: 随 WebSocket 首帧推送（不是独立的 `/api/poses` GET）
-- alignment 状态: `http://<host>:8765/api/alignment`
 - recording 状态/topics: `http://<host>:8765/api/recording/status`、`/api/recording/topics`
 - rosbag 列表: `http://<host>:8765/api/rosbags`
 - 健康检查: `http://<host>:8765/healthz`
 
 页面入口：
 
-- `/` 或 `/3d`：3D VIO 轨迹页，Babylon.js GPU 场景 + 在线标定按钮
+- `/` 或 `/3d`：实时画面与全局建图/重定位轨迹的 Babylon.js GPU 场景
 - `/recording`：独立 rosbag 录制页，topic 发现、勾选、录制、停止、同步到主机
 - `/bags`：本地 rosbag 列表页，路径/大小/时长/label/scoring/optimization 状态
 - `/scoring`：轨迹评分页骨架
 - `/optimization`：COLMAP 轨迹优化页（`jetson-nx` profile 的镜像自带 CUDA sm_87 编译的 COLMAP 3.9.1，开箱即用，见下方"部署"）
-
-3D 页面右上角 `Start Alignment / Stop Alignment` 按钮：不需要命令行参数，随时可以开始/停止标定，适合左边看 RGB、右边控制标定。
 
 Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，支持整组勾选），`Start` 只录勾选的 topic，`Stop` 优雅结束 `ros2 bag record`。Insight9 同时检测到双手“拇指向上、四指握拳”持续 0.8 秒时，会用服务器默认 topics 开始手势录制；解除 2 秒后再次保持同一手势可停止，且不会停止网页手动开始的录制。输出目录优先级：CLI `--rosbag-dir` > 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
 
@@ -144,60 +136,6 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 
 模型文件走 `/asset?path=...` 接口提供，带版本化长缓存。3D 页面会先让场景就绪，再依次启动相机、轨迹和模型；模型加载期间不会显示占位物。优化后的头盔模型为 2.7MB，旧配置会自动迁移。
 
-## 在线轨迹标定（Live Alignment）
-
-用 `AprilTag GridBoard` 的中心作为参考系，每台相机独立标定，不要求同时看到板子、不要求严格时间同步：
-
-- `session_alignment.alignment_frame = "board_center"`
-- `session_alignment.calibration.method = "board_center"`
-- 输出该相机 `VIO world -> board_center` 的锚定变换，适合单机先标、分批标、最后一起显示
-
-标定参数在 [config/board_calibration.json](config/board_calibration.json)（当前默认值，按需调）：
-
-| 字段 | 默认值 | 说明 |
-|---|---|---|
-| `board_rows`/`board_cols` | `6`/`6` | GridBoard 行列数 |
-| `marker_length_m` | `0.055` | 单个 marker 边长 |
-| `marker_separation_m` | `0.0165` | marker 间隔 |
-| `dictionary` | `DICT_APRILTAG_36h11` | AprilTag 字典 |
-| `min_detected_tags` | `12` | 低于这个数量的检测结果直接丢弃 |
-| `required_samples` | `12` | 攒够这么多"合格"样本才输出结果 |
-| `max_translation_std_m`/`max_rotation_std_deg` | `0.04`/`2.5` | 离群点过滤阈值，单帧偏离共识中心超过这个值就丢弃 |
-| `image_stream` | `color_compressed` | 全局默认标定流，可被相机自己的 `alignment_image_stream` 覆盖 |
-| `alignment_image_scale` | `1.0` | 检测前对图像的缩放系数，可调大以放大后再检测 |
-
-流程：
-
-1. 启动要标定的那一路相机和它自己的 VIO
-2. 让相机稳定看到同一块 AprilTag board 几秒（相机和板都可以动，但采样阶段要持续看到同一块板）
-3. dashboard 自动丢弃离群样本，攒够 `required_samples` 后持续更新这一路相对 `board_center` 的结果
-4. 继续按任意顺序标定其它相机，不需要等前一台自动停
-5. 需要结束时点击 `Stop Alignment`；停止后保留最后一次内存中的对齐结果继续显示轨迹
-
-状态含义：
-
-- `Alignment ON | board 2/3`：还有相机没有形成有效板位姿
-- `Alignment ON | samples 5/12`：正在累计一致样本
-- `Alignment ON | waiting pose`：板检测成功，但暂时没有匹配到可用 VIO pose
-- `Alignment ON | tracking`：已经在稳定跟踪相对位姿
-- `Alignment OFF | locked`：在线对齐已关闭，保留最后一次结果
-
-终端每秒输出一行状态：
-
-```text
-[alignment] CALIBRATED insight7_a | samples=12 board_to_camera=(0.184, 0.092, 0.614)m dashboard_position=(0.614, 0.184, -0.092)m vio_to_board_anchor=(1.203, -0.447, 0.128)m
-```
-
-详细诊断日志默认写到 `/tmp/insight_live_alignment.log`，可用 `INSIGHT_ALIGNMENT_LOG` 环境变量改路径。
-
-### 标定排查要点
-
-- 确认板子在视野内：`http://<host>:8765/api/cameras/<name>/frame` 可查看该相机当前实际画面
-- marker 成像像素尺寸建议不低于约 60px；分辨率不足时优先缩短拍摄距离，而非依赖 `alignment_image_scale` 放大
-- 角点细化方法固定为 `CORNER_REFINE_SUBPIX`（见 `live_alignment.py`），低分辨率画面下不使用 `CORNER_REFINE_APRILTAG`
-- IR/黑白相机需确认标定板在对应波段下仍有清晰的黑白对比度
-- 黑白/IR 相机 topic 若编码为 `nv12`，`_decode_calibration_message` 已支持该分支，无需额外处理
-
 ## 保留的脚本
 
 | 脚本 | 作用 |
@@ -206,8 +144,6 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 | `scripts/multi_camera_dashboard_web.py` | Web dashboard 后端：ROS2 pose/图像订阅、fake-pose demo、WebSocket 推流、rosbag 录制/查询 API |
 | `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
 | `scripts/post_processing.py` | Web 版 rosbag 录制管理、topic 发现分组、COLMAP 优化 pipeline 调度 |
-| `scripts/live_alignment.py` | 在线 AprilTag 相对位姿标定和诊断日志 |
-| `scripts/session_alignment.py` | 在线标定用的位姿/矩阵数学工具 |
 | `scripts/insight9_sparse_mapper.py` | Insight9 官方 SuperPoint/SuperGlue 在线稀疏建图验证节点 |
 | `scripts/insight9_dense_mapper.py` | Insight9 StereoSGBM/VIO 在线稠密点云与体素融合节点 |
 | `scripts/insight3_global_localizer.py` | 两路 Insight3 到 Insight9 3D 描述子地图的全局定位与轨迹重建节点 |
@@ -245,8 +181,7 @@ COLMAP（3.9.1，CUDA sm_87，GUI 关闭）和 `looper-vio-colmap-handoff` 流�
 （COLMAP 3.9.1 的 GPU 参数名、stdbuf 行缓冲让网页日志实时刷新），升级
 该仓库 commit 时需要复核补丁是否仍然适用（见 Dockerfile 内注释）。
 
-部署到新机器后，`config/cameras.json`、`config/board_calibration.json`、
-`config/post_processing.json`、`config/alignment/live_alignment_state.json`
-都是跟**当前这批相机/这台设备**绑定的配置/状态（前三个由 `select_device.sh`
-从 `config/devices/<name>/` 生成，不是手改的），换了相机需要重新走一遍标定，
-不是复制过去就能直接用。
+部署到新机器后，`config/cameras.json`、`config/post_processing.json`
+都是跟**当前这批相机/这台设备**绑定的配置（均由 `select_device.sh`
+从 `config/devices/<name>/` 生成，不是手改的）。换了相机后需要更新命名空间、
+图像流和全局重定位 topic，不能直接沿用另一台设备的配置。

@@ -132,14 +132,14 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .heading-stat strong { font-family: var(--mono); font-size: 22px; font-style: normal; font-weight: 600; color: var(--teal); }
 .heading-stat span { margin-top: 4px; color: var(--muted); font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
 
-.primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .alignment-button, .nav-button { display: inline-flex; min-height: 41px; padding: 0 16px; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 8px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .05em; line-height: 1; text-decoration: none; cursor: pointer; transition: transform 140ms, box-shadow 140ms, background 140ms, border-color 140ms; }
-.primary-button, .recording-button, .alignment-button { color: #2a2318; background: var(--accent-fill); border-color: rgba(143, 92, 0, 0.35); box-shadow: 0 6px 18px rgba(255, 176, 32, 0.3); }
-.primary-button:hover, .recording-button:hover, .alignment-button:hover { background: #ffc14d; box-shadow: 0 10px 24px rgba(255, 176, 32, 0.4); transform: translateY(-1px); }
+.primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .nav-button { display: inline-flex; min-height: 41px; padding: 0 16px; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 8px; font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .05em; line-height: 1; text-decoration: none; cursor: pointer; transition: transform 140ms, box-shadow 140ms, background 140ms, border-color 140ms; }
+.primary-button, .recording-button { color: #2a2318; background: var(--accent-fill); border-color: rgba(143, 92, 0, 0.35); box-shadow: 0 6px 18px rgba(255, 176, 32, 0.3); }
+.primary-button:hover, .recording-button:hover { background: #ffc14d; box-shadow: 0 10px 24px rgba(255, 176, 32, 0.4); transform: translateY(-1px); }
 .quiet-button, .recording-button-secondary, .nav-button { border-color: var(--line-dark); color: var(--ink-soft); background: var(--surface); }
 .quiet-button:hover, .recording-button-secondary:hover, .nav-button:hover { border-color: var(--accent); color: var(--ink); transform: translateY(-1px); }
 .danger-button, .recording-button-danger { color: #fff; background: var(--red); }
 .danger-button:hover { background: #d55e57; transform: translateY(-1px); }
-.primary-button:disabled, .quiet-button:disabled, .danger-button:disabled, .recording-button:disabled, .alignment-button:disabled { opacity: .42; cursor: wait; transform: none; }
+.primary-button:disabled, .quiet-button:disabled, .danger-button:disabled, .recording-button:disabled { opacity: .42; cursor: wait; transform: none; }
 .is-busy { animation: pulse-button 1.2s ease-in-out infinite; }
 @keyframes pulse-button { 50% { box-shadow: 0 0 0 5px rgba(255, 176, 32, 0.25); } }
 
@@ -465,7 +465,7 @@ body { font-size: 15px; }
 .section-kicker { font-size: 12px; }
 .content-heading > div:first-child > p:last-child { font-size: 16px; }
 .heading-stat span, .metric-grid span, .metric-grid small { font-size: 12px; }
-.primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .alignment-button, .nav-button { font-size: 13px; }
+.primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .nav-button { font-size: 13px; }
 .field-control, .bag-select, .field-input, .settings-text-input, .settings-model-select, .recording-bag-name-input { font-size: 14px; }
 .field-label, .field-help { font-size: 13px; }
 .field-label small { font-size: 11px; }
@@ -488,7 +488,7 @@ body { font-size: 15px; }
 .camera-wall-heading > span { font-size: 10px; }
 .stage-status strong { font-size: 12px; }
 .stage-status small { font-size: 10px; }
-.alignment-meta, .legend-row, .trail-toggle { font-size: 11px; }
+.legend-row, .trail-toggle { font-size: 11px; }
 .legend-row strong { font-size: 12px; }
 .stage-footer { font-size: 10px; }
 
@@ -496,9 +496,9 @@ body { font-size: 15px; }
    1600px workstation layout or allowing text to overwhelm the controls. */
 @media (min-width: 1800px) {
   body, .app-brand { font-size: 16px; }
-  .app-brand small, .workspace-card > span, .workspace-card small, .side-nav p, .side-nav a b, .sidebar-foot small, .topbar-clock, .section-heading > span, .section-heading > p, .control-number, .step-label > span, .camera-title span, .camera-overlay, .bag-badges, .bag-row-actions, .bag-badge, .record-topic-summary-meta, .result-placeholder small, .settings-role-pill, .capability-row span, .alignment-meta, .legend-row, .trail-toggle { font-size: 12px; }
+  .app-brand small, .workspace-card > span, .workspace-card small, .side-nav p, .side-nav a b, .sidebar-foot small, .topbar-clock, .section-heading > span, .section-heading > p, .control-number, .step-label > span, .camera-title span, .camera-overlay, .bag-badges, .bag-row-actions, .bag-badge, .record-topic-summary-meta, .result-placeholder small, .settings-role-pill, .capability-row span, .legend-row, .trail-toggle { font-size: 12px; }
   .workspace-card strong, .content-heading > div:first-child > p:last-child, .bag-row-main strong { font-size: 17px; }
-  .side-nav a, .sidebar-foot span, .app-topbar, .section-kicker, .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .alignment-button, .nav-button, .field-label, .field-help, .control-strip-copy strong, .step-label strong, .camera-title strong, .bag-row-stats strong, .empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner, .record-topic-copy strong, .settings-camera-head h3, .capability-row strong { font-size: 14px; }
+  .side-nav a, .sidebar-foot span, .app-topbar, .section-kicker, .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .nav-button, .field-label, .field-help, .control-strip-copy strong, .step-label strong, .camera-title strong, .bag-row-stats strong, .empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner, .record-topic-copy strong, .settings-camera-head h3, .capability-row strong { font-size: 14px; }
   .field-control, .bag-select, .field-input, .settings-text-input, .settings-model-select, .recording-bag-name-input { font-size: 15px; }
   .record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend, .image-pipeline-notes, .control-strip-copy small, .step-label small, .legend-row strong { font-size: 13px; }
   .camera-wall-heading h2 { font-size: 19px; }

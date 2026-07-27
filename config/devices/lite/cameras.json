@@ -1,8 +1,5 @@
 {
   "ros_domain_id": 20,
-  "session_alignment": {
-    "enabled": false
-  },
   "dashboard": {
     "window_title": "Insight Monitoring Dashboard",
     "fullscreen": true,

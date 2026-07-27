@@ -75,16 +75,6 @@ def load_setup(config_path: Path) -> Dict:
     for camera in config.get("cameras", []):
         camera["avatar_model"] = canonical_avatar_model(camera.get("avatar_model"))
 
-    session_alignment = config.get("session_alignment")
-    calibration_file = session_alignment.get("calibration_file") if session_alignment else None
-    if calibration_file:
-        project_root = config_path.resolve().parents[1]
-        calibration_path = project_root / calibration_file
-        with calibration_path.open("r", encoding="utf-8") as f:
-            calibration = json.load(f)
-        calibration.update(session_alignment.get("calibration", {}))
-        session_alignment["calibration"] = calibration
-
     return config
 
 
@@ -113,8 +103,6 @@ def build_dashboard_config(config: Dict) -> Dict:
     dashboard = config.get("dashboard", {})
     cameras = []
     poses = []
-    session_alignment = config.get("session_alignment", {})
-
     for camera in enabled_cameras(config):
         namespace = camera["namespace"]
         image_stream = camera["dashboard_image_stream"]
@@ -123,15 +111,12 @@ def build_dashboard_config(config: Dict) -> Dict:
                 "name": camera["name"],
                 "label": camera.get("dashboard_label", camera.get("label", camera["name"])),
                 "topic": image_topic(namespace, image_stream),
-                "camera_info_topic": camera_info_topic(namespace, image_stream),
                 "type": IMAGE_STREAMS[image_stream]["type"],
                 "rotation_deg": int(camera.get("dashboard_rotation_deg", 0)),
                 "row": int(camera.get("dashboard_row", 0)),
                 "column": int(camera.get("dashboard_column", 0)),
                 "column_span": int(camera.get("dashboard_column_span", 1)),
                 "row_span": int(camera.get("dashboard_row_span", 1)),
-                # Per-camera AprilTag stream overrides the global alignment stream.
-                "alignment_image_stream": camera.get("alignment_image_stream"),
             }
         )
 
@@ -163,11 +148,6 @@ def build_dashboard_config(config: Dict) -> Dict:
     return {
         "window_title": dashboard.get("window_title", "Insight Monitoring Dashboard"),
         "trajectory": dashboard.get("trajectory", {}),
-        "session_alignment": {
-            "enabled": bool(session_alignment.get("enabled", False)),
-            "alignment_frame": session_alignment.get("alignment_frame", "board_center"),
-            "reference_camera": session_alignment.get("reference_camera"),
-        },
         "cameras": cameras,
         "poses": poses,
     }

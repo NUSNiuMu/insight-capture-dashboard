@@ -15,7 +15,6 @@ if [[ ! -d "$profile_dir" ]]; then
 fi
 
 cp "${profile_dir}/cameras.json" "${ROOT_DIR}/config/cameras.json"
-cp "${profile_dir}/board_calibration.json" "${ROOT_DIR}/config/board_calibration.json"
 cp "${profile_dir}/post_processing.json" "${ROOT_DIR}/config/post_processing.json"
 echo "$device" > "${ROOT_DIR}/config/.device"
 

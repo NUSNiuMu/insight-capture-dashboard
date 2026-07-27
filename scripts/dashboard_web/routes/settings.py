@@ -14,14 +14,6 @@ from dashboard_web.context import DashboardContext
 from dashboard_web.support import read_json_body
 
 
-_BOARD_CALIBRATION_FIELDS: Dict[str, type] = {
-    "marker_length_m": float,
-    "marker_separation_m": float,
-    "board_rows": int,
-    "board_cols": int,
-    "max_translation_std_m": float,
-    "max_rotation_std_deg": float,
-}
 _ROSBAG_SYNC_FIELDS: Dict[str, type] = {
     "sync_rosbag_to_host": bool,
     "host_rosbag_sync_dir": str,
@@ -92,17 +84,6 @@ class SettingsRoutes:
         path = self.context.project_root / "config" / filename
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         return {key: data.get(key) for key in fields}
-
-    async def _handle_settings_board_calibration_get(self, _request: web.Request) -> web.Response:
-        data = self._read_config_json("board_calibration.json")
-        return web.json_response(
-            {"values": {key: data.get(key) for key in _BOARD_CALIBRATION_FIELDS}, "restart_required": True}
-        )
-
-    async def _handle_settings_board_calibration_post(self, request: web.Request) -> web.Response:
-        payload = await read_json_body(request)
-        values = self._write_config_fields("board_calibration.json", _BOARD_CALIBRATION_FIELDS, payload)
-        return web.json_response({"values": values, "restart_required": True})
 
     async def _handle_settings_rosbag_sync_get(self, _request: web.Request) -> web.Response:
         data = self._read_config_json("post_processing.json")

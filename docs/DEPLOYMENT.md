@@ -15,9 +15,9 @@
 ### 设备与 config profile
 
 三台设备（`jetson-nx`/`lite`/`lite-779`）现在共用同一个 `main` 分支，不再各自一个 git
-分支。设备差异收敛到 `config/devices/<name>/{cameras.json,board_calibration.json,
-post_processing.json}` 三个文件，`scripts/select_device.sh <name>` 把选中的 profile
-复制成 `config/` 下真正生效的文件（这三个文件本身是 `.gitignore` 掉的本地生成产物）。
+分支。设备差异收敛到 `config/devices/<name>/{cameras.json,post_processing.json}`
+两个文件，`scripts/select_device.sh <name>` 把选中的 profile
+复制成 `config/` 下真正生效的文件（这两个文件本身是 `.gitignore` 掉的本地生成产物）。
 只有 `jetson-nx` 会走 §1 打成正式发布镜像；`lite`/`lite-779` 是开发机专用 profile。
 
 ---
@@ -31,7 +31,7 @@ post_processing.json}` 三个文件，`scripts/select_device.sh <name>` 把选�
 - 当前 `main` 就是要发布的版本——`build_release.sh` 直接 `docker build` 工作目录，
   发布前先确认 `git status` 干净、该合的改动都合并了。
 - `config/` 必须选中 `jetson-nx` profile（`scripts/select_device.sh jetson-nx`）——
-  三台设备现在共用同一个分支，`config/cameras.json` 等三个文件是本地生成产物，
+  三台设备现在共用同一个分支，`config/cameras.json` 等两个文件是本地生成产物，
   见"分支与部署"一节；`build_release.sh` 会自己校验这一点，选错了会直接报错退出。
 - 本地先用根目录的开发机 `docker-compose.yml`（`docker compose build && docker compose up -d`）
   把要发布的改动完整跑一遍、`/verify` 或手动过一遍关键页面，**不要用没跑过的代码直接打包发布**。
@@ -142,7 +142,7 @@ cd insight_capture
 ```
 
 `main` 现在是唯一的代码分支，三台设备（`jetson-nx`/`lite`/`lite-779`）的差异只体现在
-`config/devices/<name>/{cameras.json,board_calibration.json,post_processing.json}`——
+`config/devices/<name>/{cameras.json,post_processing.json}`——
 `--device <name>` 会先跑一次 `scripts/select_device.sh <name>`，把对应 profile 复制成
 `config/` 下真正生效的文件（已经选过的话这个参数可以省略）。
 
@@ -231,12 +231,9 @@ cd insight-dashboard-deploy
 ```
 
 首次安装完成后，如果这台设备接的是跟别的 jetson-nx 设备不同的相机机群，
-`config/cameras.json` 里的相机列表、`config/board_calibration.json` 的标定板
-参数都是占位/上一台设备遗留的默认值，需要重新配置和标定；如果相机机群
-本来就是固定的（本项目目前是：insight3_a / insight3_b / insight9_a，见
-仓库根 `CLAUDE.md`「设备与 config profile」一节），`cameras.json` 不用改，只有
-`board_calibration.json`（标定板与具体这块板子/这次摆放相关）通常还是要
-针对这台设备重新标定一次。
+`config/cameras.json` 里的相机列表是 profile 的默认值；如果这台设备接的是
+不同的相机机群，需要按实际命名空间和全局建图/重定位 topic 调整。固定机群
+（本项目目前是：insight3_a / insight3_b / insight9_a）无需额外执行轨迹对齐操作。
 
 浏览器访问 `http://<设备IP>:8765/`，或 `./scripts/run_dashboard.sh --jetson`
 在设备屏幕本机打开全屏看板。日常操作和故障排查见 `docs/USAGE.md`。

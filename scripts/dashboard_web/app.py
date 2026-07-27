@@ -58,8 +58,6 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/settings", settings._handle_settings_get)
     app.router.add_post("/api/settings/avatar-model", settings._handle_settings_avatar_model)
     app.router.add_post("/api/settings/gripper-tracking", settings._handle_settings_gripper_tracking)
-    app.router.add_get("/api/settings/board-calibration", settings._handle_settings_board_calibration_get)
-    app.router.add_post("/api/settings/board-calibration", settings._handle_settings_board_calibration_post)
     app.router.add_get("/api/settings/rosbag-sync", settings._handle_settings_rosbag_sync_get)
     app.router.add_post("/api/settings/rosbag-sync", settings._handle_settings_rosbag_sync_post)
     app.router.add_post("/api/settings/restart-backend", settings._handle_settings_restart)

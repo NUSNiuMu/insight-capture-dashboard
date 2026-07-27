@@ -3,6 +3,14 @@
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+
+@dataclass
+class PoseSample:
+    stamp_ns: int
+    position: Tuple[float, float, float]
+    orientation_xyzw: Tuple[float, float, float, float]
+
+
 @dataclass
 class PoseSpec:
     name: str
@@ -21,14 +29,12 @@ class CameraSpec:
     namespace: str
     label: str
     topic: str
-    camera_info_topic: str
     topic_type: str
     rotation_deg: int
     row: int
     column: int
     column_span: int
     row_span: int
-    alignment_image_stream: Optional[str] = None
 
 
 @dataclass
