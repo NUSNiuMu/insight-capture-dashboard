@@ -71,6 +71,9 @@ services:
       - ${HOME}/.ssh:/root/.ssh:ro
 
     restart: unless-stopped
+    depends_on:
+      insight3-global-localizer:
+        condition: service_started
 
     # ── Resource limits ──────────────────────────────────────────────────────
     # This host has exactly 6 cores. Leave a thin 0.2-core reservation for the
@@ -86,7 +89,6 @@ services:
   # research-licensed official code and weights and must never be shipped in
   # the customer release bundle.
   superglue-inference:
-    profiles: ["mapping-validation"]
     build:
       context: .
       dockerfile: Dockerfile.superglue-validation
@@ -115,7 +117,6 @@ services:
     restart: unless-stopped
 
   insight9-sparse-mapper:
-    profiles: ["mapping-validation"]
     image: insight-dashboard:latest
     network_mode: host
     # Share Fast DDS transport with dashboard and host-side RViz.
@@ -138,7 +139,7 @@ services:
       superglue-inference:
         condition: service_healthy
     stop_signal: SIGINT
-    restart: "no"
+    restart: unless-stopped
 
   insight9-dense-mapper:
     profiles: ["mapping-validation"]
@@ -157,7 +158,6 @@ services:
     restart: "no"
 
   insight3-global-localizer:
-    profiles: ["mapping-validation"]
     image: insight-dashboard:latest
     network_mode: host
     ipc: host
@@ -184,7 +184,7 @@ services:
       insight9-sparse-mapper:
         condition: service_started
     stop_signal: SIGINT
-    restart: "no"
+    restart: unless-stopped
 
   insight9-mapping-rviz:
     profiles: ["mapping-validation"]

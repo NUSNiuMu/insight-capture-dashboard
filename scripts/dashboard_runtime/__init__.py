@@ -2,6 +2,7 @@
 
 from .image_pipeline import ImagePipeline
 from .gesture_recording import GestureRecordingController
+from .mapping_stream import MappingStream
 from .models import CameraFrame, CameraSpec, PoseSpec
 from .payloads import PayloadBuilder
 from .recording_bridge import RecordingBridge
@@ -13,6 +14,7 @@ __all__ = [
     "CameraSpec",
     "GestureRecordingController",
     "ImagePipeline",
+    "MappingStream",
     "ParticipantWatchdog",
     "PayloadBuilder",
     "PoseSpec",

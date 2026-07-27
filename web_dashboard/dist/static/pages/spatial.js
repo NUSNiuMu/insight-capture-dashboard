@@ -4,12 +4,15 @@ import { initializeRosbags } from "../shared/rosbags.js";
 import {
   clearKeptTrajectory,
   clearRenderedTrajectories,
+  clearMappingVisualization,
+  queueMappingUpdate,
   queuePoseUpdate,
   setAvatarLoadStage,
   setKeepTrajectory,
+  setMappingVisible,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260724-no-avatar-placeholder";
+} from "../spatial/renderer.js?v=20260727-mapping";
 
 const modelStatus = document.getElementById("model-status");
 const alignmentPanel = document.getElementById("alignment-panel");
@@ -24,6 +27,11 @@ const goLiveButton = document.getElementById("go-live-button");
 const playbackStatusEl = document.getElementById("playback-status");
 const clearTrajectoryButton = document.getElementById("clear-trajectory-button");
 const keepTrajectoryToggle = document.getElementById("keep-trajectory-toggle");
+const mappingStatus = document.getElementById("mapping-status");
+const mappingMeta = document.getElementById("mapping-meta");
+const mappingCameraStates = document.getElementById("mapping-camera-states");
+const mappingVisibleToggle = document.getElementById("mapping-visible-toggle");
+const newMapButton = document.getElementById("new-map-button");
 const POSE_STREAM_STALE_MS = 4000;
 const wsUrl = resolveWebSocketUrl();
 let alignmentBusy = false;
@@ -32,10 +40,14 @@ let playbackPollTimer = null;
 let keepTrajectory = false;
 let pageUnloading = false;
 let activeWs = null;
+let activeMappingWs = null;
+let mappingResetBusy = false;
+let mappingVisible = true;
 let lastPoseMessageAt = 0;
 const startupTimers = new Set();
 
 connect();
+connectMapping();
 scheduleStartup();
 window.addEventListener("pagehide", () => {
   pageUnloading = true;
@@ -44,6 +56,10 @@ window.addEventListener("pagehide", () => {
   if (activeWs) {
     try { activeWs.close(); } catch {}
     activeWs = null;
+  }
+  if (activeMappingWs) {
+    try { activeMappingWs.close(); } catch {}
+    activeMappingWs = null;
   }
   stopSpatialRenderer();
 });
@@ -90,6 +106,18 @@ if (keepTrajectoryToggle) {
     keepTrajectoryToggle.setAttribute("aria-pressed", String(keepTrajectory));
     keepTrajectoryToggle.classList.toggle("is-active", keepTrajectory);
   });
+}
+if (mappingVisibleToggle) {
+  mappingVisibleToggle.addEventListener("click", () => {
+    mappingVisible = !mappingVisible;
+    setMappingVisible(mappingVisible);
+    mappingVisibleToggle.setAttribute("aria-pressed", String(mappingVisible));
+    mappingVisibleToggle.classList.toggle("is-active", mappingVisible);
+    mappingVisibleToggle.textContent = mappingVisible ? "Map visible" : "Map hidden";
+  });
+}
+if (newMapButton) {
+  newMapButton.addEventListener("click", () => { void resetMapping(); });
 }
 if (playbackPanel) {
   void refreshPlaybackStatus();
@@ -153,6 +181,89 @@ function connect() {
     }
     window.setTimeout(connect, 1000);
   };
+}
+
+function connectMapping() {
+  if (mappingStatus) mappingStatus.textContent = "Connecting mapping stream...";
+  const ws = new WebSocket(resolveMappingWebSocketUrl());
+  activeMappingWs = ws;
+  ws.onmessage = (event) => {
+    const payload = JSON.parse(event.data);
+    if (payload.type !== "mapping_update") return;
+    queueMappingUpdate(payload);
+    renderMappingStatus(payload);
+  };
+  ws.onerror = () => {
+    if (mappingStatus) mappingStatus.textContent = "Mapping stream error";
+  };
+  ws.onclose = () => {
+    if (activeMappingWs === ws) activeMappingWs = null;
+    if (pageUnloading) return;
+    if (mappingStatus) mappingStatus.textContent = "Mapping disconnected, retrying...";
+    window.setTimeout(connectMapping, 1000);
+  };
+}
+
+function resolveMappingWebSocketUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const host = window.location.host || "localhost:8765";
+  return `${protocol}//${host}/ws/mapping`;
+}
+
+async function resetMapping() {
+  if (mappingResetBusy || !newMapButton) return;
+  mappingResetBusy = true;
+  newMapButton.disabled = true;
+  newMapButton.textContent = "Resetting...";
+  clearMappingVisualization();
+  try {
+    const response = await fetch("/api/mapping/reset", { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) {
+      const unavailable = (payload.unavailable || []).join(", ");
+      throw new Error(`Mapping service unavailable: ${unavailable || "unknown"}`);
+    }
+    if (payload.mapping) renderMappingStatus(payload.mapping);
+  } catch (error) {
+    if (mappingMeta) {
+      mappingMeta.textContent = error instanceof Error ? error.message : String(error);
+    }
+  } finally {
+    mappingResetBusy = false;
+    newMapButton.disabled = false;
+    newMapButton.textContent = "New map";
+  }
+}
+
+function renderMappingStatus(payload) {
+  const statuses = payload.statuses || {};
+  const mapper = statuses.insight9 || {};
+  const onlineCount = Object.values(statuses).filter((status) => status.online).length;
+  const points = Number(payload.map_point_count || 0);
+  if (mappingStatus) {
+    mappingStatus.textContent = mapper.online
+      ? `${points.toLocaleString()} confirmed map points`
+      : "Mapping services offline";
+  }
+  if (mappingMeta) {
+    const keyframe = Number(mapper.keyframe || 0);
+    const promoted = Number(mapper.promoted || 0);
+    mappingMeta.textContent =
+      `${onlineCount}/3 streams online · keyframe ${keyframe} · last promoted ${promoted}`;
+  }
+  if (mappingCameraStates) {
+    const labels = {
+      insight9: "Insight9 map",
+      insight3_a: "Insight3 A",
+      insight3_b: "Insight3 B",
+    };
+    mappingCameraStates.innerHTML = Object.entries(labels).map(([name, label]) => {
+      const status = statuses[name] || {};
+      const state = status.online ? String(status.state || "online") : "offline";
+      const active = status.online && (name === "insight9" || Boolean(status.localized));
+      return `<span class="${active ? "is-ok" : ""}"><i></i>${escapeHtml(label)} · ${escapeHtml(state)}</span>`;
+    }).join("");
+  }
 }
 
 window.setInterval(() => {

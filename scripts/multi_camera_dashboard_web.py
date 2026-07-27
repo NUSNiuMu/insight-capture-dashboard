@@ -70,6 +70,7 @@ from dashboard_runtime import (
     CameraSpec,
     GestureRecordingController,
     ImagePipeline,
+    MappingStream,
     ParticipantWatchdog,
     PayloadBuilder,
     PoseSpec,
@@ -120,6 +121,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self._image_pipeline = ImagePipeline(self)
         self._worker_supervisor = WorkerSupervisor(self)
         self._payload_builder = PayloadBuilder(self)
+        self._mapping_stream = MappingStream(self)
         self.config_path = config_path
         self.fake_pose = bool(fake_pose)
         self.enable_alignment_stream = bool(enable_alignment_stream)
@@ -257,6 +259,7 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
             self.create_timer(1.0 / self.pose_publish_hz, self._update_fake_pose, callback_group=self.ros_callback_group)
             self.get_logger().info("Running in fake-pose demo mode")
         else:
+            self._mapping_stream.start()
             self._create_pose_subscriptions()
             self._create_dashboard_image_subscriptions()
             self._create_hand_overlay_subscriptions()
@@ -708,6 +711,14 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self, trace_cursor: Optional[Dict[str, object]] = None
     ) -> Dict[str, object]:
         return self._payload_builder.build_pose_payload(trace_cursor=trace_cursor)
+
+    def build_mapping_payload(
+        self, known_map_version: Optional[int] = None
+    ) -> Dict[str, object]:
+        return self._mapping_stream.snapshot(known_map_version=known_map_version)
+
+    def reset_mapping(self) -> Dict[str, object]:
+        return self._mapping_stream.request_reset()
 
 
     def build_alignment_payload(self) -> Dict[str, object]:

@@ -42,6 +42,7 @@ try:
     from rclpy.time import Time
     from sensor_msgs.msg import CameraInfo, Image, PointCloud2
     from std_msgs.msg import String
+    from std_srvs.srv import Empty
     from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 except ImportError as exc:  # pragma: no cover - exercised in the ROS image
     raise SystemExit(f"ROS 2 Python dependencies are unavailable: {exc}") from exc
@@ -229,6 +230,9 @@ class Insight3GlobalLocalizer(Node):
             )
             for name in CAMERAS
         }
+        self._reset_service = self.create_service(
+            Empty, "insight_global/reset", self._on_reset
+        )
         self._tf_broadcaster = TransformBroadcaster(self)
         self._tf_buffer = Buffer(cache_time=Duration(seconds=10.0))
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -275,6 +279,26 @@ class Insight3GlobalLocalizer(Node):
         self.get_logger().info(
             "SuperPoint global localizer started for insight3_a and insight3_b"
         )
+
+    def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
+        with self._lock:
+            self._map_points = np.empty((0, 3), dtype=np.float32)
+            self._map_descriptors = np.empty((0, 256), dtype=np.float32)
+            for state in self._cameras.values():
+                state.history.clear()
+                state.consensus = LocalizationConsensus(state.consensus.config)
+                state.last_image_stamp_ns = -1
+                state.last_history_stamp_ns = -1
+                state.transformed_history.clear()
+                state.transformed_correction = None
+                state.transformed_extrinsic = None
+                state.last_transformed_stamp_ns = -1
+                state.path = PathMsg()
+                state.path.header.frame_id = self._map_frame
+                state.path_dirty = True
+                state.status = {"state": "waiting_for_map", "localized": False}
+        self.get_logger().info("Cleared Insight3 global corrections for a new map")
+        return response
 
     def destroy_node(self) -> bool:
         self._stop.set()

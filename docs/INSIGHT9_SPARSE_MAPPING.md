@@ -37,15 +37,25 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图，并发布 RViz 点
 稳定地图点必须在三个不同关键帧落入同一个 4 cm 体素。候选点超过 12 个关键帧
 未再次观测会被删除，避免单帧动态物体永久进入地图。
 
-## 构建和启动官方 GPU 验证服务
+## 构建和启动官方 GPU 服务
 
-确认内部研究用途符合官方许可后，构建并启动：
+确认内部研究用途符合官方许可后，首次构建：
 
 ```bash
-docker compose --profile mapping-validation build superglue-inference
-docker compose --profile mapping-validation up -d \
-  superglue-inference insight9-sparse-mapper
+docker compose build superglue-inference
 ```
+
+建图已接入开发版 dashboard。之后正常启动 dashboard 即会通过依赖关系同时启动
+TensorRT 推理、Insight9 mapper 和 Insight3 localizer：
+
+```bash
+docker compose up -d --wait insight-dashboard
+```
+
+打开 `http://<设备地址>:8765/3d` 可直接查看确认后的稀疏地图，以及 Insight9、
+Insight3 A、Insight3 B 三条全局轨迹。页面会显示三路在线状态、Insight9
+关键帧和最近一次晋升的地图点数量；点击 **New map** 会清空当前地图、三条轨迹
+和两个 Insight3 已确认的全局校正，从当前相机位姿开始新会话。
 
 验证镜像包含：
 
@@ -74,8 +84,8 @@ IPC 命名空间中不可达。
 查看启动状态：
 
 ```bash
-docker compose --profile mapping-validation ps
-docker compose --profile mapping-validation logs -f \
+docker compose ps
+docker compose logs -f \
   superglue-inference insight9-sparse-mapper
 ```
 
@@ -85,15 +95,24 @@ docker compose --profile mapping-validation logs -f \
 docker compose --profile mapping-validation build insight9-mapping-rviz
 ```
 
-每次清空旧地图并打开 RViz：
+RViz 仅保留为调试工具。每次清空旧地图并打开 RViz：
 
 ```bash
 scripts/run_mapping_validation_rviz.sh
 ```
 
 脚本保持在前台，关闭 RViz 后自动收回临时 X11 授权。它会先重建 mapper 和
-localizer，确保不继续显示上一会话的内存地图。
+localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后三个核心服务继续
+运行，网页仍可查看和新建地图。
 当前 RViz 验证配置只显示稀疏确认地图和三条全局轨迹，不启动稠密 mapper。
+
+网页接口：
+
+- `GET /api/mapping`：当前地图点数、三条路径和三路状态快照。
+- `GET /ws/mapping`：20 Hz 路径/状态流；点云只在版本变化时发送。
+- `POST /api/mapping/reset`：同时重置 mapper 与 localizer。
+- ROS service `/insight9_sparse_map/reset`：清空 Insight9 会话地图。
+- ROS service `/insight_global/reset`：清空两个 Insight3 的校正和全局轨迹。
 
 主要输出：
 
@@ -109,10 +128,10 @@ localizer，确保不继续显示上一会话的内存地图。
 ros2 topic echo /insight9_sparse_map/status
 ```
 
-停止验证服务：
+需要完全停止建图服务时：
 
 ```bash
-docker compose --profile mapping-validation stop insight9-sparse-mapper superglue-inference
+docker compose stop insight3-global-localizer insight9-sparse-mapper superglue-inference
 ```
 
 用该特征地图定位两路 Insight3 的方法见

@@ -51,6 +51,7 @@ try:
     from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
     from sensor_msgs_py import point_cloud2
     from std_msgs.msg import Header, String
+    from std_srvs.srv import Empty
     from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 except ImportError as exc:  # pragma: no cover - exercised inside the ROS image
     raise SystemExit(f"ROS 2 Python dependencies are unavailable: {exc}") from exc
@@ -244,6 +245,9 @@ class Insight9SparseMapper(Node):
         self._status_publisher = self.create_publisher(
             String, "insight9_sparse_map/status", 1
         )
+        self._reset_service = self.create_service(
+            Empty, "insight9_sparse_map/reset", self._on_reset
+        )
         self.create_subscription(
             PoseStamped, args.vio_topic, self._on_vio, qos_profile_sensor_data
         )
@@ -267,6 +271,19 @@ class Insight9SparseMapper(Node):
             "official SuperPoint/SuperGlue validation mapper started; "
             "the licensed model image is internal-validation only"
         )
+
+    def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
+        with self._path_lock:
+            self._path.clear()
+            self._last_path_append_ns = 0
+        with self._map_lock:
+            self._landmarks.clear()
+        self._last_keyframe_transform = None
+        self._keyframe_id = 0
+        self._latest_stats = {"state": "waiting_for_motion", "reset": True}
+        self._publish_map()
+        self.get_logger().info("Started a new web-requested sparse mapping session")
+        return response
 
     def destroy_node(self) -> bool:
         self._stop.set()

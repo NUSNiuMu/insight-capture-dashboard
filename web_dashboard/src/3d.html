@@ -60,6 +60,18 @@
                 <button type="button" id="alignment-toggle" class="primary-button">Start alignment</button>
               </div>
             </section>
+            <section class="mapping-panel" id="mapping-panel">
+              <div class="mapping-copy">
+                <p class="section-kicker">Global sparse mapping</p>
+                <h2 id="mapping-status">Mapping unavailable</h2>
+                <p id="mapping-meta" class="mapping-meta">Waiting for the TensorRT mapping services</p>
+                <div class="mapping-camera-states" id="mapping-camera-states"></div>
+              </div>
+              <div class="mapping-actions">
+                <button type="button" id="mapping-visible-toggle" class="quiet-button is-active" aria-pressed="true">Map visible</button>
+                <button type="button" id="new-map-button" class="primary-button">New map</button>
+              </div>
+            </section>
             <aside class="legend" id="pose-legend"></aside>
           </div>
 
@@ -70,6 +82,6 @@
         </section>
       </main>
     </div>
-    <script type="module" src="/static/pages/spatial.js?v=20260724-no-avatar-placeholder"></script>
+    <script type="module" src="/static/pages/spatial.js?v=20260727-mapping"></script>
   </body>
 </html>
