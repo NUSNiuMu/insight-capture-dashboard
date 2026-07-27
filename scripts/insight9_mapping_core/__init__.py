@@ -18,22 +18,34 @@ from .dense_stereo import (
     DenseVoxelMap,
 )
 from .feature_backend import (
+    ImageFeatures,
     IpcSuperGlueBackend,
     OFFICIAL_SUPERGLUE_COMMIT,
     OfficialSuperGlueBackend,
     StereoMatches,
 )
 from .map_store import LandmarkMap, LandmarkMapConfig
+from .global_localization import (
+    GlobalLocalizationConfig,
+    LocalizationCandidate,
+    LocalizationConsensus,
+    localize_features,
+    match_descriptors,
+)
 from .synchronization import PoseBuffer, StereoPair, StereoPairSynchronizer
 
 __all__ = [
     "LandmarkMap",
     "LandmarkMapConfig",
+    "GlobalLocalizationConfig",
+    "LocalizationCandidate",
+    "LocalizationConsensus",
     "DenseStereoConfig",
     "DenseStereoEstimator",
     "DenseStereoResult",
     "DenseVoxelMap",
     "IpcSuperGlueBackend",
+    "ImageFeatures",
     "OFFICIAL_SUPERGLUE_COMMIT",
     "OfficialSuperGlueBackend",
     "PoseBuffer",
@@ -46,6 +58,8 @@ __all__ = [
     "interpolate_pose",
     "matrix_from_pose",
     "matrix_from_transform",
+    "localize_features",
+    "match_descriptors",
     "rotation_distance_deg",
     "transform_points",
     "triangulate_rectified",

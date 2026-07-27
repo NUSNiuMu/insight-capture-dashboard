@@ -90,6 +90,7 @@ xhost -si:localuser:root
 主要输出：
 
 - `/insight9_sparse_map/points`：经过多关键帧确认的稀疏地图。
+- `/insight9_sparse_map/features`：确认地标的三维位置和 256 维 SuperPoint 描述子。
 - `/insight9_sparse_map/path`：最多 200 点的左目 VIO 轨迹。
 - `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数和处理耗时 JSON。
 - TF `insight9_map -> insight9_mapping_camera_left`：独立命名，避免与设备 TF 多父冲突。
@@ -105,6 +106,9 @@ ros2 topic echo /insight9_sparse_map/status
 ```bash
 docker compose --profile mapping-validation stop insight9-sparse-mapper superglue-inference
 ```
+
+用该特征地图定位两路 Insight3 的方法见
+[INSIGHT3_GLOBAL_LOCALIZATION.md](INSIGHT3_GLOBAL_LOCALIZATION.md)。
 
 ## 第一轮验收
 

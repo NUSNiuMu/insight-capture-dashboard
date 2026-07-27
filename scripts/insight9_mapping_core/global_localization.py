@@ -1,0 +1,238 @@
+"""SuperPoint descriptor-map matching and confirmed 2D-3D localization."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Optional
+
+import cv2
+import numpy as np
+
+from .geometry import rotation_distance_deg
+
+
+@dataclass(frozen=True)
+class GlobalLocalizationConfig:
+    """Acceptance and temporal-consistency thresholds for global PnP."""
+
+    ratio_test: float = 0.80
+    min_similarity: float = 0.65
+    min_matches: int = 12
+    min_inliers: int = 10
+    min_inlier_ratio: float = 0.45
+    max_reprojection_error_px: float = 3.0
+    min_grid_cells: int = 4
+    confirmation_frames: int = 3
+    confirmation_translation_m: float = 0.20
+    confirmation_rotation_deg: float = 12.0
+
+
+@dataclass(frozen=True)
+class LocalizationCandidate:
+    """One geometrically accepted map-to-camera and map-to-odom solution."""
+
+    map_to_camera: np.ndarray
+    map_to_odom: np.ndarray
+    matches: int
+    inliers: int
+    inlier_ratio: float
+    median_reprojection_error_px: float
+    grid_cells: int
+
+
+def _normalize_rows(values: np.ndarray) -> np.ndarray:
+    rows = np.asarray(values, dtype=np.float32)
+    norms = np.linalg.norm(rows, axis=1, keepdims=True)
+    return rows / np.maximum(norms, 1e-12)
+
+
+def match_descriptors(
+    query_descriptors: np.ndarray,
+    map_descriptors: np.ndarray,
+    *,
+    ratio_test: float,
+    min_similarity: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return mutual query/map indices passing cosine similarity and ratio tests."""
+
+    query = _normalize_rows(query_descriptors)
+    mapped = _normalize_rows(map_descriptors)
+    if len(query) == 0 or len(mapped) < 2:
+        empty = np.empty((0,), dtype=np.int64)
+        return empty, empty, np.empty((0,), dtype=np.float32)
+    similarity = query @ mapped.T
+    nearest_two = np.argpartition(-similarity, kth=1, axis=1)[:, :2]
+    nearest_values = np.take_along_axis(similarity, nearest_two, axis=1)
+    order = np.argsort(-nearest_values, axis=1)
+    nearest_two = np.take_along_axis(nearest_two, order, axis=1)
+    nearest_values = np.take_along_axis(nearest_values, order, axis=1)
+    best_map = nearest_two[:, 0]
+    best_similarity = nearest_values[:, 0]
+    best_distance_sq = np.maximum(0.0, 2.0 - 2.0 * best_similarity)
+    second_distance_sq = np.maximum(1e-12, 2.0 - 2.0 * nearest_values[:, 1])
+    ratio_ok = best_distance_sq < float(ratio_test) ** 2 * second_distance_sq
+    mutual_best_query = np.argmax(similarity, axis=0)
+    query_indices = np.arange(len(query), dtype=np.int64)
+    keep = (
+        ratio_ok
+        & (best_similarity >= float(min_similarity))
+        & (mutual_best_query[best_map] == query_indices)
+    )
+    return query_indices[keep], best_map[keep], best_similarity[keep]
+
+
+def localize_features(
+    query_keypoints: np.ndarray,
+    query_descriptors: np.ndarray,
+    map_points: np.ndarray,
+    map_descriptors: np.ndarray,
+    camera_matrix: np.ndarray,
+    odom_to_camera: np.ndarray,
+    image_shape: tuple[int, int],
+    config: GlobalLocalizationConfig,
+) -> tuple[Optional[LocalizationCandidate], dict[str, object]]:
+    """Match a query image to the 3D descriptor map and solve global PnP."""
+
+    query_indices, map_indices, similarities = match_descriptors(
+        query_descriptors,
+        map_descriptors,
+        ratio_test=config.ratio_test,
+        min_similarity=config.min_similarity,
+    )
+    diagnostics: dict[str, object] = {
+        "query_features": int(len(query_keypoints)),
+        "map_features": int(len(map_points)),
+        "descriptor_matches": int(len(query_indices)),
+        "median_similarity": (
+            round(float(np.median(similarities)), 4) if len(similarities) else None
+        ),
+        "inliers": 0,
+        "inlier_ratio": 0.0,
+        "median_reprojection_error_px": None,
+        "grid_cells": 0,
+        "accepted": False,
+        "rejection": None,
+    }
+    if len(query_indices) < config.min_matches:
+        diagnostics["rejection"] = "insufficient_descriptor_matches"
+        return None, diagnostics
+
+    image_points = np.asarray(query_keypoints, dtype=np.float32)[query_indices]
+    object_points = np.asarray(map_points, dtype=np.float32)[map_indices]
+    ok, rvec, tvec, inlier_payload = cv2.solvePnPRansac(
+        object_points,
+        image_points,
+        np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3),
+        None,
+        flags=cv2.SOLVEPNP_EPNP,
+        iterationsCount=1000,
+        reprojectionError=float(config.max_reprojection_error_px),
+        confidence=0.999,
+    )
+    if not ok or inlier_payload is None:
+        diagnostics["rejection"] = "pnp_failed"
+        return None, diagnostics
+    inlier_indices = inlier_payload.reshape(-1)
+    inlier_count = int(len(inlier_indices))
+    inlier_ratio = inlier_count / float(len(image_points))
+    diagnostics["inliers"] = inlier_count
+    diagnostics["inlier_ratio"] = round(inlier_ratio, 4)
+    if inlier_count < config.min_inliers:
+        diagnostics["rejection"] = "insufficient_pnp_inliers"
+        return None, diagnostics
+    if inlier_ratio < config.min_inlier_ratio:
+        diagnostics["rejection"] = "low_pnp_inlier_ratio"
+        return None, diagnostics
+
+    rvec, tvec = cv2.solvePnPRefineLM(
+        object_points[inlier_indices],
+        image_points[inlier_indices],
+        np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3),
+        None,
+        rvec,
+        tvec,
+    )
+    projected, _ = cv2.projectPoints(
+        object_points[inlier_indices],
+        rvec,
+        tvec,
+        np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3),
+        None,
+    )
+    errors = np.linalg.norm(
+        projected.reshape(-1, 2) - image_points[inlier_indices], axis=1
+    )
+    median_error = float(np.median(errors))
+    diagnostics["median_reprojection_error_px"] = round(median_error, 3)
+    if median_error > config.max_reprojection_error_px:
+        diagnostics["rejection"] = "high_reprojection_error"
+        return None, diagnostics
+
+    height, width = image_shape
+    inlier_pixels = image_points[inlier_indices]
+    grid_x = np.clip((inlier_pixels[:, 0] * 4 / width).astype(int), 0, 3)
+    grid_y = np.clip((inlier_pixels[:, 1] * 4 / height).astype(int), 0, 3)
+    grid_cells = len(set(zip(grid_x.tolist(), grid_y.tolist())))
+    diagnostics["grid_cells"] = grid_cells
+    if grid_cells < config.min_grid_cells:
+        diagnostics["rejection"] = "insufficient_spatial_coverage"
+        return None, diagnostics
+
+    rotation, _ = cv2.Rodrigues(rvec)
+    camera_from_map = np.eye(4, dtype=np.float64)
+    camera_from_map[:3, :3] = rotation
+    camera_from_map[:3, 3] = tvec.reshape(3)
+    map_to_camera = np.linalg.inv(camera_from_map)
+    map_to_odom = map_to_camera @ np.linalg.inv(
+        np.asarray(odom_to_camera, dtype=np.float64).reshape(4, 4)
+    )
+    diagnostics["accepted"] = True
+    diagnostics["rejection"] = None
+    return LocalizationCandidate(
+        map_to_camera=map_to_camera,
+        map_to_odom=map_to_odom,
+        matches=len(query_indices),
+        inliers=inlier_count,
+        inlier_ratio=inlier_ratio,
+        median_reprojection_error_px=median_error,
+        grid_cells=grid_cells,
+    ), diagnostics
+
+
+class LocalizationConsensus:
+    """Accept a global correction only after consecutive consistent candidates."""
+
+    def __init__(self, config: GlobalLocalizationConfig) -> None:
+        self.config = config
+        self.correction: Optional[np.ndarray] = None
+        self._pending: list[LocalizationCandidate] = []
+
+    def observe(self, candidate: Optional[LocalizationCandidate]) -> dict[str, object]:
+        if candidate is None:
+            self._pending.clear()
+        else:
+            if self._pending:
+                previous = self._pending[-1].map_to_odom
+                translation = float(
+                    np.linalg.norm(previous[:3, 3] - candidate.map_to_odom[:3, 3])
+                )
+                rotation = rotation_distance_deg(previous, candidate.map_to_odom)
+                if (
+                    translation > self.config.confirmation_translation_m
+                    or rotation > self.config.confirmation_rotation_deg
+                ):
+                    self._pending.clear()
+            self._pending.append(candidate)
+            if len(self._pending) >= self.config.confirmation_frames:
+                translations = np.asarray(
+                    [item.map_to_odom[:3, 3] for item in self._pending]
+                )
+                accepted = self._pending[-1].map_to_odom.copy()
+                accepted[:3, 3] = np.median(translations, axis=0)
+                self.correction = accepted
+                self._pending.clear()
+        return {
+            "localized": self.correction is not None,
+            "confirmation_progress": len(self._pending),
+            "confirmation_required": self.config.confirmation_frames,
+        }

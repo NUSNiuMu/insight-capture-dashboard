@@ -32,6 +32,11 @@ docker compose --profile mapping-validation run --rm \
 - `Dense fused map`：默认开启，蓝色，世界坐标中的累计稠密地图。
 - `Dense current frame`：默认关闭，红色；需要检查单帧深度形状时开启。
 - `Confirmed sparse map`：默认关闭，可与稠密地图对照。
+- `Insight3 A global path`：洋红色，定位到全图后的 Insight3 A 轨迹。
+- `Insight3 B global path`：绿色，定位到全图后的 Insight3 B 轨迹。
+
+双 Insight3 全局定位的启动与诊断见
+[INSIGHT3_GLOBAL_LOCALIZATION.md](INSIGHT3_GLOBAL_LOCALIZATION.md)。
 - `VIO camera path`：相机轨迹。
 
 输出话题：

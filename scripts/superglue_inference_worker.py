@@ -58,6 +58,26 @@ class OfficialMatcher:
         self._matching = module.Matching(config).eval().cuda()
         torch.backends.cudnn.benchmark = True
 
+    @staticmethod
+    def _image_tensor(image: np.ndarray):
+        return torch.from_numpy(image).cuda(non_blocking=True).float().div_(255.0)[
+            None, None
+        ]
+
+    def extract(self, image: np.ndarray):
+        """Extract SuperPoint keypoints, descriptors, and scores."""
+
+        with torch.inference_mode():
+            prediction = self._matching.superpoint({"image": self._image_tensor(image)})
+        keypoints = prediction["keypoints"][0].detach().cpu().numpy()
+        descriptors = prediction["descriptors"][0].detach().cpu().numpy().T
+        scores = prediction["scores"][0].detach().cpu().numpy()
+        return (
+            keypoints.astype(np.float32),
+            descriptors.astype(np.float32),
+            scores.astype(np.float32),
+        )
+
     def warmup(self, height: int = 640, width: int = 544, runs: int = 2) -> None:
         """Prime CUDA kernels and cuDNN selection before advertising health."""
 
@@ -75,12 +95,8 @@ class OfficialMatcher:
             )
 
     def match(self, left: np.ndarray, right: np.ndarray):
-        image0 = torch.from_numpy(left).cuda(non_blocking=True).float().div_(255.0)[
-            None, None
-        ]
-        image1 = torch.from_numpy(right).cuda(non_blocking=True).float().div_(255.0)[
-            None, None
-        ]
+        image0 = self._image_tensor(left)
+        image1 = self._image_tensor(right)
         with torch.inference_mode():
             prediction = self._matching({"image0": image0, "image1": image1})
         keypoints0 = prediction["keypoints0"][0].detach().cpu().numpy()
@@ -161,6 +177,40 @@ class InferenceServer:
                         "cuda": torch.version.cuda,
                         "device": torch.cuda.get_device_name(0),
                     },
+                )
+                return
+            if command == "extract":
+                if len(payloads) != 1:
+                    raise ValueError("expected one grayscale image for extraction")
+                height = int(metadata["height"])
+                width = int(metadata["width"])
+                expected = height * width
+                if height <= 0 or width <= 0 or len(payloads[0]) != expected:
+                    raise ValueError("invalid grayscale image dimensions")
+                image = (
+                    np.frombuffer(payloads[0], dtype=np.uint8)
+                    .reshape(height, width)
+                    .copy()
+                )
+                started = time.perf_counter()
+                keypoints, descriptors, scores = self.matcher.extract(image)
+                send_message(
+                    connection,
+                    {
+                        "ok": True,
+                        "keypoints": len(keypoints),
+                        "descriptor_dim": (
+                            descriptors.shape[1] if descriptors.ndim == 2 else 0
+                        ),
+                        "inference_ms": round(
+                            (time.perf_counter() - started) * 1000.0, 2
+                        ),
+                    },
+                    (
+                        keypoints.tobytes(),
+                        descriptors.tobytes(),
+                        scores.tobytes(),
+                    ),
                 )
                 return
             if command != "match" or len(payloads) != 2:

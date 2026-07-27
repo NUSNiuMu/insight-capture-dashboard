@@ -30,6 +30,16 @@ class StereoMatches:
     backend_inference_ms: Optional[float] = None
 
 
+@dataclass(frozen=True)
+class ImageFeatures:
+    """SuperPoint features extracted from one grayscale image."""
+
+    keypoints: np.ndarray
+    descriptors: np.ndarray
+    scores: np.ndarray
+    backend_inference_ms: Optional[float] = None
+
+
 class OfficialSuperGlueBackend:
     """Run the pinned official SuperPoint + SuperGlue PyTorch implementation."""
 
@@ -90,6 +100,29 @@ class OfficialSuperGlueBackend:
         self._torch = torch
         self._device = device
         self._matching = matching_module.Matching(config).eval().to(device)
+
+    def extract(self, gray: np.ndarray) -> ImageFeatures:
+        """Extract SuperPoint features from one uint8 grayscale image."""
+
+        image = np.asarray(gray)
+        if image.dtype != np.uint8 or image.ndim != 2:
+            raise ValueError("extractor input must be a uint8 grayscale image")
+        torch = self._torch
+        tensor = torch.from_numpy(image).to(self._device, non_blocking=True)
+        tensor = tensor.float().div_(255.0)[None, None]
+        with torch.inference_mode():
+            prediction = self._matching.superpoint({"image": tensor})
+        return ImageFeatures(
+            keypoints=prediction["keypoints"][0].detach().cpu().numpy().astype(
+                np.float32
+            ),
+            descriptors=prediction["descriptors"][0]
+            .detach()
+            .cpu()
+            .numpy()
+            .T.astype(np.float32),
+            scores=prediction["scores"][0].detach().cpu().numpy().astype(np.float32),
+        )
 
     def match(
         self,
@@ -171,6 +204,42 @@ class IpcSuperGlueBackend:
         if payloads:
             raise RuntimeError("invalid health response from SuperGlue worker")
         return metadata
+
+    def extract(self, gray: np.ndarray) -> ImageFeatures:
+        """Extract SuperPoint features through the inference worker."""
+
+        image = np.ascontiguousarray(gray, dtype=np.uint8)
+        if image.ndim != 2:
+            raise ValueError("extractor input must be a grayscale image")
+        metadata, payloads = self._request(
+            {"command": "extract", "height": image.shape[0], "width": image.shape[1]},
+            (image.tobytes(),),
+        )
+        if not metadata.get("ok"):
+            raise RuntimeError(
+                f"SuperPoint worker failed: {metadata.get('error', 'unknown')}"
+            )
+        if len(payloads) != 3:
+            raise RuntimeError("invalid extraction response from SuperPoint worker")
+        count = int(metadata["keypoints"])
+        descriptor_dim = int(metadata["descriptor_dim"])
+        expected_sizes = (
+            count * 2 * 4,
+            count * descriptor_dim * 4,
+            count * 4,
+        )
+        if tuple(len(payload) for payload in payloads) != expected_sizes:
+            raise RuntimeError("SuperPoint worker returned inconsistent array sizes")
+        return ImageFeatures(
+            keypoints=np.frombuffer(payloads[0], dtype=np.float32)
+            .reshape(count, 2)
+            .copy(),
+            descriptors=np.frombuffer(payloads[1], dtype=np.float32)
+            .reshape(count, descriptor_dim)
+            .copy(),
+            scores=np.frombuffer(payloads[2], dtype=np.float32).copy(),
+            backend_inference_ms=float(metadata["inference_ms"]),
+        )
 
     def match(
         self,

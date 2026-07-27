@@ -154,6 +154,28 @@ services:
     stop_signal: SIGINT
     restart: "no"
 
+  insight3-global-localizer:
+    profiles: ["mapping-validation"]
+    image: insight-dashboard:latest
+    network_mode: host
+    ipc: host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
+    volumes:
+      - .:/workspaces/insight_capture
+      - superglue-ipc:/run/superglue
+    command:
+      - python3
+      - -u
+      - scripts/insight3_global_localizer.py
+    depends_on:
+      superglue-inference:
+        condition: service_healthy
+      insight9-sparse-mapper:
+        condition: service_started
+    stop_signal: SIGINT
+    restart: "no"
+
   insight9-mapping-rviz:
     profiles: ["mapping-validation"]
     build:
@@ -176,6 +198,8 @@ services:
       insight9-sparse-mapper:
         condition: service_started
       insight9-dense-mapper:
+        condition: service_started
+      insight3-global-localizer:
         condition: service_started
     restart: "no"
 

@@ -48,7 +48,7 @@ try:
     from rclpy.node import Node
     from rclpy.qos import qos_profile_sensor_data
     from rclpy.time import Time
-    from sensor_msgs.msg import CameraInfo, Image, PointCloud2
+    from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
     from sensor_msgs_py import point_cloud2
     from std_msgs.msg import Header, String
     from tf2_ros import Buffer, TransformBroadcaster, TransformListener
@@ -140,6 +140,44 @@ def matrix_to_pose_stamped(
     return pose
 
 
+def descriptor_cloud(
+    header: Header, points: np.ndarray, descriptors: np.ndarray
+) -> PointCloud2:
+    """Pack XYZ and fixed-length float descriptors into PointCloud2."""
+
+    xyz = np.asarray(points, dtype=np.float32).reshape(-1, 3)
+    values = np.asarray(descriptors, dtype=np.float32)
+    if values.ndim != 2 or len(values) != len(xyz):
+        raise ValueError("descriptor cloud arrays must have matching rows")
+    descriptor_dim = values.shape[1] if values.shape[1] else 256
+    packed = (
+        np.concatenate((xyz, values), axis=1)
+        if len(values)
+        else np.empty((0, 3 + descriptor_dim), dtype=np.float32)
+    )
+    message = PointCloud2()
+    message.header = header
+    message.height = 1
+    message.width = len(packed)
+    message.fields = [
+        PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+        PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+        PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+        PointField(
+            name="descriptor",
+            offset=12,
+            datatype=PointField.FLOAT32,
+            count=descriptor_dim,
+        ),
+    ]
+    message.is_bigendian = False
+    message.point_step = int((3 + descriptor_dim) * 4)
+    message.row_step = int(message.point_step * message.width)
+    message.data = packed.tobytes()
+    message.is_dense = True
+    return message
+
+
 class Insight9SparseMapper(Node):
     """Coordinate lightweight ROS callbacks with a single inference worker."""
 
@@ -185,6 +223,7 @@ class Insight9SparseMapper(Node):
             target=self._worker_main, name="superglue-mapping", daemon=True
         )
         self._last_processed_monotonic = 0.0
+        self._last_feature_publish_monotonic = 0.0
         self._last_keyframe_transform: Optional[np.ndarray] = None
         self._keyframe_id = 0
         self._path = deque(maxlen=args.path_points)
@@ -195,6 +234,9 @@ class Insight9SparseMapper(Node):
 
         self._pointcloud_publisher = self.create_publisher(
             PointCloud2, "insight9_sparse_map/points", 1
+        )
+        self._feature_map_publisher = self.create_publisher(
+            PointCloud2, "insight9_sparse_map/features", 1
         )
         self._path_publisher = self.create_publisher(
             PathMsg, "insight9_sparse_map/path", 1
@@ -365,8 +407,22 @@ class Insight9SparseMapper(Node):
             calibration = self._calibration
             imu_to_left = self._imu_to_left
             pose = self._pose_buffer.lookup(pair.stamp_ns)
+            deadline = time.monotonic() + self._args.pose_wait_ms / 1000.0
+            while (
+                pose is None
+                and calibration is not None
+                and imu_to_left is not None
+                and time.monotonic() < deadline
+                and not self._stop.wait(0.005)
+            ):
+                pose = self._pose_buffer.lookup(pair.stamp_ns)
             if calibration is None or imu_to_left is None or pose is None:
-                self._latest_stats = {"state": "waiting_for_calibration_tf_or_pose"}
+                self._latest_stats = {
+                    "state": "waiting_for_inputs",
+                    "calibration_ready": calibration is not None,
+                    "extrinsic_ready": imu_to_left is not None,
+                    "pose_ready": pose is not None,
+                }
                 continue
             world_to_left = compose_transform(matrix_from_pose(pose), imu_to_left)
             if not self._is_keyframe(world_to_left):
@@ -450,11 +506,18 @@ class Insight9SparseMapper(Node):
     def _publish_map(self) -> None:
         with self._map_lock:
             points = self._landmarks.points()
+            feature_points, descriptors = self._landmarks.descriptors()
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
         header.frame_id = self._map_frame
         cloud = point_cloud2.create_cloud_xyz32(header, points.tolist())
         self._pointcloud_publisher.publish(cloud)
+        now = time.monotonic()
+        if now - self._last_feature_publish_monotonic >= 1.0:
+            self._feature_map_publisher.publish(
+                descriptor_cloud(header, feature_points, descriptors)
+            )
+            self._last_feature_publish_monotonic = now
         status = String()
         status.data = json.dumps(self._latest_stats, separators=(",", ":"))
         self._status_publisher.publish(status)
@@ -503,6 +566,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--map-frame", default="insight9_map")
     parser.add_argument("--mapping-camera-frame", default="insight9_mapping_camera_left")
     parser.add_argument("--mapping-hz", type=float, default=5.0)
+    parser.add_argument("--pose-wait-ms", type=float, default=30.0)
     parser.add_argument("--stereo-tolerance-ms", type=float, default=20.0)
     parser.add_argument("--max-keypoints", type=int, default=1024)
     parser.add_argument("--keypoint-threshold", type=float, default=0.005)
