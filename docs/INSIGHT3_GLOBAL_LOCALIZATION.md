@@ -14,7 +14,8 @@ scripts/run_mapping_validation_rviz.sh
 
 每次执行该脚本都会停止可选的稠密 mapper，并重建稀疏 mapper 和 localizer，
 清空上一会话的稀疏地图、两个 Insight3 的全局校正及三条轨迹，然后才打开
-RViz。SuperGlue 推理服务没有地图状态，会保留运行以避免重复加载模型。
+RViz。关闭 RViz 或按 `Ctrl+C` 退出脚本时，会自动停止稀疏 mapper、localizer
+和 SuperGlue 推理服务，释放 dashboard 所需的 CPU、GPU 和内存。
 
 Insight9 稀疏节点需要至少三个有重叠视野的关键帧确认地标。启动后缓慢移动
 Insight9，平移超过 5 cm 或旋转超过 3°，同时持续观察同一个有纹理区域。

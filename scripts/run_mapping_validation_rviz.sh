@@ -22,17 +22,31 @@ if [[ ! -r "${XAUTHORITY}" ]]; then
 fi
 
 XHOST_GRANTED=0
+VALIDATION_STARTED=0
 cleanup() {
+    local exit_status=$?
+    trap - EXIT INT TERM
+    if [[ "${VALIDATION_STARTED}" -eq 1 ]]; then
+        echo "Stopping sparse localization validation services..."
+        docker compose --profile mapping-validation stop \
+            insight3-global-localizer \
+            insight9-sparse-mapper \
+            superglue-inference || true
+    fi
     if [[ "${XHOST_GRANTED}" -eq 1 ]]; then
         xhost -si:localuser:root >/dev/null 2>&1 || true
     fi
+    exit "${exit_status}"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 xhost +si:localuser:root >/dev/null
 XHOST_GRANTED=1
 
 echo "Starting a new sparse localization session; previous maps and paths are discarded."
+VALIDATION_STARTED=1
 docker compose --profile mapping-validation up -d --wait --wait-timeout 900 \
     superglue-inference
 docker compose --profile mapping-validation stop insight9-dense-mapper
