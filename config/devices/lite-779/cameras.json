@@ -1,10 +1,7 @@
 {
   "ros_domain_id": 20,
   "session_alignment": {
-    "enabled": true,
-    "alignment_frame": "board_center",
-    "reference_camera": "insight9_a",
-    "calibration_file": "config/board_calibration.json"
+    "enabled": false
   },
   "dashboard": {
     "window_title": "Insight Monitoring Dashboard",

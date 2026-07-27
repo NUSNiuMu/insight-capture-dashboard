@@ -48,18 +48,6 @@
                 <button type="button" id="go-live-button" class="quiet-button" hidden>Go live</button>
               </div>
             </section>
-            <section class="alignment-panel" id="alignment-panel">
-              <div class="alignment-copy">
-                <p class="section-kicker">Alignment control</p>
-                <h2 id="alignment-status">Alignment OFF</h2>
-                <p id="alignment-meta" class="alignment-meta">Web control ready</p>
-              </div>
-              <div class="alignment-actions">
-                <button type="button" id="clear-trajectory-button" class="quiet-button">Clear trail</button>
-                <button type="button" id="keep-trajectory-toggle" class="quiet-button" aria-pressed="false">Keep trail</button>
-                <button type="button" id="alignment-toggle" class="primary-button">Start alignment</button>
-              </div>
-            </section>
             <section class="mapping-panel" id="mapping-panel">
               <div class="mapping-copy">
                 <p class="section-kicker">Global sparse mapping</p>
@@ -68,7 +56,9 @@
                 <div class="mapping-camera-states" id="mapping-camera-states"></div>
               </div>
               <div class="mapping-actions">
-                <button type="button" id="mapping-visible-toggle" class="quiet-button is-active" aria-pressed="true">Map visible</button>
+                <button type="button" id="clear-trajectory-button" class="quiet-button">Clear trail</button>
+                <button type="button" id="keep-trajectory-toggle" class="quiet-button" aria-pressed="false">Keep trail</button>
+                <button type="button" id="mapping-visible-toggle" class="quiet-button is-active" aria-pressed="true">Trails visible</button>
                 <button type="button" id="new-map-button" class="primary-button">New map</button>
               </div>
             </section>
@@ -82,6 +72,6 @@
         </section>
       </main>
     </div>
-    <script type="module" src="/static/pages/spatial.js?v=20260727-global-pose"></script>
+    <script type="module" src="/static/pages/spatial.js?v=20260727-global-only"></script>
   </body>
 </html>

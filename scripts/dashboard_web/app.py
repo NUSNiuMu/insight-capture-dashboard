@@ -4,7 +4,6 @@ from aiohttp import web
 
 from .context import DashboardContext
 from .middleware import create_json_error_middleware
-from .routes.alignment import AlignmentRoutes
 from .routes.cameras import CameraRoutes
 from .routes.mapping import MappingRoutes
 from .routes.optimization import OptimizationRoutes
@@ -18,7 +17,6 @@ from .websocket import PoseWebSocketService
 def create_app(context: DashboardContext) -> web.Application:
     app = web.Application(middlewares=[create_json_error_middleware(context)])
     websocket = PoseWebSocketService(context)
-    alignment = AlignmentRoutes(context)
     cameras = CameraRoutes(context)
     mapping = MappingRoutes(context)
     recording = RecordingRoutes(context)
@@ -32,13 +30,9 @@ def create_app(context: DashboardContext) -> web.Application:
 
     app.router.add_get("/ws", websocket._handle_ws)
     app.router.add_get("/healthz", handle_health)
-    app.router.add_get("/api/alignment", alignment._handle_alignment_snapshot)
-    app.router.add_post("/api/alignment/start", alignment._handle_alignment_start)
-    app.router.add_post("/api/alignment/stop", alignment._handle_alignment_stop)
     app.router.add_get("/api/cameras", cameras._handle_camera_snapshot)
     app.router.add_get("/api/mapping", mapping._handle_snapshot)
     app.router.add_post("/api/mapping/reset", mapping._handle_reset)
-    app.router.add_get("/ws/mapping", mapping._handle_ws)
     app.router.add_get("/api/cameras/{camera_name}/frame", cameras._handle_camera_frame)
     app.router.add_get("/api/cameras/{camera_name}/hand", cameras._handle_camera_hand_overlay)
     app.router.add_get("/api/images/capabilities", cameras._handle_image_capabilities)

@@ -251,9 +251,12 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
         self._hand_overlay_proc = self._start_hand_overlay_worker()
         threading.Thread(target=self._hand_overlay_ipc_loop, daemon=True, name="hand_overlay_ipc").start()
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
-        self._initialize_live_alignment_state()
-        if self.world_to_reference:
-            self.get_logger().info("Loaded persisted live alignment state for web dashboard startup")
+        if self.live_alignment_available:
+            self._initialize_live_alignment_state()
+            if self.world_to_reference:
+                self.get_logger().info(
+                    "Loaded persisted live alignment state for web dashboard startup"
+                )
 
         if self.fake_pose:
             self.create_timer(1.0 / self.pose_publish_hz, self._update_fake_pose, callback_group=self.ros_callback_group)
@@ -712,17 +715,11 @@ class PoseBridgeNode(LiveAlignmentMixin, GripperTrackingMixin, HandOverlayMixin,
     ) -> Dict[str, object]:
         return self._payload_builder.build_pose_payload(trace_cursor=trace_cursor)
 
-    def build_mapping_payload(
-        self, known_map_version: Optional[int] = None
-    ) -> Dict[str, object]:
-        return self._mapping_stream.snapshot(known_map_version=known_map_version)
+    def build_mapping_payload(self) -> Dict[str, object]:
+        return self._mapping_stream.snapshot()
 
     def reset_mapping(self) -> Dict[str, object]:
         return self._mapping_stream.request_reset()
-
-
-    def build_alignment_payload(self) -> Dict[str, object]:
-        return self._payload_builder.build_alignment_payload()
 
 
     def build_camera_payload(self) -> Dict[str, object]:
@@ -862,7 +859,8 @@ def main() -> None:
     default_record_topics = configured_record_topics if configured_record_topics else build_default_topics(raw_config)
 
     rclpy.init(args=None)
-    enable_alignment_stream = not args.fake_pose
+    # Global mapping/relocalization is now the only spatial alignment source.
+    enable_alignment_stream = False
     node = PoseBridgeNode(
         config_path,
         fake_pose=args.fake_pose,

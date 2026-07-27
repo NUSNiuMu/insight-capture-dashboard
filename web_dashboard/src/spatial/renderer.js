@@ -53,16 +53,8 @@ const handRigs = new Map();
 const keptPoints = new Map();
 const traceCaches = new Map();
 const pendingTrailPoses = new Map();
-const mappingPathMeshes = new Map();
-const mappingMarkers = new Map();
-const mappingPoseOverrides = new Map();
 let pendingPosePayload = null;
 let latestPosePayload = null;
-let pendingMappingPayload = null;
-let mappingPointMesh = null;
-let mappingPointMaterial = null;
-let mappingVisible = true;
-let globalMappingEnabled = false;
 let keepTrajectory = false;
 let stickFigureMode = false;
 let avatarLoadStage = 0;
@@ -79,7 +71,6 @@ if (engine && scene) {
     sceneRenderBudgetMs %= sceneFrameIntervalMs;
     flushPendingPoseUpdate();
     flushPendingTrailUpdates();
-    flushPendingMappingUpdate();
     updateTrails();
     scene.render();
   });
@@ -120,35 +111,6 @@ export function clearRenderedTrajectories() {
   pendingPosePayload = null;
   pendingTrailPoses.clear();
   for (const trail of trailStates.values()) clearTrail(trail);
-}
-
-export function queueMappingUpdate(payload) {
-  pendingMappingPayload = payload;
-}
-
-export function setMappingVisible(visible) {
-  mappingVisible = Boolean(visible);
-  if (mappingPointMesh) mappingPointMesh.setEnabled(mappingVisible);
-  for (const state of mappingPathMeshes.values()) state.mesh.setEnabled(mappingVisible);
-  for (const marker of mappingMarkers.values()) marker.setEnabled(mappingVisible);
-}
-
-export function setGlobalMappingEnabled(enabled) {
-  globalMappingEnabled = Boolean(enabled);
-  if (latestPosePayload) pendingPosePayload = latestPosePayload;
-}
-
-export function clearMappingVisualization() {
-  pendingMappingPayload = null;
-  mappingPoseOverrides.clear();
-  if (mappingPointMesh) {
-    mappingPointMesh.dispose();
-    mappingPointMesh = null;
-  }
-  for (const state of mappingPathMeshes.values()) state.mesh.dispose();
-  mappingPathMeshes.clear();
-  for (const marker of mappingMarkers.values()) marker.dispose();
-  mappingMarkers.clear();
 }
 
 export function stopSpatialRenderer() {
@@ -278,18 +240,11 @@ function applyPoseUpdate(payload) {
     if (!node) continue;
     if (!node.position) node.position = new BABYLON.Vector3(0, 0, 0);
     if (!node.rotationQuaternion) node.rotationQuaternion = new BABYLON.Quaternion(0, 0, 0, 1);
-    const globalPose = globalMappingEnabled
-      ? mappingPoseOverrides.get(pose.name)
-      : null;
-    const position = Array.isArray(globalPose?.position)
-      ? globalPose.position
-      : (Array.isArray(pose.position) ? pose.position : [0, 0, 0]);
-    const quaternion = Array.isArray(globalPose?.quaternion_xyzw)
-      ? globalPose.quaternion_xyzw
-      : (Array.isArray(pose.quaternion_xyzw) ? pose.quaternion_xyzw : [0, 0, 0, 1]);
+    const position = Array.isArray(pose.position) ? pose.position : [0, 0, 0];
+    const quaternion = Array.isArray(pose.quaternion_xyzw) ? pose.quaternion_xyzw : [0, 0, 0, 1];
     const scenePosition = mapDashboardPositionToScene(position);
     const sceneQuaternion = mapDashboardQuaternionToScene(quaternion);
-    node.setEnabled(globalMappingEnabled ? Boolean(globalPose) : Boolean(pose.visible));
+    node.setEnabled(Boolean(pose.visible));
     node.position.copyFromFloats(scenePosition.x, scenePosition.y, scenePosition.z);
     node.rotationQuaternion.copyFromFloats(sceneQuaternion.x, sceneQuaternion.y, sceneQuaternion.z, sceneQuaternion.w);
     if (trajectoriesEnabled) {
@@ -320,113 +275,6 @@ function flushPendingPoseUpdate() {
   const payload = pendingPosePayload;
   pendingPosePayload = null;
   applyPoseUpdate(payload);
-}
-
-function flushPendingMappingUpdate() {
-  if (!pendingMappingPayload || document.hidden || !scene) return;
-  const payload = pendingMappingPayload;
-  pendingMappingPayload = null;
-  if (Array.isArray(payload.map_points)) updateMappingPoints(payload.map_points);
-  updateMappingPoseOverrides(payload.latest_poses || {});
-  const paths = payload.paths || {};
-  for (const name of ["insight9", "insight3_a", "insight3_b"]) {
-    updateMappingPath(name, Array.isArray(paths[name]) ? paths[name] : []);
-  }
-}
-
-function updateMappingPoseOverrides(latestPoses) {
-  const poseNames = {
-    insight9: "insight9_a",
-    insight3_a: "insight3_a",
-    insight3_b: "insight3_b",
-  };
-  mappingPoseOverrides.clear();
-  for (const [mappingName, poseName] of Object.entries(poseNames)) {
-    const pose = latestPoses[mappingName];
-    if (
-      Array.isArray(pose?.position) &&
-      Array.isArray(pose?.quaternion_xyzw)
-    ) {
-      mappingPoseOverrides.set(poseName, pose);
-    }
-  }
-  if (globalMappingEnabled && latestPosePayload) {
-    pendingPosePayload = latestPosePayload;
-  }
-}
-
-function updateMappingPoints(points) {
-  if (!mappingPointMaterial) {
-    mappingPointMaterial = new BABYLON.StandardMaterial("mapping-points-material", scene);
-    mappingPointMaterial.emissiveColor = BABYLON.Color3.FromHexString("#2f776f");
-    mappingPointMaterial.disableLighting = true;
-    mappingPointMaterial.pointsCloud = true;
-    mappingPointMaterial.pointSize = 3.2;
-  }
-  if (mappingPointMesh) mappingPointMesh.dispose();
-  mappingPointMesh = new BABYLON.Mesh("sparse-map-points", scene);
-  const positions = [];
-  for (const point of points) {
-    const mapped = mapDashboardPositionToScene(point);
-    positions.push(mapped.x, mapped.y, mapped.z);
-  }
-  mappingPointMesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions);
-  mappingPointMesh.setIndices(points.map((_point, index) => index));
-  mappingPointMesh.material = mappingPointMaterial;
-  mappingPointMesh.isPickable = false;
-  mappingPointMesh.alwaysSelectAsActiveMesh = true;
-  mappingPointMesh.setEnabled(mappingVisible);
-}
-
-function updateMappingPath(name, points) {
-  const style = {
-    insight9: { color: "#ffb020", size: 0.055 },
-    insight3_a: { color: "#4aa8ff", size: 0.045 },
-    insight3_b: { color: "#ff6f61", size: 0.045 },
-  }[name];
-  const mapped = points.map(mapDashboardPositionToScene);
-  const existing = mappingPathMeshes.get(name);
-  if (mapped.length < 2) {
-    if (existing) existing.mesh.setEnabled(false);
-    const marker = mappingMarkers.get(name);
-    if (marker) marker.setEnabled(false);
-    return;
-  }
-  let mesh;
-  if (existing && existing.count === mapped.length) {
-    mesh = BABYLON.MeshBuilder.CreateLines(
-      `mapping-path-${name}`,
-      { points: mapped, instance: existing.mesh },
-      scene
-    );
-  } else {
-    if (existing) existing.mesh.dispose();
-    mesh = BABYLON.MeshBuilder.CreateLines(
-      `mapping-path-${name}`,
-      { points: mapped, updatable: true },
-      scene
-    );
-    mesh.color = BABYLON.Color3.FromHexString(style.color);
-    mesh.isPickable = false;
-    mappingPathMeshes.set(name, { mesh, count: mapped.length });
-  }
-  mesh.setEnabled(mappingVisible);
-  let marker = mappingMarkers.get(name);
-  if (!marker) {
-    marker = BABYLON.MeshBuilder.CreateSphere(
-      `mapping-camera-${name}`,
-      { diameter: style.size, segments: 8 },
-      scene
-    );
-    const material = new BABYLON.StandardMaterial(`mapping-camera-material-${name}`, scene);
-    material.emissiveColor = BABYLON.Color3.FromHexString(style.color);
-    material.disableLighting = true;
-    marker.material = material;
-    marker.isPickable = false;
-    mappingMarkers.set(name, marker);
-  }
-  marker.position.copyFrom(mapped[mapped.length - 1]);
-  marker.setEnabled(mappingVisible);
 }
 
 function setDisplayFpsLimit(value) {

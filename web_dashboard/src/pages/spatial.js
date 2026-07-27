@@ -4,22 +4,14 @@ import { initializeRosbags } from "../shared/rosbags.js";
 import {
   clearKeptTrajectory,
   clearRenderedTrajectories,
-  clearMappingVisualization,
-  queueMappingUpdate,
   queuePoseUpdate,
   setAvatarLoadStage,
   setKeepTrajectory,
-  setGlobalMappingEnabled,
-  setMappingVisible,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
 } from "../spatial/renderer.js?v=20260727-mapping";
 
 const modelStatus = document.getElementById("model-status");
-const alignmentPanel = document.getElementById("alignment-panel");
-const alignmentStatus = document.getElementById("alignment-status");
-const alignmentMeta = document.getElementById("alignment-meta");
-const alignmentToggle = document.getElementById("alignment-toggle");
 const playbackPanel = document.getElementById("playback-panel");
 const playbackBagSelect = document.getElementById("playback-bag-select");
 const startPlaybackButton = document.getElementById("start-playback-button");
@@ -35,22 +27,18 @@ const mappingVisibleToggle = document.getElementById("mapping-visible-toggle");
 const newMapButton = document.getElementById("new-map-button");
 const POSE_STREAM_STALE_MS = 4000;
 const wsUrl = resolveWebSocketUrl();
-let alignmentBusy = false;
 let playbackBusy = false;
 let playbackPollTimer = null;
+let mappingPollTimer = null;
 let keepTrajectory = false;
 let pageUnloading = false;
 let activeWs = null;
-let activeMappingWs = null;
 let mappingResetBusy = false;
 let mappingVisible = true;
-let mappingStreamOnline = false;
-let playbackActive = false;
 let lastPoseMessageAt = 0;
 const startupTimers = new Set();
 
 connect();
-connectMapping();
 scheduleStartup();
 window.addEventListener("pagehide", () => {
   pageUnloading = true;
@@ -60,20 +48,19 @@ window.addEventListener("pagehide", () => {
     try { activeWs.close(); } catch {}
     activeWs = null;
   }
-  if (activeMappingWs) {
-    try { activeMappingWs.close(); } catch {}
-    activeMappingWs = null;
-  }
+  if (playbackPollTimer) window.clearInterval(playbackPollTimer);
+  if (mappingPollTimer) window.clearInterval(mappingPollTimer);
   stopSpatialRenderer();
 });
 
 function scheduleStartup() {
   // Keep the viewport responsive before heavier camera, trace, and avatar work.
   scheduleStartupTask(() => {
-    fetchAlignmentStatus();
     startCameraDashboard({ cameraStaggerMs: 450 });
+    void refreshMappingStatus();
+    mappingPollTimer = window.setInterval(() => { void refreshMappingStatus(); }, 500);
   }, 250);
-  scheduleStartupTask(() => syncTrajectorySource(), 1200);
+  scheduleStartupTask(() => setTrajectoriesEnabled(true), 1200);
   scheduleStartupTask(() => initializeRosbags(), 1500);
   scheduleStartupTask(() => setAvatarLoadStage(1), 1900);
   scheduleStartupTask(() => setAvatarLoadStage(2), 3600);
@@ -87,9 +74,6 @@ function scheduleStartupTask(callback, delayMs) {
   startupTimers.add(timer);
 }
 
-if (alignmentToggle) {
-  alignmentToggle.addEventListener("click", () => { void toggleAlignment(); });
-}
 if (startPlaybackButton) {
   startPlaybackButton.addEventListener("click", () => { void startPlayback(); });
 }
@@ -113,10 +97,10 @@ if (keepTrajectoryToggle) {
 if (mappingVisibleToggle) {
   mappingVisibleToggle.addEventListener("click", () => {
     mappingVisible = !mappingVisible;
-    syncTrajectorySource();
+    setTrajectoriesEnabled(mappingVisible);
     mappingVisibleToggle.setAttribute("aria-pressed", String(mappingVisible));
     mappingVisibleToggle.classList.toggle("is-active", mappingVisible);
-    mappingVisibleToggle.textContent = mappingVisible ? "Map visible" : "Map hidden";
+    mappingVisibleToggle.textContent = mappingVisible ? "Trails visible" : "Trails hidden";
   });
 }
 if (newMapButton) {
@@ -155,9 +139,6 @@ function connect() {
   ws.onmessage = (event) => {
     lastPoseMessageAt = Date.now();
     const payload = JSON.parse(event.data);
-    if (payload.alignment) {
-      renderAlignment(payload.alignment);
-    }
     if (payload.type !== "pose_update") {
       return;
     }
@@ -186,41 +167,12 @@ function connect() {
   };
 }
 
-function connectMapping() {
-  if (mappingStatus) mappingStatus.textContent = "Connecting mapping stream...";
-  const ws = new WebSocket(resolveMappingWebSocketUrl());
-  activeMappingWs = ws;
-  ws.onmessage = (event) => {
-    const payload = JSON.parse(event.data);
-    if (payload.type !== "mapping_update") return;
-    queueMappingUpdate(payload);
-    renderMappingStatus(payload);
-  };
-  ws.onerror = () => {
-    if (mappingStatus) mappingStatus.textContent = "Mapping stream error";
-  };
-  ws.onclose = () => {
-    if (activeMappingWs === ws) activeMappingWs = null;
-    if (pageUnloading) return;
-    mappingStreamOnline = false;
-    syncTrajectorySource();
-    if (mappingStatus) mappingStatus.textContent = "Mapping disconnected, retrying...";
-    window.setTimeout(connectMapping, 1000);
-  };
-}
-
-function resolveMappingWebSocketUrl() {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const host = window.location.host || "localhost:8765";
-  return `${protocol}//${host}/ws/mapping`;
-}
-
 async function resetMapping() {
   if (mappingResetBusy || !newMapButton) return;
   mappingResetBusy = true;
   newMapButton.disabled = true;
   newMapButton.textContent = "Resetting...";
-  clearMappingVisualization();
+  clearRenderedTrajectories();
   try {
     const response = await fetch("/api/mapping/reset", { method: "POST" });
     const payload = await response.json();
@@ -240,11 +192,21 @@ async function resetMapping() {
   }
 }
 
+async function refreshMappingStatus() {
+  try {
+    const response = await fetch(`/api/mapping?ts=${Date.now()}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) return;
+    renderMappingStatus(await response.json());
+  } catch (_error) {
+    if (mappingStatus) mappingStatus.textContent = "Mapping status unavailable";
+  }
+}
+
 function renderMappingStatus(payload) {
   const statuses = payload.statuses || {};
   const mapper = statuses.insight9 || {};
-  mappingStreamOnline = Boolean(mapper.online);
-  syncTrajectorySource();
   const onlineCount = Object.values(statuses).filter((status) => status.online).length;
   const points = Number(payload.map_point_count || 0);
   if (mappingStatus) {
@@ -281,102 +243,6 @@ window.setInterval(() => {
     activeWs.close();
   }
 }, 1000);
-
-async function fetchAlignmentStatus() {
-  if (!alignmentPanel) {
-    return;
-  }
-  try {
-    const response = await fetch(`/api/alignment?ts=${Date.now()}`, { cache: "no-store" });
-    if (!response.ok) {
-      return;
-    }
-    const payload = await response.json();
-    if (payload && payload.alignment) {
-      renderAlignment(payload.alignment);
-    }
-  } catch (_error) {
-    // The websocket will refresh status once connected.
-  }
-}
-
-async function toggleAlignment() {
-  if (!alignmentToggle || alignmentBusy) {
-    return;
-  }
-  const shouldStop = alignmentToggle.dataset.action === "stop";
-  alignmentBusy = true;
-  syncAlignmentButtonState();
-  try {
-    const response = await fetch(shouldStop ? "/api/alignment/stop" : "/api/alignment/start", {
-      method: "POST"
-    });
-    const payload = await response.json();
-    if (payload && payload.alignment) {
-      renderAlignment(payload.alignment);
-    }
-  } catch (_error) {
-    if (alignmentMeta) {
-      alignmentMeta.textContent = "Alignment control request failed";
-    }
-  } finally {
-    alignmentBusy = false;
-    syncAlignmentButtonState();
-  }
-}
-
-function renderAlignment(alignment) {
-  if (!alignmentPanel) {
-    return;
-  }
-  const available = Boolean(alignment && alignment.available);
-  const active = Boolean(alignment && alignment.active);
-  const statusText = (alignment && alignment.status_text) || "Alignment OFF";
-  const requiredSamples = Number((alignment && alignment.required_samples) || 0);
-  const inlierCount = Number((alignment && alignment.inlier_count) || 0);
-  const visibleCameras = Number((alignment && alignment.visible_cameras) || 0);
-  const cameraCount = Number((alignment && alignment.camera_count) || 0);
-  const hasSolution = Boolean(alignment && alignment.has_solution);
-  const lockOnFirst = Boolean(alignment && alignment.lock_on_first_solution);
-
-  if (alignmentStatus) {
-    alignmentStatus.textContent = statusText;
-  }
-  if (alignmentToggle) {
-    alignmentToggle.dataset.action = active ? "stop" : "start";
-    alignmentToggle.dataset.state = active ? "stop" : "start";
-    alignmentToggle.textContent = active ? "Stop Alignment" : "Start Alignment";
-    alignmentToggle.disabled = !available || alignmentBusy;
-  }
-  if (alignmentMeta) {
-    if (!available) {
-      alignmentMeta.textContent = "Alignment stream unavailable in this backend session";
-    } else if (active) {
-      alignmentMeta.textContent =
-        `Board ${visibleCameras}/${cameraCount} visible · samples ${inlierCount}/${requiredSamples}` +
-        (lockOnFirst ? " · auto-lock after first camera is ON" : " · manual stop mode");
-    } else if (hasSolution) {
-      alignmentMeta.textContent = "Last calibration remains applied to the 3D view. Press Start Alignment to recalibrate.";
-    } else {
-      alignmentMeta.textContent = "Ready to calibrate from the web view. Press Start Alignment when the board is visible.";
-    }
-  }
-  syncAlignmentButtonState();
-}
-
-function syncAlignmentButtonState() {
-  if (!alignmentToggle) {
-    return;
-  }
-  if (alignmentBusy) {
-    alignmentToggle.disabled = true;
-    alignmentToggle.classList.add("is-busy");
-    alignmentToggle.textContent = alignmentToggle.dataset.action === "stop" ? "Stopping..." : "Starting...";
-    return;
-  }
-  alignmentToggle.classList.remove("is-busy");
-}
-
 
 async function startPlayback() {
   if (playbackBusy) return;
@@ -456,8 +322,6 @@ function renderPlaybackStatus(payload) {
   const state = (payload && payload.state) || "idle";
   const bagName = (payload && payload.bag_name) || "";
   const isPlaying = state === "playing";
-  playbackActive = isPlaying;
-  syncTrajectorySource();
   if (startPlaybackButton) {
     startPlaybackButton.hidden = isPlaying;
     if (!isPlaying) startPlaybackButton.disabled = false;
@@ -468,14 +332,6 @@ function renderPlaybackStatus(payload) {
   if (playbackStatusEl) {
     playbackStatusEl.textContent = isPlaying ? `Playing: ${bagName}` : "Idle";
   }
-}
-
-function syncTrajectorySource() {
-  const useGlobalMapping = mappingStreamOnline && !playbackActive;
-  document.body.classList.toggle("global-mapping-active", useGlobalMapping);
-  setTrajectoriesEnabled(!useGlobalMapping);
-  setGlobalMappingEnabled(useGlobalMapping);
-  setMappingVisible(mappingVisible && !playbackActive);
 }
 
 async function clearAllTrajectories() {

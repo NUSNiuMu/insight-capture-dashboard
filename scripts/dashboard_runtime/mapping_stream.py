@@ -1,56 +1,35 @@
-"""Bridge sparse mapping ROS topics into compact web visualization snapshots."""
+"""Bridge sparse mapping status into compact web snapshots."""
 
 from __future__ import annotations
 
 import json
 import threading
 import time
-from typing import Dict, Optional
-
-import numpy as np
+from typing import Dict
 
 try:
-    from nav_msgs.msg import Path as PathMsg
     from sensor_msgs.msg import PointCloud2
     from std_msgs.msg import String
     from std_srvs.srv import Empty
 except ImportError:  # pragma: no cover - only fake/non-ROS imports use this path
-    PathMsg = None
     PointCloud2 = None
     String = None
     Empty = None
 
 
-PATH_TOPICS = {
-    "insight9": "/insight9_sparse_map/path",
-    "insight3_a": "/insight_global/insight3_a/path",
-    "insight3_b": "/insight_global/insight3_b/path",
-}
 STATUS_TOPICS = {
     "insight9": "/insight9_sparse_map/status",
     "insight3_a": "/insight_global/insight3_a/status",
     "insight3_b": "/insight_global/insight3_b/status",
 }
-
-
 class MappingStream:
-    """Hold bounded map/path snapshots without adding work to image callbacks."""
+    """Hold lightweight map counters and status without forwarding geometry."""
 
-    def __init__(self, owner, *, max_map_points: int = 12_000) -> None:
+    def __init__(self, owner) -> None:
         self.owner = owner
-        self.max_map_points = max(100, int(max_map_points))
         self._lock = threading.Lock()
-        self._map_points: list[list[float]] = []
+        self._map_point_count = 0
         self._map_version = 0
-        self._paths: Dict[str, list[list[float]]] = {
-            name: [] for name in PATH_TOPICS
-        }
-        self._latest_poses: Dict[str, Optional[Dict[str, list[float]]]] = {
-            name: None for name in PATH_TOPICS
-        }
-        self._path_versions: Dict[str, int] = {
-            name: 0 for name in PATH_TOPICS
-        }
         self._statuses: Dict[str, Dict[str, object]] = {
             name: {"state": "unavailable"} for name in STATUS_TOPICS
         }
@@ -62,7 +41,11 @@ class MappingStream:
         self._localizer_reset_client = None
 
     def start(self) -> None:
-        if PointCloud2 is None or PathMsg is None or String is None or Empty is None:
+        if (
+            PointCloud2 is None
+            or String is None
+            or Empty is None
+        ):
             return
         kwargs = {
             "callback_group": self.owner.ros_callback_group,
@@ -77,12 +60,6 @@ class MappingStream:
                 **kwargs,
             )
         )
-        for name, topic in PATH_TOPICS.items():
-            self._subscriptions.append(
-                self.owner.create_subscription(
-                    PathMsg, topic, self._path_callback(name), 1, **kwargs
-                )
-            )
         for name, topic in STATUS_TOPICS.items():
             self._subscriptions.append(
                 self.owner.create_subscription(
@@ -97,85 +74,15 @@ class MappingStream:
         )
         self.owner.dashboard_subscriptions.extend(self._subscriptions)
         self.owner.get_logger().info(
-            "Mapping web stream subscribed to sparse map and three global paths"
+            "Mapping status bridge subscribed without forwarding sparse cloud data"
         )
-
-    @staticmethod
-    def _decode_xyz(message: PointCloud2) -> np.ndarray:
-        fields = {field.name: field for field in message.fields}
-        if any(name not in fields for name in ("x", "y", "z")):
-            raise ValueError("point cloud has no XYZ fields")
-        count = int(message.width) * int(message.height)
-        point_step = int(message.point_step)
-        if count <= 0:
-            return np.empty((0, 3), dtype=np.float32)
-        if point_step <= 0 or len(message.data) < count * point_step:
-            raise ValueError("point cloud payload is truncated")
-        endian = ">" if message.is_bigendian else "<"
-        dtype = np.dtype(
-            {
-                "names": ["x", "y", "z"],
-                "formats": [f"{endian}f4", f"{endian}f4", f"{endian}f4"],
-                "offsets": [
-                    int(fields["x"].offset),
-                    int(fields["y"].offset),
-                    int(fields["z"].offset),
-                ],
-                "itemsize": point_step,
-            }
-        )
-        packed = np.frombuffer(message.data, dtype=dtype, count=count)
-        points = np.column_stack((packed["x"], packed["y"], packed["z"])).astype(
-            np.float32, copy=False
-        )
-        return points[np.isfinite(points).all(axis=1)]
 
     def _on_map(self, message: PointCloud2) -> None:
-        try:
-            points = self._decode_xyz(message)
-        except ValueError as exc:
-            self.owner.get_logger().warning(f"Mapping web cloud rejected: {exc}")
-            return
-        if len(points) > self.max_map_points:
-            indices = np.linspace(
-                0, len(points) - 1, self.max_map_points, dtype=np.int64
-            )
-            points = points[indices]
-        rounded = np.round(points, 4).tolist()
         with self._lock:
-            self._map_points = rounded
+            # The web UI only needs the count. Keeping the binary cloud out of
+            # JSON avoids both network traffic and accidental point rendering.
+            self._map_point_count = int(message.width) * int(message.height)
             self._map_version += 1
-
-    def _path_callback(self, name: str):
-        def callback(message: PathMsg) -> None:
-            points = [
-                [
-                    round(float(pose.pose.position.x), 4),
-                    round(float(pose.pose.position.y), 4),
-                    round(float(pose.pose.position.z), 4),
-                ]
-                for pose in message.poses
-            ]
-            latest_pose = None
-            if message.poses:
-                pose = message.poses[-1].pose
-                latest_pose = {
-                    # Reuse the exact serialized path endpoint so the camera
-                    # model and visible endpoint marker cannot diverge.
-                    "position": list(points[-1]),
-                    "quaternion_xyzw": [
-                        round(float(pose.orientation.x), 6),
-                        round(float(pose.orientation.y), 6),
-                        round(float(pose.orientation.z), 6),
-                        round(float(pose.orientation.w), 6),
-                    ],
-                }
-            with self._lock:
-                self._paths[name] = points
-                self._latest_poses[name] = latest_pose
-                self._path_versions[name] += 1
-
-        return callback
 
     def _status_callback(self, name: str):
         def callback(message: String) -> None:
@@ -191,9 +98,7 @@ class MappingStream:
 
         return callback
 
-    def snapshot(
-        self, *, known_map_version: Optional[int] = None
-    ) -> Dict[str, object]:
+    def snapshot(self) -> Dict[str, object]:
         now = time.monotonic()
         with self._lock:
             statuses = {}
@@ -210,17 +115,9 @@ class MappingStream:
             payload: Dict[str, object] = {
                 "type": "mapping_update",
                 "map_version": self._map_version,
-                "map_point_count": len(self._map_points),
-                "paths": {name: list(points) for name, points in self._paths.items()},
-                "latest_poses": {
-                    name: None if pose is None else dict(pose)
-                    for name, pose in self._latest_poses.items()
-                },
-                "path_versions": dict(self._path_versions),
+                "map_point_count": self._map_point_count,
                 "statuses": statuses,
             }
-            if known_map_version != self._map_version:
-                payload["map_points"] = list(self._map_points)
             return payload
 
     def request_reset(self) -> Dict[str, object]:
@@ -238,12 +135,8 @@ class MappingStream:
             else:
                 unavailable.append(name)
         with self._lock:
-            self._map_points = []
+            self._map_point_count = 0
             self._map_version += 1
-            for name in self._paths:
-                self._paths[name] = []
-                self._latest_poses[name] = None
-                self._path_versions[name] += 1
             for name in self._statuses:
                 self._statuses[name] = {"state": "resetting"}
         return {

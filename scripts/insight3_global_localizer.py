@@ -189,6 +189,7 @@ class CameraState:
         self.transformed_correction: Optional[np.ndarray] = None
         self.transformed_extrinsic: Optional[np.ndarray] = None
         self.last_transformed_stamp_ns = -1
+        self.last_global_pose_publish_ns = -1
 
 
 class Insight3GlobalLocalizer(Node):
@@ -221,6 +222,12 @@ class Insight3GlobalLocalizer(Node):
         self._path_publishers = {
             name: self.create_publisher(
                 PathMsg, f"insight_global/{name}/path", 1
+            )
+            for name in CAMERAS
+        }
+        self._pose_publishers = {
+            name: self.create_publisher(
+                PoseStamped, f"insight_global/{name}/pose", 1
             )
             for name in CAMERAS
         }
@@ -293,6 +300,7 @@ class Insight3GlobalLocalizer(Node):
                 state.transformed_correction = None
                 state.transformed_extrinsic = None
                 state.last_transformed_stamp_ns = -1
+                state.last_global_pose_publish_ns = -1
                 state.path = PathMsg()
                 state.path.header.frame_id = self._map_frame
                 state.path_dirty = True
@@ -359,6 +367,7 @@ class Insight3GlobalLocalizer(Node):
                 ),
             )
             state = self._cameras[name]
+            global_pose = None
             with self._lock:
                 try:
                     matrix_from_pose(sample)
@@ -374,6 +383,7 @@ class Insight3GlobalLocalizer(Node):
                     state.transformed_correction = None
                     state.transformed_extrinsic = None
                     state.last_transformed_stamp_ns = -1
+                    state.last_global_pose_publish_ns = -1
                     state.path = PathMsg()
                     state.path.header.frame_id = self._map_frame
                     state.path_dirty = True
@@ -384,6 +394,32 @@ class Insight3GlobalLocalizer(Node):
                     state.history.append(sample)
                     state.last_history_stamp_ns = sample.stamp_ns
                     state.path_dirty = True
+                correction = (
+                    None
+                    if state.transformed_correction is None
+                    else state.transformed_correction.copy()
+                )
+                extrinsic = (
+                    None
+                    if state.transformed_extrinsic is None
+                    else state.transformed_extrinsic.copy()
+                )
+                publish_interval_ns = int(
+                    1_000_000_000 / max(self._args.pose_publish_hz, 0.1)
+                )
+                should_publish = (
+                    sample.stamp_ns - state.last_global_pose_publish_ns
+                    >= publish_interval_ns
+                )
+                if should_publish:
+                    state.last_global_pose_publish_ns = sample.stamp_ns
+            if should_publish and correction is not None and extrinsic is not None:
+                transform = correction @ matrix_from_pose(sample) @ extrinsic
+                global_pose = pose_message(
+                    transform, message.header.stamp, self._map_frame
+                )
+            if global_pose is not None:
+                self._pose_publishers[name].publish(global_pose)
 
         return callback
 
@@ -537,6 +573,7 @@ class Insight3GlobalLocalizer(Node):
         if correction_changed or extrinsic_changed:
             state.transformed_history.clear()
             state.last_transformed_stamp_ns = -1
+            state.last_global_pose_publish_ns = -1
             pending = history[-1:]
             with self._lock:
                 state.history.clear()
@@ -619,7 +656,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirmation-rotation-deg", type=float, default=12.0)
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
-    parser.add_argument("--path-publish-hz", type=float, default=20.0)
+    parser.add_argument("--path-publish-hz", type=float, default=50.0)
+    parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument("--path-reset-translation-m", type=float, default=0.05)
     parser.add_argument("--path-reset-rotation-deg", type=float, default=3.0)
     return parser

@@ -1,10 +1,7 @@
 {
   "ros_domain_id": 20,
   "session_alignment": {
-    "enabled": true,
-    "alignment_frame": "board_center",
-    "reference_camera": "insight9_a",
-    "calibration_file": "config/board_calibration.json"
+    "enabled": false
   },
   "dashboard": {
     "window_title": "Insight Monitoring Dashboard",
@@ -19,8 +16,8 @@
       "image_qos_reliability": "best_effort",
       "pose_timeout_sec": 2.0,
       "camera_stale_timeout_sec": 2.0,
-      "title": "3D VIO Trajectory",
-      "subtitle": "Interactive 3D view of x/y with z as up using current VIO poses.",
+      "title": "3D Global Trajectory",
+      "subtitle": "Interactive 3D view driven by mapping and relocalization poses.",
       "axis_label": "x/y plane, z up",
       "pose_publish_hz": 50.0
     }
@@ -32,9 +29,9 @@
       "namespace": "insight3_a",
       "label": "Insight3 A",
       "dashboard_image_stream": "infra1",
-      "alignment_image_stream": "infra1",
       "dashboard_label": "Insight3 A Infrared",
-      "dashboard_pose_stream": "vio_100hz",
+      "dashboard_pose_stream": "/insight_global/insight3_a/pose",
+      "dashboard_path_topic": "/insight_global/insight3_a/path",
       "dashboard_rotation_deg": 0,
       "teleop_role": "right_hand",
       "avatar_model": "assets/models/vis_assembly.glb",
@@ -50,9 +47,9 @@
       "namespace": "insight3_b",
       "label": "Insight3 B",
       "dashboard_image_stream": "infra1",
-      "alignment_image_stream": "infra1",
       "dashboard_label": "Insight3 B Infrared",
-      "dashboard_pose_stream": "vio_100hz",
+      "dashboard_pose_stream": "/insight_global/insight3_b/pose",
+      "dashboard_path_topic": "/insight_global/insight3_b/path",
       "dashboard_rotation_deg": 0,
       "teleop_role": "left_hand",
       "avatar_model": "assets/models/vis_assembly.glb",
@@ -69,7 +66,8 @@
       "label": "Insight9 A",
       "dashboard_image_stream": "color_compressed",
       "dashboard_label": "Insight9 A Color",
-      "dashboard_pose_stream": "vio_100hz",
+      "dashboard_pose_stream": "/insight9_sparse_map/pose",
+      "dashboard_path_topic": "/insight9_sparse_map/path",
       "dashboard_rotation_deg": 0,
       "teleop_role": "head",
       "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",

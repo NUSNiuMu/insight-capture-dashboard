@@ -43,6 +43,9 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         pose_topic = _camera_pose_topic(namespace, str(camera.get("dashboard_pose_stream", "vio_100hz")))
         if pose_topic:
             topics.append(pose_topic)
+        path_topic = _normalize_topic_name(camera.get("dashboard_path_topic", ""))
+        if path_topic:
+            topics.append(path_topic)
 
         image_stream = str(camera.get("dashboard_image_stream", "color_compressed"))
         topics.append(f"{camera_base(namespace)}/imu")
@@ -64,6 +67,9 @@ def filter_recordable_live_topics(raw_config: Dict, live_topics: Sequence[str]) 
     for topic in live_topics:
         normalized = _normalize_topic_name(topic)
         if normalized == "/tf_static":
+            filtered.append(normalized)
+            continue
+        if normalized.startswith(("/insight9_sparse_map/", "/insight_global/")):
             filtered.append(normalized)
             continue
         for namespace in enabled:

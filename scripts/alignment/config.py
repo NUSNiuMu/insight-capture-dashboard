@@ -25,7 +25,11 @@ class AlignmentConfigurator:
         self.owner.live_alignment_frame = str(alignment_config.get("alignment_frame", "board_center") or "board_center")
         self.owner.world_to_reference = {}
         calibration_config = raw_config.get("session_alignment", {}).get("calibration", {})
-        self.owner.live_alignment_available = self.owner.session_alignment_enabled and hasattr(cv2, "aruco")
+        self.owner.live_alignment_available = (
+            self.owner.enable_alignment_stream
+            and self.owner.session_alignment_enabled
+            and hasattr(cv2, "aruco")
+        )
         self.owner.live_alignment_active = False
         self.owner.live_alignment_image_stream = str(calibration_config.get("image_stream", "color") or "color")
         self.owner.live_alignment_method = str(calibration_config.get("method", "board_center") or "board_center")

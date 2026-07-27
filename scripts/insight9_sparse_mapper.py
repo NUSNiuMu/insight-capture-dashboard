@@ -231,6 +231,7 @@ class Insight9SparseMapper(Node):
         self._path_lock = threading.Lock()
         self._map_lock = threading.Lock()
         self._last_path_append_ns = 0
+        self._last_pose_publish_ns = 0
         self._latest_stats = {"state": "waiting_for_inputs"}
 
         self._pointcloud_publisher = self.create_publisher(
@@ -241,6 +242,9 @@ class Insight9SparseMapper(Node):
         )
         self._path_publisher = self.create_publisher(
             PathMsg, "insight9_sparse_map/path", 1
+        )
+        self._pose_publisher = self.create_publisher(
+            PoseStamped, "insight9_sparse_map/pose", 1
         )
         self._status_publisher = self.create_publisher(
             String, "insight9_sparse_map/status", 1
@@ -264,7 +268,9 @@ class Insight9SparseMapper(Node):
             CameraInfo, args.right_info_topic, self._on_right_info, qos_profile_sensor_data
         )
         self.create_timer(0.5, self._publish_map)
-        self.create_timer(0.05, self._publish_path_and_tf)
+        self.create_timer(
+            1.0 / max(args.path_publish_hz, 0.1), self._publish_path_and_tf
+        )
         self.create_timer(0.5, self._resolve_extrinsic)
         self._worker.start()
         self.get_logger().info(
@@ -350,8 +356,14 @@ class Insight9SparseMapper(Node):
         if self._imu_to_left is None:
             return
         world_to_left = compose_transform(matrix_from_pose(sample), self._imu_to_left)
+        stamped = matrix_to_pose_stamped(world_to_left, sample.stamp_ns, self._map_frame)
+        if (
+            sample.stamp_ns - self._last_pose_publish_ns
+            >= int(1_000_000_000 / max(self._args.pose_publish_hz, 0.1))
+        ):
+            self._pose_publisher.publish(stamped)
+            self._last_pose_publish_ns = sample.stamp_ns
         if sample.stamp_ns - self._last_path_append_ns >= self._args.path_interval_ms * 1_000_000:
-            stamped = matrix_to_pose_stamped(world_to_left, sample.stamp_ns, self._map_frame)
             with self._path_lock:
                 self._path.append(stamped)
             self._last_path_append_ns = sample.stamp_ns
@@ -601,6 +613,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-landmarks", type=int, default=100_000)
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
+    parser.add_argument("--path-publish-hz", type=float, default=50.0)
+    parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     return parser
 
 

@@ -1,4 +1,4 @@
-"""Read-only pose, alignment, camera, and settings payload construction."""
+"""Read-only pose, camera, and settings payload construction."""
 
 from __future__ import annotations
 
@@ -121,25 +121,7 @@ class PayloadBuilder:
             "display_fps_limit": self.owner.display_fps_limit,
             "trace_capacity": self.owner.max_points,
             "trace_generation": trace_generation,
-            "alignment": self.owner.build_alignment_payload(),
             "poses": poses,
-        }
-
-    def build_alignment_payload(self) -> Dict[str, object]:
-        target_camera = getattr(self.owner, "live_alignment_target_camera", None)
-        inlier_counts = getattr(self.owner, "live_alignment_inlier_counts", {})
-        return {
-            "available": bool(self.owner.live_alignment_available and not self.owner.fake_pose),
-            "active": bool(self.owner.live_alignment_active),
-            "status_text": self.owner.alignment_status_text(),
-            "lock_on_first_solution": bool(self.owner.live_alignment_lock_on_first_solution),
-            "required_samples": int(self.owner.live_alignment_required_samples),
-            "visible_cameras": int(getattr(self.owner, "live_alignment_visible_cameras", 0)),
-            "camera_count": len(self.owner.cameras),
-            "inlier_count": int(0 if target_camera is None else inlier_counts.get(target_camera, 0)),
-            "last_status": str(getattr(self.owner, "live_alignment_last_status", "")),
-            "has_solution": bool(self.owner.world_to_reference),
-            "camera_names": [camera.name for camera in self.owner.cameras],
         }
 
     def build_camera_payload(self) -> Dict[str, object]:

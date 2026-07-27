@@ -173,7 +173,9 @@ services:
       - --path-points
       - "200"
       - --path-publish-hz
-      - "20"
+      - "50"
+      - --pose-publish-hz
+      - "50"
       - --path-reset-translation-m
       - "0.05"
       - --path-reset-rotation-deg

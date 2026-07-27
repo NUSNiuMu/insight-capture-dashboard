@@ -52,13 +52,24 @@ TensorRT 推理、Insight9 mapper 和 Insight3 localizer：
 docker compose up -d --wait insight-dashboard
 ```
 
-打开 `http://<设备地址>:8765/3d` 可直接查看确认后的稀疏地图，以及 Insight9、
+打开 `http://<设备地址>:8765/3d` 可直接查看稀疏建图状态，以及 Insight9、
 Insight3 A、Insight3 B 三条全局轨迹。页面会显示三路在线状态、Insight9
 关键帧和最近一次晋升的地图点数量；点击 **New map** 会清空当前地图、三条轨迹
 和两个 Insight3 已确认的全局校正，从当前相机位姿开始新会话。
 建图在线时网页只显示这三条全局轨迹，不再叠加原有的三条局部 VIO 轨迹；
-三个模型的位置和朝向也直接使用对应全局 Path 的末端位姿。播放 rosbag 或
-建图离线时才恢复原 VIO 位姿和轨迹显示。
+三个模型的位置和朝向也直接使用对应全局 Pose。建图离线时不会回退到局部
+VIO，避免模型在两套坐标源之间跳变。
+
+网页不渲染稀疏特征点云，只显示点数统计和三条全局轨迹。模型位姿使用独立的
+高频全局 Pose 话题，唯一的 dashboard WebSocket 以 50 Hz 发送最新位姿，
+前端用同一份 Pose 增量绘制轨迹。ROS Path 同样以 50 Hz 发布并限制为 200 点，
+用于录制、回放和 RViz；网页不再接收整条 Path，也不再建立第二条 mapping
+WebSocket。建图状态通过 500 ms 的轻量 REST 轮询显示。
+
+新录制会保存三路全局 Pose 和 Path；回放时三路全局 Pose 经 `/bagplay/...`
+remap 后继续驱动同一套模型和轨迹。旧 rosbag 如果没有这些全局话题，将不显示
+轨迹或模型位置，不会回退到旧 VIO。原 AprilTag 在线对齐的订阅、定时器、
+Web API、前端控制和 WebSocket payload 已停用，建图重定位是唯一在线校准源。
 
 验证镜像包含：
 
@@ -111,8 +122,8 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 
 网页接口：
 
-- `GET /api/mapping`：当前地图点数、三条路径和三路状态快照。
-- `GET /ws/mapping`：20 Hz 路径/状态流；点云只在版本变化时发送。
+- `GET /api/mapping`：当前地图点数和三路状态快照。
+- `GET /ws`：50 Hz 三路全局位姿流，同时驱动模型和网页轨迹。
 - `POST /api/mapping/reset`：同时重置 mapper 与 localizer。
 - ROS service `/insight9_sparse_map/reset`：清空 Insight9 会话地图。
 - ROS service `/insight_global/reset`：清空两个 Insight3 的校正和全局轨迹。
@@ -121,7 +132,8 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 
 - `/insight9_sparse_map/points`：经过多关键帧确认的稀疏地图。
 - `/insight9_sparse_map/features`：确认地标的三维位置和 256 维 SuperPoint 描述子。
-- `/insight9_sparse_map/path`：最多 200 点的左目 VIO 轨迹。
+- `/insight9_sparse_map/pose`：50 Hz 最新全局位姿。
+- `/insight9_sparse_map/path`：50 Hz 发布、最多 200 点的全局轨迹。
 - `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数和处理耗时 JSON。
 - TF `insight9_map -> insight9_mapping_camera_left`：独立命名，避免与设备 TF 多父冲突。
 
