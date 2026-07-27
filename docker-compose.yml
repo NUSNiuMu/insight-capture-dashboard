@@ -168,6 +168,8 @@ services:
       - python3
       - -u
       - scripts/insight3_global_localizer.py
+      - --path-publish-hz
+      - "20"
     depends_on:
       superglue-inference:
         condition: service_healthy

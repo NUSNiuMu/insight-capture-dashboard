@@ -263,7 +263,10 @@ class Insight3GlobalLocalizer(Node):
         )
         self._worker.start()
         self.create_timer(0.5, self._resolve_extrinsics)
-        self.create_timer(0.5, self._publish)
+        self.create_timer(
+            1.0 / max(args.path_publish_hz, 0.1), self._publish_paths_and_tf
+        )
+        self.create_timer(0.5, self._publish_status)
         self.get_logger().info(
             "SuperPoint global localizer started for insight3_a and insight3_b"
         )
@@ -472,7 +475,7 @@ class Insight3GlobalLocalizer(Node):
             path.header.stamp = path.poses[-1].header.stamp
         state.path = path
 
-    def _publish(self) -> None:
+    def _publish_paths_and_tf(self) -> None:
         now_stamp = self.get_clock().now().to_msg()
         for name, state in self._cameras.items():
             if state.path_dirty:
@@ -489,6 +492,9 @@ class Insight3GlobalLocalizer(Node):
                 transform.transform.translation.z = latest.pose.position.z
                 transform.transform.rotation = latest.pose.orientation
                 self._tf_broadcaster.sendTransform(transform)
+
+    def _publish_status(self) -> None:
+        for name, state in self._cameras.items():
             status = dict(state.status)
             status["camera"] = name
             status["history_points"] = len(state.history)
@@ -520,6 +526,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirmation-rotation-deg", type=float, default=12.0)
     parser.add_argument("--path-points", type=int, default=1000)
     parser.add_argument("--path-interval-ms", type=int, default=50)
+    parser.add_argument("--path-publish-hz", type=float, default=20.0)
     return parser
 
 
