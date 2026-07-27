@@ -84,6 +84,8 @@ xhost -si:localuser:root
 ```
 
 第二条命令保持在前台，关闭 RViz 后才执行第三条以收回临时 X11 授权。
+当前 RViz 验证配置默认显示稠密融合地图；稀疏确认点图层保留但默认关闭。
+稠密节点和图层说明见 [INSIGHT9_DENSE_MAPPING.md](INSIGHT9_DENSE_MAPPING.md)。
 
 主要输出：
 

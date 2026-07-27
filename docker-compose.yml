@@ -138,6 +138,22 @@ services:
     stop_signal: SIGINT
     restart: "no"
 
+  insight9-dense-mapper:
+    profiles: ["mapping-validation"]
+    image: insight-dashboard:latest
+    network_mode: host
+    ipc: host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
+    volumes:
+      - .:/workspaces/insight_capture
+    command:
+      - python3
+      - -u
+      - scripts/insight9_dense_mapper.py
+    stop_signal: SIGINT
+    restart: "no"
+
   insight9-mapping-rviz:
     profiles: ["mapping-validation"]
     build:
@@ -158,6 +174,8 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
     depends_on:
       insight9-sparse-mapper:
+        condition: service_started
+      insight9-dense-mapper:
         condition: service_started
     restart: "no"
 

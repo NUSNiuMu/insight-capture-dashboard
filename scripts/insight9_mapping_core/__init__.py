@@ -11,6 +11,12 @@ from .geometry import (
     transform_points,
     triangulate_rectified,
 )
+from .dense_stereo import (
+    DenseStereoConfig,
+    DenseStereoEstimator,
+    DenseStereoResult,
+    DenseVoxelMap,
+)
 from .feature_backend import (
     IpcSuperGlueBackend,
     OFFICIAL_SUPERGLUE_COMMIT,
@@ -23,6 +29,10 @@ from .synchronization import PoseBuffer, StereoPair, StereoPairSynchronizer
 __all__ = [
     "LandmarkMap",
     "LandmarkMapConfig",
+    "DenseStereoConfig",
+    "DenseStereoEstimator",
+    "DenseStereoResult",
+    "DenseVoxelMap",
     "IpcSuperGlueBackend",
     "OFFICIAL_SUPERGLUE_COMMIT",
     "OfficialSuperGlueBackend",
