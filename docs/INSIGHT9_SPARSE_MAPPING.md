@@ -75,15 +75,14 @@ docker compose --profile mapping-validation logs -f \
 docker compose --profile mapping-validation build insight9-mapping-rviz
 ```
 
-打开 RViz：
+每次清空旧地图并打开 RViz：
 
 ```bash
-xhost +si:localuser:root
-docker compose --profile mapping-validation run --rm insight9-mapping-rviz
-xhost -si:localuser:root
+scripts/run_mapping_validation_rviz.sh
 ```
 
-第二条命令保持在前台，关闭 RViz 后才执行第三条以收回临时 X11 授权。
+脚本保持在前台，关闭 RViz 后自动收回临时 X11 授权。它会先重建 mapper 和
+localizer，确保不继续显示上一会话的内存地图。
 当前 RViz 验证配置默认显示稠密融合地图；稀疏确认点图层保留但默认关闭。
 稠密节点和图层说明见 [INSIGHT9_DENSE_MAPPING.md](INSIGHT9_DENSE_MAPPING.md)。
 

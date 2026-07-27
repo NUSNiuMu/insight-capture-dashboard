@@ -211,6 +211,7 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 | `scripts/insight9_sparse_mapper.py` | Insight9 官方 SuperPoint/SuperGlue 在线稀疏建图验证节点 |
 | `scripts/insight9_dense_mapper.py` | Insight9 StereoSGBM/VIO 在线稠密点云与体素融合节点 |
 | `scripts/insight3_global_localizer.py` | 两路 Insight3 到 Insight9 3D 描述子地图的全局定位与轨迹重建节点 |
+| `scripts/run_mapping_validation_rviz.sh` | 清空上一会话地图和轨迹后启动全套 mapper 与 RViz |
 | `Dockerfile.superglue-validation` | 内部研究验证专用 NVIDIA Jetson PyTorch/SuperGlue GPU 镜像 |
 | `scripts/camera_setup.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |
 | `scripts/reboot_cameras.sh` | 扫描 `169.254.x.x` 网段并批量重启相机 |

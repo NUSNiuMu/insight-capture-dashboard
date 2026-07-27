@@ -4,28 +4,20 @@
 通过 100 Hz VIO 和 `T_imu_left` 转换到世界坐标，并按 4 cm 体素累计融合。
 它不依赖 PyTorch 或额外模型。
 
-## 启动
+## 每次新建地图并启动 RViz
 
 ```bash
 cd /home/nvidia/insight-capture-dashboard
-
-docker compose --profile mapping-validation up -d \
-  insight9-sparse-mapper insight9-dense-mapper
+scripts/run_mapping_validation_rviz.sh
 ```
 
-稀疏节点在这里保留轨迹和 TF；RViz 默认关闭稀疏点，显示稠密融合地图。
+脚本每次都会强制重建稀疏 mapper、稠密 mapper 和双 Insight3 定位节点，因此
+上一会话仅存在于内存中的融合点云、关键帧、全局校正和轨迹都会先清空。
+SuperGlue 推理容器不保存地图，为避免重复加载模型会继续复用。脚本自动设置
+当前桌面的 X11 授权，并在 RViz 退出后收回授权。
 
-从 TTY/SSH 启动 RViz 时：
-
-```bash
-export DISPLAY=:0
-export XAUTHORITY=/run/user/1000/gdm/Xauthority
-xhost +si:localuser:root
-trap 'xhost -si:localuser:root' EXIT
-
-docker compose --profile mapping-validation run --rm \
-  insight9-mapping-rviz
-```
+不要先执行普通的 `docker compose up -d` 再期待地图自动清空：Compose 会
+复用已经运行的容器，内存地图也会继续保留。
 
 ## RViz 图层
 
@@ -34,10 +26,10 @@ docker compose --profile mapping-validation run --rm \
 - `Confirmed sparse map`：默认关闭，可与稠密地图对照。
 - `Insight3 A global path`：洋红色，定位到全图后的 Insight3 A 轨迹。
 - `Insight3 B global path`：绿色，定位到全图后的 Insight3 B 轨迹。
+- `VIO camera path`：Insight9 本轮建图轨迹。
 
 双 Insight3 全局定位的启动与诊断见
 [INSIGHT3_GLOBAL_LOCALIZATION.md](INSIGHT3_GLOBAL_LOCALIZATION.md)。
-- `VIO camera path`：相机轨迹。
 
 输出话题：
 

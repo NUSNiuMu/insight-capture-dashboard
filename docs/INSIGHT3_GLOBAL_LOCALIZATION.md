@@ -5,17 +5,16 @@ Insight9 的 `insight9_map`。它不使用 RTAB-Map：Insight9 双目关键帧�
 SuperPoint 描述子的三维地标，Insight3 单目图像与这些地标匹配，再通过
 PnP 求出相机在全图中的位置。
 
-## 启动
+## 每次新建地图并启动 RViz
 
 ```bash
 cd /home/nvidia/insight-capture-dashboard
-
-docker compose --profile mapping-validation up -d \
-  superglue-inference \
-  insight9-sparse-mapper \
-  insight9-dense-mapper \
-  insight3-global-localizer
+scripts/run_mapping_validation_rviz.sh
 ```
+
+每次执行该脚本都会重建 mapper 和 localizer，清空上一会话的稠密/稀疏地图、
+两个 Insight3 的全局校正及三条轨迹，然后才打开 RViz。SuperGlue 推理服务
+没有地图状态，会保留运行以避免重复加载模型。
 
 Insight9 稀疏节点需要至少三个有重叠视野的关键帧确认地标。启动后缓慢移动
 Insight9，平移超过 5 cm 或旋转超过 3°，同时持续观察同一个有纹理区域。
@@ -64,21 +63,6 @@ ros2 topic echo --full-length /insight_global/insight3_b/status
 - TF `insight9_map -> insight3_b_global_camera_left`。
 
 ## RViz
-
-从 TTY 或 SSH 启动时，先授权容器访问桌面：
-
-```bash
-cd /home/nvidia/insight-capture-dashboard
-
-export DISPLAY=:0
-export XAUTHORITY=/run/user/1000/gdm/Xauthority
-
-xhost +si:localuser:root
-trap 'xhost -si:localuser:root' EXIT
-
-docker compose --profile mapping-validation run --rm \
-  insight9-mapping-rviz
-```
 
 RViz 固定坐标系是 `insight9_map`。默认显示蓝色稠密地图、黄色 Insight9 轨迹、
 洋红色 Insight3 A 全局轨迹和绿色 Insight3 B 全局轨迹。
