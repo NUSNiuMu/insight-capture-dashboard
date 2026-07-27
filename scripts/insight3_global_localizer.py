@@ -183,6 +183,10 @@ class CameraState:
         self.path = PathMsg()
         self.path.header.frame_id = "insight9_map"
         self.path_dirty = True
+        self.transformed_history: deque[PoseStamped] = deque(maxlen=history_points)
+        self.transformed_correction: Optional[np.ndarray] = None
+        self.transformed_extrinsic: Optional[np.ndarray] = None
+        self.last_transformed_stamp_ns = -1
 
 
 class Insight3GlobalLocalizer(Node):
@@ -339,6 +343,14 @@ class Insight3GlobalLocalizer(Node):
                 if reset:
                     state.history.clear()
                     state.consensus = LocalizationConsensus(state.consensus.config)
+                    state.last_image_stamp_ns = -1
+                    state.last_history_stamp_ns = -1
+                    state.transformed_history.clear()
+                    state.transformed_correction = None
+                    state.transformed_extrinsic = None
+                    state.last_transformed_stamp_ns = -1
+                    state.path = PathMsg()
+                    state.path.header.frame_id = self._map_frame
                     state.path_dirty = True
                 if (
                     sample.stamp_ns - state.last_history_stamp_ns
@@ -435,9 +447,10 @@ class Insight3GlobalLocalizer(Node):
                         image.shape,
                         state.consensus.config,
                     )
-                    transition = state.consensus.observe(candidate)
-                    if transition["localized"]:
-                        state.path_dirty = True
+                    with self._lock:
+                        transition = state.consensus.observe(candidate)
+                        if transition["localized"]:
+                            state.path_dirty = True
                     state.status = {
                         "state": (
                             "localized"
@@ -453,24 +466,65 @@ class Insight3GlobalLocalizer(Node):
                         **transition,
                     }
                 except Exception as exc:
-                    state.consensus.observe(None)
+                    with self._lock:
+                        state.consensus.observe(None)
                     state.status = {"state": "error", "error": str(exc)}
                     self.get_logger().error(f"{name} localization failed: {exc}")
 
     def _rebuild_path(self, state: CameraState) -> None:
-        correction = state.consensus.correction
-        extrinsic = state.imu_to_left
-        if correction is None or extrinsic is None:
-            return
         with self._lock:
+            correction = (
+                None
+                if state.consensus.correction is None
+                else state.consensus.correction.copy()
+            )
+            extrinsic = (
+                None if state.imu_to_left is None else state.imu_to_left.copy()
+            )
             history = tuple(state.history)
             state.path_dirty = False
-        path = PathMsg()
-        path.header.frame_id = self._map_frame
-        for sample in history:
+        if correction is None or extrinsic is None:
+            return
+
+        correction_changed = (
+            state.transformed_correction is None
+            or not np.allclose(
+                correction, state.transformed_correction, rtol=0.0, atol=1e-12
+            )
+        )
+        extrinsic_changed = (
+            state.transformed_extrinsic is None
+            or not np.allclose(
+                extrinsic, state.transformed_extrinsic, rtol=0.0, atol=1e-12
+            )
+        )
+        if correction_changed or extrinsic_changed:
+            state.transformed_history.clear()
+            state.last_transformed_stamp_ns = -1
+            pending = history[-1:]
+            with self._lock:
+                state.history.clear()
+                state.history.extend(pending)
+        else:
+            pending = tuple(
+                sample
+                for sample in history
+                if sample.stamp_ns > state.last_transformed_stamp_ns
+            )
+
+        for sample in pending:
             transform = correction @ matrix_from_pose(sample) @ extrinsic
             stamp = Time(nanoseconds=sample.stamp_ns).to_msg()
-            path.poses.append(pose_message(transform, stamp, self._map_frame))
+            state.transformed_history.append(
+                pose_message(transform, stamp, self._map_frame)
+            )
+            state.last_transformed_stamp_ns = sample.stamp_ns
+
+        state.transformed_correction = correction
+        state.transformed_extrinsic = extrinsic
+        path = PathMsg()
+        path.header.frame_id = self._map_frame
+        path.poses = list(state.transformed_history)
         if path.poses:
             path.header.stamp = path.poses[-1].header.stamp
         state.path = path
