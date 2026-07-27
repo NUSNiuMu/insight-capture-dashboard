@@ -251,11 +251,12 @@ class Insight3GlobalLocalizer(Node):
         )
         self._camera_subscriptions = []
         for name in CAMERAS:
+            image_topic = args.image_topic_template.format(name=name)
             self._camera_subscriptions.extend(
                 [
                     self.create_subscription(
                         Image,
-                        f"/{name}/camera/infra1/image_rect_raw",
+                        image_topic,
                         self._image_callback(name),
                         qos_profile_sensor_data,
                     ),
@@ -273,6 +274,7 @@ class Insight3GlobalLocalizer(Node):
                     ),
                 ]
             )
+            self.get_logger().info(f"{name} localization image <- {image_topic}")
         self._stop = threading.Event()
         self._worker = threading.Thread(
             target=self._worker_main, name="insight3-global-localization", daemon=True
@@ -640,6 +642,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--feature-map-topic", default="/insight9_sparse_map/features"
     )
+    parser.add_argument(
+        "--image-topic-template",
+        default="/insight_mapping/{name}/infra1/image_rect_raw",
+    )
     parser.add_argument("--map-frame", default="insight9_map")
     parser.add_argument("--localization-hz", type=float, default=1.0)
     parser.add_argument("--max-map-features", type=int, default=20_000)
@@ -656,7 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirmation-rotation-deg", type=float, default=12.0)
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
-    parser.add_argument("--path-publish-hz", type=float, default=50.0)
+    parser.add_argument("--path-publish-hz", type=float, default=5.0)
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument("--path-reset-translation-m", type=float, default=0.05)
     parser.add_argument("--path-reset-rotation-deg", type=float, default=3.0)

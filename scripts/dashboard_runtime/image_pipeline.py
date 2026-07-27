@@ -21,6 +21,7 @@ from .models import CameraFrame
 
 WEBRTC_JPEG_FALLBACK_INTERVAL_SEC = 0.5
 RECORDING_WEBRTC_PREVIEW_FPS = 10.0
+LOCALIZATION_IMAGE_RELAY_INTERVAL_NS = 500_000_000
 
 
 class ImagePipeline:
@@ -40,10 +41,25 @@ class ImagePipeline:
                 return
             if not self.owner._playback_mode:
                 self.owner._feed_recording_writer(camera_topic, msg)
+                self._maybe_relay_localization_image(camera_name, msg)
             self.owner._pending_frames[camera_name] = msg
             event.set()
 
         return callback
+
+    def _maybe_relay_localization_image(self, camera_name: str, msg: object) -> None:
+        """Reuse the display reader instead of adding another full-rate DDS reader."""
+
+        publisher = self.owner._localization_image_publishers.get(camera_name)
+        if publisher is None:
+            return
+        stamp_ns = self.owner._stamp_to_ns(msg.header.stamp)
+        previous = self.owner._last_localization_image_relay_ns.get(camera_name, -1)
+        if previous >= 0 and stamp_ns > previous:
+            if stamp_ns - previous < LOCALIZATION_IMAGE_RELAY_INTERVAL_NS:
+                return
+        self.owner._last_localization_image_relay_ns[camera_name] = stamp_ns
+        publisher.publish(msg)
 
     def _frame_worker_loop(self, camera_name: str, topic_type: str, also_alignment: bool) -> None:
         alignment_cb = self.owner._make_live_alignment_image_callback(camera_name, topic_type) if also_alignment else None

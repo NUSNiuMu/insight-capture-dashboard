@@ -44,7 +44,7 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         if pose_topic:
             topics.append(pose_topic)
         path_topic = _normalize_topic_name(camera.get("dashboard_path_topic", ""))
-        if path_topic:
+        if path_topic and camera.get("record_dashboard_path", False):
             topics.append(path_topic)
 
         image_stream = str(camera.get("dashboard_image_stream", "color_compressed"))
@@ -115,9 +115,17 @@ def build_recording_topic_catalog(
         for camera in enabled:
             namespace = str(camera["namespace"])
             prefix = f"/{namespace}/camera/"
-            if not topic.startswith(prefix):
+            global_prefix = (
+                "/insight9_sparse_map/"
+                if namespace == "insight9_a"
+                else f"/insight_global/{namespace}/"
+            )
+            if topic.startswith(prefix):
+                tail = topic[len(prefix) :]
+            elif topic.startswith(global_prefix):
+                tail = f"global/{topic[len(global_prefix):]}"
+            else:
                 continue
-            tail = topic[len(prefix) :]
             topics_by_camera[namespace].append(
                 {
                     "name": topic,
@@ -220,5 +228,11 @@ def discover_live_topics(
 
 
 def _topic_group(topic: str) -> str:
-    """Group a topic by its first namespace segment for recorder isolation."""
+    """Keep global poses with their camera recorder instead of spawning extras."""
+
+    if topic.startswith("/insight9_sparse_map/"):
+        return "insight9_a"
+    for namespace in ("insight3_a", "insight3_b"):
+        if topic.startswith(f"/insight_global/{namespace}/"):
+            return namespace
     return topic.strip("/").split("/", 1)[0]

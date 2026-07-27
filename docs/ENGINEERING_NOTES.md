@@ -6,6 +6,9 @@
 
 - ROS 图像 callback 只负责轻量状态更新、录制 writer 投递和 latest-frame 交接，不执行编码或磁盘 I/O。
 - 图像由主进程现有 DDS reader 直接交给 `InProcessBagWriter`，不能恢复为额外的 `ros2 bag record` 图像订阅，否则会与预览、WebRTC 竞争。
+- Insight3 在线重定位同样不能再直接增加两个全速原图 DDS reader。dashboard
+  复用既有 reader，以 2 Hz 发布 `/insight_mapping/...` 定位图；localizer
+  只订阅该中继。实机 A/B 测试中，这使 Insight3 B 从 13–14 FPS 恢复到 20 FPS。
 - 当前机队在 2026-07-13 的实测中，图像 QoS 使用 `best_effort` 会因单个 UDP 分片丢失而丢掉整帧；设备配置选择 `reliable` 后，多轮录制没有再观察到对应散落丢帧。
 - 录制期间预览可以降频，但原始录制帧不能降频。WebRTC 预览当前限制为 10 FPS，停止录制后立即恢复。
 
@@ -14,6 +17,11 @@
 - SQLite 存储配置使用 WAL 和 `synchronous=OFF`。这是吞吐、断电恢复和数据完整性之间经过实机验证的折中，不能改回 `NORMAL` 或 `FULL`。
 - 图像 header timestamp 通过录制开始时的固定偏移映射到 recorder timeline，并在录制期间持续审计帧间隔。
 - `/tf_static` 是 latched 单次流，只要求至少存在一条消息，不按 FPS 判断完整性。
+- 400 Hz IMU 使用 `config/rosbag_qos_overrides.yaml` 的 best-effort、
+  keep-last 1000 深度 reader；默认深度不足时，短时 CPU 调度停顿会先表现为
+  单路 IMU 分散丢帧，而图像 writer 仍显示 0 drop。
+- 全局 Pose 与各自相机小消息共用 recorder；完整 Path 是 Pose 可重建的冗余
+  调试数据，不默认录制。不要为全局 namespace 再增加两个 recorder 进程。
 - staging 恢复中的 reindex、salvage、convert 和输出验证是一个完整流程；`ros2 bag convert` 成功返回不代表输出一定可信。
 
 ## WebRTC 与预览

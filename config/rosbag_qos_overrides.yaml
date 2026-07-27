@@ -1,0 +1,17 @@
+/insight3_a/camera/imu:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 1000
+
+/insight3_b/camera/imu:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 1000
+
+/insight9_a/camera/imu:
+  reliability: best_effort
+  durability: volatile
+  history: keep_last
+  depth: 1000

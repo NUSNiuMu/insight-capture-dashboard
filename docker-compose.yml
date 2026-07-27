@@ -135,6 +135,10 @@ services:
       - scripts/insight9_sparse_mapper.py
       - --backend
       - ipc
+      - --path-publish-hz
+      - "5"
+      - --pose-publish-hz
+      - "50"
     depends_on:
       superglue-inference:
         condition: service_healthy
@@ -170,10 +174,12 @@ services:
       - python3
       - -u
       - scripts/insight3_global_localizer.py
+      - --image-topic-template
+      - /insight_mapping/{name}/infra1/image_rect_raw
       - --path-points
       - "200"
       - --path-publish-hz
-      - "50"
+      - "5"
       - --pose-publish-hz
       - "50"
       - --path-reset-translation-m

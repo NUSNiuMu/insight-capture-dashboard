@@ -225,6 +225,7 @@ class Insight9SparseMapper(Node):
         )
         self._last_processed_monotonic = 0.0
         self._last_feature_publish_monotonic = 0.0
+        self._feature_map_dirty = True
         self._last_keyframe_transform: Optional[np.ndarray] = None
         self._keyframe_id = 0
         self._path = deque(maxlen=args.path_points)
@@ -284,6 +285,7 @@ class Insight9SparseMapper(Node):
             self._last_path_append_ns = 0
         with self._map_lock:
             self._landmarks.clear()
+            self._feature_map_dirty = True
         self._last_keyframe_transform = None
         self._keyframe_id = 0
         self._latest_stats = {"state": "waiting_for_motion", "reset": True}
@@ -486,6 +488,7 @@ class Insight9SparseMapper(Node):
                         descriptors=matches.descriptors[source],
                         scores=matches.scores[source],
                     )
+                    self._feature_map_dirty = True
                 self._last_keyframe_transform = world_to_left
                 self._last_processed_monotonic = time.monotonic()
                 self._latest_stats = {
@@ -533,16 +536,24 @@ class Insight9SparseMapper(Node):
         )
 
     def _publish_map(self) -> None:
+        now = time.monotonic()
         with self._map_lock:
             points = self._landmarks.points()
-            feature_points, descriptors = self._landmarks.descriptors()
+            feature_due = (
+                self._feature_map_dirty
+                or now - self._last_feature_publish_monotonic >= 10.0
+            ) and now - self._last_feature_publish_monotonic >= 1.0
+            if feature_due:
+                feature_points, descriptors = self._landmarks.descriptors()
+                self._feature_map_dirty = False
+            else:
+                feature_points = descriptors = None
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
         header.frame_id = self._map_frame
         cloud = point_cloud2.create_cloud_xyz32(header, points.tolist())
         self._pointcloud_publisher.publish(cloud)
-        now = time.monotonic()
-        if now - self._last_feature_publish_monotonic >= 1.0:
+        if feature_points is not None and descriptors is not None:
             self._feature_map_publisher.publish(
                 descriptor_cloud(header, feature_points, descriptors)
             )
@@ -613,7 +624,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-landmarks", type=int, default=100_000)
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
-    parser.add_argument("--path-publish-hz", type=float, default=50.0)
+    parser.add_argument("--path-publish-hz", type=float, default=5.0)
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     return parser
 

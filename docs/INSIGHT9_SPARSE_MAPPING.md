@@ -62,11 +62,12 @@ VIO，避免模型在两套坐标源之间跳变。
 
 网页不渲染稀疏特征点云，只显示点数统计和三条全局轨迹。模型位姿使用独立的
 高频全局 Pose 话题，唯一的 dashboard WebSocket 以 50 Hz 发送最新位姿，
-前端用同一份 Pose 增量绘制轨迹。ROS Path 同样以 50 Hz 发布并限制为 200 点，
-用于录制、回放和 RViz；网页不再接收整条 Path，也不再建立第二条 mapping
-WebSocket。建图状态通过 500 ms 的轻量 REST 轮询显示。
+前端用同一份 Pose 增量绘制轨迹。完整 ROS Path 限制为 200 点并以 5 Hz
+发布，仅供 RViz 和显式调试选择，避免反复序列化整条历史；网页和默认录制
+只使用 50 Hz Pose，也不再建立第二条 mapping WebSocket。建图状态通过
+500 ms 的轻量 REST 轮询显示。
 
-新录制会保存三路全局 Pose 和 Path；回放时三路全局 Pose 经 `/bagplay/...`
+新录制默认保存三路全局 Pose；回放时三路全局 Pose 经 `/bagplay/...`
 remap 后继续驱动同一套模型和轨迹。旧 rosbag 如果没有这些全局话题，将不显示
 轨迹或模型位置，不会回退到旧 VIO。原 AprilTag 在线对齐的订阅、定时器、
 Web API、前端控制和 WebSocket payload 已停用，建图重定位是唯一在线校准源。
@@ -133,7 +134,7 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 - `/insight9_sparse_map/points`：经过多关键帧确认的稀疏地图。
 - `/insight9_sparse_map/features`：确认地标的三维位置和 256 维 SuperPoint 描述子。
 - `/insight9_sparse_map/pose`：50 Hz 最新全局位姿。
-- `/insight9_sparse_map/path`：50 Hz 发布、最多 200 点的全局轨迹。
+- `/insight9_sparse_map/path`：5 Hz 发布、最多 200 点的调试全局轨迹。
 - `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数和处理耗时 JSON。
 - TF `insight9_map -> insight9_mapping_camera_left`：独立命名，避免与设备 TF 多父冲突。
 
@@ -188,6 +189,14 @@ Jetson Orin NX、544×640 双目红外输入、1024 个最大关键点、官方 
 - 强制静止画面连续关键帧后，170 个关键帧形成 976 个已确认地图点；
 - 发布点云宽度达到 982，路径保持在配置的 200 点上限；
 - dashboard 容器已实际收到 mapper 容器发布的完整状态消息。
+- localizer 直接订阅两路 20 Hz 原始图时，Insight3 B 实时图像曾下降到
+  13–14 Hz，六核 CPU 在录制期间达到 75–90%/核；改为复用 dashboard reader
+  并以 2 Hz 中继定位图后，A/B 连续实测均恢复为 20 Hz。
+- 完整 200 点 Path 改为 5 Hz 调试输出，默认录制只保留 50 Hz Pose；三个
+  全局 Pose 合并进对应相机 recorder，录制 part 数由 9 降为 7。
+- 在 3D/WebRTC 同时运行的 30 秒压力录制中，三路图像 live audit 为
+  602/602/904 帧，header missing 和 writer drop 均为 0；为 400 Hz IMU
+  配置 1000 深度 rosbag QoS 后，三路 IMU 与所有受检话题也均为 0% 丢失。
 
 结论：在线进程已是纯 TensorRT/CUDA runtime，PyTorch 只存在于镜像构建阶段，
 且没有为了速度接受 SuperGlue FP16 精度回归。当前共享 GPU 负载下端到端吞吐

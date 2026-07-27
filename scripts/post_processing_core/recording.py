@@ -103,10 +103,17 @@ def _trim_startup_skew(bag_dir: Path) -> Dict[str, object]:
 # Shared crash-tolerant SQLite settings for subprocess and in-process writers.
 
 STORAGE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "rosbag_storage_sqlite3.yaml"
+QOS_OVERRIDE_PATH = Path(__file__).resolve().parents[2] / "config" / "rosbag_qos_overrides.yaml"
 
 def _storage_config_args() -> List[str]:
     if STORAGE_CONFIG_PATH.is_file():
         return ["--storage-config-file", str(STORAGE_CONFIG_PATH)]
+    return []
+
+
+def _qos_override_args() -> List[str]:
+    if QOS_OVERRIDE_PATH.is_file():
+        return ["--qos-profile-overrides-path", str(QOS_OVERRIDE_PATH)]
     return []
 
 
@@ -274,6 +281,7 @@ class RecordingManager:
                     "--max-cache-size",
                     str(self.max_cache_size),
                     *_storage_config_args(),
+                    *_qos_override_args(),
                     *group_topics,
                 ]
                 process = subprocess.Popen(
