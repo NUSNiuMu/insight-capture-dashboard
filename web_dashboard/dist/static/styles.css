@@ -389,6 +389,9 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
 .legend-meta { text-align: right; white-space: nowrap; }
 .swatch { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; }
 .trail-toggle { display: inline-flex; align-items: center; justify-content: flex-end; gap: 5px; color: var(--muted); font-size: 7px; }
+body.global-mapping-active .trail-toggle,
+body.global-mapping-active #clear-trajectory-button,
+body.global-mapping-active #keep-trajectory-toggle { display: none; }
 .stage-footer { position: absolute; right: 22px; bottom: 17px; left: 22px; z-index: 10; display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-family: var(--mono); font-size: 7px; font-weight: 600; letter-spacing: .08em; pointer-events: none; }
 
 @media (max-width: 1120px) {

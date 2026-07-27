@@ -56,6 +56,8 @@ docker compose up -d --wait insight-dashboard
 Insight3 A、Insight3 B 三条全局轨迹。页面会显示三路在线状态、Insight9
 关键帧和最近一次晋升的地图点数量；点击 **New map** 会清空当前地图、三条轨迹
 和两个 Insight3 已确认的全局校正，从当前相机位姿开始新会话。
+建图在线时网页只显示这三条全局轨迹，不再叠加原有的三条局部 VIO 轨迹；
+播放 rosbag 或建图离线时才恢复原轨迹显示。
 
 验证镜像包含：
 

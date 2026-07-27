@@ -43,6 +43,8 @@ let activeWs = null;
 let activeMappingWs = null;
 let mappingResetBusy = false;
 let mappingVisible = true;
+let mappingStreamOnline = false;
+let playbackActive = false;
 let lastPoseMessageAt = 0;
 const startupTimers = new Set();
 
@@ -70,7 +72,7 @@ function scheduleStartup() {
     fetchAlignmentStatus();
     startCameraDashboard({ cameraStaggerMs: 450 });
   }, 250);
-  scheduleStartupTask(() => setTrajectoriesEnabled(true), 1200);
+  scheduleStartupTask(() => syncTrajectorySource(), 1200);
   scheduleStartupTask(() => initializeRosbags(), 1500);
   scheduleStartupTask(() => setAvatarLoadStage(1), 1900);
   scheduleStartupTask(() => setAvatarLoadStage(2), 3600);
@@ -110,7 +112,7 @@ if (keepTrajectoryToggle) {
 if (mappingVisibleToggle) {
   mappingVisibleToggle.addEventListener("click", () => {
     mappingVisible = !mappingVisible;
-    setMappingVisible(mappingVisible);
+    syncTrajectorySource();
     mappingVisibleToggle.setAttribute("aria-pressed", String(mappingVisible));
     mappingVisibleToggle.classList.toggle("is-active", mappingVisible);
     mappingVisibleToggle.textContent = mappingVisible ? "Map visible" : "Map hidden";
@@ -199,6 +201,8 @@ function connectMapping() {
   ws.onclose = () => {
     if (activeMappingWs === ws) activeMappingWs = null;
     if (pageUnloading) return;
+    mappingStreamOnline = false;
+    syncTrajectorySource();
     if (mappingStatus) mappingStatus.textContent = "Mapping disconnected, retrying...";
     window.setTimeout(connectMapping, 1000);
   };
@@ -238,6 +242,8 @@ async function resetMapping() {
 function renderMappingStatus(payload) {
   const statuses = payload.statuses || {};
   const mapper = statuses.insight9 || {};
+  mappingStreamOnline = Boolean(mapper.online);
+  syncTrajectorySource();
   const onlineCount = Object.values(statuses).filter((status) => status.online).length;
   const points = Number(payload.map_point_count || 0);
   if (mappingStatus) {
@@ -449,6 +455,8 @@ function renderPlaybackStatus(payload) {
   const state = (payload && payload.state) || "idle";
   const bagName = (payload && payload.bag_name) || "";
   const isPlaying = state === "playing";
+  playbackActive = isPlaying;
+  syncTrajectorySource();
   if (startPlaybackButton) {
     startPlaybackButton.hidden = isPlaying;
     if (!isPlaying) startPlaybackButton.disabled = false;
@@ -459,6 +467,13 @@ function renderPlaybackStatus(payload) {
   if (playbackStatusEl) {
     playbackStatusEl.textContent = isPlaying ? `Playing: ${bagName}` : "Idle";
   }
+}
+
+function syncTrajectorySource() {
+  const useGlobalMapping = mappingStreamOnline && !playbackActive;
+  document.body.classList.toggle("global-mapping-active", useGlobalMapping);
+  setTrajectoriesEnabled(!useGlobalMapping);
+  setMappingVisible(mappingVisible && !playbackActive);
 }
 
 async function clearAllTrajectories() {
