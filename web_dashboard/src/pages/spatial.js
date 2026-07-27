@@ -9,6 +9,7 @@ import {
   queuePoseUpdate,
   setAvatarLoadStage,
   setKeepTrajectory,
+  setGlobalMappingEnabled,
   setMappingVisible,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
@@ -473,6 +474,7 @@ function syncTrajectorySource() {
   const useGlobalMapping = mappingStreamOnline && !playbackActive;
   document.body.classList.toggle("global-mapping-active", useGlobalMapping);
   setTrajectoriesEnabled(!useGlobalMapping);
+  setGlobalMappingEnabled(useGlobalMapping);
   setMappingVisible(mappingVisible && !playbackActive);
 }
 

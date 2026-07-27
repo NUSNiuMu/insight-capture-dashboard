@@ -45,6 +45,9 @@ class MappingStream:
         self._paths: Dict[str, list[list[float]]] = {
             name: [] for name in PATH_TOPICS
         }
+        self._latest_poses: Dict[str, Optional[Dict[str, list[float]]]] = {
+            name: None for name in PATH_TOPICS
+        }
         self._path_versions: Dict[str, int] = {
             name: 0 for name in PATH_TOPICS
         }
@@ -153,8 +156,23 @@ class MappingStream:
                 ]
                 for pose in message.poses
             ]
+            latest_pose = None
+            if message.poses:
+                pose = message.poses[-1].pose
+                latest_pose = {
+                    # Reuse the exact serialized path endpoint so the camera
+                    # model and visible endpoint marker cannot diverge.
+                    "position": list(points[-1]),
+                    "quaternion_xyzw": [
+                        round(float(pose.orientation.x), 6),
+                        round(float(pose.orientation.y), 6),
+                        round(float(pose.orientation.z), 6),
+                        round(float(pose.orientation.w), 6),
+                    ],
+                }
             with self._lock:
                 self._paths[name] = points
+                self._latest_poses[name] = latest_pose
                 self._path_versions[name] += 1
 
         return callback
@@ -194,6 +212,10 @@ class MappingStream:
                 "map_version": self._map_version,
                 "map_point_count": len(self._map_points),
                 "paths": {name: list(points) for name, points in self._paths.items()},
+                "latest_poses": {
+                    name: None if pose is None else dict(pose)
+                    for name, pose in self._latest_poses.items()
+                },
                 "path_versions": dict(self._path_versions),
                 "statuses": statuses,
             }
@@ -220,6 +242,7 @@ class MappingStream:
             self._map_version += 1
             for name in self._paths:
                 self._paths[name] = []
+                self._latest_poses[name] = None
                 self._path_versions[name] += 1
             for name in self._statuses:
                 self._statuses[name] = {"state": "resetting"}
