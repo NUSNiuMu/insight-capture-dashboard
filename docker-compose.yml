@@ -194,10 +194,12 @@ services:
     volumes:
       - .:/workspaces/insight_capture
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    command:
+      - rviz2
+      - -d
+      - /workspaces/insight_capture/config/rviz/insight9_global_localization.rviz
     depends_on:
       insight9-sparse-mapper:
-        condition: service_started
-      insight9-dense-mapper:
         condition: service_started
       insight3-global-localizer:
         condition: service_started

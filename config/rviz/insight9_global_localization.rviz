@@ -39,61 +39,7 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /insight9_sparse_map/points
       Use Fixed Frame: true
-      Value: false
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
-        Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz_default_plugins/PointCloud2
-      Color: 65; 210; 255
-      Color Transformer: FlatColor
-      Decay Time: 0
-      Name: Dense fused map
-      Position Transformer: XYZ
-      Queue Size: 2
-      Selectable: true
-      Size (Pixels): 2
-      Size (m): 0.015
-      Style: Points
-      Topic:
-        Depth: 2
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /insight9_dense_map/fused_points
-      Use Fixed Frame: true
       Value: true
-    - Alpha: 0.8
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
-        Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz_default_plugins/PointCloud2
-      Color: 255; 90; 55
-      Color Transformer: FlatColor
-      Decay Time: 0
-      Name: Dense current frame
-      Position Transformer: XYZ
-      Queue Size: 2
-      Selectable: true
-      Size (Pixels): 2
-      Size (m): 0.01
-      Style: Points
-      Topic:
-        Depth: 2
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /insight9_dense_map/current_points
-      Use Fixed Frame: true
-      Value: false
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path

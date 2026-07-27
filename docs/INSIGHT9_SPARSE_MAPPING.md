@@ -83,8 +83,7 @@ scripts/run_mapping_validation_rviz.sh
 
 脚本保持在前台，关闭 RViz 后自动收回临时 X11 授权。它会先重建 mapper 和
 localizer，确保不继续显示上一会话的内存地图。
-当前 RViz 验证配置默认显示稠密融合地图；稀疏确认点图层保留但默认关闭。
-稠密节点和图层说明见 [INSIGHT9_DENSE_MAPPING.md](INSIGHT9_DENSE_MAPPING.md)。
+当前 RViz 验证配置只显示稀疏确认地图和三条全局轨迹，不启动稠密 mapper。
 
 主要输出：
 

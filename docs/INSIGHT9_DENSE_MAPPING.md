@@ -2,34 +2,33 @@
 
 该验证节点使用校正后的左右红外图计算 StereoSGBM 稠密视差，把有效深度点
 通过 100 Hz VIO 和 `T_imu_left` 转换到世界坐标，并按 4 cm 体素累计融合。
-它不依赖 PyTorch 或额外模型。
+它不依赖 PyTorch 或额外模型，也不参与三个相机的重定位。当前默认验证流程
+已经改用稀疏 3D 描述子地图，本节点仅保留为可选的场景形状诊断工具。
 
-## 每次新建地图并启动 RViz
+## 可选启动
 
 ```bash
 cd /home/nvidia/insight-capture-dashboard
-scripts/run_mapping_validation_rviz.sh
+docker compose --profile mapping-validation up -d --force-recreate \
+  insight9-dense-mapper
 ```
 
-脚本每次都会强制重建稀疏 mapper、稠密 mapper 和双 Insight3 定位节点，因此
-上一会话仅存在于内存中的融合点云、关键帧、全局校正和轨迹都会先清空。
-SuperGlue 推理容器不保存地图，为避免重复加载模型会继续复用。脚本自动设置
-当前桌面的 X11 授权，并在 RViz 退出后收回授权。
-
-不要先执行普通的 `docker compose up -d` 再期待地图自动清空：Compose 会
-复用已经运行的容器，内存地图也会继续保留。
+`scripts/run_mapping_validation_rviz.sh` 会主动停止该服务，确保默认的三相机
+定位验证不消耗 StereoSGBM 的 CPU 和内存。
 
 ## RViz 图层
 
-- `Dense fused map`：默认开启，蓝色，世界坐标中的累计稠密地图。
-- `Dense current frame`：默认关闭，红色；需要检查单帧深度形状时开启。
-- `Confirmed sparse map`：默认关闭，可与稠密地图对照。
+- `Confirmed sparse map`：默认开启，蓝色，是重定位实际使用的确认地标。
 - `Insight3 A global path`：洋红色，定位到全图后的 Insight3 A 轨迹。
 - `Insight3 B global path`：绿色，定位到全图后的 Insight3 B 轨迹。
 - `VIO camera path`：Insight9 本轮建图轨迹。
 
 双 Insight3 全局定位的启动与诊断见
 [INSIGHT3_GLOBAL_LOCALIZATION.md](INSIGHT3_GLOBAL_LOCALIZATION.md)。
+
+默认 RViz 配置不包含稠密点云图层。如果临时诊断场景形状，可在 RViz 手动
+添加 `/insight9_dense_map/current_points` 或
+`/insight9_dense_map/fused_points`。
 
 输出话题：
 

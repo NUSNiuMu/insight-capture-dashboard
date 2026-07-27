@@ -12,9 +12,9 @@ cd /home/nvidia/insight-capture-dashboard
 scripts/run_mapping_validation_rviz.sh
 ```
 
-每次执行该脚本都会重建 mapper 和 localizer，清空上一会话的稠密/稀疏地图、
-两个 Insight3 的全局校正及三条轨迹，然后才打开 RViz。SuperGlue 推理服务
-没有地图状态，会保留运行以避免重复加载模型。
+每次执行该脚本都会停止可选的稠密 mapper，并重建稀疏 mapper 和 localizer，
+清空上一会话的稀疏地图、两个 Insight3 的全局校正及三条轨迹，然后才打开
+RViz。SuperGlue 推理服务没有地图状态，会保留运行以避免重复加载模型。
 
 Insight9 稀疏节点需要至少三个有重叠视野的关键帧确认地标。启动后缓慢移动
 Insight9，平移超过 5 cm 或旋转超过 3°，同时持续观察同一个有纹理区域。
@@ -64,8 +64,8 @@ ros2 topic echo --full-length /insight_global/insight3_b/status
 
 ## RViz
 
-RViz 固定坐标系是 `insight9_map`。默认显示蓝色稠密地图、黄色 Insight9 轨迹、
-洋红色 Insight3 A 全局轨迹和绿色 Insight3 B 全局轨迹。
+RViz 固定坐标系是 `insight9_map`。默认显示蓝色确认稀疏地图、黄色 Insight9
+轨迹、洋红色 Insight3 A 全局轨迹和绿色 Insight3 B 全局轨迹。
 
 如果状态停在 `waiting`：
 
