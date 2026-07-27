@@ -98,12 +98,8 @@ def build_recording_topic_catalog(
             other.append(
                 {
                     "name": topic,
-                    "label": "tf_static",
-                    "camera": "",
-                    "tail": "tf_static",
                     "short_name": "Other - tf_static",
                     "group": "Other",
-                    "default_selected": topic in default_selected,
                 }
             )
             continue
@@ -126,12 +122,8 @@ def build_recording_topic_catalog(
             topics_by_camera[namespace].append(
                 {
                     "name": topic,
-                    "label": tail,
-                    "camera": namespace,
-                    "tail": tail,
                     "short_name": f"{namespace} - {tail}",
                     "group": namespace,
-                    "default_selected": topic in default_selected,
                 }
             )
             matched = True
@@ -141,29 +133,23 @@ def build_recording_topic_catalog(
             other.append(
                 {
                     "name": topic,
-                    "label": tail,
-                    "camera": "",
-                    "tail": tail,
                     "short_name": f"Other - {tail}",
                     "group": "Other",
-                    "default_selected": topic in default_selected,
                 }
             )
 
     for camera in enabled:
         namespace = str(camera["namespace"])
-        entries = sorted(topics_by_camera[namespace], key=lambda item: item["tail"])
+        entries = sorted(topics_by_camera[namespace], key=lambda item: item["short_name"])
         cameras.append(
             {
-                "name": camera["name"],
                 "namespace": namespace,
                 "label": camera.get("dashboard_label", camera["name"]),
-                "detected": bool(entries),
                 "topics": entries,
             }
         )
 
-    other = sorted(other, key=lambda item: item["tail"])
+    other = sorted(other, key=lambda item: item["short_name"])
     return {
         "cameras": cameras,
         "other": other,

@@ -1,7 +1,6 @@
 import { escapeHtml } from "../shared/format.js";
 
 const cameraDock = document.getElementById("camera-dock");
-const cameraPageMeta = document.getElementById("camera-page-meta");
 const enableCameras = Boolean(cameraDock);
 const CAMERA_FPS_WINDOW_MS = 1500;
 const CAMERA_POLL_INTERVAL_MS = 250;
@@ -56,10 +55,6 @@ async function pollCameraMetadata() {
     }
     const isPlayback = Boolean(payload.playback_mode);
     renderCameraPanels(payload.cameras || [], isPlayback);
-    if (cameraPageMeta) {
-      const liveCount = (payload.cameras || []).filter((camera) => !camera.stale && camera.visible).length;
-      cameraPageMeta.textContent = `${liveCount}/${(payload.cameras || []).length} streams ${isPlayback ? "playback" : "live"}`;
-    }
   } catch (_error) {
     // The pose WebSocket remains the primary status signal; image polling can retry quietly.
   }
@@ -180,13 +175,8 @@ function updateCameraPanelAspect(panel, camera) {
 }
 
 function updateCameraPanelLayout(panel, index) {
-  if (cameraDock?.classList.contains("spatial-camera-dock")) {
-    panel.style.gridColumn = "1 / span 1";
-    panel.style.gridRow = `${index + 1} / span 1`;
-    return;
-  }
-  panel.style.gridColumn = `${index + 1} / span 1`;
-  panel.style.gridRow = "1 / span 1";
+  panel.style.gridColumn = "1 / span 1";
+  panel.style.gridRow = `${index + 1} / span 1`;
 }
 
 function updateCameraStream(panel, camera) {

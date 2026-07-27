@@ -3,7 +3,6 @@ import { escapeHtml } from "../shared/format.js";
 const settingsPanel = document.getElementById("settings-panel");
 const settingsStatus = document.getElementById("settings-status");
 const settingsCameraList = document.getElementById("settings-camera-list");
-const settingsRestartBanner = document.getElementById("settings-restart-banner");
 const settingsRestartMessage = document.getElementById("settings-restart-message");
 const settingsRestartButton = document.getElementById("settings-restart-button");
 const ROLE_STYLE = {
@@ -200,16 +199,6 @@ async function setGripperTrackingEnabled(name, enabled) {
     const message = error instanceof Error ? error.message : String(error);
     setSettingsStatus(`Failed to update ${name}: ${message}`);
   }
-}
-
-function showRestartBanner(message) {
-  if (!settingsRestartBanner) {
-    return;
-  }
-  if (settingsRestartMessage) {
-    settingsRestartMessage.textContent = message || "Saved. Restart the backend to apply.";
-  }
-  settingsRestartBanner.hidden = false;
 }
 
 async function restartBackend() {

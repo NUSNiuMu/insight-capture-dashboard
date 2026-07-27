@@ -76,13 +76,7 @@ def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object
         message_count = int(metadata.get("message_count", 0) or 0)
         topics = metadata.get("topics_with_message_count") or []
         size_bytes = _directory_size_bytes(bag_dir)
-        labeled = (
-            _result_exists(results_root, "labels", bag_dir.name)
-            or _result_exists(results_root, "label", bag_dir.name)
-            or _result_exists(results_root, "labeled", bag_dir.name)
-        )
         scored = _result_exists(results_root, "scores", bag_dir.name) or _result_exists(results_root, "scoring", bag_dir.name)
-        optimized = _result_exists(results_root, "optimized", bag_dir.name) or _result_exists(results_root, "optimization", bag_dir.name)
         # The persisted report distinguishes pass, fail, and never checked.
         integrity: Optional[bool] = None
         integrity_path = results_root / "integrity" / f"{bag_dir.name}.json"
@@ -94,22 +88,13 @@ def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object
         entries.append(
             {
                 "name": bag_dir.name,
-                "path": str(bag_dir),
-                "size_bytes": size_bytes,
                 "size_label": _format_bytes(size_bytes),
                 "duration_s": duration_ns / 1_000_000_000.0,
                 "message_count": message_count,
                 "topic_count": len(topics) if isinstance(topics, list) else 0,
-                "modified_at_epoch_s": bag_dir.stat().st_mtime,
-                "labeled": labeled,
                 "scored": scored,
-                "optimized": optimized,
                 "integrity": integrity,
-                "label": (
-                    f"{'labeled' if labeled else 'unlabeled'} / "
-                    f"{'scored' if scored else 'unscored'} / "
-                    f"{'optimized' if optimized else 'not optimized'}"
-                ),
+                "label": "scored" if scored else "unscored",
             }
         )
     return entries

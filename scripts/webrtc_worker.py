@@ -122,7 +122,7 @@ def build_app(streams: Optional[WebRtcStreams], camera_topic_types: Dict[str, st
             except RuntimeError:
                 pass  # loop shutting down; the session is about to close too
 
-        session = streams.create_session(camera_name, topic_type, send_signal)
+        session = streams.create_session(camera_name, send_signal)
         try:
             async for message in ws:
                 if message.type != web.WSMsgType.TEXT:

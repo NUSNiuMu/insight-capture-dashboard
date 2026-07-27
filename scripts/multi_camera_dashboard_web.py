@@ -547,10 +547,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 self.last_pose_received_time[name] = 0.0
             self.trace_generation += 1
 
-    def invalidate_trace_snapshots(self) -> None:
-        with self.pose_lock:
-            self.trace_generation += 1
-
     def set_playback_mode(self, enabled: bool) -> None:
         # Topic remapping, not boot-relative timestamps, separates playback.
         self._playback_mode = enabled

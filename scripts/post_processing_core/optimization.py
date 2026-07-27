@@ -61,7 +61,6 @@ class OptimizationManager:
                 "state": self._state,
                 "step": self._step,
                 "step_name": self.STEP_NAMES[self._step - 1] if 1 <= self._step <= 4 else "",
-                "total_steps": 4,
                 "sub_progress": round(self._sub_progress, 4),
                 "run_name": self._run_name,
                 "log_tail": list(self._log[-30:]),
@@ -94,8 +93,6 @@ class OptimizationManager:
             hz_label = str(int(output_hz)) if output_hz == int(output_hz) else str(output_hz).replace(".", "p")
             stream = self._stream_name(image_topic_str)
             self._result = {
-                "trajectory_3d": f"/optimization-runs/{run_name}/viz/{stream}_{hz_label}hz_vs_vio100/trajectory_3d.png",
-                "trajectory_2d": f"/optimization-runs/{run_name}/viz/{stream}_{hz_label}hz_vs_vio100/trajectory_2d.png",
                 "colmap_log": f"/optimization-runs/{run_name}/colmap/{stream}_{hz_label}hz/colmap.log",
             }
             cmd = [

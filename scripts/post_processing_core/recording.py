@@ -499,20 +499,9 @@ class RecordingManager:
             catalog = self.topic_catalog
             output_lines = list(self._output_lines)
             recording = bool(self.processes) or self._image_writer_active
-            pids = {group: process.pid for group, process in self.processes.items()}
             return {
                 "recording": recording,
-                "pid": next(iter(pids.values())) if pids else None,
-                "pids": pids,
                 "output_path": self.output_path,
-                "started_at": self.started_at,
-                "topics": list(self.current_topics),
                 "topic_catalog": catalog,
                 "recent_output": output_lines,
-                "merge_state": self.merge_state,
-                "merge_error": self.merge_error,
-                "host_sync_dir": None if self.host_sync_dir is None else str(self.host_sync_dir),
-                "host_sync_ssh_target": self.host_sync_ssh_target or None,
-                "sync_to_host_on_stop": self.sync_to_host_on_stop,
-                "sync_status": dict(self.last_sync_status),
             }

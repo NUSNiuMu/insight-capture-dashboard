@@ -13,10 +13,6 @@ class PlaybackRoutes:
     def __init__(self, context: DashboardContext) -> None:
         self.context = context
 
-    def _on_playback_finished(self) -> None:
-        self.context.node.set_playback_mode(False)
-        self.context.node.clear_traces()
-
     async def _handle_playback_start(self, request: web.Request) -> web.Response:
         body = await request.json()
         bag_name = str(body.get("bag_name", "")).strip()

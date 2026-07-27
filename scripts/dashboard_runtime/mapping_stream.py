@@ -90,11 +90,6 @@ class MappingStream:
                 status = dict(value)
                 age = now - self._last_received[name]
                 status["online"] = self._last_received[name] > 0.0 and age <= 2.0
-                status["age_ms"] = (
-                    None
-                    if self._last_received[name] <= 0.0
-                    else round(age * 1000.0)
-                )
                 statuses[name] = status
             payload: Dict[str, object] = {
                 "type": "mapping_update",

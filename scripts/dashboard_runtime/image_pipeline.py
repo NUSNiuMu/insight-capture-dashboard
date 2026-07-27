@@ -91,7 +91,7 @@ class ImagePipeline:
                     gripper_image = (
                         display_image
                         if display_image is not None
-                        else self.owner._decode_calibration_message(topic_type, msg)
+                        else self._decode_raw_image(topic_type, msg)
                     )
                     if gripper_image is not None:
                         self.owner._process_gripper_image(camera_name, gripper_image)
@@ -187,7 +187,32 @@ class ImagePipeline:
             if encoding in ("mono8", "8uc1"):
                 data = np.frombuffer(msg.data, dtype=np.uint8)
                 return data.reshape((msg.height, msg.width))
-        return self.owner._decode_calibration_message("image", msg)
+        return self._decode_raw_image("image", msg)
+
+    def _decode_raw_image(self, topic_type: str, msg: object) -> Optional[np.ndarray]:
+        """Decode a raw or compressed ROS image message into a mono/BGR array."""
+        if topic_type == "compressed":
+            buffer = np.frombuffer(bytes(msg.data), dtype=np.uint8)
+            return cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+        if not isinstance(msg, RosImage) or msg.width <= 0:
+            return None
+        height, width, step = int(msg.height), int(msg.width), int(msg.step)
+        if step < width:
+            return None
+        raw = np.frombuffer(msg.data, dtype=np.uint8)
+        encoding = msg.encoding.lower()
+        if encoding in ("mono8", "8uc1"):
+            required = height * step
+            if raw.size < required:
+                return None
+            return raw[:required].reshape(height, step)[:, :width].copy()
+        if encoding == "nv12":
+            total_rows, remainder = divmod(raw.size, step)
+            if remainder or total_rows <= 0 or (total_rows * 2) % 3:
+                return None
+            yuv = raw[: total_rows * step].reshape(total_rows, step)[:, :width].copy()
+            return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
+        return None
 
     @staticmethod
     def _jpeg_dimensions(data: bytes) -> Tuple[int, int]:

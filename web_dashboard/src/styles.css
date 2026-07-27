@@ -177,9 +177,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 /* Camera monitor -- panel chrome is paper, the video body is a screen. */
 .camera-dock { display: grid; gap: 15px; }
-.camera-dock.image-camera-dock { position: static; grid-template-columns: repeat(3, minmax(0,1fr)); width: 100%; height: auto; pointer-events: auto; }
 .camera-panel { display: flex; min-width: 0; overflow: hidden; border: 1px solid var(--line-dark); border-radius: 10px; flex-direction: column; background: var(--screen); box-shadow: var(--shadow-sm); pointer-events: auto; }
-.image-camera-dock .camera-panel { width: 100%; max-width: none; resize: none; }
 .camera-panel.minimized { min-height: 70px; }
 .camera-panel.minimized .camera-body { display: none; }
 .camera-panel.maximized { position: fixed; inset: 24px; z-index: 100; width: auto !important; max-width: none; height: auto !important; border-radius: 14px; box-shadow: 0 30px 100px rgba(42, 35, 24, 0.4); }
@@ -386,7 +384,6 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
 
 @media (max-width: 1120px) {
   .app-shell { grid-template-columns: 214px minmax(0,1fr); }
-  .camera-dock.image-camera-dock { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .record-hero { align-items: flex-start; flex-direction: column; }
   .record-controls { width: 100%; justify-content: flex-start; }
   .recording-layout { grid-template-columns: 1fr; }
@@ -430,7 +427,6 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
 @media (max-width: 580px) {
   .content-heading { flex-direction: column; }
   .metric-grid { grid-template-columns: 1fr; }
-  .camera-dock.image-camera-dock { grid-template-columns: 1fr; }
   .playback-row, .record-controls { align-items: stretch; flex-direction: column; }
   .playback-row > *, .record-controls > * { width: 100%; }
   .record-hero { padding: 20px; }

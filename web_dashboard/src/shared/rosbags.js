@@ -54,7 +54,6 @@ function renderBagList(bags) {
           bag.integrity === true ? "complete" : bag.integrity === false ? "incomplete" : "unverified"
         }</span>
         <span class="bag-badge ${bag.scored ? "is-ok" : ""}">${bag.scored ? "scored" : "unscored"}</span>
-        <span class="bag-badge ${bag.optimized ? "is-ok" : ""}">${bag.optimized ? "optimized" : "not optimized"}</span>
       </div>
       <div class="bag-row-actions">
         <button type="button" class="bag-delete-button" data-bag-name="${escapeHtml(bag.name || "")}">Delete</button>

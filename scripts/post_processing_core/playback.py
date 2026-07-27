@@ -5,7 +5,7 @@ import signal
 import subprocess
 import threading
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Callable, Dict, List, Optional, TYPE_CHECKING
 
 try:
     import yaml
@@ -47,23 +47,6 @@ class PlaybackManager:
         with self._lock:
             self._reap_unlocked()
             return {"state": "playing" if self._process is not None else "idle", "bag_name": self._bag_name}
-
-    def get_bag_time_range(self, bag_name: str) -> Optional[Tuple[int, int]]:
-        bag_path = (self.rosbag_root / bag_name).resolve()
-        topics = _read_bag_topics(bag_path)  # reuse metadata reader
-        meta_path = bag_path / "metadata.yaml"
-        if not meta_path.exists():
-            return None
-        try:
-            with open(meta_path, "r") as f:
-                meta = yaml.safe_load(f) if yaml else {}
-            info = meta.get("rosbag2_bagfile_information", {})
-            start_ns = info.get("starting_time", {}).get("nanoseconds_since_epoch", 0)
-            duration_ns = info.get("duration", {}).get("nanoseconds", 0)
-            margin_ns = int(2e9)  # 2-second margin each side
-            return (start_ns - margin_ns, start_ns + duration_ns + margin_ns)
-        except Exception:
-            return None
 
     def start(
         self,

@@ -145,12 +145,10 @@ class WebRtcSession:
     def __init__(
         self,
         camera_name: str,
-        topic_type: str,
         send_signal: Callable[[Dict], None],
         log: Callable[[str], None],
     ) -> None:
         self.camera_name = camera_name
-        self.topic_type = topic_type
         self._send_signal = send_signal
         self._log = log
         self._lock = threading.Lock()
@@ -373,9 +371,9 @@ class WebRtcStreams:
         return cls(log=log, on_session_state_change=on_session_state_change)
 
     def create_session(
-        self, camera_name: str, topic_type: str, send_signal: Callable[[Dict], None]
+        self, camera_name: str, send_signal: Callable[[Dict], None]
     ) -> WebRtcSession:
-        session = WebRtcSession(camera_name, topic_type, send_signal, self._log)
+        session = WebRtcSession(camera_name, send_signal, self._log)
         with self._lock:
             sessions = self._sessions.setdefault(camera_name, [])
             was_empty = not sessions
@@ -393,10 +391,6 @@ class WebRtcStreams:
         session.close()
         if now_empty and self._on_session_state_change:
             self._on_session_state_change(session.camera_name, False)
-
-    def has_sessions(self, camera_name: str) -> bool:
-        sessions = self._sessions.get(camera_name)
-        return bool(sessions)
 
     def push_resolved_frame(self, camera_name: str, fmt: str, width: int, height: int, data: bytes) -> None:
         """Fan a resolved frame out to all sessions for its camera."""

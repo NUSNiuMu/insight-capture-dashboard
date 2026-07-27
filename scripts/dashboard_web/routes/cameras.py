@@ -32,20 +32,6 @@ class CameraRoutes:
         }
         return web.Response(body=frame.data, content_type=frame.mime_type, headers=headers)
 
-    async def _handle_camera_hand_overlay(self, request: web.Request) -> web.Response:
-        camera_name = request.match_info.get("camera_name", "")
-        if camera_name not in self.context.node.hand_overlay_available:
-            raise web.HTTPNotFound(text="no hand-landmark data for this camera")
-        if camera_name not in self.context.node.hand_overlay_enabled:
-            return web.json_response({"camera": camera_name, "enabled": False, "hands": []})
-        payload = self.context.node.hand_overlay_payload(camera_name) or {
-            "camera": camera_name,
-            "hands": [],
-            "stale": True,
-        }
-        payload["enabled"] = True
-        return web.json_response(payload)
-
     async def _handle_image_capabilities(self, _request: web.Request) -> web.Response:
         # GStreamer capabilities are stable for the process lifetime.
         if self.context._image_capabilities_cache is None:

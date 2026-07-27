@@ -45,15 +45,11 @@ def _points(
 class HandThumbsUpResult:
     matched: bool
     reason: str
-    curled_fingers: int = 0
 
 
 @dataclass(frozen=True)
 class DoubleThumbsUpResult:
     active: bool
-    hands_detected: int
-    matching_hands: int
-    reasons: Tuple[str, ...]
 
 
 def classify_thumbs_up(
@@ -94,8 +90,8 @@ def classify_thumbs_up(
         if pip_bent and tip_folded and tip_not_raised:
             curled += 1
     if curled != 4:
-        return HandThumbsUpResult(False, "fingers_not_curled", curled)
-    return HandThumbsUpResult(True, "matched", curled)
+        return HandThumbsUpResult(False, "fingers_not_curled")
+    return HandThumbsUpResult(True, "matched")
 
 
 def classify_double_thumbs_up(
@@ -103,15 +99,10 @@ def classify_double_thumbs_up(
 ) -> DoubleThumbsUpResult:
     """Require exactly two detected hands and a thumbs-up match on both."""
     if len(hands) != 2:
-        return DoubleThumbsUpResult(False, len(hands), 0, ("requires_two_hands",))
+        return DoubleThumbsUpResult(False)
     results = tuple(classify_thumbs_up(hand, min_score) for hand in hands)
     matching = sum(1 for result in results if result.matched)
-    return DoubleThumbsUpResult(
-        active=matching == 2,
-        hands_detected=2,
-        matching_hands=matching,
-        reasons=tuple(result.reason for result in results),
-    )
+    return DoubleThumbsUpResult(active=matching == 2)
 
 
 @dataclass(frozen=True)

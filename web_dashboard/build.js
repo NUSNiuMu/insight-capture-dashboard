@@ -46,7 +46,6 @@ for (const [name, buf] of Object.entries(preserved)) {
   fs.writeFileSync(path.join(staticDir, name), buf);
 }
 
-copyFile(path.join(srcDir, "index.html"), path.join(distDir, "index.html"));
 copyFile(path.join(srcDir, "3d.html"), path.join(distDir, "3d.html"));
 copyFile(path.join(srcDir, "bags.html"), path.join(distDir, "bags.html"));
 copyFile(path.join(srcDir, "recording.html"), path.join(distDir, "recording.html"));

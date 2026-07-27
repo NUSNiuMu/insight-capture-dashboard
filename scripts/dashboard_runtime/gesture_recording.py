@@ -39,8 +39,6 @@ class GestureRecordingController:
         self._last_event: Optional[str] = None
         self._last_error: Optional[str] = None
         self._message = "Gesture recording armed" if self.enabled else "Gesture recording disabled"
-        self._hands_detected = 0
-        self._matching_hands = 0
         self._last_snapshot_monotonic: Optional[float] = None
         self._worker: Optional[threading.Thread] = None
         if self.enabled:
@@ -67,8 +65,6 @@ class GestureRecordingController:
                 return
             triggered = self._latch.update(result.active, now)
             self._last_snapshot_monotonic = now
-            self._hands_detected = result.hands_detected
-            self._matching_hands = result.matching_hands
             latch = self._latch.snapshot(now)
             if latch.phase == "armed" and not latch.active:
                 if self._last_event and (
@@ -111,8 +107,6 @@ class GestureRecordingController:
                 return
             was_armed = self._latch.armed
             self._latch.update(False, now)
-            self._hands_detected = 0
-            self._matching_hands = 0
             if not was_armed and self._latch.armed:
                 if self._last_event and (
                     self._last_event.startswith("blocked")
@@ -144,7 +138,7 @@ class GestureRecordingController:
 
         with self._lock:
             self._owned_output_path = None
-        if status.get("merge_state") == "merging":
+        if self.recording_manager.merge_state == "merging":
             self._set_event("blocked_merge", "Previous recording is still merging")
             return
         free_ratio = self._free_ratio(self.recording_manager.rosbag_root)
@@ -220,20 +214,12 @@ class GestureRecordingController:
                 state = latch.phase
             return {
                 "enabled": self.enabled,
-                "camera": self.camera,
                 "state": state,
                 "gesture_phase": latch.phase,
-                "gesture_active": latch.active,
                 "hold_progress": round(latch.hold_progress, 3),
                 "release_progress": round(latch.release_progress, 3),
-                "hold_sec": self._latch.hold_sec,
                 "release_sec": self._latch.release_sec,
-                "hands_detected": self._hands_detected,
-                "matching_hands": self._matching_hands,
-                "owns_recording": owned,
                 "message": self._message,
-                "last_event": self._last_event,
-                "last_error": self._last_error,
             }
 
     def close(self) -> None:

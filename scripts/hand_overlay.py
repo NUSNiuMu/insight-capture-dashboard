@@ -445,18 +445,6 @@ class HandOverlayMixin:
             return None
         return track.landmarks
 
-    def hand_overlay_payload(self, camera_name: str) -> Optional[Dict[str, object]]:
-        snapshot = self.hand_latest_snapshot.get(camera_name)
-        if snapshot is None:
-            return None
-        age_sec = time.monotonic() - snapshot.received_monotonic
-        return {
-            "camera": camera_name,
-            "stamp_ns": snapshot.stamp_ns,
-            "stale": age_sec > HAND_DATA_TIMEOUT_SEC,
-            "hands": snapshot.hands,
-        }
-
     def compose_hand_overlay_jpeg(
         self, camera_name: str, jpeg_bytes: bytes, version: int = 0
     ) -> bool:

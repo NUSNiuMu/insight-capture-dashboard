@@ -50,12 +50,6 @@ class RecordingRoutes:
     async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
         return web.json_response(self.context.recording_manager.stop())
 
-    async def _handle_recording_sync(self, _request: web.Request) -> web.Response:
-        sync_status = self.context.recording_manager.sync_recording_to_host()
-        payload = self.context.recording_manager.status()
-        payload["sync_status"] = sync_status
-        return web.json_response(payload)
-
     async def _handle_rosbag_list(self, _request: web.Request) -> web.Response:
         loop = asyncio.get_event_loop()
         bags = await loop.run_in_executor(
