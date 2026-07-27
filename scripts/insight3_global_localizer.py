@@ -29,6 +29,7 @@ from insight9_mapping_core import (  # noqa: E402
     localize_features,
     matrix_from_pose,
     matrix_from_transform,
+    rotation_distance_deg,
 )
 
 try:
@@ -486,12 +487,23 @@ class Insight3GlobalLocalizer(Node):
         if correction is None or extrinsic is None:
             return
 
-        correction_changed = (
-            state.transformed_correction is None
-            or not np.allclose(
-                correction, state.transformed_correction, rtol=0.0, atol=1e-12
+        if state.transformed_correction is None:
+            correction_changed = True
+        else:
+            correction_translation_m = float(
+                np.linalg.norm(
+                    correction[:3, 3] - state.transformed_correction[:3, 3]
+                )
             )
-        )
+            correction_rotation_deg = rotation_distance_deg(
+                state.transformed_correction, correction
+            )
+            correction_changed = (
+                correction_translation_m
+                >= self._args.path_reset_translation_m
+                or correction_rotation_deg
+                >= self._args.path_reset_rotation_deg
+            )
         extrinsic_changed = (
             state.transformed_extrinsic is None
             or not np.allclose(
@@ -505,22 +517,25 @@ class Insight3GlobalLocalizer(Node):
             with self._lock:
                 state.history.clear()
                 state.history.extend(pending)
+            active_correction = correction
         else:
             pending = tuple(
                 sample
                 for sample in history
                 if sample.stamp_ns > state.last_transformed_stamp_ns
             )
+            active_correction = state.transformed_correction
 
         for sample in pending:
-            transform = correction @ matrix_from_pose(sample) @ extrinsic
+            transform = active_correction @ matrix_from_pose(sample) @ extrinsic
             stamp = Time(nanoseconds=sample.stamp_ns).to_msg()
             state.transformed_history.append(
                 pose_message(transform, stamp, self._map_frame)
             )
             state.last_transformed_stamp_ns = sample.stamp_ns
 
-        state.transformed_correction = correction
+        if correction_changed or extrinsic_changed:
+            state.transformed_correction = correction
         state.transformed_extrinsic = extrinsic
         path = PathMsg()
         path.header.frame_id = self._map_frame
@@ -581,6 +596,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--path-points", type=int, default=1000)
     parser.add_argument("--path-interval-ms", type=int, default=50)
     parser.add_argument("--path-publish-hz", type=float, default=20.0)
+    parser.add_argument("--path-reset-translation-m", type=float, default=0.05)
+    parser.add_argument("--path-reset-rotation-deg", type=float, default=3.0)
     return parser
 
 
