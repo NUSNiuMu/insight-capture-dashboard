@@ -40,6 +40,49 @@ Visualization Manager:
         Value: /insight9_sparse_map/points
       Use Fixed Frame: true
       Value: true
+    - Alpha: 0.9
+      Autocompute Intensity Bounds: true
+      Autocompute Value Bounds:
+        Max Value: 10
+        Min Value: -10
+        Value: true
+      Axis: Z
+      Channel Name: intensity
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 80; 70
+      Color Transformer: FlatColor
+      Decay Time: 0
+      Name: Current triangulated frame
+      Position Transformer: XYZ
+      Queue Size: 2
+      Selectable: true
+      Size (Pixels): 5
+      Size (m): 0.025
+      Style: Points
+      Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /insight9_sparse_map/current_points
+      Use Fixed Frame: true
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Image Topic:
+        Depth: 2
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /insight9_sparse_map/debug_matches
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Stereo match validation
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Value: true
     - Alpha: 1
       Buffer Length: 1
       Class: rviz_default_plugins/Path
