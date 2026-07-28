@@ -271,9 +271,6 @@ class HandPoseManager:
             / "models"
             / "handpose"
             / "hand_landmarker.task",
-            # Temporary compatibility while the untracked experiment is
-            # migrated; this path is never included in release images.
-            self.project_root / "gesture" / "models" / "hand_landmarker.task",
         ]
         return next(
             (
