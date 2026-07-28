@@ -48,7 +48,7 @@ from camera_setup import (
 )
 from hand_tracking.gripper import GripperTrackingMixin
 from hand_tracking.overlay import HandOverlayMixin
-from hw_jpeg import HwJpegCodec
+from dashboard_media.jpeg import HwJpegCodec
 from inprocess_bag_writer import InProcessBagWriter
 import perf_tracker
 from post_processing import (

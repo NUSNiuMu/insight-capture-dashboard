@@ -17,7 +17,7 @@ from aiohttp import web
 from multiprocessing.connection import Listener
 
 from camera_setup import build_dashboard_config, load_setup
-from webrtc_stream import WebRtcStreams
+from dashboard_media.webrtc import WebRtcStreams
 
 _AUTHKEY_ENV = "INSIGHT_WEBRTC_AUTHKEY"
 _PR_SET_PDEATHSIG = 1

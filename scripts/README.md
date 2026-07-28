@@ -11,6 +11,7 @@
 |---|---|
 | `dashboard_web/` | aiohttp 应用和 Web API |
 | `dashboard_runtime/` | Dashboard 运行时协调 |
+| `dashboard_media/` | 硬件 JPEG 和 WebRTC 流 |
 | `hand_tracking/` | 实时手部感知、手势和夹爪 |
 | `handpose/` | 离线 Hand pose |
 | `post_processing_core/` | rosbag 与离线处理 |

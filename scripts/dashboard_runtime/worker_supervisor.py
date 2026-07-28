@@ -17,7 +17,7 @@ try:
 except Exception:  # pragma: no cover - fake mode can run without ROS imports
     rclpy = None
 
-from hw_jpeg import HwJpegCodec
+from dashboard_media.jpeg import HwJpegCodec
 
 from .models import CameraFrame
 

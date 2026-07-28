@@ -46,6 +46,7 @@ scripts/
   post_processing.py                离线处理公共导入兼容面
   dashboard_web/                    HTTP app、context、middleware、routes、WebSocket
   dashboard_runtime/                Dashboard 图像、录制桥接、worker 监管与状态
+  dashboard_media/                  硬件 JPEG 和 WebRTC 流实现
   hand_tracking/                    实时手部关键点、手势识别与夹爪跟踪
   handpose/                         离线 MediaPipe/WiLoR Hand pose 提取与任务管理
   post_processing_core/             bag catalog、录制、恢复、回放、同步、优化
@@ -73,6 +74,7 @@ rosbags/ outputs/ runs/ data/        运行数据；不提交、不烘焙
 |---|---|
 | HTTP endpoint | `dashboard_web/routes/`，跨 route 状态经 `DashboardContext` |
 | Dashboard ROS/图像/worker 协调 | `dashboard_runtime/` |
+| JPEG 编解码与 WebRTC 流 | `dashboard_media/` |
 | 实时手部 landmark、手势、夹爪 | `hand_tracking/` |
 | 离线 Hand pose | `handpose/` |
 | 录制、bag、回放、优化 | `post_processing_core/` |
@@ -104,8 +106,8 @@ small infrastructure adapter
 ## 迁移顺序
 
 1. **手部感知**：归并 overlay、手势和夹爪逻辑，保留原 import facade。
-2. **媒体 worker**：归并 WebRTC、JPEG 和 hand-overlay worker 的实现，顶层
-   保留进程入口。
+2. **媒体实现**：归并 WebRTC 和 JPEG 实现，顶层保留兼容 facade，worker
+   进程入口保持稳定。
 3. **Mapping**：把三个 mapper/localizer 入口缩成组合层，算法继续收进
    `insight9_mapping_core/`。
 4. **命令与运维**：区分产品进程入口、管理员命令和开发工具。

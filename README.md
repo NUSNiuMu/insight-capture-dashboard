@@ -143,6 +143,7 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 | `scripts/run_dashboard.sh` | 统一启动入口，`docker compose up -d` + 健康检查，`--jetson` 额外拉起本机 kiosk 窗口 |
 | `scripts/multi_camera_dashboard_web.py` | Web dashboard 稳定进程入口与 ROS 生命周期组合 |
 | `scripts/dashboard_web/` / `dashboard_runtime/` | Web API、WebSocket 与 Dashboard 运行时领域实现 |
+| `scripts/dashboard_media/` | 硬件 JPEG 编解码与 WebRTC 流实现 |
 | `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
 | `scripts/post_processing.py` | Web 版 rosbag 录制管理、topic 发现分组、COLMAP 优化 pipeline 调度 |
 | `scripts/post_processing_core/` | 录制、恢复、回放、同步、bag catalog 与优化实现 |
