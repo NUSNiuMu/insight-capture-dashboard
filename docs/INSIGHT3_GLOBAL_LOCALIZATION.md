@@ -21,7 +21,7 @@ Insight9 稀疏节点需要至少三个有重叠视野的关键帧确认地标�
 Insight9，平移超过 5 cm 或旋转超过 3°，同时持续观察同一个有纹理区域。
 两个 Insight3 也需要看到该区域。地图中至少有 80 个确认特征后才开始定位。
 
-定位并不是单帧跳转。每一路必须连续得到三次相互一致的 PnP 结果，并满足：
+定位不会由单帧结果触发。每一路必须连续得到三次相互一致的 PnP 结果，并满足：
 
 - 至少 12 个描述子匹配、10 个 PnP 内点；
 - 内点比例至少 45%，中值重投影误差不超过 3 px；
@@ -34,14 +34,19 @@ Insight9，平移超过 5 cm 或旋转超过 3°，同时持续观察同一个�
   并从该点开始全局轨迹；
 - 后续 VIO 作为 100 Hz 连续运动预测，重定位结果作为低频绝对观测更新
   `T_map_odom`；
-- EKF 的后验修正按默认 1 秒时间常数随 VIO 帧连续注入，后续重定位不再清空
-  轨迹，也不会在单帧内把相机跳到新位置。
+- 新观测与当前对外 `T_map_odom` 的差异小于 `0.50 m` 且 `25°` 时，EKF 的
+  后验修正按默认 1 秒时间常数随 VIO 帧连续注入，不会产生单帧跳变；
+- 任一差异达到 `0.50 m` 或 `25°` 时，视为相机已经大幅漂移或飞走后重新找回，
+  立即用新观测重置 EKF 的内部状态和对外输出，同时清空旧 Path 段，从跳回后的
+  当前点重新画轨迹，避免跨空间连线。
 
 默认平移过程噪声是 `0.02 m/√s`、旋转过程噪声是 `0.5°/√s`；重定位观测标准差
 是 `0.10 m` 和 `3°`。可用命令行参数 `--ekf-process-translation-std`、
 `--ekf-process-rotation-std-deg`、`--ekf-measurement-translation-std`、
 `--ekf-measurement-rotation-std-deg` 和
-`--ekf-correction-time-constant-sec` 调整。
+`--ekf-correction-time-constant-sec` 调整。大小修正分流阈值通过
+`--jump-translation-m` 和 `--jump-rotation-deg` 调整；它们只在三帧 PnP
+共识已经通过后判断，不会绕过重定位几何验证。
 
 PnP 仍在左目光学坐标系中计算，但发布前会通过设备 TF 求出左右目光心中点：
 
@@ -78,6 +83,9 @@ ros2 topic echo --full-length /insight_global/insight3_b/status
 不会清除已确认的全局变换；只有新的三帧一致结果才会更新它。
 `ekf_initialized`、`ekf_innovation_translation_m`、
 `ekf_innovation_rotation_deg` 和 `ekf_covariance_diagonal` 用于检查融合状态。
+`correction_mode` 为 `initialize`、`ekf`、`jump` 或 `none`；
+`correction_translation_m`、`correction_rotation_deg` 是新观测相对当前对外
+校正的差异，`hard_relocalizations` 是本次地图会话累计直跳次数。
 
 ## 重定位精度如何计算
 

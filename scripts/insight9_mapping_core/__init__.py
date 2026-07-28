@@ -1,5 +1,10 @@
 """Realtime sparse stereo mapping primitives for Insight9."""
 
+from .adaptive_relocalization import (
+    AdaptiveRelocalizationConfig,
+    AdaptiveRelocalizationPolicy,
+    AdaptiveRelocalizationUpdate,
+)
 from .geometry import (
     PoseSample,
     StereoCalibration,
@@ -37,6 +42,9 @@ from .synchronization import PoseBuffer, StereoPair, StereoPairSynchronizer
 from .relocalization_ekf import RelocalizationEkf, RelocalizationEkfConfig
 
 __all__ = [
+    "AdaptiveRelocalizationConfig",
+    "AdaptiveRelocalizationPolicy",
+    "AdaptiveRelocalizationUpdate",
     "LandmarkMap",
     "LandmarkMapConfig",
     "GlobalLocalizationConfig",

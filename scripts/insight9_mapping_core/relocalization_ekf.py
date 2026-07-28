@@ -125,6 +125,16 @@ class RelocalizationEkf:
         self.last_innovation_translation_m = 0.0
         self.last_innovation_rotation_deg = 0.0
 
+    def reinitialize(self, map_to_odom: np.ndarray) -> None:
+        """Immediately replace the estimate and published correction."""
+
+        measurement = _valid_transform(map_to_odom)
+        self._estimate = measurement
+        self._output = measurement.copy()
+        self._covariance.fill(0.0)
+        self.last_innovation_translation_m = 0.0
+        self.last_innovation_rotation_deg = 0.0
+
     def predict(self, dt_sec: float) -> None:
         if not self.initialized or not np.isfinite(dt_sec) or dt_sec <= 0.0:
             return
@@ -165,11 +175,7 @@ class RelocalizationEkf:
 
         measurement = _valid_transform(map_to_odom)
         if not self.initialized:
-            self._estimate = measurement
-            self._output = measurement.copy()
-            # The first accepted localization is the initial condition, not a
-            # weighted compromise with an arbitrary origin.
-            self._covariance.fill(0.0)
+            self.reinitialize(measurement)
             return True
 
         innovation = np.empty(6, dtype=np.float64)

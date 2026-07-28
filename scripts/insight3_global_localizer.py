@@ -20,6 +20,8 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from insight9_mapping_core import (  # noqa: E402
+    AdaptiveRelocalizationConfig,
+    AdaptiveRelocalizationPolicy,
     GlobalLocalizationConfig,
     IpcSuperGlueBackend,
     LocalizationConsensus,
@@ -173,6 +175,7 @@ class CameraState:
         *,
         history_points: int,
         ekf_config: RelocalizationEkfConfig,
+        adaptive_config: AdaptiveRelocalizationConfig,
     ) -> None:
         self.name = name
         self.pose_buffer = PoseBuffer(max_bracket_gap_ns=50_000_000)
@@ -183,7 +186,9 @@ class CameraState:
         self.imu_to_center: Optional[np.ndarray] = None
         self.consensus = LocalizationConsensus(config)
         self.pose_filter = RelocalizationEkf(ekf_config)
+        self.relocalization_policy = AdaptiveRelocalizationPolicy(adaptive_config)
         self.last_relocalization_measurement: Optional[np.ndarray] = None
+        self.hard_relocalizations = 0
         self.last_vio_stamp_ns = -1
         self.last_image_stamp_ns = -1
         self.last_history_stamp_ns = -1
@@ -224,6 +229,10 @@ class Insight3GlobalLocalizer(Node):
             measurement_rotation_std_deg=args.ekf_measurement_rotation_std_deg,
             correction_time_constant_sec=args.ekf_correction_time_constant_sec,
         )
+        adaptive_config = AdaptiveRelocalizationConfig(
+            jump_translation_m=args.jump_translation_m,
+            jump_rotation_deg=args.jump_rotation_deg,
+        )
         self._matcher = IpcSuperGlueBackend(Path(args.inference_socket))
         self._lock = threading.Lock()
         self._map_points = np.empty((0, 3), dtype=np.float32)
@@ -234,6 +243,7 @@ class Insight3GlobalLocalizer(Node):
                 config,
                 history_points=args.path_points,
                 ekf_config=ekf_config,
+                adaptive_config=adaptive_config,
             )
             for name in CAMERAS
         }
@@ -316,6 +326,7 @@ class Insight3GlobalLocalizer(Node):
                 state.consensus = LocalizationConsensus(state.consensus.config)
                 state.pose_filter.reset()
                 state.last_relocalization_measurement = None
+                state.hard_relocalizations = 0
                 state.last_vio_stamp_ns = -1
                 state.last_image_stamp_ns = -1
                 state.last_history_stamp_ns = -1
@@ -401,6 +412,7 @@ class Insight3GlobalLocalizer(Node):
                     state.consensus = LocalizationConsensus(state.consensus.config)
                     state.pose_filter.reset()
                     state.last_relocalization_measurement = None
+                    state.hard_relocalizations = 0
                     state.last_vio_stamp_ns = -1
                     state.last_image_stamp_ns = -1
                     state.last_history_stamp_ns = -1
@@ -586,16 +598,36 @@ class Insight3GlobalLocalizer(Node):
                             )
                         )
                         if measurement_changed:
-                            first_fix = state.pose_filter.observe(measurement)
+                            correction_update = state.relocalization_policy.apply(
+                                state.pose_filter, measurement
+                            )
                             state.last_relocalization_measurement = measurement.copy()
                             state.path_dirty = True
-                            if first_fix:
-                                state.transformed_history.clear()
-                                state.last_transformed_stamp_ns = -1
-                                state.last_global_pose_publish_ns = -1
-                                latest_history = tuple(state.history)[-1:]
-                                state.history.clear()
-                                state.history.extend(latest_history)
+                            transition["correction_mode"] = correction_update.mode
+                            transition["correction_translation_m"] = round(
+                                correction_update.translation_m, 4
+                            )
+                            transition["correction_rotation_deg"] = round(
+                                correction_update.rotation_deg, 3
+                            )
+                            if correction_update.mode in {"initialize", "jump"}:
+                                self._start_new_path_segment(state)
+                            if correction_update.mode == "jump":
+                                state.hard_relocalizations += 1
+                                self.get_logger().warning(
+                                    "%s hard relocalization %d: %.3f m / %.2f deg"
+                                    % (
+                                        name,
+                                        state.hard_relocalizations,
+                                        correction_update.translation_m,
+                                        correction_update.rotation_deg,
+                                    )
+                                )
+                        else:
+                            transition["correction_mode"] = "none"
+                        transition["hard_relocalizations"] = (
+                            state.hard_relocalizations
+                        )
                         transition["ekf_initialized"] = state.pose_filter.initialized
                         transition["ekf_innovation_translation_m"] = round(
                             state.pose_filter.last_innovation_translation_m, 4
@@ -622,6 +654,16 @@ class Insight3GlobalLocalizer(Node):
                         state.consensus.observe(None)
                     state.status = {"state": "error", "error": str(exc)}
                     self.get_logger().error(f"{name} localization failed: {exc}")
+
+    def _start_new_path_segment(self, state: CameraState) -> None:
+        state.transformed_history.clear()
+        state.last_transformed_stamp_ns = -1
+        state.last_global_pose_publish_ns = -1
+        latest_history = tuple(state.history)[-1:]
+        state.history.clear()
+        state.history.extend(latest_history)
+        state.path = PathMsg()
+        state.path.header.frame_id = self._map_frame
 
     def _rebuild_path(self, state: CameraState) -> None:
         with self._lock:
@@ -700,6 +742,13 @@ class Insight3GlobalLocalizer(Node):
             status["published_path_points"] = len(state.path.poses)
             status["ekf_initialized"] = state.pose_filter.initialized
             status["ekf_covariance_diagonal"] = state.pose_filter.covariance_diagonal
+            status["hard_relocalizations"] = state.hard_relocalizations
+            status["jump_translation_m"] = (
+                state.relocalization_policy.config.jump_translation_m
+            )
+            status["jump_rotation_deg"] = (
+                state.relocalization_policy.config.jump_rotation_deg
+            )
             status["pose_frame"] = f"{name}_global_camera_center"
             message = String()
             message.data = json.dumps(status, separators=(",", ":"))
@@ -741,6 +790,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ekf-correction-time-constant-sec", type=float, default=1.0
     )
+    parser.add_argument("--jump-translation-m", type=float, default=0.50)
+    parser.add_argument("--jump-rotation-deg", type=float, default=25.0)
     return parser
 
 
