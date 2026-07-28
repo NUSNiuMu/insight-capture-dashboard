@@ -337,7 +337,11 @@ class Insight3GlobalLocalizer(Node):
                 state.path = PathMsg()
                 state.path.header.frame_id = self._map_frame
                 state.path_dirty = True
-                state.status = {"state": "waiting_for_map", "localized": False}
+                state.status = {
+                    "state": "waiting_for_map",
+                    "localized": False,
+                    "tracking_mode": "unlocalized",
+                }
         self.get_logger().info("Cleared Insight3 global corrections for a new map")
         return response
 
@@ -423,6 +427,11 @@ class Insight3GlobalLocalizer(Node):
                     state.path = PathMsg()
                     state.path.header.frame_id = self._map_frame
                     state.path_dirty = True
+                    state.status = {
+                        "state": "waiting_for_relocalization",
+                        "localized": False,
+                        "tracking_mode": "unlocalized",
+                    }
                 if (
                     sample.stamp_ns - state.last_history_stamp_ns
                     >= self._args.path_interval_ms * 1_000_000
@@ -438,8 +447,8 @@ class Insight3GlobalLocalizer(Node):
                 correction = state.pose_filter.correction
                 extrinsic = (
                     None
-                    if state.transformed_output_extrinsic is None
-                    else state.transformed_output_extrinsic.copy()
+                    if state.imu_to_center is None
+                    else state.imu_to_center.copy()
                 )
                 publish_interval_ns = int(
                     1_000_000_000 / max(self._args.pose_publish_hz, 0.1)
@@ -542,10 +551,13 @@ class Insight3GlobalLocalizer(Node):
                     or imu_to_center is None
                     or len(map_points) < self._args.min_map_features
                 ):
-                    localized = state.consensus.correction is not None
+                    localized = state.pose_filter.initialized
                     state.status = {
-                        "state": "localized" if localized else "waiting",
+                        "state": "vio_only" if localized else "waiting",
                         "localized": localized,
+                        "tracking_mode": (
+                            "vio_only" if localized else "unlocalized"
+                        ),
                         "image_ready": message is not None,
                         "camera_info_ready": camera_matrix is not None,
                         "extrinsic_ready": (
@@ -628,6 +640,17 @@ class Insight3GlobalLocalizer(Node):
                         transition["hard_relocalizations"] = (
                             state.hard_relocalizations
                         )
+                        localized = state.pose_filter.initialized
+                        transition["localized"] = localized
+                        if diagnostics["accepted"]:
+                            tracking_mode = (
+                                "map_matched" if localized else "verifying"
+                            )
+                        else:
+                            tracking_mode = (
+                                "vio_only" if localized else "unlocalized"
+                            )
+                        transition["tracking_mode"] = tracking_mode
                         transition["ekf_initialized"] = state.pose_filter.initialized
                         transition["ekf_innovation_translation_m"] = round(
                             state.pose_filter.last_innovation_translation_m, 4
@@ -638,8 +661,12 @@ class Insight3GlobalLocalizer(Node):
                     state.status = {
                         "state": (
                             "localized"
-                            if transition["localized"]
-                            else "localizing"
+                            if tracking_mode == "map_matched"
+                            else (
+                                "vio_only"
+                                if tracking_mode == "vio_only"
+                                else "localizing"
+                            )
                         ),
                         "map_features": len(map_points),
                         "extract_ms": features.backend_inference_ms,
@@ -652,7 +679,15 @@ class Insight3GlobalLocalizer(Node):
                 except Exception as exc:
                     with self._lock:
                         state.consensus.observe(None)
-                    state.status = {"state": "error", "error": str(exc)}
+                        localized = state.pose_filter.initialized
+                    state.status = {
+                        "state": "error",
+                        "error": str(exc),
+                        "localized": localized,
+                        "tracking_mode": (
+                            "vio_only" if localized else "unlocalized"
+                        ),
+                    }
                     self.get_logger().error(f"{name} localization failed: {exc}")
 
     def _start_new_path_segment(self, state: CameraState) -> None:
@@ -741,6 +776,7 @@ class Insight3GlobalLocalizer(Node):
             status["history_points"] = len(state.history)
             status["published_path_points"] = len(state.path.poses)
             status["ekf_initialized"] = state.pose_filter.initialized
+            status["localized"] = state.pose_filter.initialized
             status["ekf_covariance_diagonal"] = state.pose_filter.covariance_diagonal
             status["hard_relocalizations"] = state.hard_relocalizations
             status["jump_translation_m"] = (
@@ -790,8 +826,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ekf-correction-time-constant-sec", type=float, default=1.0
     )
-    parser.add_argument("--jump-translation-m", type=float, default=0.50)
-    parser.add_argument("--jump-rotation-deg", type=float, default=25.0)
+    parser.add_argument("--jump-translation-m", type=float, default=0.15)
+    parser.add_argument("--jump-rotation-deg", type=float, default=10.0)
     return parser
 
 

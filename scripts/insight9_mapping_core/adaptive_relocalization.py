@@ -14,8 +14,8 @@ from .relocalization_ekf import RelocalizationEkf
 class AdaptiveRelocalizationConfig:
     """Thresholds above which a confirmed global correction is applied at once."""
 
-    jump_translation_m: float = 0.50
-    jump_rotation_deg: float = 25.0
+    jump_translation_m: float = 0.15
+    jump_rotation_deg: float = 10.0
 
     def __post_init__(self) -> None:
         if (

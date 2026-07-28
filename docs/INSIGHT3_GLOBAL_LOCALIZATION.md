@@ -34,9 +34,9 @@ Insight9，平移超过 5 cm 或旋转超过 3°，同时持续观察同一个�
   并从该点开始全局轨迹；
 - 后续 VIO 作为 100 Hz 连续运动预测，重定位结果作为低频绝对观测更新
   `T_map_odom`；
-- 新观测与当前对外 `T_map_odom` 的差异小于 `0.50 m` 且 `25°` 时，EKF 的
+- 新观测与当前对外 `T_map_odom` 的差异小于 `0.15 m` 且 `10°` 时，EKF 的
   后验修正按默认 1 秒时间常数随 VIO 帧连续注入，不会产生单帧跳变；
-- 任一差异达到 `0.50 m` 或 `25°` 时，视为相机已经大幅漂移或飞走后重新找回，
+- 任一差异达到 `0.15 m` 或 `10°` 时，视为相机已经大幅漂移或飞走后重新找回，
   立即用新观测重置 EKF 的内部状态和对外输出，同时清空旧 Path 段，从跳回后的
   当前点重新画轨迹，避免跨空间连线。
 
@@ -47,6 +47,12 @@ Insight9，平移超过 5 cm 或旋转超过 3°，同时持续观察同一个�
 `--ekf-correction-time-constant-sec` 调整。大小修正分流阈值通过
 `--jump-translation-m` 和 `--jump-rotation-deg` 调整；它们只在三帧 PnP
 共识已经通过后判断，不会绕过重定位几何验证。
+
+相机已经完成过一次全局定位后，即使转向尚未建图的区域、当前图像没有足够
+2D–3D 匹配，节点也会保留最后的 `T_map_odom`，进入 `vio_only` 状态并继续用
+Insight3 自身 VIO 发布全局 Pose 和轨迹。重新看到地图后再由 PnP 校准；
+暂时失配不会清空 EKF、隐藏模型或停止轨迹。只有从未取得过全局定位，或者设备
+VIO 本身停止发布时，才没有可继续外推的全局 Pose。
 
 PnP 仍在左目光学坐标系中计算，但发布前会通过设备 TF 求出左右目光心中点：
 
@@ -86,6 +92,8 @@ ros2 topic echo --full-length /insight_global/insight3_b/status
 `correction_mode` 为 `initialize`、`ekf`、`jump` 或 `none`；
 `correction_translation_m`、`correction_rotation_deg` 是新观测相对当前对外
 校正的差异，`hard_relocalizations` 是本次地图会话累计直跳次数。
+`tracking_mode=map_matched` 表示当前 PnP 几何验证通过，
+`tracking_mode=vio_only` 表示暂时看不到已建图区域但仍在使用保留校正和 VIO。
 
 ## 重定位精度如何计算
 
