@@ -7,7 +7,7 @@
   "max_cache_size": 104857600,
   "record_topics": [],
   "gesture_recording": {
-    "enabled": true,
+    "enabled": false,
     "camera": "insight9_a",
     "hold_sec": 0.8,
     "hold_gap_sec": 0.15,

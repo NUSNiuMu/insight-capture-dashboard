@@ -26,11 +26,10 @@ class GestureRecordingController:
         self.min_free_ratio = max(0.0, min(1.0, float(config.get("min_free_ratio", 0.10))))
         self.snapshot_timeout_sec = max(0.05, float(config.get("snapshot_timeout_sec", 0.35)))
         self._log = log
-        self._latch = DoubleThumbsUpLatch(
-            hold_sec=float(config.get("hold_sec", 0.8)),
-            release_sec=float(config.get("release_sec", 2.0)),
-            hold_gap_sec=float(config.get("hold_gap_sec", 0.15)),
-        )
+        self._hold_sec = float(config.get("hold_sec", 0.8))
+        self._release_sec = float(config.get("release_sec", 2.0))
+        self._hold_gap_sec = float(config.get("hold_gap_sec", 0.15))
+        self._latch = self._new_latch()
         self._lock = threading.Lock()
         self._commands: "queue.Queue[Optional[str]]" = queue.Queue()
         self._closed = False
@@ -42,12 +41,57 @@ class GestureRecordingController:
         self._last_snapshot_monotonic: Optional[float] = None
         self._worker: Optional[threading.Thread] = None
         if self.enabled:
-            self._worker = threading.Thread(
-                target=self._command_loop,
-                daemon=True,
-                name="gesture_recording",
-            )
+            self._worker = self._new_worker()
             self._worker.start()
+
+    def _new_latch(self) -> DoubleThumbsUpLatch:
+        return DoubleThumbsUpLatch(
+            hold_sec=self._hold_sec,
+            release_sec=self._release_sec,
+            hold_gap_sec=self._hold_gap_sec,
+        )
+
+    def _new_worker(self) -> threading.Thread:
+        return threading.Thread(
+            target=self._command_loop,
+            daemon=True,
+            name="gesture_recording",
+        )
+
+    def set_enabled(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        worker_to_join: Optional[threading.Thread] = None
+        worker_to_start: Optional[threading.Thread] = None
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("gesture recording controller is closed")
+            if self.enabled == enabled:
+                return
+            self.enabled = enabled
+            self._latch = self._new_latch()
+            self._last_snapshot_monotonic = None
+            self._last_event = None
+            self._last_error = None
+            self._command_pending = False
+            self._message = (
+                "Gesture recording armed"
+                if enabled
+                else "Gesture recording disabled"
+            )
+            if enabled:
+                self._commands = queue.Queue()
+                worker_to_start = self._new_worker()
+                self._worker = worker_to_start
+            else:
+                worker_to_join = self._worker
+                self._worker = None
+                if worker_to_join is not None:
+                    self._commands.put(None)
+        if worker_to_join is not None:
+            worker_to_join.join(timeout=2.0)
+        if worker_to_start is not None:
+            worker_to_start.start()
+        self._log(self._message)
 
     def handle_snapshot(
         self,
@@ -116,6 +160,9 @@ class GestureRecordingController:
                     self._message = "Gesture recording armed"
 
     def _toggle_recording(self) -> None:
+        with self._lock:
+            if not self.enabled:
+                return
         status = self.recording_manager.status()
         recording = bool(status.get("recording"))
         output_path = status.get("output_path")
@@ -223,10 +270,13 @@ class GestureRecordingController:
             }
 
     def close(self) -> None:
+        worker = None
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-        if self._worker is not None:
+            worker = self._worker
+            self._worker = None
+        if worker is not None:
             self._commands.put(None)
-            self._worker.join(timeout=2.0)
+            worker.join(timeout=2.0)

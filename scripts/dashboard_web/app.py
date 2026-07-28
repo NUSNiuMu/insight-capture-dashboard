@@ -59,6 +59,10 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_post("/api/settings/restart-backend", settings._handle_settings_restart)
     app.router.add_post("/api/settings/hand-overlay", settings._handle_settings_hand_overlay)
     app.router.add_post("/api/settings/stick-figure", settings._handle_settings_stick_figure)
+    app.router.add_post(
+        "/api/settings/gesture-recording",
+        settings._handle_settings_gesture_recording,
+    )
     app.router.add_get("/asset", static._handle_asset)
 
     if context.web_root and context.web_root.exists():

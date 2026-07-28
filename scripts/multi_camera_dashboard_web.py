@@ -486,6 +486,12 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             return {"enabled": False, "state": "disabled", "message": "Gesture recording disabled"}
         return controller.status(recording_status)
 
+    def set_gesture_recording_enabled(self, enabled: bool) -> None:
+        controller = self._gesture_recording_controller
+        if controller is None:
+            raise RuntimeError("Gesture recording is not configured")
+        controller.set_enabled(enabled)
+
     def stop_gesture_recording(self) -> None:
         controller = getattr(self, "_gesture_recording_controller", None)
         if controller is not None:

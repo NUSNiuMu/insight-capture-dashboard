@@ -195,4 +195,7 @@ class PayloadBuilder:
             "poses": poses,
             "available_models": AVAILABLE_AVATAR_MODELS,
             "stick_figure_mode": bool(self.owner.stick_figure_mode),
+            "gesture_recording_enabled": bool(
+                self.owner.gesture_recording_status().get("enabled", False)
+            ),
         }

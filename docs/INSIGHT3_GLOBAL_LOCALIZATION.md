@@ -79,6 +79,33 @@ ros2 topic echo --full-length /insight_global/insight3_b/status
 `ekf_initialized`、`ekf_innovation_translation_m`、
 `ekf_innovation_rotation_deg` 和 `ekf_covariance_diagonal` 用于检查融合状态。
 
+## 重定位精度如何计算
+
+当前在线状态不能直接给出“绝对位置精度为多少厘米”。系统内的三个量含义不同：
+
+- `median_reprojection_error_px` 是 PnP 内点投回图像后的像素残差，当前只接受
+  中值不超过 3 px 的结果；它是几何一致性指标，不等于三维位置误差。
+- `ekf_innovation_translation_m` 和 `ekf_innovation_rotation_deg` 是新重定位观测
+  与 EKF 预测的差，反映重定位重复性和 VIO 漂移，但两者可能一起偏离真实位置。
+- 默认 EKF 观测标准差 `0.10 m / 3°` 是滤波权重假设，不是测量得到的系统精度。
+
+没有外部真值时，可以用针孔近似把像素残差换算成某一深度上的横向误差量级：
+
+`e_lateral ≈ Z · e_px / f_px`
+
+其中 `Z` 是特征深度，`e_px` 是重投影误差，`f_px` 是相机焦距像素值。该近似
+不能覆盖深度方向误差、地图点误差、特征分布退化或 VIO 漂移，因此不能作为
+最终精度结论。
+
+正式精度需要同步记录外部真值 `T_map_camera_gt`，逐帧计算：
+
+- 平移误差：`e_t = ||p_est - p_gt||`；
+- 旋转误差：`e_R = acos((trace(R_gtᵀ R_est) - 1) / 2)`。
+
+应分别报告平移与旋转的中位数、RMSE、P95 和最大值，并按静止、正常运动、
+遮挡后重定位等场景分组。没有这组真值实验前，只能报告像素残差和重复性，
+不能诚实地给出绝对厘米级精度。
+
 输出话题：
 
 - `/insight_global/insight3_a/path`：A 的全局轨迹；

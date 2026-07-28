@@ -5,5 +5,8 @@
   "sync_rosbag_to_host": false,
   "results_dir": "outputs/results",
   "max_cache_size": 104857600,
-  "record_topics": []
+  "record_topics": [],
+  "gesture_recording": {
+    "enabled": false
+  }
 }
