@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Insight 3D Workspace</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260715-daylight-v3">
+    <link rel="stylesheet" href="/static/styles.css?v=20260728-obs-mode">
     <script src="/static/babylon.js"></script>
     <script src="/static/babylonjs.loaders.min.js"></script>
   </head>
@@ -58,6 +58,7 @@
               <div class="mapping-actions">
                 <button type="button" id="clear-trajectory-button" class="quiet-button">Clear trail</button>
                 <button type="button" id="keep-trajectory-toggle" class="quiet-button" aria-pressed="false">Keep trail</button>
+                <button type="button" id="obs-mode-toggle" class="quiet-button" aria-pressed="false" title="Reduce preview and 3D rendering load while OBS is recording">OBS mode</button>
                 <button type="button" id="new-map-button" class="primary-button">New map</button>
               </div>
             </section>
@@ -71,6 +72,6 @@
         </section>
       </main>
     </div>
-    <script type="module" src="/static/pages/spatial.js?v=20260727-performance"></script>
+    <script type="module" src="/static/pages/spatial.js?v=20260728-obs-mode"></script>
   </body>
 </html>

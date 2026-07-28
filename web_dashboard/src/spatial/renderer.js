@@ -55,10 +55,13 @@ const traceCaches = new Map();
 const pendingTrailPoses = new Map();
 let pendingPosePayload = null;
 let latestPosePayload = null;
+let dashboardOrigin = null;
 let keepTrajectory = false;
 let stickFigureMode = false;
 let avatarLoadStage = 0;
 let trajectoriesEnabled = false;
+let capturePerformanceMode = false;
+let configuredDisplayFps = 20;
 let sceneFrameIntervalMs = 1000 / 20;
 let traceCapacity = 300;
 
@@ -87,6 +90,15 @@ export function setAvatarLoadStage(stage) {
   if (nextStage === avatarLoadStage) return;
   avatarLoadStage = nextStage;
   if (latestPosePayload) pendingPosePayload = latestPosePayload;
+}
+
+export function setCapturePerformanceMode(enabled) {
+  capturePerformanceMode = Boolean(enabled);
+  if (engine) {
+    engine.setHardwareScalingLevel(capturePerformanceMode ? 2.0 : 1.4);
+    engine.resize();
+  }
+  refreshSceneFrameInterval();
 }
 
 export function setTrajectoriesEnabled(enabled) {
@@ -177,6 +189,14 @@ export function queuePoseUpdate(payload) {
   const configuredCapacity = Number(payload.trace_capacity);
   if (Number.isInteger(configuredCapacity) && configuredCapacity >= 2) {
     traceCapacity = configuredCapacity;
+  }
+  if (!dashboardOrigin) {
+    const initialHead = (payload.poses || []).find(
+      (pose) => pose.role === "head" && pose.visible && Array.isArray(pose.position)
+    );
+    if (initialHead) {
+      dashboardOrigin = initialHead.position.map((value) => Number(value) || 0);
+    }
   }
   let traceStateValid = true;
   if (trajectoriesEnabled) {
@@ -280,8 +300,16 @@ function flushPendingPoseUpdate() {
 function setDisplayFpsLimit(value) {
   const fps = Number(value);
   if (Number.isFinite(fps) && fps > 0) {
-    sceneFrameIntervalMs = 1000 / Math.min(120, fps);
+    configuredDisplayFps = Math.min(120, fps);
   }
+  refreshSceneFrameInterval();
+}
+
+function refreshSceneFrameInterval() {
+  const fps = capturePerformanceMode
+    ? Math.min(12, configuredDisplayFps)
+    : configuredDisplayFps;
+  sceneFrameIntervalMs = 1000 / fps;
 }
 
 function ensurePoseNode(pose) {
@@ -296,6 +324,15 @@ function ensurePoseNode(pose) {
 }
 
 function mapDashboardPositionToScene(sample) {
+  const origin = dashboardOrigin || [0, 0, 0];
+  return mapDashboardVectorToScene([
+    Number(sample[0] || 0) - origin[0],
+    Number(sample[1] || 0) - origin[1],
+    Number(sample[2] || 0) - origin[2],
+  ]);
+}
+
+function mapDashboardVectorToScene(sample) {
   const forward = Number(sample[0] || 0);
   const right = Number(sample[1] || 0);
   const up = Number(sample[2] || 0);
@@ -386,7 +423,7 @@ async function ensurePoseVisual(pose, node) {
     const scaledSize = pose.avatar_scale * scaleMultiplier;
     rootNode.scaling = new BABYLON.Vector3(scaledSize, scaledSize, scaledSize);
     const offset = Array.isArray(pose.avatar_offset_xyz) ? pose.avatar_offset_xyz : [0, 0, 0];
-    rootNode.position = mapDashboardPositionToScene(offset);
+    rootNode.position = mapDashboardVectorToScene(offset);
     const rotationDeg = Array.isArray(pose.avatar_rotation_deg_xyz) ? pose.avatar_rotation_deg_xyz : [0, 0, 0];
     rootNode.rotationQuaternion = BABYLON.Quaternion.FromEulerAngles(
       BABYLON.Angle.FromDegrees(Number(rotationDeg[0] || 0)).radians(),

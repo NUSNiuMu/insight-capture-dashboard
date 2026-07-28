@@ -3,6 +3,7 @@
 """Per-viewer hardware H.264 WebRTC streams with polling fallback."""
 
 import threading
+import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 try:
@@ -46,8 +47,8 @@ def _scaled_dims(width: int, height: int) -> Tuple[int, int]:
     return (out_w, max(2, out_h))
 
 
-def _bitrate_for(width: int, height: int) -> int:
-    return max(_MIN_BITRATE, min(_MAX_BITRATE, int(width * height * 30 * 0.15)))
+def _bitrate_for(width: int, height: int, fps: int = 30) -> int:
+    return max(_MIN_BITRATE, min(_MAX_BITRATE, int(width * height * fps * 0.15)))
 
 
 # One query resolves both of a browser's candidates (UDP + TCP carry the same
@@ -147,6 +148,7 @@ class WebRtcSession:
         camera_name: str,
         send_signal: Callable[[Dict], None],
         log: Callable[[str], None],
+        target_fps: int = 30,
     ) -> None:
         self.camera_name = camera_name
         self._send_signal = send_signal
@@ -157,10 +159,16 @@ class WebRtcSession:
         self._webrtc = None
         self._caps_key: Optional[Tuple] = None
         self._closed = False
+        self._target_fps = max(5, min(30, int(target_fps)))
+        self._last_frame_at = 0.0
 
     # ── frame ingest (camera worker thread) ─────────────────────────────────
 
     def push_frame(self, data: bytes, fmt: str, width: int, height: int) -> None:
+        now = time.monotonic()
+        if now - self._last_frame_at < 1.0 / self._target_fps:
+            return
+        self._last_frame_at = now
         caps_key = (fmt, width, height)
         with self._lock:
             if self._closed:
@@ -188,19 +196,19 @@ class WebRtcSession:
 
     def _build_pipeline(self, fmt: str, width: int, height: int) -> None:
         out_width, out_height = _scaled_dims(width, height)
-        bitrate = _bitrate_for(out_width, out_height)
+        bitrate = _bitrate_for(out_width, out_height, self._target_fps)
         if fmt == "JPEG":
             source = (
                 f"appsrc name=src is-live=true format=time do-timestamp=true "
                 f"block=false max-buffers=3 leaky-type=downstream "
-                f"caps=image/jpeg,width={width},height={height},framerate=30/1 ! "
+                f"caps=image/jpeg,width={width},height={height},framerate={self._target_fps}/1 ! "
                 f"nvjpegdec ! "
             )
         else:
             source = (
                 f"appsrc name=src is-live=true format=time do-timestamp=true "
                 f"block=false max-buffers=3 leaky-type=downstream "
-                f"caps=video/x-raw,format={fmt},width={width},height={height},framerate=30/1 ! "
+                f"caps=video/x-raw,format={fmt},width={width},height={height},framerate={self._target_fps}/1 ! "
             )
         # insert-sps-pps + config-interval=-1: parameter sets ride along with
         # every IDR so a viewer joining mid-stream can start decoding at the
@@ -226,7 +234,8 @@ class WebRtcSession:
         self._appsrc = pipeline.get_by_name("src")
         self._webrtc = webrtc
         self._log(
-            f"webrtc[{self.camera_name}]: streaming {fmt} {width}x{height} -> {out_width}x{out_height} at {bitrate // 1000} kbps"
+            f"webrtc[{self.camera_name}]: streaming {fmt} {width}x{height} -> "
+            f"{out_width}x{out_height} at {self._target_fps} fps, {bitrate // 1000} kbps"
         )
 
     # ── webrtcbin callbacks (GStreamer threads) ─────────────────────────────
@@ -371,9 +380,17 @@ class WebRtcStreams:
         return cls(log=log, on_session_state_change=on_session_state_change)
 
     def create_session(
-        self, camera_name: str, send_signal: Callable[[Dict], None]
+        self,
+        camera_name: str,
+        send_signal: Callable[[Dict], None],
+        target_fps: int = 30,
     ) -> WebRtcSession:
-        session = WebRtcSession(camera_name, send_signal, self._log)
+        session = WebRtcSession(
+            camera_name,
+            send_signal,
+            self._log,
+            target_fps=target_fps,
+        )
         with self._lock:
             sessions = self._sessions.setdefault(camera_name, [])
             was_empty = not sessions

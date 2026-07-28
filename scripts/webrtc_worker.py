@@ -122,7 +122,15 @@ def build_app(streams: Optional[WebRtcStreams], camera_topic_types: Dict[str, st
             except RuntimeError:
                 pass  # loop shutting down; the session is about to close too
 
-        session = streams.create_session(camera_name, send_signal)
+        try:
+            target_fps = max(5, min(30, int(request.query.get("fps", "30"))))
+        except (TypeError, ValueError):
+            target_fps = 30
+        session = streams.create_session(
+            camera_name,
+            send_signal,
+            target_fps=target_fps,
+        )
         try:
             async for message in ws:
                 if message.type != web.WSMsgType.TEXT:

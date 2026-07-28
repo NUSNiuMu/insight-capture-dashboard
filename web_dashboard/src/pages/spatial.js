@@ -1,4 +1,7 @@
-import { startCameraDashboard } from "../camera/dashboard.js";
+import {
+  setCameraCapturePerformanceMode,
+  startCameraDashboard,
+} from "../camera/dashboard.js?v=20260728-obs-mode";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 import {
@@ -6,10 +9,11 @@ import {
   clearRenderedTrajectories,
   queuePoseUpdate,
   setAvatarLoadStage,
+  setCapturePerformanceMode,
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260727-mapping";
+} from "../spatial/renderer.js?v=20260728-obs-mode";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");
@@ -24,7 +28,9 @@ const mappingStatus = document.getElementById("mapping-status");
 const mappingMeta = document.getElementById("mapping-meta");
 const mappingCameraStates = document.getElementById("mapping-camera-states");
 const newMapButton = document.getElementById("new-map-button");
+const obsModeToggle = document.getElementById("obs-mode-toggle");
 const POSE_STREAM_STALE_MS = 4000;
+const OBS_MODE_STORAGE_KEY = "insight.obs-performance-mode";
 const wsUrl = resolveWebSocketUrl();
 let playbackBusy = false;
 let playbackPollTimer = null;
@@ -34,8 +40,10 @@ let pageUnloading = false;
 let activeWs = null;
 let mappingResetBusy = false;
 let lastPoseMessageAt = 0;
+let obsModeEnabled = readInitialObsMode();
 const startupTimers = new Set();
 
+applyObsMode(obsModeEnabled);
 connect();
 scheduleStartup();
 window.addEventListener("pagehide", () => {
@@ -95,6 +103,13 @@ if (keepTrajectoryToggle) {
 if (newMapButton) {
   newMapButton.addEventListener("click", () => { void resetMapping(); });
 }
+if (obsModeToggle) {
+  obsModeToggle.addEventListener("click", () => {
+    obsModeEnabled = !obsModeEnabled;
+    window.localStorage.setItem(OBS_MODE_STORAGE_KEY, obsModeEnabled ? "1" : "0");
+    applyObsMode(obsModeEnabled);
+  });
+}
 if (playbackPanel) {
   void refreshPlaybackStatus();
   playbackPollTimer = window.setInterval(() => { void refreshPlaybackStatus(); }, 1500);
@@ -109,6 +124,25 @@ function resolveWebSocketUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = window.location.host || "localhost:8765";
   return `${protocol}//${host}/ws`;
+}
+
+function readInitialObsMode() {
+  const query = new URLSearchParams(window.location.search);
+  if (query.has("obs")) {
+    return query.get("obs") !== "0";
+  }
+  return window.localStorage.getItem(OBS_MODE_STORAGE_KEY) === "1";
+}
+
+function applyObsMode(enabled) {
+  document.body.classList.toggle("capture-performance", enabled);
+  setCapturePerformanceMode(enabled);
+  setCameraCapturePerformanceMode(enabled);
+  if (obsModeToggle) {
+    obsModeToggle.classList.toggle("is-active", enabled);
+    obsModeToggle.setAttribute("aria-pressed", String(enabled));
+    obsModeToggle.textContent = enabled ? "OBS mode: on" : "OBS mode";
+  }
 }
 
 function connect() {
