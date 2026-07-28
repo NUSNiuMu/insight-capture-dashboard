@@ -32,6 +32,7 @@ from insight9_mapping_core import (  # noqa: E402
     StereoPair,
     StereoPairSynchronizer,
     compose_transform,
+    left_to_stereo_center,
     matrix_from_pose,
     matrix_from_transform,
     rotation_distance_deg,
@@ -215,6 +216,7 @@ class Insight9SparseMapper(Node):
         self._right_info: Optional[CameraInfo] = None
         self._calibration: Optional[StereoCalibration] = None
         self._imu_to_left: Optional[np.ndarray] = None
+        self._imu_to_center: Optional[np.ndarray] = None
         self._tf_buffer = Buffer(cache_time=Duration(seconds=10.0))
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._tf_broadcaster = TransformBroadcaster(self)
@@ -303,25 +305,54 @@ class Insight9SparseMapper(Node):
         return super().destroy_node()
 
     def _resolve_extrinsic(self) -> None:
-        if self._imu_to_left is not None:
+        if self._imu_to_left is not None and self._imu_to_center is not None:
             return
+        imu_to_left = self._imu_to_left
+        if imu_to_left is None:
+            try:
+                transform = self._tf_buffer.lookup_transform(
+                    self._args.imu_frame,
+                    self._args.left_frame,
+                    Time(),
+                    timeout=Duration(seconds=0.05),
+                )
+            except Exception:
+                return
+            value = transform.transform
+            imu_to_left = matrix_from_transform(
+                (value.translation.x, value.translation.y, value.translation.z),
+                (
+                    value.rotation.x,
+                    value.rotation.y,
+                    value.rotation.z,
+                    value.rotation.w,
+                ),
+            )
+            self._imu_to_left = imu_to_left
+            self.get_logger().info(
+                "resolved T_imu_left translation=(%.4f, %.4f, %.4f)"
+                % tuple(imu_to_left[:3, 3])
+            )
         try:
             transform = self._tf_buffer.lookup_transform(
-                self._args.imu_frame,
                 self._args.left_frame,
+                self._args.right_frame,
                 Time(),
                 timeout=Duration(seconds=0.05),
             )
         except Exception:
             return
         value = transform.transform
-        self._imu_to_left = matrix_from_transform(
+        left_to_right = matrix_from_transform(
             (value.translation.x, value.translation.y, value.translation.z),
             (value.rotation.x, value.rotation.y, value.rotation.z, value.rotation.w),
         )
+        self._imu_to_center = compose_transform(
+            imu_to_left, left_to_stereo_center(left_to_right)
+        )
+        baseline_m = float(np.linalg.norm(left_to_right[:3, 3]))
         self.get_logger().info(
-            "resolved T_imu_left translation=(%.4f, %.4f, %.4f)"
-            % tuple(self._imu_to_left[:3, 3])
+            f"resolved Insight9 stereo center from {baseline_m:.4f} m baseline"
         )
 
     def _on_vio(self, message: PoseStamped) -> None:
@@ -355,10 +386,14 @@ class Insight9SparseMapper(Node):
             self._last_keyframe_transform = None
             self._keyframe_id = 0
             self.get_logger().warning("VIO timestamp reset; cleared session map")
-        if self._imu_to_left is None:
+        if self._imu_to_center is None:
             return
-        world_to_left = compose_transform(matrix_from_pose(sample), self._imu_to_left)
-        stamped = matrix_to_pose_stamped(world_to_left, sample.stamp_ns, self._map_frame)
+        world_to_center = compose_transform(
+            matrix_from_pose(sample), self._imu_to_center
+        )
+        stamped = matrix_to_pose_stamped(
+            world_to_center, sample.stamp_ns, self._map_frame
+        )
         if (
             sample.stamp_ns - self._last_pose_publish_ns
             >= int(1_000_000_000 / max(self._args.pose_publish_hz, 0.1))
@@ -437,6 +472,7 @@ class Insight9SparseMapper(Node):
                 continue
             calibration = self._calibration
             imu_to_left = self._imu_to_left
+            imu_to_center = self._imu_to_center
             pose = self._pose_buffer.lookup(pair.stamp_ns)
             deadline = time.monotonic() + self._args.pose_wait_ms / 1000.0
             while (
@@ -452,6 +488,7 @@ class Insight9SparseMapper(Node):
                     "state": "waiting_for_inputs",
                     "calibration_ready": calibration is not None,
                     "extrinsic_ready": imu_to_left is not None,
+                    "center_extrinsic_ready": imu_to_center is not None,
                     "pose_ready": pose is not None,
                 }
                 continue
@@ -561,6 +598,8 @@ class Insight9SparseMapper(Node):
         status = String()
         status_payload = dict(self._latest_stats)
         status_payload["map_point_count"] = int(len(points))
+        status_payload["center_extrinsic_ready"] = self._imu_to_center is not None
+        status_payload["pose_frame"] = self._camera_frame
         status.data = json.dumps(status_payload, separators=(",", ":"))
         self._status_publisher.publish(status)
 
@@ -605,8 +644,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vio-topic", default="/insight9_a/camera/vio_100hz")
     parser.add_argument("--imu-frame", default="insight9_a_camera_imu")
     parser.add_argument("--left-frame", default="insight9_a_camera_left")
+    parser.add_argument("--right-frame", default="insight9_a_camera_right")
     parser.add_argument("--map-frame", default="insight9_map")
-    parser.add_argument("--mapping-camera-frame", default="insight9_mapping_camera_left")
+    parser.add_argument("--mapping-camera-frame", default="insight9_mapping_camera_center")
     parser.add_argument("--mapping-hz", type=float, default=5.0)
     parser.add_argument("--pose-wait-ms", type=float, default=30.0)
     parser.add_argument("--stereo-tolerance-ms", type=float, default=20.0)

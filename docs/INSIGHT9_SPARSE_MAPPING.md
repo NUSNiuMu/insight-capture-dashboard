@@ -138,7 +138,8 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 - `/insight9_sparse_map/pose`：50 Hz 最新全局位姿。
 - `/insight9_sparse_map/path`：5 Hz 发布、最多 200 点的调试全局轨迹。
 - `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数和处理耗时 JSON。
-- TF `insight9_map -> insight9_mapping_camera_left`：独立命名，避免与设备 TF 多父冲突。
+- TF `insight9_map -> insight9_mapping_camera_center`：位于左右目光心中点，
+  姿态沿用左目；使用独立命名避免与设备 TF 多父冲突。
 
 查看状态：
 
