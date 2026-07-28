@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from handpose import HandPoseManager
 from post_processing import OptimizationManager, PlaybackManager, RecordingManager
 
 from .scoring import ScoringManager
@@ -19,6 +20,7 @@ class DashboardContext:
     scoring_manager: ScoringManager = field(init=False)
     playback_manager: PlaybackManager = field(init=False)
     optimization_manager: OptimizationManager = field(init=False)
+    handpose_manager: HandPoseManager = field(init=False)
     _image_capabilities_cache: Optional[Dict[str, object]] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -43,6 +45,10 @@ class DashboardContext:
         self.optimization_manager = OptimizationManager(
             project_root=self.project_root,
             pipeline_script=pipeline_script,
+        )
+        self.handpose_manager = HandPoseManager(
+            project_root=self.project_root,
+            rosbag_root=self.recording_manager.rosbag_root,
         )
 
     def on_playback_finished(self) -> None:

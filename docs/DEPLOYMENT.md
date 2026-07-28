@@ -67,7 +67,7 @@ host 层设置，见 §3.2）——这几个文件本身不大，但**它们的�
 
 ### 1.4 发布前检查清单
 
-- [ ] 本地开发机 compose 跑过一遍，关键页面（3d / recording / bags / scoring / settings）无 console 报错
+- [ ] 本地开发机 compose 跑过一遍，关键页面（3d / recording / bags / scoring / handpose / settings）无 console 报错
 - [ ] 涉及数据库结构/配置字段变化的改动，确认旧版本升级上来后不会因为缺字段崩溃
   （`config/` 目录在首次安装后不会被镜像覆盖，见下文"数据持久化"）
 - [ ] `git status` 干净，且要发布的 commit 已经推到远端（发布包本身不含 git 历史，事后排查靠 commit hash）

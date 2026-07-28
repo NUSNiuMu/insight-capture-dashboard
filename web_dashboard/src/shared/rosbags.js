@@ -5,6 +5,7 @@ const bagListStatus = document.getElementById("bag-list-status");
 const refreshBagsButton = document.getElementById("refresh-bags-button");
 const scoringBagMeta = document.getElementById("scoring-bag-meta");
 const optimizationBagMeta = document.getElementById("optimization-bag-meta");
+const handposeBagMeta = document.getElementById("handpose-bag-meta");
 let knownRosbags = [];
 
 async function refreshRosbags() {
@@ -88,7 +89,12 @@ function renderBagSelects(bags) {
 
 function updateSelectedBagMeta(select) {
   const bag = knownRosbags.find((item) => item.name === select.value);
-  const meta = select.id === "optimization-bag-select" ? optimizationBagMeta : scoringBagMeta;
+  const metaBySelect = {
+    "scoring-bag-select": scoringBagMeta,
+    "optimization-bag-select": optimizationBagMeta,
+    "handpose-bag-select": handposeBagMeta,
+  };
+  const meta = metaBySelect[select.id];
   if (!meta) {
     return;
   }

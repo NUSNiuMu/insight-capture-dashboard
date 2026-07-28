@@ -4,6 +4,7 @@ data/
 runs/
 outputs/
 bags/
+gesture/
 
 # Git and IDE
 .git/

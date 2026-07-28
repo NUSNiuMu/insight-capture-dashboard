@@ -5,6 +5,7 @@ from aiohttp import web
 from .context import DashboardContext
 from .middleware import create_json_error_middleware
 from .routes.cameras import CameraRoutes
+from .routes.handpose import HandPoseRoutes
 from .routes.mapping import MappingRoutes
 from .routes.optimization import OptimizationRoutes
 from .routes.playback import PlaybackRoutes
@@ -18,6 +19,7 @@ def create_app(context: DashboardContext) -> web.Application:
     app = web.Application(middlewares=[create_json_error_middleware(context)])
     websocket = PoseWebSocketService(context)
     cameras = CameraRoutes(context)
+    handpose = HandPoseRoutes(context)
     mapping = MappingRoutes(context)
     recording = RecordingRoutes(context)
     playback = PlaybackRoutes(context)
@@ -40,6 +42,12 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_post("/api/recording/start", recording._handle_recording_start)
     app.router.add_post("/api/recording/stop", recording._handle_recording_stop)
     app.router.add_get("/api/rosbags", recording._handle_rosbag_list)
+    app.router.add_get("/api/handpose/capabilities", handpose._handle_capabilities)
+    app.router.add_get("/api/handpose/status", handpose._handle_status)
+    app.router.add_post("/api/handpose/start", handpose._handle_start)
+    app.router.add_post("/api/handpose/stop", handpose._handle_stop)
+    app.router.add_get("/api/handpose/result", handpose._handle_result)
+    app.router.add_get("/api/handpose/preview", handpose._handle_preview)
     app.router.add_delete("/api/rosbags/{bag_name}", recording._handle_rosbag_delete)
     app.router.add_post("/api/integrity/run", recording._handle_integrity_run)
     app.router.add_post("/api/scoring/run", recording._handle_scoring_run)
@@ -73,6 +81,7 @@ def create_app(context: DashboardContext) -> web.Application:
         app.router.add_get("/recording", static._handle_recording_page)
         app.router.add_get("/scoring", static._handle_scoring_page)
         app.router.add_get("/optimization", static._handle_optimization_page)
+        app.router.add_get("/handpose", static._handle_handpose_page)
         app.router.add_get("/settings", static._handle_settings_page)
         static_root = context.web_root / "static"
         if static_root.exists():
@@ -82,5 +91,6 @@ def create_app(context: DashboardContext) -> web.Application:
         app.router.add_static("/optimization-runs/", str(runs_root), show_index=False)
 
     app.on_startup.append(websocket._on_startup)
+    app.on_shutdown.append(handpose._on_shutdown)
     app.on_shutdown.append(websocket._on_shutdown)
     return app

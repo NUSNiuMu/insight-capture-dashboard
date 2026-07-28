@@ -291,6 +291,31 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .plot-legend a { margin-left: 10px; color: var(--teal); text-decoration: none; }
 #opt-traj-canvas { display: block; width: 100%; height: 500px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper-deep); touch-action: none; }
 
+/* Hand pose */
+.handpose-workspace { display: grid; grid-template-columns: minmax(300px,.62fr) minmax(520px,1.38fr); align-items: start; gap: 18px; }
+.handpose-config { min-width: 0; }
+.handpose-result { min-width: 0; margin-top: 0; }
+.handpose-legend { display: flex; align-items: center; gap: 13px; color: var(--muted); font-family: var(--mono); font-size: 9px; }
+.handpose-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.handpose-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+.handpose-left-key { background: var(--left); }
+.handpose-right-key { background: var(--right); }
+.handpose-progress { margin-top: 26px; padding-top: 20px; border-top: 1px solid var(--line); }
+.handpose-progress > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; color: var(--muted); font-family: var(--mono); font-size: 9px; }
+.handpose-progress strong { color: var(--teal); font-size: 10px; font-weight: 600; }
+.handpose-log { min-height: 116px; max-height: 190px; }
+#handpose-canvas { display: block; width: 100%; height: 500px; border: 1px solid var(--line-dark); border-radius: 10px; background: var(--screen); cursor: grab; touch-action: none; }
+#handpose-canvas:active { cursor: grabbing; }
+.handpose-empty { display: flex; height: 500px; align-items: center; justify-content: center; border: 1px dashed var(--line-dark); border-radius: 10px; color: var(--muted); background: var(--surface-soft); flex-direction: column; gap: 7px; text-align: center; }
+.handpose-empty strong { color: var(--ink-soft); font-size: 13px; }
+.handpose-empty span { font-size: 11px; }
+.handpose-player { display: grid; margin-top: 12px; grid-template-columns: auto minmax(100px,1fr) auto; align-items: center; gap: 12px; }
+.handpose-player input[type="range"] { width: 100%; accent-color: var(--accent); }
+.handpose-player > span { min-width: 82px; color: var(--teal); font-family: var(--mono); font-size: 10px; text-align: right; }
+.handpose-coordinates { display: flex; min-height: 34px; margin-top: 8px; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted-light); font-family: var(--mono); font-size: 9px; }
+.handpose-coordinates strong { overflow: hidden; color: var(--ink-soft); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.handpose-saved-strip { margin-top: 18px; }
+
 /* Settings */
 .restart-banner { display: flex; min-height: 62px; margin-bottom: 18px; padding: 10px 12px 10px 18px; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid rgba(184, 119, 0, 0.45); border-radius: 10px; color: var(--accent-dark); background: rgba(255, 176, 32, 0.1); font-size: 10px; }
 .settings-camera-list { display: grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); gap: 12px; }
@@ -421,7 +446,7 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .content-heading { min-height: 0; margin-bottom: 25px; }
   .content-heading h1 { font-size: 28px; }
   .heading-stat { display: none; }
-  .metric-grid, .analysis-layout, .pipeline-layout { grid-template-columns: 1fr; }
+  .metric-grid, .analysis-layout, .pipeline-layout, .handpose-workspace { grid-template-columns: 1fr; }
   .control-strip { align-items: flex-start; flex-direction: column; }
   .playback-row { justify-content: flex-start; }
   .record-topic-groups { grid-template-columns: 1fr; }
@@ -448,6 +473,9 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .bag-row { grid-template-columns: 1fr; }
   .bag-row-stats, .bag-row-badges, .bag-badges, .bag-row-actions { grid-column: auto; justify-content: flex-start; }
   .settings-form-grid, .opt-radio-group { grid-template-columns: 1fr; }
+  .handpose-player { grid-template-columns: auto minmax(80px,1fr); }
+  .handpose-player > span { grid-column: 1 / -1; text-align: left; }
+  .handpose-coordinates { align-items: flex-start; flex-direction: column; }
   .settings-form-field-wide { grid-column: auto; }
   .plot-legend { align-items: flex-end; flex-direction: column; gap: 5px; }
   .stage-topbar { right: 12px; left: 12px; }

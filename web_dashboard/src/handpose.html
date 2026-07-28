@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight Hand Pose</title><link rel="stylesheet" href="/static/styles.css?v=20260728-handpose">
+  </head>
+  <body data-dashboard-view="handpose">
+    <div class="app-shell">
+      <aside class="app-sidebar">
+        <a class="app-brand" href="/3d"><span class="brand-mark">I</span><span>INSIGHT<small>Capture Studio</small></span></a>
+        <div class="workspace-card"><span><i></i> Active workspace</span><strong>Jetson NX</strong><small>ROS 2 · Domain 20</small></div>
+        <nav class="side-nav" aria-label="Dashboard pages"><p>Monitor</p><a href="/3d"><b>01</b><span>Spatial view</span></a><p>Capture</p><a href="/recording"><b>02</b><span>Recording</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/scoring"><b>04</b><span>Scoring</span></a><a href="/handpose" class="is-active"><b>05</b><span>Hand pose</span></a><a href="/optimization"><b>06</b><span>Optimization</span></a><p>System</p><a href="/settings"><b>07</b><span>Settings</span></a></nav>
+        <div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
+      </aside>
+      <section class="app-main">
+        <header class="app-topbar"><span>Process / <strong>Hand pose</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
+        <main class="page-content">
+          <header class="content-heading">
+            <div><p class="section-kicker">Offline reconstruction</p><h1>Hand pose</h1><p>Extract 3D hand landmarks directly from a saved rosbag, then inspect the timeline without duplicating the recording.</p></div>
+            <div class="heading-statuses"><span id="handpose-method-chip" class="load-chip">Checking runtime</span><span id="handpose-job-chip" class="load-chip">Idle</span></div>
+          </header>
+
+          <div class="handpose-workspace">
+            <aside class="form-surface handpose-config">
+              <div class="step-label"><span>01</span><div><strong>Configure extraction</strong><small>Existing rosbag and pose method</small></div></div>
+              <label class="field-label" for="handpose-bag-select">Rosbag</label>
+              <select id="handpose-bag-select" class="field-control" data-bag-select></select>
+              <p id="handpose-bag-meta" class="field-help">Loading bags...</p>
+
+              <label class="field-label" for="handpose-method-select">Method</label>
+              <select id="handpose-method-select" class="field-control">
+                <option value="mediapipe">MediaPipe · hand-relative 3D</option>
+                <option value="wilor">WiLoR · camera-space 3D</option>
+              </select>
+              <p id="handpose-capability-help" class="field-help">Checking installed runtimes and model files...</p>
+
+              <div class="button-row">
+                <button type="button" id="start-handpose-button" class="primary-button">Extract hand pose</button>
+                <button type="button" id="stop-handpose-button" class="danger-button" hidden>Stop</button>
+              </div>
+
+              <div class="handpose-progress">
+                <div><span id="handpose-status-label">Idle</span><strong id="handpose-progress-label">0 frames</strong></div>
+                <div class="opt-progress-track"><div id="handpose-progress-fill" class="opt-progress-fill" style="width:0%"></div></div>
+              </div>
+              <pre id="handpose-log" class="opt-log handpose-log">Waiting for a task.</pre>
+            </aside>
+
+            <section class="result-canvas-surface handpose-result">
+              <div class="section-heading">
+                <div><p class="section-kicker">Interactive result</p><h2 id="handpose-result-title">3D landmark viewer</h2></div>
+                <div class="handpose-legend"><span><i class="handpose-left-key"></i>Left</span><span><i class="handpose-right-key"></i>Right</span></div>
+              </div>
+              <div id="handpose-empty" class="handpose-empty"><strong>No result loaded</strong><span>Run an extraction or open a saved result below.</span></div>
+              <canvas id="handpose-canvas" aria-label="3D hand landmark viewer"></canvas>
+              <div class="handpose-player">
+                <button type="button" id="handpose-play-button" class="quiet-button" disabled>Play</button>
+                <input id="handpose-timeline" type="range" min="0" max="0" value="0" disabled aria-label="Hand pose timeline">
+                <span id="handpose-time-label">00:00.000</span>
+              </div>
+              <div class="handpose-coordinates">
+                <span>Drag to rotate · wheel to zoom</span>
+                <strong id="handpose-coordinate-label">No landmark selected</strong>
+              </div>
+            </section>
+          </div>
+
+          <section class="control-strip handpose-saved-strip">
+            <div class="control-strip-copy"><span class="control-number">02</span><div><strong>Saved result</strong><small>Outputs remain under outputs/handpose</small></div></div>
+            <div class="playback-row"><select id="handpose-result-select" class="field-control"><option value="">No saved results</option></select><button type="button" id="load-handpose-result-button" class="quiet-button" disabled>Load result</button><a id="handpose-preview-link" class="quiet-button" href="#" target="_blank" hidden>Open preview</a></div>
+          </section>
+        </main>
+      </section>
+    </div>
+    <script type="module" src="/static/pages/handpose.js?v=20260728-handpose"></script>
+  </body>
+</html>

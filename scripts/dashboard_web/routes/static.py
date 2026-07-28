@@ -31,6 +31,9 @@ class StaticRoutes:
     async def _handle_optimization_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.context.web_root / "optimization.html")
 
+    async def _handle_handpose_page(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.context.web_root / "handpose.html")
+
     async def _handle_settings_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.context.web_root / "settings.html")
 
