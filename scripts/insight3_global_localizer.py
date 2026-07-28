@@ -25,11 +25,13 @@ from insight9_mapping_core import (  # noqa: E402
     LocalizationConsensus,
     PoseBuffer,
     PoseSample,
+    RelocalizationEkf,
+    RelocalizationEkfConfig,
     compose_transform,
+    left_to_stereo_center,
     localize_features,
     matrix_from_pose,
     matrix_from_transform,
-    rotation_distance_deg,
 )
 
 try:
@@ -170,6 +172,7 @@ class CameraState:
         config: GlobalLocalizationConfig,
         *,
         history_points: int,
+        ekf_config: RelocalizationEkfConfig,
     ) -> None:
         self.name = name
         self.pose_buffer = PoseBuffer(max_bracket_gap_ns=50_000_000)
@@ -177,7 +180,11 @@ class CameraState:
         self.latest_image: Optional[Image] = None
         self.camera_matrix: Optional[np.ndarray] = None
         self.imu_to_left: Optional[np.ndarray] = None
+        self.imu_to_center: Optional[np.ndarray] = None
         self.consensus = LocalizationConsensus(config)
+        self.pose_filter = RelocalizationEkf(ekf_config)
+        self.last_relocalization_measurement: Optional[np.ndarray] = None
+        self.last_vio_stamp_ns = -1
         self.last_image_stamp_ns = -1
         self.last_history_stamp_ns = -1
         self.next_process_monotonic = 0.0
@@ -186,8 +193,7 @@ class CameraState:
         self.path.header.frame_id = "insight9_map"
         self.path_dirty = True
         self.transformed_history: deque[PoseStamped] = deque(maxlen=history_points)
-        self.transformed_correction: Optional[np.ndarray] = None
-        self.transformed_extrinsic: Optional[np.ndarray] = None
+        self.transformed_output_extrinsic: Optional[np.ndarray] = None
         self.last_transformed_stamp_ns = -1
         self.last_global_pose_publish_ns = -1
 
@@ -211,12 +217,24 @@ class Insight3GlobalLocalizer(Node):
             confirmation_translation_m=args.confirmation_translation_m,
             confirmation_rotation_deg=args.confirmation_rotation_deg,
         )
+        ekf_config = RelocalizationEkfConfig(
+            process_translation_std_m_sqrt_s=args.ekf_process_translation_std,
+            process_rotation_std_deg_sqrt_s=args.ekf_process_rotation_std_deg,
+            measurement_translation_std_m=args.ekf_measurement_translation_std,
+            measurement_rotation_std_deg=args.ekf_measurement_rotation_std_deg,
+            correction_time_constant_sec=args.ekf_correction_time_constant_sec,
+        )
         self._matcher = IpcSuperGlueBackend(Path(args.inference_socket))
         self._lock = threading.Lock()
         self._map_points = np.empty((0, 3), dtype=np.float32)
         self._map_descriptors = np.empty((0, 256), dtype=np.float32)
         self._cameras = {
-            name: CameraState(name, config, history_points=args.path_points)
+            name: CameraState(
+                name,
+                config,
+                history_points=args.path_points,
+                ekf_config=ekf_config,
+            )
             for name in CAMERAS
         }
         self._path_publishers = {
@@ -296,11 +314,13 @@ class Insight3GlobalLocalizer(Node):
             for state in self._cameras.values():
                 state.history.clear()
                 state.consensus = LocalizationConsensus(state.consensus.config)
+                state.pose_filter.reset()
+                state.last_relocalization_measurement = None
+                state.last_vio_stamp_ns = -1
                 state.last_image_stamp_ns = -1
                 state.last_history_stamp_ns = -1
                 state.transformed_history.clear()
-                state.transformed_correction = None
-                state.transformed_extrinsic = None
+                state.transformed_output_extrinsic = None
                 state.last_transformed_stamp_ns = -1
                 state.last_global_pose_publish_ns = -1
                 state.path = PathMsg()
@@ -379,11 +399,13 @@ class Insight3GlobalLocalizer(Node):
                 if reset:
                     state.history.clear()
                     state.consensus = LocalizationConsensus(state.consensus.config)
+                    state.pose_filter.reset()
+                    state.last_relocalization_measurement = None
+                    state.last_vio_stamp_ns = -1
                     state.last_image_stamp_ns = -1
                     state.last_history_stamp_ns = -1
                     state.transformed_history.clear()
-                    state.transformed_correction = None
-                    state.transformed_extrinsic = None
+                    state.transformed_output_extrinsic = None
                     state.last_transformed_stamp_ns = -1
                     state.last_global_pose_publish_ns = -1
                     state.path = PathMsg()
@@ -396,15 +418,16 @@ class Insight3GlobalLocalizer(Node):
                     state.history.append(sample)
                     state.last_history_stamp_ns = sample.stamp_ns
                     state.path_dirty = True
-                correction = (
-                    None
-                    if state.transformed_correction is None
-                    else state.transformed_correction.copy()
-                )
+                if state.last_vio_stamp_ns >= 0:
+                    state.pose_filter.predict(
+                        (sample.stamp_ns - state.last_vio_stamp_ns) / 1e9
+                    )
+                state.last_vio_stamp_ns = sample.stamp_ns
+                correction = state.pose_filter.correction
                 extrinsic = (
                     None
-                    if state.transformed_extrinsic is None
-                    else state.transformed_extrinsic.copy()
+                    if state.transformed_output_extrinsic is None
+                    else state.transformed_output_extrinsic.copy()
                 )
                 publish_interval_ns = int(
                     1_000_000_000 / max(self._args.pose_publish_hz, 0.1)
@@ -427,25 +450,54 @@ class Insight3GlobalLocalizer(Node):
 
     def _resolve_extrinsics(self) -> None:
         for name, state in self._cameras.items():
-            if state.imu_to_left is not None:
+            if state.imu_to_left is not None and state.imu_to_center is not None:
                 continue
+            imu_to_left = state.imu_to_left
+            if imu_to_left is None:
+                try:
+                    transform = self._tf_buffer.lookup_transform(
+                        f"{name}_camera_imu",
+                        f"{name}_camera_left",
+                        Time(),
+                        timeout=Duration(seconds=0.05),
+                    )
+                except Exception:
+                    continue
+                value = transform.transform
+                imu_to_left = matrix_from_transform(
+                    (value.translation.x, value.translation.y, value.translation.z),
+                    (
+                        value.rotation.x,
+                        value.rotation.y,
+                        value.rotation.z,
+                        value.rotation.w,
+                    ),
+                )
+                with self._lock:
+                    state.imu_to_left = imu_to_left
+                self.get_logger().info(f"resolved {name} T_imu_left")
             try:
                 transform = self._tf_buffer.lookup_transform(
-                    f"{name}_camera_imu",
                     f"{name}_camera_left",
+                    f"{name}_camera_right",
                     Time(),
                     timeout=Duration(seconds=0.05),
                 )
             except Exception:
                 continue
             value = transform.transform
-            imu_to_left = matrix_from_transform(
+            left_to_right = matrix_from_transform(
                 (value.translation.x, value.translation.y, value.translation.z),
                 (value.rotation.x, value.rotation.y, value.rotation.z, value.rotation.w),
             )
+            left_to_center = left_to_stereo_center(left_to_right)
+            imu_to_center = compose_transform(imu_to_left, left_to_center)
             with self._lock:
-                state.imu_to_left = imu_to_left
-            self.get_logger().info(f"resolved {name} T_imu_left")
+                state.imu_to_center = imu_to_center
+            baseline_m = float(np.linalg.norm(left_to_right[:3, 3]))
+            self.get_logger().info(
+                f"resolved {name} stereo center from {baseline_m:.4f} m baseline"
+            )
 
     def _worker_main(self) -> None:
         period = 1.0 / max(self._args.localization_hz, 0.1)
@@ -464,12 +516,18 @@ class Insight3GlobalLocalizer(Node):
                     imu_to_left = (
                         None if state.imu_to_left is None else state.imu_to_left.copy()
                     )
+                    imu_to_center = (
+                        None
+                        if state.imu_to_center is None
+                        else state.imu_to_center.copy()
+                    )
                     map_points = self._map_points.copy()
                     map_descriptors = self._map_descriptors.copy()
                 if (
                     message is None
                     or camera_matrix is None
                     or imu_to_left is None
+                    or imu_to_center is None
                     or len(map_points) < self._args.min_map_features
                 ):
                     localized = state.consensus.correction is not None
@@ -478,7 +536,11 @@ class Insight3GlobalLocalizer(Node):
                         "localized": localized,
                         "image_ready": message is not None,
                         "camera_info_ready": camera_matrix is not None,
-                        "extrinsic_ready": imu_to_left is not None,
+                        "extrinsic_ready": (
+                            imu_to_left is not None and imu_to_center is not None
+                        ),
+                        "left_extrinsic_ready": imu_to_left is not None,
+                        "center_extrinsic_ready": imu_to_center is not None,
                         "map_features": len(map_points),
                         "need_map_features": self._args.min_map_features,
                     }
@@ -512,8 +574,35 @@ class Insight3GlobalLocalizer(Node):
                     )
                     with self._lock:
                         transition = state.consensus.observe(candidate)
-                        if transition["localized"]:
+                        measurement = state.consensus.correction
+                        measurement_changed = (
+                            measurement is not None
+                            and (
+                                state.last_relocalization_measurement is None
+                                or not np.array_equal(
+                                    measurement,
+                                    state.last_relocalization_measurement,
+                                )
+                            )
+                        )
+                        if measurement_changed:
+                            first_fix = state.pose_filter.observe(measurement)
+                            state.last_relocalization_measurement = measurement.copy()
                             state.path_dirty = True
+                            if first_fix:
+                                state.transformed_history.clear()
+                                state.last_transformed_stamp_ns = -1
+                                state.last_global_pose_publish_ns = -1
+                                latest_history = tuple(state.history)[-1:]
+                                state.history.clear()
+                                state.history.extend(latest_history)
+                        transition["ekf_initialized"] = state.pose_filter.initialized
+                        transition["ekf_innovation_translation_m"] = round(
+                            state.pose_filter.last_innovation_translation_m, 4
+                        )
+                        transition["ekf_innovation_rotation_deg"] = round(
+                            state.pose_filter.last_innovation_rotation_deg, 3
+                        )
                     state.status = {
                         "state": (
                             "localized"
@@ -536,43 +625,25 @@ class Insight3GlobalLocalizer(Node):
 
     def _rebuild_path(self, state: CameraState) -> None:
         with self._lock:
-            correction = (
-                None
-                if state.consensus.correction is None
-                else state.consensus.correction.copy()
-            )
+            correction = state.pose_filter.correction
             extrinsic = (
-                None if state.imu_to_left is None else state.imu_to_left.copy()
+                None if state.imu_to_center is None else state.imu_to_center.copy()
             )
             history = tuple(state.history)
             state.path_dirty = False
         if correction is None or extrinsic is None:
             return
 
-        if state.transformed_correction is None:
-            correction_changed = True
-        else:
-            correction_translation_m = float(
-                np.linalg.norm(
-                    correction[:3, 3] - state.transformed_correction[:3, 3]
-                )
-            )
-            correction_rotation_deg = rotation_distance_deg(
-                state.transformed_correction, correction
-            )
-            correction_changed = (
-                correction_translation_m
-                >= self._args.path_reset_translation_m
-                or correction_rotation_deg
-                >= self._args.path_reset_rotation_deg
-            )
         extrinsic_changed = (
-            state.transformed_extrinsic is None
+            state.transformed_output_extrinsic is None
             or not np.allclose(
-                extrinsic, state.transformed_extrinsic, rtol=0.0, atol=1e-12
+                extrinsic,
+                state.transformed_output_extrinsic,
+                rtol=0.0,
+                atol=1e-12,
             )
         )
-        if correction_changed or extrinsic_changed:
+        if extrinsic_changed:
             state.transformed_history.clear()
             state.last_transformed_stamp_ns = -1
             state.last_global_pose_publish_ns = -1
@@ -580,26 +651,22 @@ class Insight3GlobalLocalizer(Node):
             with self._lock:
                 state.history.clear()
                 state.history.extend(pending)
-            active_correction = correction
         else:
             pending = tuple(
                 sample
                 for sample in history
                 if sample.stamp_ns > state.last_transformed_stamp_ns
             )
-            active_correction = state.transformed_correction
 
         for sample in pending:
-            transform = active_correction @ matrix_from_pose(sample) @ extrinsic
+            transform = correction @ matrix_from_pose(sample) @ extrinsic
             stamp = Time(nanoseconds=sample.stamp_ns).to_msg()
             state.transformed_history.append(
                 pose_message(transform, stamp, self._map_frame)
             )
             state.last_transformed_stamp_ns = sample.stamp_ns
 
-        if correction_changed or extrinsic_changed:
-            state.transformed_correction = correction
-        state.transformed_extrinsic = extrinsic
+        state.transformed_output_extrinsic = extrinsic
         path = PathMsg()
         path.header.frame_id = self._map_frame
         path.poses = list(state.transformed_history)
@@ -618,7 +685,7 @@ class Insight3GlobalLocalizer(Node):
                 transform = TransformStamped()
                 transform.header.frame_id = self._map_frame
                 transform.header.stamp = now_stamp
-                transform.child_frame_id = f"{name}_global_camera_left"
+                transform.child_frame_id = f"{name}_global_camera_center"
                 transform.transform.translation.x = latest.pose.position.x
                 transform.transform.translation.y = latest.pose.position.y
                 transform.transform.translation.z = latest.pose.position.z
@@ -631,6 +698,9 @@ class Insight3GlobalLocalizer(Node):
             status["camera"] = name
             status["history_points"] = len(state.history)
             status["published_path_points"] = len(state.path.poses)
+            status["ekf_initialized"] = state.pose_filter.initialized
+            status["ekf_covariance_diagonal"] = state.pose_filter.covariance_diagonal
+            status["pose_frame"] = f"{name}_global_camera_center"
             message = String()
             message.data = json.dumps(status, separators=(",", ":"))
             self._status_publishers[name].publish(message)
@@ -664,8 +734,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--path-interval-ms", type=int, default=50)
     parser.add_argument("--path-publish-hz", type=float, default=5.0)
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
-    parser.add_argument("--path-reset-translation-m", type=float, default=0.05)
-    parser.add_argument("--path-reset-rotation-deg", type=float, default=3.0)
+    parser.add_argument("--ekf-process-translation-std", type=float, default=0.02)
+    parser.add_argument("--ekf-process-rotation-std-deg", type=float, default=0.5)
+    parser.add_argument("--ekf-measurement-translation-std", type=float, default=0.10)
+    parser.add_argument("--ekf-measurement-rotation-std-deg", type=float, default=3.0)
+    parser.add_argument(
+        "--ekf-correction-time-constant-sec", type=float, default=1.0
+    )
     return parser
 
 

@@ -182,10 +182,8 @@ services:
       - "5"
       - --pose-publish-hz
       - "50"
-      - --path-reset-translation-m
-      - "0.05"
-      - --path-reset-rotation-deg
-      - "3.0"
+      - --ekf-correction-time-constant-sec
+      - "1.0"
     depends_on:
       superglue-inference:
         condition: service_healthy

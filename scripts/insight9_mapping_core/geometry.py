@@ -150,6 +150,24 @@ def compose_transform(first: np.ndarray, second: np.ndarray) -> np.ndarray:
     return first @ second
 
 
+def left_to_stereo_center(left_to_right: np.ndarray) -> np.ndarray:
+    """Return ``T_left_center`` for the midpoint of two optical origins.
+
+    The center frame keeps the left optical frame orientation. This avoids
+    introducing any small right-camera calibration rotation into the published
+    device pose while placing its origin halfway between both optical centers.
+    """
+
+    transform = np.asarray(left_to_right, dtype=np.float64).reshape(4, 4)
+    if not np.all(np.isfinite(transform)):
+        raise ValueError("left-to-right transform must be finite")
+    if not np.allclose(transform[3], (0.0, 0.0, 0.0, 1.0), atol=1e-9):
+        raise ValueError("left-to-right transform is not homogeneous")
+    center = np.eye(4, dtype=np.float64)
+    center[:3, 3] = 0.5 * transform[:3, 3]
+    return center
+
+
 def transform_points(transform: np.ndarray, points: np.ndarray) -> np.ndarray:
     """Transform an ``N x 3`` point array without homogeneous allocation."""
 

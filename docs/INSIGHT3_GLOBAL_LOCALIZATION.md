@@ -28,15 +28,31 @@ Insight9，平移超过 5 cm 或旋转超过 3°，同时持续观察同一个�
 - 内点至少覆盖图像的四个网格区域；
 - 连续结果之间小于 20 cm 和 12°。
 
-确认成功后，节点保存 `T_insight9_map_insight3_odom`。首次确认会从当前点
-开始轨迹；后续校正相对当前轨迹基准平移达到 5 cm 或旋转达到 3° 时，丢弃
-旧轨迹并从当前点重新开始。两个差值都低于门槛时认为位置基本不变，继续使用
-原轨迹基准增量变换新 VIO 点，不产生接缝，也不反复重建历史。小幅校正以当前
-轨迹基准累计比较，累计超过门槛后仍会触发清空。
-原始 VIO 约为 100 Hz；全局轨迹按 50 ms 间隔采样，并以 20 Hz 发布 Path 和
-相机 TF。与 Insight9 相同，每条轨迹最多保留 200 点，达到上限后旧点随新点
-进入而逐个消失；按目标采样间隔对应约 10 秒历史。状态 JSON 独立保持 2 Hz，
-避免诊断消息占用额外带宽。
+确认成功后，节点用误差状态 EKF 融合 VIO 和重定位：
+
+- 第一次确认直接初始化 `T_insight9_map_insight3_odom`，让相机立即到达真实位置，
+  并从该点开始全局轨迹；
+- 后续 VIO 作为 100 Hz 连续运动预测，重定位结果作为低频绝对观测更新
+  `T_map_odom`；
+- EKF 的后验修正按默认 1 秒时间常数随 VIO 帧连续注入，后续重定位不再清空
+  轨迹，也不会在单帧内把相机跳到新位置。
+
+默认平移过程噪声是 `0.02 m/√s`、旋转过程噪声是 `0.5°/√s`；重定位观测标准差
+是 `0.10 m` 和 `3°`。可用命令行参数 `--ekf-process-translation-std`、
+`--ekf-process-rotation-std-deg`、`--ekf-measurement-translation-std`、
+`--ekf-measurement-rotation-std-deg` 和
+`--ekf-correction-time-constant-sec` 调整。
+
+PnP 仍在左目光学坐标系中计算，但发布前会通过设备 TF 求出左右目光心中点：
+
+`T_map_center = T_map_odom · T_odom_imu · T_imu_left · T_left_center`
+
+其中 `T_left_center` 的平移是 `T_left_right` 平移的一半，姿态沿用左目。Pose、
+Path、轨迹和 Dashboard 模型位置都表示双目中心，不再表示左目位置。
+原始 VIO 约为 100 Hz；全局 Pose 以 50 Hz 发布，轨迹按 50 ms 间隔采样，
+Path 和相机 TF 以 5 Hz 发布。与 Insight9 相同，每条轨迹最多保留 200 点，
+达到上限后旧点随新点进入而逐个消失；按目标采样间隔对应约 10 秒历史。
+状态 JSON 独立保持 2 Hz，避免诊断消息占用额外带宽。
 
 ## 状态检查
 
@@ -60,6 +76,8 @@ ros2 topic echo --full-length /insight_global/insight3_b/status
 定位状态中的 `descriptor_matches`、`inliers`、`inlier_ratio`、
 `median_reprojection_error_px` 和 `rejection` 用于判断结果。单个后续帧被拒绝
 不会清除已确认的全局变换；只有新的三帧一致结果才会更新它。
+`ekf_initialized`、`ekf_innovation_translation_m`、
+`ekf_innovation_rotation_deg` 和 `ekf_covariance_diagonal` 用于检查融合状态。
 
 输出话题：
 
@@ -67,8 +85,8 @@ ros2 topic echo --full-length /insight_global/insight3_b/status
 - `/insight_global/insight3_b/path`：B 的全局轨迹；
 - `/insight_global/insight3_a/status`、`.../insight3_b/status`：定位诊断；
 - `/insight9_sparse_map/features`：Insight9 三维位置和 256 维描述子地图；
-- TF `insight9_map -> insight3_a_global_camera_left`；
-- TF `insight9_map -> insight3_b_global_camera_left`。
+- TF `insight9_map -> insight3_a_global_camera_center`；
+- TF `insight9_map -> insight3_b_global_camera_center`。
 
 ## RViz
 

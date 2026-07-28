@@ -5,6 +5,7 @@ from .geometry import (
     StereoCalibration,
     compose_transform,
     interpolate_pose,
+    left_to_stereo_center,
     matrix_from_pose,
     matrix_from_transform,
     rotation_distance_deg,
@@ -33,6 +34,7 @@ from .global_localization import (
     match_descriptors,
 )
 from .synchronization import PoseBuffer, StereoPair, StereoPairSynchronizer
+from .relocalization_ekf import RelocalizationEkf, RelocalizationEkfConfig
 
 __all__ = [
     "LandmarkMap",
@@ -50,12 +52,15 @@ __all__ = [
     "OfficialSuperGlueBackend",
     "PoseBuffer",
     "PoseSample",
+    "RelocalizationEkf",
+    "RelocalizationEkfConfig",
     "StereoMatches",
     "StereoPair",
     "StereoCalibration",
     "StereoPairSynchronizer",
     "compose_transform",
     "interpolate_pose",
+    "left_to_stereo_center",
     "matrix_from_pose",
     "matrix_from_transform",
     "localize_features",
