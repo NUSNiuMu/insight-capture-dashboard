@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from check_bag import nominal_for
+from post_processing_core.integrity import nominal_for
 from inprocess_bag_writer import InProcessBagWriter
 from post_processing import STORAGE_CONFIG_PATH
 

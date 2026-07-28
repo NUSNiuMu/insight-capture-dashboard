@@ -14,7 +14,7 @@
 | `dashboard_media/` | 硬件 JPEG 和 WebRTC 流 |
 | `hand_tracking/` | 实时手部感知、手势和夹爪 |
 | `handpose/` | 离线 Hand pose |
-| `post_processing_core/` | rosbag 与离线处理 |
+| `post_processing_core/` | rosbag 完整性、评分与离线处理 |
 | `insight9_mapping_core/` | 建图和定位算法 |
 
 ## 顶层文件判断

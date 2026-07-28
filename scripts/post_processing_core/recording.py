@@ -13,7 +13,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable, Deque, Dict, List, Optional, Sequence, Set
 
-from check_bag import nominal_for
+from post_processing_core.integrity import nominal_for
 from perf_tracker import track
 
 from .topic_catalog import (

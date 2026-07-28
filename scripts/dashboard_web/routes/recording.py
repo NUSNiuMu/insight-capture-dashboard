@@ -8,7 +8,7 @@ import shutil
 
 from aiohttp import web
 
-from check_bag import analyze_bag
+from post_processing_core.integrity import analyze_bag
 from post_processing import list_rosbags
 from dashboard_web.support import read_disk_space, read_json_body, read_system_load
 

@@ -146,7 +146,7 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 | `scripts/dashboard_media/` | 硬件 JPEG 编解码与 WebRTC 流实现 |
 | `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
 | `scripts/post_processing.py` | Web 版 rosbag 录制管理、topic 发现分组、COLMAP 优化 pipeline 调度 |
-| `scripts/post_processing_core/` | 录制、恢复、回放、同步、bag catalog 与优化实现 |
+| `scripts/post_processing_core/` | 完整性、评分、录制、恢复、回放、同步、bag catalog 与优化实现 |
 | `scripts/hand_tracking/` | 实时手部 landmark、双手手势识别和夹爪跟踪 |
 | `scripts/handpose/` | 从已有 rosbag 离线提取并管理 Hand pose 结果 |
 | `scripts/insight9_sparse_mapper.py` | Insight9 官方 SuperPoint/SuperGlue 在线稀疏建图验证节点 |

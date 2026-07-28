@@ -49,7 +49,7 @@ scripts/
   dashboard_media/                  硬件 JPEG 和 WebRTC 流实现
   hand_tracking/                    实时手部关键点、手势识别与夹爪跟踪
   handpose/                         离线 MediaPipe/WiLoR Hand pose 提取与任务管理
-  post_processing_core/             bag catalog、录制、恢复、回放、同步、优化
+  post_processing_core/             bag 完整性、评分、录制、恢复、回放、同步、优化
   insight9_mapping_core/            稀疏/稠密建图和全局定位算法
 web_dashboard/
   src/                              前端源码，按领域和页面分包
@@ -77,7 +77,7 @@ rosbags/ outputs/ runs/ data/        运行数据；不提交、不烘焙
 | JPEG 编解码与 WebRTC 流 | `dashboard_media/` |
 | 实时手部 landmark、手势、夹爪 | `hand_tracking/` |
 | 离线 Hand pose | `handpose/` |
-| 录制、bag、回放、优化 | `post_processing_core/` |
+| 录制、bag 完整性、评分、回放、优化 | `post_processing_core/` |
 | Insight9 建图/定位算法 | `insight9_mapping_core/` |
 | 浏览器页面级逻辑 | `web_dashboard/src/pages/` |
 | 可跨页面复用的前端逻辑 | `web_dashboard/src/shared/` 或明确领域目录 |
