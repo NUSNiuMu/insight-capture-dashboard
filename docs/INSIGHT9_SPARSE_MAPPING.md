@@ -31,13 +31,21 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图，并发布 RViz 点
   -> 极线、视差、深度和重投影过滤
   -> 双目三角化
   -> 100 Hz VIO 插值到图像时间戳
-  -> T_world_imu * T_imu_left
+  -> 历史 3D 地标 PnP 回环检测
+  -> T_map_odom * T_odom_imu * T_imu_left
   -> 世界坐标体素确认
   -> PointCloud2 + Path + TF
 ```
 
 稳定地图点必须在三个不同关键帧落入同一个 4 cm 体素。候选点超过 12 个关键帧
 未再次观测会被删除，避免单帧动态物体永久进入地图。
+
+Insight9 每两个关键帧尝试一次自身回环，并从候选地图中排除最近 30 个关键帧
+内首次建立的地标，避免把连续跟踪误判成回环。当前左目特征与历史三维地标通过
+描述子互检和比率测试后，由 PnP-RANSAC 做几何验证；默认要求至少 15 个内点、
+55% 内点率、覆盖 5 个 4x4 图像网格，并连续三次得到一致校正才接受。
+接受后的 `T_map_odom` 经误差状态 EKF 和 0.75 秒时间常数平滑应用；设备原始
+VIO 不被写回，新地标、Insight9 全局 Pose、Path 和 TF 使用校正后的坐标。
 
 ## 构建和启动官方 GPU 服务
 
@@ -137,7 +145,8 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 - `/insight9_sparse_map/features`：确认地标的三维位置和 256 维 SuperPoint 描述子。
 - `/insight9_sparse_map/pose`：50 Hz 最新全局位姿。
 - `/insight9_sparse_map/path`：5 Hz 发布、最多 200 点的调试全局轨迹。
-- `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数和处理耗时 JSON。
+- `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数、回环候选/拒绝
+  诊断、累计接受次数和处理耗时 JSON。
 - TF `insight9_map -> insight9_mapping_camera_center`：位于左右目光心中点，
   姿态沿用左目；使用独立命名避免与设备 TF 多父冲突。
 
@@ -163,6 +172,9 @@ docker compose stop insight3-global-localizer insight9-sparse-mapper superglue-i
 - 点云随相机移动保持在世界坐标中，不跟随相机漂移。
 - 人手或移动物体的单帧点不进入稳定点云。
 - VIO 时间戳回退时自动清空当前会话地图和轨迹。
+- 返回较早区域后 `loop_confirmation_progress` 连续达到 3，
+  `loop_closures` 增加，Insight9 全局 Pose 被拉回历史地图。
+- 无回环和重复纹理数据中不接受错误回环。
 - 记录 `stereo_matches`、`triangulated`、`confirmed` 和
   `inference_and_geometry_ms`，再判断 5 Hz 目标是否成立。
 

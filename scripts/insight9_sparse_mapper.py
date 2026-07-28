@@ -22,17 +22,22 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from insight9_mapping_core import (  # noqa: E402
+    GlobalLocalizationConfig,
     IpcSuperGlueBackend,
     LandmarkMap,
     LandmarkMapConfig,
+    LocalizationConsensus,
     OfficialSuperGlueBackend,
     PoseBuffer,
     PoseSample,
+    RelocalizationEkf,
+    RelocalizationEkfConfig,
     StereoCalibration,
     StereoPair,
     StereoPairSynchronizer,
     compose_transform,
     left_to_stereo_center,
+    localize_features,
     matrix_from_pose,
     matrix_from_transform,
     rotation_distance_deg,
@@ -200,6 +205,33 @@ class Insight9SparseMapper(Node):
                 max_landmarks=args.max_landmarks,
             )
         )
+        self._loop_config = GlobalLocalizationConfig(
+            ratio_test=args.loop_ratio_test,
+            min_similarity=args.loop_min_similarity,
+            min_matches=args.loop_min_matches,
+            min_inliers=args.loop_min_inliers,
+            min_inlier_ratio=args.loop_min_inlier_ratio,
+            max_reprojection_error_px=args.loop_max_reprojection_error_px,
+            min_grid_cells=args.loop_min_grid_cells,
+            confirmation_frames=args.loop_confirmation_frames,
+            confirmation_translation_m=args.loop_confirmation_translation_m,
+            confirmation_rotation_deg=args.loop_confirmation_rotation_deg,
+        )
+        self._loop_consensus = LocalizationConsensus(self._loop_config)
+        self._loop_pose_filter = RelocalizationEkf(
+            RelocalizationEkfConfig(
+                process_translation_std_m_sqrt_s=args.loop_process_translation_std,
+                process_rotation_std_deg_sqrt_s=args.loop_process_rotation_std_deg,
+                measurement_translation_std_m=args.loop_measurement_translation_std,
+                measurement_rotation_std_deg=args.loop_measurement_rotation_std_deg,
+                correction_time_constant_sec=args.loop_correction_time_constant_sec,
+            )
+        )
+        self._loop_pose_filter.observe(np.eye(4, dtype=np.float64))
+        self._loop_lock = threading.Lock()
+        self._last_loop_measurement: Optional[np.ndarray] = None
+        self._loop_closure_count = 0
+        self._last_vio_stamp_ns = 0
         if args.backend == "ipc":
             self._matcher = IpcSuperGlueBackend(Path(args.inference_socket))
         else:
@@ -290,10 +322,29 @@ class Insight9SparseMapper(Node):
             self._feature_map_dirty = True
         self._last_keyframe_transform = None
         self._keyframe_id = 0
+        self._reset_loop_closure()
         self._latest_stats = {"state": "waiting_for_motion", "reset": True}
         self._publish_map()
         self.get_logger().info("Started a new web-requested sparse mapping session")
         return response
+
+    def _reset_loop_closure(self) -> None:
+        with self._loop_lock:
+            self._loop_consensus = LocalizationConsensus(self._loop_config)
+            self._loop_pose_filter.reset()
+            self._loop_pose_filter.observe(np.eye(4, dtype=np.float64))
+            self._last_loop_measurement = None
+            self._loop_closure_count = 0
+            self._last_vio_stamp_ns = 0
+
+    def _map_to_odom(self, *, smoothed: bool = True) -> np.ndarray:
+        with self._loop_lock:
+            correction = (
+                self._loop_pose_filter.correction
+                if smoothed
+                else self._loop_pose_filter.estimate
+            )
+        return np.eye(4, dtype=np.float64) if correction is None else correction
 
     def destroy_node(self) -> bool:
         self._stop.set()
@@ -381,18 +432,33 @@ class Insight9SparseMapper(Node):
         if reset:
             with self._path_lock:
                 self._path.clear()
+                self._last_path_append_ns = 0
             with self._map_lock:
                 self._landmarks.clear()
+                self._feature_map_dirty = True
             self._last_keyframe_transform = None
             self._keyframe_id = 0
+            self._last_pose_publish_ns = 0
+            self._reset_loop_closure()
             self.get_logger().warning("VIO timestamp reset; cleared session map")
         if self._imu_to_center is None:
             return
-        world_to_center = compose_transform(
+        with self._loop_lock:
+            if self._last_vio_stamp_ns > 0:
+                self._loop_pose_filter.predict(
+                    (sample.stamp_ns - self._last_vio_stamp_ns) / 1_000_000_000.0
+                )
+            self._last_vio_stamp_ns = sample.stamp_ns
+            correction = self._loop_pose_filter.correction
+        odom_to_center = compose_transform(
             matrix_from_pose(sample), self._imu_to_center
         )
+        map_to_center = compose_transform(
+            np.eye(4, dtype=np.float64) if correction is None else correction,
+            odom_to_center,
+        )
         stamped = matrix_to_pose_stamped(
-            world_to_center, sample.stamp_ns, self._map_frame
+            map_to_center, sample.stamp_ns, self._map_frame
         )
         if (
             sample.stamp_ns - self._last_pose_publish_ns
@@ -402,7 +468,7 @@ class Insight9SparseMapper(Node):
             self._last_pose_publish_ns = sample.stamp_ns
         if sample.stamp_ns - self._last_path_append_ns >= self._args.path_interval_ms * 1_000_000:
             with self._path_lock:
-                self._path.append(stamped)
+                self._path.append((sample.stamp_ns, odom_to_center))
             self._last_path_append_ns = sample.stamp_ns
 
     def _on_left(self, message: Image) -> None:
@@ -492,8 +558,8 @@ class Insight9SparseMapper(Node):
                     "pose_ready": pose is not None,
                 }
                 continue
-            world_to_left = compose_transform(matrix_from_pose(pose), imu_to_left)
-            if not self._is_keyframe(world_to_left):
+            odom_to_left = compose_transform(matrix_from_pose(pose), imu_to_left)
+            if not self._is_keyframe(odom_to_left):
                 continue
             started = time.perf_counter()
             try:
@@ -516,8 +582,20 @@ class Insight9SparseMapper(Node):
                     max_reprojection_error_px=self._args.max_reprojection_error_px,
                 )
                 source = triangulated.source_indices
-                world_points = transform_points(world_to_left, triangulated.points_left)
-                self._keyframe_id += 1
+                next_keyframe_id = self._keyframe_id + 1
+                loop_diagnostics = self._detect_loop_closure(
+                    next_keyframe_id,
+                    matches.left_points,
+                    matches.descriptors,
+                    calibration,
+                    odom_to_left,
+                    left.shape,
+                )
+                map_to_left = compose_transform(
+                    self._map_to_odom(smoothed=False), odom_to_left
+                )
+                world_points = transform_points(map_to_left, triangulated.points_left)
+                self._keyframe_id = next_keyframe_id
                 with self._map_lock:
                     update = self._landmarks.update(
                         self._keyframe_id,
@@ -526,7 +604,7 @@ class Insight9SparseMapper(Node):
                         scores=matches.scores[source],
                     )
                     self._feature_map_dirty = True
-                self._last_keyframe_transform = world_to_left
+                self._last_keyframe_transform = odom_to_left
                 self._last_processed_monotonic = time.monotonic()
                 self._latest_stats = {
                     "state": "mapping",
@@ -556,10 +634,101 @@ class Insight9SparseMapper(Node):
                     "inference_and_geometry_ms": round(
                         (time.perf_counter() - started) * 1000.0, 1
                     ),
+                    **loop_diagnostics,
                 }
             except Exception as exc:
                 self._latest_stats = {"state": "error", "error": str(exc)}
                 self.get_logger().error(f"mapping frame failed: {exc}")
+
+    def _detect_loop_closure(
+        self,
+        keyframe_id: int,
+        keypoints: np.ndarray,
+        descriptors: np.ndarray,
+        calibration: StereoCalibration,
+        odom_to_left: np.ndarray,
+        image_shape: tuple[int, int],
+    ) -> dict[str, object]:
+        diagnostics: dict[str, object] = {
+            "loop_checked": False,
+            "loop_closures": self._loop_closure_count,
+        }
+        if (
+            not self._args.loop_closure_enabled
+            or keyframe_id % max(1, self._args.loop_check_interval_keyframes) != 0
+        ):
+            return diagnostics
+
+        historical_cutoff = keyframe_id - self._args.loop_exclude_recent_keyframes
+        with self._map_lock:
+            map_points, map_descriptors = self._landmarks.descriptors(
+                max_source_keyframe=historical_cutoff
+            )
+        diagnostics.update(
+            {
+                "loop_checked": True,
+                "loop_historical_features": int(len(map_points)),
+                "loop_excluded_after_keyframe": int(historical_cutoff),
+            }
+        )
+        if len(map_points) < self._args.loop_min_map_features:
+            diagnostics["loop_rejection"] = "insufficient_historical_map"
+            return diagnostics
+
+        candidate, localization = localize_features(
+            keypoints,
+            descriptors,
+            map_points,
+            map_descriptors,
+            calibration.left_projection[:, :3],
+            odom_to_left,
+            image_shape,
+            self._loop_config,
+        )
+        with self._loop_lock:
+            transition = self._loop_consensus.observe(candidate)
+            measurement = self._loop_consensus.correction
+            measurement_changed = (
+                measurement is not None
+                and (
+                    self._last_loop_measurement is None
+                    or not np.array_equal(measurement, self._last_loop_measurement)
+                )
+            )
+            if measurement_changed:
+                self._loop_pose_filter.observe(measurement)
+                self._last_loop_measurement = measurement.copy()
+                self._loop_closure_count += 1
+                correction_translation = float(
+                    np.linalg.norm(measurement[:3, 3])
+                )
+                correction_rotation = rotation_distance_deg(
+                    np.eye(4, dtype=np.float64), measurement
+                )
+                self.get_logger().info(
+                    "accepted Insight9 loop closure %d: correction=%.3f m / %.2f deg"
+                    % (
+                        self._loop_closure_count,
+                        correction_translation,
+                        correction_rotation,
+                    )
+                )
+            loop_count = self._loop_closure_count
+            innovation_translation = (
+                self._loop_pose_filter.last_innovation_translation_m
+            )
+            innovation_rotation = self._loop_pose_filter.last_innovation_rotation_deg
+        return {
+            **diagnostics,
+            **{f"loop_{key}": value for key, value in localization.items()},
+            "loop_localized": transition["localized"],
+            "loop_confirmation_progress": transition["confirmation_progress"],
+            "loop_confirmation_required": transition["confirmation_required"],
+            "loop_accepted": measurement_changed,
+            "loop_closures": loop_count,
+            "loop_ekf_innovation_translation_m": round(innovation_translation, 4),
+            "loop_ekf_innovation_rotation_deg": round(innovation_rotation, 3),
+        }
 
     def _is_keyframe(self, transform: np.ndarray) -> bool:
         previous = self._last_keyframe_transform
@@ -605,9 +774,18 @@ class Insight9SparseMapper(Node):
 
     def _publish_path_and_tf(self) -> None:
         with self._path_lock:
-            poses = list(self._path)
-        if not poses:
+            raw_poses = list(self._path)
+        if not raw_poses:
             return
+        correction = self._map_to_odom()
+        poses = [
+            matrix_to_pose_stamped(
+                compose_transform(correction, odom_to_center),
+                stamp_ns,
+                self._map_frame,
+            )
+            for stamp_ns, odom_to_center in raw_poses
+        ]
         path = PathMsg()
         path.header.stamp = poses[-1].header.stamp
         path.header.frame_id = self._map_frame
@@ -668,6 +846,29 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--path-interval-ms", type=int, default=50)
     parser.add_argument("--path-publish-hz", type=float, default=5.0)
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
+    parser.add_argument(
+        "--loop-closure-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument("--loop-check-interval-keyframes", type=int, default=2)
+    parser.add_argument("--loop-exclude-recent-keyframes", type=int, default=30)
+    parser.add_argument("--loop-min-map-features", type=int, default=80)
+    parser.add_argument("--loop-ratio-test", type=float, default=0.78)
+    parser.add_argument("--loop-min-similarity", type=float, default=0.70)
+    parser.add_argument("--loop-min-matches", type=int, default=20)
+    parser.add_argument("--loop-min-inliers", type=int, default=15)
+    parser.add_argument("--loop-min-inlier-ratio", type=float, default=0.55)
+    parser.add_argument("--loop-max-reprojection-error-px", type=float, default=2.5)
+    parser.add_argument("--loop-min-grid-cells", type=int, default=5)
+    parser.add_argument("--loop-confirmation-frames", type=int, default=3)
+    parser.add_argument("--loop-confirmation-translation-m", type=float, default=0.20)
+    parser.add_argument("--loop-confirmation-rotation-deg", type=float, default=10.0)
+    parser.add_argument("--loop-process-translation-std", type=float, default=0.02)
+    parser.add_argument("--loop-process-rotation-std-deg", type=float, default=0.5)
+    parser.add_argument("--loop-measurement-translation-std", type=float, default=0.08)
+    parser.add_argument("--loop-measurement-rotation-std-deg", type=float, default=2.5)
+    parser.add_argument("--loop-correction-time-constant-sec", type=float, default=0.75)
     return parser
 
 
@@ -683,7 +884,7 @@ def main() -> int:
     finally:
         if node is not None:
             node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
     return 0
 
 

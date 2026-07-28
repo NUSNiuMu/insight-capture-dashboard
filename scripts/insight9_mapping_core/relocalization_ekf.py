@@ -109,6 +109,12 @@ class RelocalizationEkf:
         return None if self._output is None else self._output.copy()
 
     @property
+    def estimate(self) -> Optional[np.ndarray]:
+        """Return the latest filtered target before display smoothing."""
+
+        return None if self._estimate is None else self._estimate.copy()
+
+    @property
     def covariance_diagonal(self) -> list[float]:
         return np.diag(self._covariance).astype(float).tolist()
 

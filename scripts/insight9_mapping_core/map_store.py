@@ -36,6 +36,7 @@ class _Landmark:
     position: np.ndarray
     descriptor: Optional[np.ndarray]
     observations: int
+    first_keyframe: int
     last_keyframe: int
     score: float
 
@@ -119,6 +120,7 @@ class LandmarkMap:
                     position=points[index].copy(),
                     descriptor=self._normalized_descriptor(descriptor),
                     observations=1,
+                    first_keyframe=int(keyframe_id),
                     last_keyframe=int(keyframe_id),
                     score=float(scores_array[index]),
                 )
@@ -190,13 +192,19 @@ class LandmarkMap:
             dtype=np.float32,
         )
 
-    def descriptors(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Return positions and descriptors for confirmed points that have both."""
+    def descriptors(
+        self, *, max_source_keyframe: Optional[int] = None
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Return descriptor landmarks, optionally excluding recently created points."""
 
         entries = [
             landmark
             for landmark in self._confirmed.values()
             if landmark.descriptor is not None
+            and (
+                max_source_keyframe is None
+                or landmark.first_keyframe <= int(max_source_keyframe)
+            )
         ]
         if not entries:
             return (

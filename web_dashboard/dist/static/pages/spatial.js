@@ -206,8 +206,15 @@ function renderMappingStatus(payload) {
   if (mappingMeta) {
     const keyframe = Number(mapper.keyframe || 0);
     const promoted = Number(mapper.promoted || 0);
+    const loops = Number(mapper.loop_closures || 0);
+    const loopProgress = Number(mapper.loop_confirmation_progress || 0);
+    const loopRequired = Number(mapper.loop_confirmation_required || 0);
+    const loopCheck = loopProgress > 0 && loopRequired > 0
+      ? ` · loop check ${loopProgress}/${loopRequired}`
+      : "";
     mappingMeta.textContent =
-      `${onlineCount}/3 streams online · keyframe ${keyframe} · last promoted ${promoted}`;
+      `${onlineCount}/3 streams online · keyframe ${keyframe} · ` +
+      `last promoted ${promoted} · loops ${loops}${loopCheck}`;
   }
   if (mappingCameraStates) {
     const labels = {
