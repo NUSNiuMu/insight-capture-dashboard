@@ -46,8 +46,8 @@ from camera_setup import (
     build_dashboard_config,
     load_setup,
 )
-from gripper_tracking import GripperTrackingMixin
-from hand_overlay import HandOverlayMixin
+from hand_tracking.gripper import GripperTrackingMixin
+from hand_tracking.overlay import HandOverlayMixin
 from hw_jpeg import HwJpegCodec
 from inprocess_bag_writer import InProcessBagWriter
 import perf_tracker

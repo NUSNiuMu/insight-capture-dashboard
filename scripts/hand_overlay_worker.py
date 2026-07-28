@@ -14,7 +14,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from hand_overlay import draw_hands_on_frame
+from hand_tracking.overlay import draw_hands_on_frame
 from hw_jpeg import HwJpegCodec
 
 _AUTHKEY_ENV = "INSIGHT_HANDOVERLAY_AUTHKEY"

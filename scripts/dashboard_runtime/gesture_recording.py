@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from hand_gestures import DoubleThumbsUpLatch, classify_double_thumbs_up
+from hand_tracking.gestures import DoubleThumbsUpLatch, classify_double_thumbs_up
 
 
 class GestureRecordingController:

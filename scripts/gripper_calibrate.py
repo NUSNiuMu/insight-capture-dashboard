@@ -18,7 +18,10 @@ from sensor_msgs.msg import CompressedImage, Image as RosImage
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from camera_setup import build_dashboard_config, load_setup  # noqa: E402
-from gripper_tracking import DEFAULT_CALIBRATION_PATH, GripperMarkerDetector  # noqa: E402
+from hand_tracking.gripper import (  # noqa: E402
+    DEFAULT_CALIBRATION_PATH,
+    GripperMarkerDetector,
+)
 
 
 def decode_frame(topic_type: str, msg: object) -> "np.ndarray | None":

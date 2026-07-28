@@ -141,9 +141,13 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 | 脚本 | 作用 |
 |---|---|
 | `scripts/run_dashboard.sh` | 统一启动入口，`docker compose up -d` + 健康检查，`--jetson` 额外拉起本机 kiosk 窗口 |
-| `scripts/multi_camera_dashboard_web.py` | Web dashboard 后端：ROS2 pose/图像订阅、fake-pose demo、WebSocket 推流、rosbag 录制/查询 API |
+| `scripts/multi_camera_dashboard_web.py` | Web dashboard 稳定进程入口与 ROS 生命周期组合 |
+| `scripts/dashboard_web/` / `dashboard_runtime/` | Web API、WebSocket 与 Dashboard 运行时领域实现 |
 | `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
 | `scripts/post_processing.py` | Web 版 rosbag 录制管理、topic 发现分组、COLMAP 优化 pipeline 调度 |
+| `scripts/post_processing_core/` | 录制、恢复、回放、同步、bag catalog 与优化实现 |
+| `scripts/hand_tracking/` | 实时手部 landmark、双手手势识别和夹爪跟踪 |
+| `scripts/handpose/` | 从已有 rosbag 离线提取并管理 Hand pose 结果 |
 | `scripts/insight9_sparse_mapper.py` | Insight9 官方 SuperPoint/SuperGlue 在线稀疏建图验证节点 |
 | `scripts/insight9_dense_mapper.py` | Insight9 StereoSGBM/VIO 在线稠密点云与体素融合节点 |
 | `scripts/insight3_global_localizer.py` | 两路 Insight3 到 Insight9 3D 描述子地图的全局定位与轨迹重建节点 |
@@ -155,6 +159,8 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 | `scripts/traj_score.py` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
 | `web_dashboard/` | Babylon.js Web 前端源码，`npm run build` 生成 `dist/` 静态页面 |
 | `config/post_processing.json` | Web 版 rosbag 默认录制配置（`rosbag_dir` 等） |
+
+新增功能和迁移规则见 [项目结构规范](docs/PROJECT_STRUCTURE.md)。
 
 ## 部署
 
