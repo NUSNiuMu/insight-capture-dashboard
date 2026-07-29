@@ -81,17 +81,29 @@ def main() -> None:
         ]
         if not connections:
             raise RuntimeError(f"Topic {args.topic!r} is not present in the bag")
+        total_frames = sum(connection.msgcount for connection in connections)
+        if args.max_frames > 0:
+            total_frames = min(total_frames, args.max_frames)
+        print(f"HANDPOSE_PROGRESS 0 0 {total_frames}", flush=True)
 
         with HandLandmarker.create_from_options(options) as landmarker:
             for connection, _bag_timestamp, rawdata in reader.messages(
                 connections=connections
             ):
+                frame_count += 1
                 message = reader.deserialize(rawdata, connection.msgtype)
                 frame = cv2.imdecode(
                     np.frombuffer(message.data, dtype=np.uint8),
                     cv2.IMREAD_COLOR,
                 )
                 if frame is None:
+                    print(
+                        "HANDPOSE_PROGRESS "
+                        f"{frame_count} {detected_frame_count} {total_frames}",
+                        flush=True,
+                    )
+                    if args.max_frames > 0 and frame_count >= args.max_frames:
+                        break
                     continue
                 stamp_ns = (
                     int(message.header.stamp.sec) * 1_000_000_000
@@ -159,12 +171,11 @@ def main() -> None:
                         )
                     writer.write(frame)
 
-                frame_count += 1
-                if frame_count % 50 == 0:
-                    print(
-                        f"HANDPOSE_PROGRESS {frame_count} {detected_frame_count}",
-                        flush=True,
-                    )
+                print(
+                    "HANDPOSE_PROGRESS "
+                    f"{frame_count} {detected_frame_count} {total_frames}",
+                    flush=True,
+                )
                 if args.max_frames > 0 and frame_count >= args.max_frames:
                     break
 
@@ -179,7 +190,8 @@ def main() -> None:
     with args.output_json.open("w", encoding="utf-8") as stream:
         json.dump(records, stream, separators=(",", ":"))
     print(
-        f"HANDPOSE_DONE {frame_count} {len(records)} {args.output_json}",
+        "HANDPOSE_DONE "
+        f"{frame_count} {len(records)} {total_frames} {args.output_json}",
         flush=True,
     )
 

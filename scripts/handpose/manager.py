@@ -19,8 +19,10 @@ from .schema import METHODS, safe_child
 class HandPoseManager:
     """Run one hand-pose extraction job without blocking the web server."""
 
-    _PROGRESS = re.compile(r"^HANDPOSE_PROGRESS\s+(\d+)\s+(\d+)")
-    _DONE = re.compile(r"^HANDPOSE_DONE\s+(\d+)\s+(\d+)")
+    _PROGRESS = re.compile(
+        r"^HANDPOSE_PROGRESS\s+(\d+)\s+(\d+)\s+(\d+)"
+    )
+    _DONE = re.compile(r"^HANDPOSE_DONE\s+(\d+)\s+(\d+)\s+(\d+)")
     _MAX_LOG_LINES = 60
     _WILOR_MODEL_FILES = (
         "wilor_final.ckpt",
@@ -47,6 +49,7 @@ class HandPoseManager:
         self._method = ""
         self._processed_frames = 0
         self._detected_frames = 0
+        self._total_frames = 0
         self._started_at = 0.0
         self._finished_at = 0.0
         self._error = ""
@@ -95,6 +98,7 @@ class HandPoseManager:
                 "method": self._method,
                 "processed_frames": self._processed_frames,
                 "detected_frames": self._detected_frames,
+                "total_frames": self._total_frames,
                 "started_at": self._started_at,
                 "finished_at": self._finished_at,
                 "log_tail": list(self._log[-30:]),
@@ -205,6 +209,7 @@ class HandPoseManager:
             self._method = method
             self._processed_frames = 0
             self._detected_frames = 0
+            self._total_frames = 0
             self._started_at = time.time()
             self._finished_at = 0.0
             self._error = ""
@@ -324,12 +329,14 @@ class HandPoseManager:
             line = raw_line.rstrip()
             progress = self._PROGRESS.match(line) or self._DONE.match(line)
             with self._lock:
-                self._log.append(line)
-                if len(self._log) > self._MAX_LOG_LINES:
-                    self._log = self._log[-self._MAX_LOG_LINES :]
                 if progress:
                     self._processed_frames = int(progress.group(1))
                     self._detected_frames = int(progress.group(2))
+                    self._total_frames = int(progress.group(3))
+                else:
+                    self._log.append(line)
+                    if len(self._log) > self._MAX_LOG_LINES:
+                        self._log = self._log[-self._MAX_LOG_LINES :]
         return_code = process.wait()
         with self._lock:
             if self._process is not process:

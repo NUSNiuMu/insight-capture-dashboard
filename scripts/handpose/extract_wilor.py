@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stdout
 import json
 import os
 from pathlib import Path
+import sys
 
 import cv2
 import numpy as np
@@ -23,6 +25,27 @@ from handpose.schema import DEFAULT_IMAGE_TOPIC
 
 FOCAL_LENGTH = 768.3264582796221 * 256.0 / 1920.0
 DEFAULT_MODEL_DIR = Path("/opt/insight/models/wilor")
+MANO_SHAPE_NOTICE = (
+    "WARNING: You are using a MANO model, with only 10 shape coefficients."
+)
+
+
+class _KnownNoticeFilter:
+    """Drop one expected MANO notice while preserving all other output."""
+
+    def __init__(self, stream) -> None:
+        self.stream = stream
+
+    def write(self, text: str) -> int:
+        if MANO_SHAPE_NOTICE in text:
+            return len(text)
+        return self.stream.write(text)
+
+    def flush(self) -> None:
+        self.stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
 
 
 def main() -> None:
@@ -44,16 +67,6 @@ def main() -> None:
     args = parser.parse_args()
 
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data_type = torch.float16 if device.type == "cuda" else torch.float32
-    pipeline = WiLorHandPose3dEstimationPipeline(
-        device=device,
-        dtype=data_type,
-        focal_length=FOCAL_LENGTH,
-        wilor_pretrained_dir=str(args.model_dir),
-        verbose=False,
-    )
-
     typestore = get_typestore(Stores.ROS2_HUMBLE)
     raw_records = []
     frame_count = 0
@@ -66,15 +79,38 @@ def main() -> None:
         ]
         if not connections:
             raise RuntimeError(f"Topic {args.topic!r} is not present in the bag")
+        total_frames = sum(connection.msgcount for connection in connections)
+        if args.max_frames > 0:
+            total_frames = min(total_frames, args.max_frames)
+        print(f"HANDPOSE_PROGRESS 0 0 {total_frames}", flush=True)
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        data_type = torch.float16 if device.type == "cuda" else torch.float32
+        with redirect_stdout(_KnownNoticeFilter(sys.stdout)):
+            pipeline = WiLorHandPose3dEstimationPipeline(
+                device=device,
+                dtype=data_type,
+                focal_length=FOCAL_LENGTH,
+                wilor_pretrained_dir=str(args.model_dir),
+                verbose=False,
+            )
         for connection, _bag_timestamp, rawdata in reader.messages(
             connections=connections
         ):
+            frame_count += 1
             message = reader.deserialize(rawdata, connection.msgtype)
             frame = cv2.imdecode(
                 np.frombuffer(message.data, dtype=np.uint8),
                 cv2.IMREAD_COLOR,
             )
             if frame is None:
+                print(
+                    "HANDPOSE_PROGRESS "
+                    f"{frame_count} {len(raw_records)} {total_frames}",
+                    flush=True,
+                )
+                if args.max_frames > 0 and frame_count >= args.max_frames:
+                    break
                 continue
             stamp_ns = (
                 int(message.header.stamp.sec) * 1_000_000_000
@@ -105,12 +141,11 @@ def main() -> None:
                 )
             if hands:
                 raw_records.append({"t": elapsed_ms, "h": hands})
-            frame_count += 1
-            if frame_count % 25 == 0:
-                print(
-                    f"HANDPOSE_PROGRESS {frame_count} {len(raw_records)}",
-                    flush=True,
-                )
+            print(
+                "HANDPOSE_PROGRESS "
+                f"{frame_count} {len(raw_records)} {total_frames}",
+                flush=True,
+            )
             if args.max_frames > 0 and frame_count >= args.max_frames:
                 break
 
@@ -122,7 +157,8 @@ def main() -> None:
     with args.output_json.open("w", encoding="utf-8") as stream:
         json.dump(records, stream, separators=(",", ":"))
     print(
-        f"HANDPOSE_DONE {frame_count} {len(records)} {args.output_json}",
+        "HANDPOSE_DONE "
+        f"{frame_count} {len(records)} {total_frames} {args.output_json}",
         flush=True,
     )
 

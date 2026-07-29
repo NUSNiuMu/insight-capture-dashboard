@@ -115,13 +115,21 @@ async function loadResult(entry, force = false) {
 
 function renderStatus(payload) {
   const running = payload.state === "running";
+  const processed = Math.max(0, Number(payload.processed_frames || 0));
+  const detected = Math.max(0, Number(payload.detected_frames || 0));
+  const total = Math.max(0, Number(payload.total_frames || 0));
+  const percent = total > 0
+    ? Math.min(100, (processed / total) * 100)
+    : (payload.state === "done" ? 100 : 0);
   elements.start.hidden = running;
   elements.stop.hidden = !running;
   elements.jobChip.textContent = payload.state || "idle";
   elements.status.textContent = running ? `Extracting ${payload.bag_name} with ${payload.method}` : (payload.error ? `Error: ${payload.error}` : payload.state || "Idle");
-  elements.progress.textContent = `${Number(payload.processed_frames || 0).toLocaleString()} processed · ${Number(payload.detected_frames || 0).toLocaleString()} detected`;
-  const pulse = running ? 45 + Math.sin(Date.now() / 700) * 25 : (payload.state === "done" ? 100 : 0);
-  elements.progressFill.style.width = `${Math.max(0, pulse)}%`;
+  const frameProgress = total > 0
+    ? `${processed.toLocaleString()} / ${total.toLocaleString()} frames`
+    : `${processed.toLocaleString()} frames`;
+  elements.progress.textContent = `${frameProgress} · ${percent.toFixed(1)}% · ${detected.toLocaleString()} detected`;
+  elements.progressFill.style.width = `${percent}%`;
   elements.log.textContent = (payload.log_tail || []).join("\n") || "Waiting for a task.";
   elements.log.scrollTop = elements.log.scrollHeight;
   renderResults(payload.results);
