@@ -515,13 +515,21 @@ async function collectWebRtcStats(cameraName, state, pc) {
       ...totals,
       receivedFps,
       decodedFps,
-      jitterMs: Number(inbound.jitter || 0) * 1000
+      jitterMs: Number(inbound.jitter || 0) * 1000,
+      presentedFps: computeDisplayedFps(
+        (cameraPollState.get(cameraName) || {}).displayFrameTimes
+      )
     };
     const pollState = cameraPollState.get(cameraName);
     if (pollState) {
       pollState.rtcStats = state.rtcStats;
       renderCameraFps(cameraName);
     }
+    void fetch(`/api/cameras/${encodeURIComponent(cameraName)}/browser-stats`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state.rtcStats)
+    }).catch(() => {});
   } catch {
     // Stats support varies by browser; video playback remains independent.
   }

@@ -232,6 +232,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             for camera in self.cameras
         }
         self._webrtc_worker_stats: Dict[str, Dict[str, object]] = {}
+        self._webrtc_browser_stats: Dict[str, Dict[str, object]] = {}
         self._last_webrtc_fallback_jpeg_at: Dict[str, float] = {}
         self._last_recording_preview_at: Dict[str, float] = {}
         self._webrtc_proc = self._start_webrtc_worker()

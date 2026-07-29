@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import shutil
 import subprocess
+import time
 from typing import Dict, List
 
 from aiohttp import web
@@ -31,6 +33,36 @@ class CameraRoutes:
             "X-Frame-Version": str(frame.version),
         }
         return web.Response(body=frame.data, content_type=frame.mime_type, headers=headers)
+
+    async def _handle_browser_stats(self, request: web.Request) -> web.Response:
+        camera_name = request.match_info.get("camera_name", "")
+        if camera_name not in {camera.name for camera in self.context.node.cameras}:
+            raise web.HTTPNotFound(text="unknown camera")
+        payload = await request.json()
+        allowed = (
+            "framesReceived",
+            "framesDecoded",
+            "framesDropped",
+            "packetsReceived",
+            "packetsLost",
+            "bytesReceived",
+            "receivedFps",
+            "decodedFps",
+            "presentedFps",
+            "jitterMs",
+        )
+        stats = {}
+        for key in allowed:
+            try:
+                value = float(payload.get(key, 0))
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(value):
+                stats[key] = value
+        stats["updated_monotonic"] = time.monotonic()
+        with self.context.node._webrtc_metrics_lock:
+            self.context.node._webrtc_browser_stats[camera_name] = stats
+        return web.Response(status=204)
 
     async def _handle_image_capabilities(self, _request: web.Request) -> web.Response:
         # GStreamer capabilities are stable for the process lifetime.

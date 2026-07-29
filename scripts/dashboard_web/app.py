@@ -33,6 +33,10 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/ws", websocket._handle_ws)
     app.router.add_get("/healthz", handle_health)
     app.router.add_get("/api/cameras", cameras._handle_camera_snapshot)
+    app.router.add_post(
+        "/api/cameras/{camera_name}/browser-stats",
+        cameras._handle_browser_stats,
+    )
     app.router.add_get("/api/mapping", mapping._handle_snapshot)
     app.router.add_post("/api/mapping/reset", mapping._handle_reset)
     app.router.add_get("/api/cameras/{camera_name}/frame", cameras._handle_camera_frame)

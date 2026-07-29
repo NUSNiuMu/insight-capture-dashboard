@@ -130,6 +130,11 @@ class PayloadBuilder:
                 for name, metrics in self.owner._webrtc_worker_stats.items()
                 if isinstance(metrics, dict)
             }
+            browser_stats = {
+                name: dict(metrics)
+                for name, metrics in self.owner._webrtc_browser_stats.items()
+                if isinstance(metrics, dict)
+            }
         with self.owner.camera_frame_lock:
             for camera in self.owner.cameras:
                 frame = self.owner.latest_camera_frames.get(camera.name)
@@ -155,6 +160,14 @@ class PayloadBuilder:
                     span = max(recent_times[-1] - recent_times[0], 1e-6)
                     fps = (len(recent_times) - 1) / span
                 stale = frame is None or (now - frame.received_monotonic) > self.owner.camera_stale_timeout_sec
+                browser = browser_stats.get(camera.name, {})
+                browser_age_sec = now - float(
+                    browser.pop("updated_monotonic", 0.0)
+                )
+                if browser_age_sec > 5.0:
+                    browser = {}
+                elif browser:
+                    browser["age_sec"] = max(0.0, browser_age_sec)
                 cameras.append(
                     {
                         "name": camera.name,
@@ -168,6 +181,7 @@ class PayloadBuilder:
                             "processed_fps": fps,
                             "main": main_metrics.get(camera.name, {}),
                             "worker": worker_stats.get(camera.name, {}),
+                            "browser": browser,
                         },
                         "width": 0 if frame is None else frame.width,
                         "height": 0 if frame is None else frame.height,
