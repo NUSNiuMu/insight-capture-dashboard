@@ -1,7 +1,7 @@
 import {
   setCameraCapturePerformanceMode,
   startCameraDashboard,
-} from "../camera/dashboard.js?v=20260728-obs-mode";
+} from "../camera/dashboard.js?v=20260729-quality-tiers";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 import {
@@ -13,7 +13,7 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260728-obs-mode";
+} from "../spatial/renderer.js?v=20260729-quality-tiers";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");

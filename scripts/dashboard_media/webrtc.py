@@ -28,19 +28,33 @@ _REQUIRED_ELEMENTS = (
 # ~0.15 bits per pixel per frame at 30fps: 544x640 -> ~1.6 Mbps,
 # 1088x1920 -> ~9.4 Mbps. Clamped so tiny streams still get enough for
 # clean motion and huge ones don't swamp WiFi viewers.
-_MIN_BITRATE = 1_500_000
+_MIN_BITRATE = 500_000
 _MAX_BITRATE = 10_000_000
 
-# Downscale on VIC to match dashboard thumbnail sizes.
-STREAM_MAX_WIDTH = 540
+# Downscale on VIC to match the rendered use. Existing clients that do not
+# request a quality keep the previous 540px behavior; the dashboard uses the
+# smaller tier until a panel is maximized.
+DEFAULT_STREAM_QUALITY = "detail"
+STREAM_MAX_WIDTH_BY_QUALITY = {
+    "thumbnail": 270,
+    "detail": 540,
+}
 
 
-def _scaled_dims(width: int, height: int) -> Tuple[int, int]:
-    """Cap width at STREAM_MAX_WIDTH keeping aspect, rounded to even (NV12)."""
-    if width <= STREAM_MAX_WIDTH:
+def normalize_stream_quality(value: object) -> str:
+    quality = str(value or "").strip().lower()
+    if quality in STREAM_MAX_WIDTH_BY_QUALITY:
+        return quality
+    return DEFAULT_STREAM_QUALITY
+
+
+def _scaled_dims(width: int, height: int, max_width: int) -> Tuple[int, int]:
+    """Cap width while keeping aspect, rounded to even for NV12."""
+    max_width = max(2, int(max_width)) & ~1
+    if width <= max_width:
         return (width, height)
-    scale = STREAM_MAX_WIDTH / float(width)
-    out_w = STREAM_MAX_WIDTH & ~1
+    scale = max_width / float(width)
+    out_w = max_width
     out_h = int(round(height * scale)) & ~1
     return (out_w, max(2, out_h))
 
@@ -147,6 +161,7 @@ class WebRtcSession:
         send_signal: Callable[[Dict], None],
         log: Callable[[str], None],
         target_fps: int = 30,
+        quality: str = DEFAULT_STREAM_QUALITY,
     ) -> None:
         self.camera_name = camera_name
         self._send_signal = send_signal
@@ -158,6 +173,10 @@ class WebRtcSession:
         self._caps_key: Optional[Tuple] = None
         self._closed = False
         self._target_fps = max(5, min(30, int(target_fps)))
+        self._quality = normalize_stream_quality(quality)
+        self._max_width = STREAM_MAX_WIDTH_BY_QUALITY[self._quality]
+        self._output_width = 0
+        self._output_height = 0
         self._last_frame_at = 0.0
         self._stats_lock = threading.Lock()
         self._stats = {
@@ -219,7 +238,9 @@ class WebRtcSession:
     # ── pipeline (called under self._lock) ──────────────────────────────────
 
     def _build_pipeline(self, fmt: str, width: int, height: int) -> None:
-        out_width, out_height = _scaled_dims(width, height)
+        out_width, out_height = _scaled_dims(width, height, self._max_width)
+        self._output_width = out_width
+        self._output_height = out_height
         bitrate = _bitrate_for(out_width, out_height, self._target_fps)
         if fmt == "JPEG":
             source = (
@@ -263,7 +284,8 @@ class WebRtcSession:
         self._webrtc = webrtc
         self._log(
             f"webrtc[{self.camera_name}]: streaming {fmt} {width}x{height} -> "
-            f"{out_width}x{out_height} at {self._target_fps} fps, {bitrate // 1000} kbps"
+            f"{out_width}x{out_height} {self._quality} at {self._target_fps} fps, "
+            f"{bitrate // 1000} kbps"
         )
 
     # ── webrtcbin callbacks (GStreamer threads) ─────────────────────────────
@@ -273,10 +295,13 @@ class WebRtcSession:
             self._stats["encoded"] += 1
         return Gst.PadProbeReturn.OK
 
-    def snapshot_stats(self) -> Dict[str, int]:
+    def snapshot_stats(self) -> Dict[str, object]:
         with self._stats_lock:
             stats = dict(self._stats)
         stats["target_fps"] = self._target_fps
+        stats["quality"] = self._quality
+        stats["output_width"] = self._output_width
+        stats["output_height"] = self._output_height
         return stats
 
     def _on_negotiation_needed(self, webrtc) -> None:
@@ -424,12 +449,14 @@ class WebRtcStreams:
         camera_name: str,
         send_signal: Callable[[Dict], None],
         target_fps: int = 30,
+        quality: str = DEFAULT_STREAM_QUALITY,
     ) -> WebRtcSession:
         session = WebRtcSession(
             camera_name,
             send_signal,
             self._log,
             target_fps=target_fps,
+            quality=quality,
         )
         with self._lock:
             sessions = self._sessions.setdefault(camera_name, [])
@@ -461,7 +488,7 @@ class WebRtcStreams:
         for session in sessions:
             session.push_frame(data, fmt, width, height)
 
-    def snapshot_stats(self) -> Dict[str, Dict[str, int]]:
+    def snapshot_stats(self) -> Dict[str, Dict[str, object]]:
         """Return cumulative per-camera counters for the worker lifetime."""
         with self._lock:
             received = dict(self._frames_received)
@@ -480,6 +507,16 @@ class WebRtcStreams:
                 "sessions": len(session_stats),
                 "target_fps": (
                     session_stats[0]["target_fps"] if session_stats else 0
+                ),
+                "qualities": sorted(
+                    str(stats["quality"]) for stats in session_stats
+                ),
+                "outputs": sorted(
+                    {
+                        f"{int(stats['output_width'])}x{int(stats['output_height'])}"
+                        for stats in session_stats
+                        if int(stats["output_width"]) > 0
+                    }
                 ),
             }
             for key in (
