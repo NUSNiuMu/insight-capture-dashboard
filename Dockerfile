@@ -153,17 +153,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
-# ── CUDA runtime for the baked-in COLMAP binary ─────────────────────────────
-# Only the runtime libs (libcudart, libcublas, libcufft, ...), not the full
-# toolkit with nvcc/headers -- that's the colmap-builder stage's job, and
-# keeping it out of the final image saves real space. Kept separate from the
-# COLMAP runtime-lib apt block above since it's a different repo/keyring.
+# ── CUDA runtime for COLMAP and offline WiLoR inference ─────────────────────
+# Only shared runtime libraries are installed. The compiler, headers, samples,
+# profilers, and the rest of the CUDA toolkit stay in the builder stage.
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget \
     && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/arm64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && rm cuda-keyring_1.1-1_all.deb \
     && apt-get update \
-    && apt-get install -y --no-install-recommends cuda-cudart-12-6 libcublas-12-6 libcufft-12-6 \
+    && apt-get install -y --no-install-recommends \
+        cuda-cudart-12-6 \
+        cuda-cupti-12-6 \
+        cuda-nvtx-12-6 \
+        libcublas-12-6 \
+        libcufft-12-6 \
+        libcurand-12-6 \
+        libcudnn9-cuda-12 \
+        libcusparse-12-6 \
+        libcusparselt0 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── COLMAP binary, baked in from the colmap-builder stage ───────────────────
@@ -216,13 +223,12 @@ RUN cd /workspaces/looper-vio-colmap-handoff && \
 # (run_pipeline_from_rosbag.py's --make-plots, currently always "false" from
 # post_processing.py -- installed anyway so flipping that flag doesn't
 # surface an ImportError from a separate subprocess).
-# MediaPipe + rosbags provide the lightweight, releasable Hand pose path.
-# WiLoR remains an optional research runtime: its multi-GB weights and
-# research-only model dependencies are deliberately not baked into customer
-# images.
+# MediaPipe + rosbags provide the lightweight Hand pose path. WiLoR's minimal
+# offline inference runtime and pinned weights are added separately below.
 RUN pip3 install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "aiohttp==3.13.3" \
+    "numpy==1.26.4" \
     "opencv-contrib-python-headless==4.11.0.86" \
     "absl-py==2.5.0" \
     "certifi" \
@@ -247,6 +253,80 @@ RUN mkdir -p /opt/insight/models \
         -O "${HANDPOSE_MEDIAPIPE_MODEL}" \
     && echo "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1  ${HANDPOSE_MEDIAPIPE_MODEL}" \
         | sha256sum -c -
+
+# ── Minimal offline WiLoR runtime (JetPack 6.1 / CUDA 12.6 / sm_87) ─────────
+# This intentionally does not install WiLoR's declared training/demo stack.
+# The local patch replaces its three tiny timm helpers with torch equivalents,
+# uses OpenCV for anti-aliasing, and disables runtime Hugging Face downloads.
+# PyTorch headers, tests, and command-line development binaries are removed
+# after installation; CUDA compiler/toolkit files never enter this stage.
+ARG WILOR_SOURCE_REVISION=ebec42f94c389070cdd7dda6fd1bf0b4a659c960
+ARG WILOR_MODEL_REVISION=b00adea9a6843bbb4c9042109c5eb29ab2a59dea
+ARG TORCH_WHEEL_URL=https://developer.download.nvidia.com/compute/redist/jp/v61/pytorch/torch-2.5.0a0+872d972e41.nv24.08.17622132-cp310-cp310-linux_aarch64.whl
+ARG TORCHVISION_WHEEL_URL=https://github.com/ultralytics/assets/releases/download/v0.0.0/torchvision-0.20.0a0+afc54f7-cp310-cp310-linux_aarch64.whl
+ENV HANDPOSE_WILOR_MODEL_DIR=/opt/insight/models/wilor
+ENV YOLO_AUTOINSTALL=false
+ENV YOLO_CONFIG_DIR=/tmp/ultralytics
+RUN pip3 install --no-cache-dir \
+        "${TORCH_WHEEL_URL}" \
+    && pip3 install --no-cache-dir --no-deps \
+        "${TORCHVISION_WHEEL_URL}" \
+    && pip3 install --no-cache-dir \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple \
+        "py-cpuinfo==9.0.0" \
+        "psutil==5.9.8" \
+        "pyyaml==6.0.3" \
+        "requests==2.32.3" \
+        "roma==1.5.7" \
+        "smplx==0.1.28" \
+        "tqdm==4.67.1" \
+    && pip3 install --no-cache-dir --no-deps \
+        -i https://pypi.tuna.tsinghua.edu.cn/simple \
+        "ultralytics==8.3.235" \
+    && rm -rf \
+        /usr/local/lib/python3.10/dist-packages/torch/include \
+        /usr/local/lib/python3.10/dist-packages/torch/test \
+    && find /usr/local/lib/python3.10/dist-packages/torch/bin \
+        -maxdepth 1 -type f ! -name torch_shm_manager -delete
+
+RUN mkdir -p "${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models" \
+    && wget -q \
+        "https://huggingface.co/warmshao/WiLoR-mini/resolve/${WILOR_MODEL_REVISION}/pretrained_models/wilor_final.ckpt" \
+        -O "${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/wilor_final.ckpt" \
+    && wget -q \
+        "https://huggingface.co/warmshao/WiLoR-mini/resolve/${WILOR_MODEL_REVISION}/pretrained_models/detector.pt" \
+        -O "${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/detector.pt" \
+    && wget -q \
+        "https://huggingface.co/warmshao/WiLoR-mini/resolve/${WILOR_MODEL_REVISION}/pretrained_models/MANO_RIGHT.pkl" \
+        -O "${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/MANO_RIGHT.pkl" \
+    && wget -q \
+        "https://huggingface.co/warmshao/WiLoR-mini/resolve/${WILOR_MODEL_REVISION}/pretrained_models/mano_mean_params.npz" \
+        -O "${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/mano_mean_params.npz" \
+    && echo "3e97aafc7dd08d883a4cc5a027df61fdb6fda6136dbd1319405413862ada6bb2  ${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/wilor_final.ckpt" \
+        | sha256sum -c - \
+    && echo "5ef3df44e42d2db52d4ffe91f83a22ce9925e2acc9abebf453f2c5d22e380033  ${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/detector.pt" \
+        | sha256sum -c - \
+    && echo "45d60aa3b27ef9107a7afd4e00808f307fd91111e1cfa35afd5c4a62de264767  ${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/MANO_RIGHT.pkl" \
+        | sha256sum -c - \
+    && echo "efc0ec58e4a5cef78f3abfb4e8f91623b8950be9eff8b8e0dbb0d036ebc63988  ${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/mano_mean_params.npz" \
+        | sha256sum -c -
+
+COPY docker/wilor-runtime.patch /tmp/wilor-runtime.patch
+RUN git clone --filter=blob:none --no-checkout \
+        https://github.com/warmshao/WiLoR-mini.git /tmp/wilor-src \
+    && git -C /tmp/wilor-src checkout "${WILOR_SOURCE_REVISION}" \
+    && git -C /tmp/wilor-src apply /tmp/wilor-runtime.patch \
+    && pip3 install --no-cache-dir --no-deps /tmp/wilor-src \
+    && rm -rf /tmp/wilor-src /tmp/wilor-runtime.patch
+
+# MANO_RIGHT.pkl contains scipy.sparse objects, so SciPy is required while
+# unpickling the bundled model even though WiLoR does not import it directly.
+RUN pip3 install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    "dill==0.4.1" \
+    "scipy==1.15.3" \
+    && pip3 install --no-cache-dir --no-deps \
+        "git+https://github.com/mattloper/chumpy.git@580566eafc9ac68b2614b64d6f7aaa84eebb70da"
 
 # ── Kiosk browser (scripts/open_web_3d_right.sh) ────────────────────────────
 # The on-device kiosk previously used PyQt5's QWebEngineView, which bundles
@@ -341,6 +421,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-gi \
     gir1.2-gst-plugins-base-1.0 \
     gir1.2-gst-plugins-bad-1.0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# NVIDIA's JetPack PyTorch wheel links this CUDA JIT runtime directly, while
+# the CUDA library packages above do not declare it as a transitive dependency.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnvjitlink-12-6 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Interactive shells: source ROS2 for plain `docker exec -it ... bash` ────

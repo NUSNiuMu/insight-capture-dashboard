@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import cv2
@@ -21,6 +22,7 @@ from handpose.schema import DEFAULT_IMAGE_TOPIC
 
 
 FOCAL_LENGTH = 768.3264582796221 * 256.0 / 1920.0
+DEFAULT_MODEL_DIR = Path("/opt/insight/models/wilor")
 
 
 def main() -> None:
@@ -32,6 +34,13 @@ def main() -> None:
     parser.add_argument("--hand-confidence", type=float, default=0.3)
     parser.add_argument("--min-cutoff", type=float, default=1.5)
     parser.add_argument("--beta", type=float, default=0.3)
+    parser.add_argument(
+        "--model-dir",
+        type=Path,
+        default=Path(
+            os.environ.get("HANDPOSE_WILOR_MODEL_DIR", DEFAULT_MODEL_DIR)
+        ),
+    )
     args = parser.parse_args()
 
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -41,6 +50,7 @@ def main() -> None:
         device=device,
         dtype=data_type,
         focal_length=FOCAL_LENGTH,
+        wilor_pretrained_dir=str(args.model_dir),
         verbose=False,
     )
 

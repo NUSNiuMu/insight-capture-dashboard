@@ -1,0 +1,122 @@
+diff --git a/wilor_mini/models/vit.py b/wilor_mini/models/vit.py
+index 38d14c8..5515322 100644
+--- a/wilor_mini/models/vit.py
++++ b/wilor_mini/models/vit.py
+@@ -6,10 +6,31 @@ from functools import partial
+ import torch.nn as nn
+ import torch.nn.functional as F
+ import torch.utils.checkpoint as checkpoint
+-from timm.models.layers import drop_path, to_2tuple, trunc_normal_
+ import os
+ 
+ 
++def drop_path(x, drop_prob=0.0, training=False):
++    """Apply per-sample stochastic depth without importing all of timm."""
++    if drop_prob == 0.0 or not training:
++        return x
++    keep_prob = 1.0 - drop_prob
++    shape = (x.shape[0],) + (1,) * (x.ndim - 1)
++    random_tensor = keep_prob + torch.rand(
++        shape, dtype=x.dtype, device=x.device
++    )
++    random_tensor.floor_()
++    return x.div(keep_prob) * random_tensor
++
++
++def to_2tuple(value):
++    if isinstance(value, tuple):
++        return value
++    return (value, value)
++
++
++trunc_normal_ = nn.init.trunc_normal_
++
++
+ def rot6d_to_rotmat(x: torch.Tensor) -> torch.Tensor:
+     """
+     Convert 6D rotation representation to 3x3 rotation matrix.
+diff --git a/wilor_mini/pipelines/wilor_hand_pose3d_estimation_pipeline.py b/wilor_mini/pipelines/wilor_hand_pose3d_estimation_pipeline.py
+index d6cf0b6..01bd16d 100644
+--- a/wilor_mini/pipelines/wilor_hand_pose3d_estimation_pipeline.py
++++ b/wilor_mini/pipelines/wilor_hand_pose3d_estimation_pipeline.py
+@@ -4,11 +4,9 @@
+ # @Project : WiLoR-mini
+ # @FileName: wilor_hand_pose3d_estimation_pipeline.py
+ import pdb
+-from skimage.filters import gaussian
+ import torch
+ import cv2
+ from ultralytics import YOLO
+-from huggingface_hub import hf_hub_download
+ import os
+ import numpy as np
+ from tqdm import tqdm
+@@ -43,15 +41,10 @@ class WiLorHandPose3dEstimationPipeline:
+         os.makedirs(wilor_pretrained_dir, exist_ok=True)
+         mano_mean_path = os.path.join(wilor_pretrained_dir, "pretrained_models", "mano_mean_params.npz")
+         if not os.path.exists(mano_mean_path):
+-            self.logger.info(f"download mano mean npz {mano_mean_path} from huggingface")
+-            hf_hub_download(repo_id=self.WILOR_MINI_REPO_ID, subfolder="pretrained_models",
+-                            filename="mano_mean_params.npz",
+-                            local_dir=wilor_pretrained_dir)
++            raise FileNotFoundError(f"Missing bundled WiLoR model: {mano_mean_path}")
+         mano_model_path = os.path.join(wilor_pretrained_dir, "pretrained_models", "MANO_RIGHT.pkl")
+         if not os.path.exists(mano_model_path):
+-            self.logger.info(f"download mano model {mano_model_path} from huggingface")
+-            hf_hub_download(repo_id=self.WILOR_MINI_REPO_ID, subfolder="pretrained_models", filename="MANO_RIGHT.pkl",
+-                            local_dir=wilor_pretrained_dir)
++            raise FileNotFoundError(f"Missing bundled WiLoR model: {mano_model_path}")
+         self.logger.info(f"loading WiLor model >>> ")
+         self.wilor_model = WiLor(mano_model_path=mano_model_path, mano_mean_path=mano_mean_path,
+                                  focal_length=self.FOCAL_LENGTH,
+@@ -59,18 +53,21 @@ class WiLorHandPose3dEstimationPipeline:
+                                  image_size=self.IMAGE_SIZE)
+         wilor_model_path = os.path.join(wilor_pretrained_dir, "pretrained_models", "wilor_final.ckpt")
+         if not os.path.exists(wilor_model_path):
+-            self.logger.info(f"download wilor pretrained model {wilor_model_path} from huggingface")
+-            hf_hub_download(repo_id=self.WILOR_MINI_REPO_ID, subfolder="pretrained_models", filename="wilor_final.ckpt",
+-                            local_dir=wilor_pretrained_dir)
++            raise FileNotFoundError(f"Missing bundled WiLoR model: {wilor_model_path}")
+-        self.wilor_model.load_state_dict(torch.load(wilor_model_path)["state_dict"], strict=False)
+-        self.wilor_model.eval()
+-        self.wilor_model.to(self.device, dtype=self.dtype)
++        self.wilor_model.eval()
++        self.wilor_model.to(self.device, dtype=self.dtype)
++        checkpoint = torch.load(
++            wilor_model_path,
++            map_location="cpu",
++            mmap=True,
++            weights_only=True,
++        )
++        self.wilor_model.load_state_dict(checkpoint["state_dict"], strict=False)
++        del checkpoint
+ 
+         yolo_model_path = os.path.join(wilor_pretrained_dir, "pretrained_models", "detector.pt")
+         if not os.path.exists(yolo_model_path):
+-            self.logger.info(f"download yolo pretrained model {wilor_model_path} from huggingface")
+-            hf_hub_download(repo_id=self.WILOR_MINI_REPO_ID, subfolder="pretrained_models", filename="detector.pt",
+-                            local_dir=wilor_pretrained_dir)
++            raise FileNotFoundError(f"Missing bundled WiLoR model: {yolo_model_path}")
+         self.logger.info(f"loading Yolo hand detection model >>> ")
+         self.hand_detector = YOLO(yolo_model_path)
+         self.hand_detector.to(self.device)
+@@ -113,7 +110,8 @@ class WiLorHandPose3dEstimationPipeline:
+             downsampling_factor = ((bbox_size * 1.0) / patch_width)
+             downsampling_factor = downsampling_factor / 2.0
+             if downsampling_factor > 1.1:
+-                cvimg = gaussian(cvimg, sigma=(downsampling_factor - 1) / 2, channel_axis=2, preserve_range=True)
++                sigma = (downsampling_factor - 1) / 2
++                cvimg = cv2.GaussianBlur(cvimg, (0, 0), sigma)
+ 
+             img_patch_cv, trans = utils.generate_image_patch_cv2(cvimg,
+                                                                  box_center[0], box_center[1],
+@@ -188,7 +186,8 @@ class WiLorHandPose3dEstimationPipeline:
+             downsampling_factor = ((bbox_size * 1.0) / patch_width)
+             downsampling_factor = downsampling_factor / 2.0
+             if downsampling_factor > 1.1:
+-                cvimg = gaussian(cvimg, sigma=(downsampling_factor - 1) / 2, channel_axis=2, preserve_range=True)
++                sigma = (downsampling_factor - 1) / 2
++                cvimg = cv2.GaussianBlur(cvimg, (0, 0), sigma)
+             img_size = np.array([cvimg.shape[1], cvimg.shape[0]])
+ 
+             img_patch_cv, trans = utils.generate_image_patch_cv2(cvimg,

@@ -36,7 +36,21 @@
 - 本地先用根目录的开发机 `docker-compose.yml`（`docker compose build && docker compose up -d`）
   把要发布的改动完整跑一遍、`/verify` 或手动过一遍关键页面，**不要用没跑过的代码直接打包发布**。
 
-### 1.2 打包
+### 1.2 构建缓存与镜像体积
+
+Dashboard 镜像包含离线 WiLoR 所需的固定版本权重、JetPack PyTorch 和 CUDA
+运行库。首次或缓存失效时需要下载、校验并导出这些数 GB 内容，耗时可能达到
+数十分钟；这不是每次启动都需要做的工作。Dockerfile 把固定权重和运行时放在
+源码 `COPY` 之前，普通源码变更会复用这些层。开发 compose 又把仓库 bind mount
+到容器内，因此日常 Python/前端修改通常执行
+`docker compose up -d insight-dashboard`（必要时加 `--force-recreate`）即可。
+只有 Dockerfile、系统包或 Python 依赖发生变化时才重新 build。
+
+WiLoR 层只保留离线推理路径：不包含 CUDA 编译器/头文件、WiLoR 训练和 demo
+依赖，也不允许运行时自动下载模型或补装 Python 包。其模型仅限研究用途，
+发布或商用前需单独确认模型与数据许可。
+
+### 1.3 打包
 
 ```bash
 ./scripts/build_release.sh v1.2.0
@@ -63,13 +77,13 @@ host 层设置，见 §3.2）——这几个文件本身不大，但**它们的�
 （比如调 shm_size）或 `scripts/host_setup.sh` 一定要在改动落地之后的这个分支上
 重新跑一次 `build_release.sh`，不能沿用旧的部署包。
 
-### 1.3 版本号约定
+### 1.4 版本号约定
 
 这个仓库目前还没有为发布流程打过 git tag（`git tag` 里唯一的旧标签跟这套
 发布脚本无关）。建议：镜像版本号对应到一个 git tag（`git tag v1.2.0 && git push --tags`），
 方便日后从版本号反查代码状态；`build_release.sh` 本身不会自动打 tag，需要手动做。
 
-### 1.4 发布前检查清单
+### 1.5 发布前检查清单
 
 - [ ] 本地开发机 compose 跑过一遍，关键页面（3d / recording / bags / scoring / handpose / settings）无 console 报错
 - [ ] `superglue-inference` 健康检查能通过（本地至少验证一次冷启动 TensorRT 引擎编译），
@@ -79,7 +93,7 @@ host 层设置，见 §3.2）——这几个文件本身不大，但**它们的�
 - [ ] `git status` 干净，且要发布的 commit 已经推到远端（发布包本身不含 git 历史，事后排查靠 commit hash）
 - [ ] 如果这次发布改了 `Dockerfile`（新依赖），本地至少验证过 `docker compose build` 全新构建成功一次（不是吃的旧层缓存）
 
-### 1.5 交付
+### 1.6 交付
 
 - **首次安装**：把镜像 tar + 部署包 tar 都发给对方（U 盘/scp 均可）。
 - **升级**：只发镜像 tar，对方在已有的部署目录里跑 `./update.sh <镜像tar>`。
@@ -129,7 +143,7 @@ cd <部署目录>   # 首次安装时 update.sh 所在的那个目录
 | 现象 | 大概率原因 | 怎么查 |
 |---|---|---|
 | `docker load` 报错 / 卡住 | 镜像 tar 传输不完整 | 检查文件大小、`md5sum`/`sha256sum` 跟发布方核对 |
-| healthz 90 秒超时 | 后端容器起不来 | `docker compose logs -f`；常见于新版本引入的依赖没装全（对照 §1.4 发布前检查） |
+| healthz 90 秒超时 | 后端容器起不来 | `docker compose logs -f`；常见于新版本引入的依赖没装全（对照 §1.5 发布前检查） |
 | 升级后配置/标定"消失" | 罕见——config/ 首次安装后不该被覆盖 | 确认没有手动删过 `config/` 目录；`ls config/` 核对文件还在 |
 | "a recording is in progress" | 有正在跑的录制 | 等它录完，或确认可以中断后加 `--force` |
 

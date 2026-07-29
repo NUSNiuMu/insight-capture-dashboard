@@ -25,6 +25,9 @@ docker compose build   # 首次构建，之后代码不变可跳过
 ```
 
 `run_dashboard.sh` 内部就是 `docker compose up -d` + 健康检查，幂等，可以随时重复跑。容器用 `restart: unless-stopped`，SSH 断开、机器重启后 Docker 会自动拉起来。
+镜像内置 WiLoR 权重和 GPU 推理运行时，首次或无缓存构建会下载并导出数 GB
+固定内容；日常 Python/前端改动由源码 bind mount 生效，通常只需重启
+`insight-dashboard`，不要每次都先执行完整 `docker compose build`。
 
 远程访问：在自己电脑上开 SSH 隧道，不需要暴露端口到局域网：
 

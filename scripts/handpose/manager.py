@@ -22,6 +22,12 @@ class HandPoseManager:
     _PROGRESS = re.compile(r"^HANDPOSE_PROGRESS\s+(\d+)\s+(\d+)")
     _DONE = re.compile(r"^HANDPOSE_DONE\s+(\d+)\s+(\d+)")
     _MAX_LOG_LINES = 60
+    _WILOR_MODEL_FILES = (
+        "wilor_final.ckpt",
+        "detector.pt",
+        "MANO_RIGHT.pkl",
+        "mano_mean_params.npz",
+    )
 
     def __init__(
         self,
@@ -59,6 +65,9 @@ class HandPoseManager:
             for name in ("wilor_mini", "torch", "rosbags", "cv2")
             if importlib.util.find_spec(name) is None
         ]
+        wilor_model_dir = self._wilor_model_dir()
+        if wilor_model_dir is None:
+            wilor_missing.append("bundled WiLoR model files")
         return {
             "methods": {
                 "mediapipe": {
@@ -165,6 +174,11 @@ class HandPoseManager:
             if model is None:
                 raise RuntimeError("MediaPipe model is unavailable")
             command.extend(["--model", str(model)])
+        elif method == "wilor":
+            model_dir = self._wilor_model_dir()
+            if model_dir is None:
+                raise RuntimeError("WiLoR model files are unavailable")
+            command.extend(["--model-dir", str(model_dir)])
 
         environment = os.environ.copy()
         scripts_root = str(Path(__file__).resolve().parents[1])
@@ -280,6 +294,24 @@ class HandPoseManager:
             ),
             None,
         )
+
+    def _wilor_model_dir(self) -> Optional[Path]:
+        configured = os.environ.get("HANDPOSE_WILOR_MODEL_DIR", "").strip()
+        candidates = [
+            Path(configured) if configured else None,
+            self.project_root / "data" / "models" / "handpose" / "wilor",
+        ]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            model_dir = candidate.resolve()
+            pretrained_dir = model_dir / "pretrained_models"
+            if all(
+                (pretrained_dir / filename).is_file()
+                for filename in self._WILOR_MODEL_FILES
+            ):
+                return model_dir
+        return None
 
     def _monitor(
         self,
