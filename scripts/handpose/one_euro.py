@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import deque
 import math
 from typing import List
 
@@ -77,13 +76,32 @@ class _OneEuroFilter:
         return self.value_filter.filter(value, self._alpha(cutoff))
 
 
-def _dominant_label(votes: deque) -> str:
-    """Return the majority label, preferring the most recent vote on ties."""
-    counts = {label: votes.count(label) for label in set(votes)}
-    best_count = max(counts.values())
-    return next(
-        label for label in reversed(votes) if counts[label] == best_count
-    )
+def _stabilize_label(
+    track: dict, observed: str, *, switch_frames: int = 8
+) -> str:
+    """Apply hysteresis so transient handedness errors cannot recolor a track."""
+    if observed == track["label"]:
+        track["pending_label"] = None
+        track["pending_label_count"] = 0
+        return track["label"]
+    if observed != track["pending_label"]:
+        track["pending_label"] = observed
+        track["pending_label_count"] = 1
+    else:
+        track["pending_label_count"] += 1
+    if track["pending_label_count"] >= switch_frames:
+        track["label"] = observed
+        track["pending_label"] = None
+        track["pending_label_count"] = 0
+    return track["label"]
+
+
+def _new_label_state(label: str) -> dict:
+    return {
+        "label": label,
+        "pending_label": None,
+        "pending_label_count": 0,
+    }
 
 
 def stabilize_mediapipe(
@@ -126,7 +144,7 @@ def stabilize_mediapipe(
                 if distance <= gate:
                     label_penalty = (
                         0.04
-                        if hand["c"] != _dominant_label(track["labels"])
+                        if hand["c"] != track["label"]
                         else 0.0
                     )
                     candidates.append(
@@ -159,13 +177,12 @@ def stabilize_mediapipe(
                 track["t"] = timestamp_ms
                 track["last_frame"] = frame_index
                 track["streak"] += 1
-                track["labels"].append(hand["c"])
                 points = [
                     item_filter.filter(value, timestamp_sec)
                     for item_filter, value in zip(track["filters"], hand["p"])
                 ]
                 filtered = {
-                    "c": _dominant_label(track["labels"]),
+                    "c": _stabilize_label(track, hand["c"]),
                     "s": hand["s"],
                     "p": points,
                 }
@@ -190,7 +207,6 @@ def stabilize_mediapipe(
                 item_filter.filter(value, timestamp_sec)
                 for item_filter, value in zip(filters, hand["p"])
             ]
-            labels = deque([hand["c"]], maxlen=5)
             filtered = {
                 "c": hand["c"],
                 "s": hand["s"],
@@ -209,7 +225,7 @@ def stabilize_mediapipe(
                 "streak": 1,
                 "pending": pending,
                 "filters": filters,
-                "labels": labels,
+                **_new_label_state(hand["c"]),
             }
             tracks.append(track)
             if confirmation_frames <= 1:
@@ -223,11 +239,12 @@ def stabilize_mediapipe(
         record["h"].sort(key=lambda item: item[0])
         hands = [
             {
+                "i": track_id,
                 "c": hand["c"],
                 "s": hand["s"],
                 "p": [round(value, 4) for value in hand["p"]],
             }
-            for _track_id, hand in record["h"]
+            for track_id, hand in record["h"]
         ]
         cleaned.append({"t": record["t"], "h": hands})
     return cleaned
@@ -251,6 +268,11 @@ def stabilize_wilor(
     for frame_index, record in enumerate(frames):
         timestamp_ms = int(record["t"])
         hands = [hand for hand in record.get("h", []) if _in_bounds(hand)]
+        tracks[:] = [
+            track
+            for track in tracks
+            if timestamp_ms - track["t"] < track_timeout_ms
+        ]
         candidates = []
         for hand_index, hand in enumerate(hands):
             for track_index, track in enumerate(tracks):
@@ -258,7 +280,10 @@ def stabilize_wilor(
                 gate = min(max_gate, max(min_gate, max_speed * delta_sec))
                 distance = _distance(_wrist(hand), track["position"])
                 if distance <= gate:
-                    candidates.append((distance, hand_index, track_index))
+                    label_penalty = 0.06 if hand["c"] != track["label"] else 0.0
+                    candidates.append(
+                        (distance + label_penalty, hand_index, track_index)
+                    )
         candidates.sort()
 
         assignments = {}
@@ -282,7 +307,11 @@ def stabilize_wilor(
                     item_filter.filter(value, timestamp_sec)
                     for item_filter, value in zip(track["filters"], hand["p"])
                 ]
-                filtered = {"c": hand["c"], "s": hand["s"], "p": points}
+                filtered = {
+                    "c": _stabilize_label(track, hand["c"]),
+                    "s": hand["s"],
+                    "p": points,
+                }
                 if track["streak"] == 2:
                     for pending_index, pending_hand in track["pending"]:
                         output[pending_index]["h"].append(
@@ -316,28 +345,31 @@ def stabilize_wilor(
                         )
                     ],
                     "filters": filters,
+                    **_new_label_state(hand["c"]),
                 }
             )
             next_id += 1
-
-        tracks[:] = [
-            track
-            for track in tracks
-            if timestamp_ms - track["t"] < track_timeout_ms
-        ]
 
     cleaned = []
     for record in output:
         if not record["h"]:
             continue
         record["h"].sort(key=lambda item: item[0])
+        unique_hands = []
+        seen_labels = set()
+        for track_id, hand in record["h"]:
+            if hand["c"] in seen_labels:
+                continue
+            seen_labels.add(hand["c"])
+            unique_hands.append((track_id, hand))
         hands = [
             {
+                "i": track_id,
                 "c": hand["c"],
                 "s": hand["s"],
                 "p": [round(value, 4) for value in hand["p"]],
             }
-            for _track_id, hand in record["h"]
+            for track_id, hand in unique_hands[:2]
         ]
         cleaned.append({"t": record["t"], "h": hands})
     return cleaned

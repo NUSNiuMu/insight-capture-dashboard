@@ -24,6 +24,107 @@ function formatTime(milliseconds) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
 }
 
+function handDistance(first, second, method) {
+  const a = first.p || [];
+  const b = second.p || [];
+  const length = method === "wilor" ? Math.min(3, a.length, b.length) : Math.min(a.length, b.length);
+  if (!length) return Number.POSITIVE_INFINITY;
+  let squared = 0;
+  for (let index = 0; index < length; index += 1) squared += (Number(a[index]) - Number(b[index])) ** 2;
+  return Math.sqrt(squared / length);
+}
+
+function updateTrackLabel(track, observed) {
+  if (observed === track.label) {
+    track.pendingLabel = "";
+    track.pendingCount = 0;
+  } else if (observed === track.pendingLabel) {
+    track.pendingCount += 1;
+  } else {
+    track.pendingLabel = observed;
+    track.pendingCount = 1;
+  }
+  if (track.pendingCount >= 8) {
+    track.label = observed;
+    track.pendingLabel = "";
+    track.pendingCount = 0;
+  }
+  return track.label;
+}
+
+export function stabilizeHandedness(records, method) {
+  const tracks = [];
+  let nextId = 0;
+  return records.map((frame) => {
+    const timestamp = Number(frame.t || 0);
+    const hands = (frame.h || []).map((hand) => ({ ...hand }));
+    const timeout = method === "wilor" ? 2000 : 750;
+    for (let index = tracks.length - 1; index >= 0; index -= 1) {
+      if (timestamp - tracks[index].time > timeout) tracks.splice(index, 1);
+    }
+    const assignments = new Map();
+    const usedTracks = new Set();
+    hands.forEach((hand, handIndex) => {
+      if (hand.i === undefined || hand.i === null) return;
+      const trackIndex = tracks.findIndex((track) => track.sourceId === hand.i);
+      if (trackIndex >= 0) {
+        assignments.set(handIndex, trackIndex);
+        usedTracks.add(trackIndex);
+      }
+    });
+    const candidates = [];
+    hands.forEach((hand, handIndex) => {
+      if (assignments.has(handIndex)) return;
+      tracks.forEach((track, trackIndex) => {
+        if (usedTracks.has(trackIndex) || track.sourceId !== null) return;
+        const elapsed = Math.max(1, timestamp - track.time) / 1000;
+        const gate = method === "wilor"
+          ? Math.min(0.35, Math.max(0.05, 4 * elapsed))
+          : Math.min(0.12, Math.max(0.025, 1.5 * elapsed));
+        const distance = handDistance(hand, track.hand, method);
+        if (distance <= gate) {
+          const labelPenalty = hand.c === track.label ? 0 : (method === "wilor" ? 0.06 : 0.015);
+          candidates.push([distance + labelPenalty, handIndex, trackIndex]);
+        }
+      });
+    });
+    candidates.sort((a, b) => a[0] - b[0]);
+    candidates.forEach(([, handIndex, trackIndex]) => {
+      if (assignments.has(handIndex) || usedTracks.has(trackIndex)) return;
+      assignments.set(handIndex, trackIndex);
+      usedTracks.add(trackIndex);
+    });
+    hands.forEach((hand, handIndex) => {
+      let track;
+      if (assignments.has(handIndex)) {
+        track = tracks[assignments.get(handIndex)];
+      } else {
+        track = {
+          id: nextId,
+          sourceId: hand.i ?? null,
+          label: hand.c,
+          pendingLabel: "",
+          pendingCount: 0,
+        };
+        nextId += 1;
+        tracks.push(track);
+      }
+      hand.i = track.sourceId ?? track.id;
+      hand.c = updateTrackLabel(track, hand.c);
+      track.hand = hand;
+      track.time = timestamp;
+    });
+    if (method !== "wilor") return { ...frame, h: hands };
+    const labels = new Set();
+    const uniqueHands = hands.filter((hand) => {
+      if (labels.has(hand.c)) return false;
+      labels.add(hand.c);
+      return true;
+    });
+    return { ...frame, h: uniqueHands.slice(0, 2) };
+  });
+}
+
 export function createHandPoseViewer({ canvas, empty, timeline, playButton, timeLabel, coordinateLabel }) {
   const context = canvas.getContext("2d");
   const state = {
@@ -40,6 +141,7 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
     animation: 0,
     lastStep: 0,
     selected: null,
+    view: { center: [0, 0, 0], radius: 0.1 },
   };
 
   function resize() {
@@ -73,8 +175,8 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
     const sourceHands = frame?.h || [];
     const hands = sourceHands.map((hand, index) => {
       const rawPoints = unpack(hand.p || []);
-      const relativeOffset = state.method === "mediapipe" && sourceHands.length > 1
-        ? (index - (sourceHands.length - 1) / 2) * 0.18
+      const relativeOffset = state.method === "mediapipe"
+        ? (hand.c === "L" ? -0.09 : (hand.c === "R" ? 0.09 : (index - 0.5) * 0.18))
         : 0;
       return {
         ...hand,
@@ -85,37 +187,46 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
     return { hands };
   }
 
-  function projectionFor(hands, width, height) {
-    const sourcePoints = hands.flatMap((hand) => hand.points);
-    if (!sourcePoints.length) {
-      return { center: [0, 0, 0], scale: 1, viewX: 0, viewY: 0 };
-    }
-    const center = [0, 1, 2].map((axis) => (
-      sourcePoints.reduce((sum, point) => sum + point[axis], 0) / sourcePoints.length
+  function quantile(sorted, fraction) {
+    if (!sorted.length) return 0;
+    return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction))];
+  }
+
+  function resultView() {
+    const points = state.frames.flatMap((frame) => (
+      frameGeometry(frame).hands.flatMap((hand) => hand.points)
     ));
-    const rotated = sourcePoints.map((point) => rotate(point, center));
-    const xs = rotated.map((point) => point[0]);
-    const ys = rotated.map((point) => point[1]);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
-    const minY = Math.min(...ys);
-    const maxY = Math.max(...ys);
-    const spanX = Math.max(maxX - minX, 0.02);
-    const spanY = Math.max(maxY - minY, 0.02);
-    const scale = Math.min((width * 0.72) / spanX, (height * 0.72) / spanY);
+    if (!points.length) return { center: [0, 0, 0], radius: 0.1 };
+    const bounds = [0, 1, 2].map((axis) => {
+      const values = points.map((point) => point[axis]).sort((a, b) => a - b);
+      return [quantile(values, 0.01), quantile(values, 0.99)];
+    });
+    const center = bounds.map(([low, high]) => (low + high) / 2);
+    const distances = points
+      .map((point) => Math.hypot(
+        point[0] - center[0],
+        point[1] - center[1],
+        point[2] - center[2],
+      ))
+      .sort((a, b) => a - b);
     return {
       center,
-      scale,
-      viewX: (minX + maxX) / 2,
-      viewY: (minY + maxY) / 2,
+      radius: Math.max(0.02, quantile(distances, 0.99)),
+    };
+  }
+
+  function projectionFor(width, height) {
+    return {
+      center: state.view.center,
+      scale: (Math.min(width, height) * 0.36) / state.view.radius,
     };
   }
 
   function project(point, projection, width, height) {
     const rotated = rotate(point, projection.center);
     return [
-      width / 2 + (rotated[0] - projection.viewX) * projection.scale * state.zoom,
-      height / 2 + (rotated[1] - projection.viewY) * projection.scale * state.zoom,
+      width / 2 + rotated[0] * projection.scale * state.zoom,
+      height / 2 + rotated[1] * projection.scale * state.zoom,
       rotated[2],
     ];
   }
@@ -146,7 +257,7 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
     drawGrid(width, height);
     const frame = state.frames[state.index];
     const geometry = frameGeometry(frame);
-    const projection = projectionFor(geometry.hands, width, height);
+    const projection = projectionFor(width, height);
     const projected = [];
     geometry.hands.forEach((hand, handIndex) => {
       const points = hand.points.map((point) => project(point, projection, width, height));
@@ -174,8 +285,10 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
   }
 
   function setFrames(records, options = {}) {
-    state.frames = Array.isArray(records) ? records.filter((frame) => Array.isArray(frame?.h) && frame.h.length) : [];
     state.method = options.method || "";
+    const frames = Array.isArray(records) ? records.filter((frame) => Array.isArray(frame?.h) && frame.h.length) : [];
+    state.frames = stabilizeHandedness(frames, state.method);
+    state.view = resultView();
     state.index = 0;
     state.playing = false;
     playButton.textContent = "Play";
