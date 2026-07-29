@@ -49,6 +49,12 @@ Dashboard 镜像包含离线 WiLoR 所需的固定版本权重、JetPack PyTorch
 WiLoR 层只保留离线推理路径：不包含 CUDA 编译器/头文件、WiLoR 训练和 demo
 依赖，也不允许运行时自动下载模型或补装 Python 包。
 
+Dockerfile 自 `v2.0.2` 起拆成 `runtime`/`dev` 两个 target：`dev`（`runtime`
+基础上追加 Playwright headless Chromium，仅用于 CLAUDE.md 里的无头页面验证）
+是根目录开发 compose 的默认构建目标；`build_release.sh` 显式用
+`--target runtime`，客户镜像不含这层调试用的 Chromium，体积因此减少约 1.8GB
+（未压缩）。这两个 target 共享除 Chromium 外的全部层，互不影响构建缓存。
+
 ### 1.3 打包
 
 ```bash

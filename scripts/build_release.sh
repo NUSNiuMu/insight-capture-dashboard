@@ -25,7 +25,8 @@ selected_device="$(cat config/.device 2>/dev/null || echo "<none>")"
 
 log "Building ${IMAGE_NAME}:${version} ..."
 # --network host: same Jetson iptables raw-table workaround as docker-compose.yml
-docker build --network host -t "${IMAGE_NAME}:${version}" .
+# --target runtime: skips the dev-only headless Chromium stage (see Dockerfile)
+docker build --network host --target runtime -t "${IMAGE_NAME}:${version}" .
 
 log "Building ${SUPERGLUE_IMAGE} (mapping/relocalization dependency) ..."
 docker build --network host -f Dockerfile.superglue-validation -t "${SUPERGLUE_IMAGE}" .

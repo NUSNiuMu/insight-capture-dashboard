@@ -8,6 +8,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: dev      # adds headless Chromium for page verification (CLAUDE.md); release builds skip it
       network: host    # Jetson iptables raw table workaround
     image: insight-dashboard:latest
     container_name: insight-dashboard

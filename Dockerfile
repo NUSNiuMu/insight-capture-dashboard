@@ -86,7 +86,7 @@ RUN git clone --branch 3.9.1 --depth 1 https://github.com/colmap/colmap.git /col
     && ninja -j2 \
     && ninja install
 
-FROM ros:humble-ros-base-jammy
+FROM ros:humble-ros-base-jammy AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -328,37 +328,20 @@ RUN pip3 install --no-cache-dir \
     && pip3 install --no-cache-dir --no-deps \
         "git+https://github.com/mattloper/chumpy.git@580566eafc9ac68b2614b64d6f7aaa84eebb70da"
 
-# ── Kiosk browser (scripts/open_web_3d_right.sh) ────────────────────────────
+# ── Kiosk browser (scripts/open_web_3d_right.sh): official Firefox ─────────
 # The on-device kiosk previously used PyQt5's QWebEngineView, which bundles
 # Chromium 87 (Nov 2020, frozen since). That old build's GPU compositor has
 # a bug on this Tegra GPU/driver combo: under high-frequency, large texture
 # uploads (the live camera feed panels) it presents a blank/white compositor
 # frame -- visible as a flicker, worse the busier the page. Confirmed absent
-# on a current Chromium build on the same hardware. Vendored here via
-# Playwright rather than the host's snap/apt chromium-browser: both of those
-# route through snap-confine, which was found broken (missing file
-# capabilities) on at least one deployed Jetson -- vendoring into the image
-# sidesteps the host package manager entirely and keeps the browser version
-# pinned and reproducible across machines.
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
-RUN pip3 install --no-cache-dir \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    "playwright==1.61.0" \
-    && python3 -m playwright install --with-deps chromium
-
-# ── Kiosk browser, take two: official Firefox (scripts/open_web_3d_right.sh) ─
-# The Playwright Chromium above is no longer used as the on-device kiosk --
-# kept only for headless page verification (screenshots, console-error
-# checks; see CLAUDE.md), since it has no H.264 decoder at all (checked via
-# RTCRtpReceiver.getCapabilities: VP8/VP9/AV1 only), so it can never show
-# the WebRTC camera streams and was permanently stuck on the JPEG-polling
-# fallback path.
-#
-# No vendor ships an arm64 desktop Linux build with H.264 baked in --
-# checked and ruled out Microsoft Edge, Brave, Vivaldi, and the xtradeb PPA
-# (none publish arm64 packages/binaries at all, confirmed via each vendor's
-# own apt/PPA repo metadata). Mozilla is the one still-maintained vendor
-# that ships an official arm64 Linux build, and Firefox bundles Cisco's
+# on a current Chromium build on the same hardware, but no vendor ships an
+# arm64 desktop Linux build with H.264 baked in (checked and ruled out
+# Microsoft Edge, Brave, Vivaldi, and the xtradeb PPA -- none publish arm64
+# packages/binaries at all, confirmed via each vendor's own apt/PPA repo
+# metadata), so a Chromium-based kiosk can never show the WebRTC camera
+# streams and would be permanently stuck on the JPEG-polling fallback path.
+# Mozilla is the one still-maintained vendor that ships an official arm64
+# Linux build, and Firefox bundles Cisco's
 # OpenH264 plugin specifically for WebRTC's H.264 (Cisco pays the patent
 # license for exactly this use case) -- verified via getCapabilities and a
 # real screenshot of the /3d page rendering all three camera panels
@@ -458,3 +441,20 @@ EXPOSE 8765
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python3", "-u", "scripts/multi_camera_dashboard_web.py"]
+
+# ── Dev-only: headless Chromium for page verification ──────────────────────
+# Vendored via Playwright rather than the host's snap/apt chromium-browser:
+# both route through snap-confine, which was found broken (missing file
+# capabilities) on at least one deployed Jetson -- vendoring sidesteps the
+# host package manager and keeps the browser version pinned and reproducible.
+# Not part of the customer release: scripts/build_release.sh builds the
+# "runtime" stage above with --target; only the dev compose (docker-compose.yml)
+# targets this stage, for the headless console-error/screenshot checks
+# described in CLAUDE.md. This is never the on-device kiosk -- see the
+# Firefox section above for why (no H.264 decoder in any arm64 Chromium).
+FROM runtime AS dev
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+RUN pip3 install --no-cache-dir \
+    -i https://pypi.tuna.tsinghua.edu.cn/simple \
+    "playwright==1.61.0" \
+    && python3 -m playwright install --with-deps chromium
