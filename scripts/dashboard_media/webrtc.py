@@ -31,18 +31,9 @@ _REQUIRED_ELEMENTS = (
 _MIN_BITRATE = 1_500_000
 _MAX_BITRATE = 10_000_000
 
-# Downscale on VIC to match dashboard thumbnail sizes.
-STREAM_MAX_WIDTH = 540
-
-
-def _scaled_dims(width: int, height: int) -> Tuple[int, int]:
-    """Cap width at STREAM_MAX_WIDTH keeping aspect, rounded to even (NV12)."""
-    if width <= STREAM_MAX_WIDTH:
-        return (width, height)
-    scale = STREAM_MAX_WIDTH / float(width)
-    out_w = STREAM_MAX_WIDTH & ~1
-    out_h = int(round(height * scale)) & ~1
-    return (out_w, max(2, out_h))
+def _encoder_dims(width: int, height: int) -> Tuple[int, int]:
+    """Keep the published resolution, rounded down only when NV12 requires it."""
+    return (max(2, int(width) & ~1), max(2, int(height) & ~1))
 
 
 def _bitrate_for(width: int, height: int, fps: int = 30) -> int:
@@ -219,7 +210,7 @@ class WebRtcSession:
     # ── pipeline (called under self._lock) ──────────────────────────────────
 
     def _build_pipeline(self, fmt: str, width: int, height: int) -> None:
-        out_width, out_height = _scaled_dims(width, height)
+        out_width, out_height = _encoder_dims(width, height)
         bitrate = _bitrate_for(out_width, out_height, self._target_fps)
         if fmt == "JPEG":
             source = (
