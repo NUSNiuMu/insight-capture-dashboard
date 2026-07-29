@@ -10,12 +10,9 @@ const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 8000;
 const WEBRTC_STATS_INTERVAL_MS = 1000;
 const NORMAL_PREVIEW_FPS = 30;
 const CAPTURE_PREVIEW_FPS = 15;
-const THUMBNAIL_QUALITY = "thumbnail";
-const DETAIL_QUALITY = "detail";
 const cameraPanels = new Map();
 const cameraPollState = new Map();
 const cameraWebRtc = new Map();
-const pendingCameraWebRtc = new Map();
 let maximizedCameraName = null;
 let pageUnloading = false;
 let cameraStartupAt = 0;
@@ -258,42 +255,14 @@ function maybeStartCameraWebRtc(camera, panel) {
     return;
   }
   const state = cameraWebRtc.get(camera.name);
-  const desiredQuality = getDesiredCameraQuality(camera.name);
-  if (state && state.active) {
-    if (
-      state.quality !== desiredQuality &&
-      !pendingCameraWebRtc.has(camera.name) &&
-      performance.now() >= Number(state.qualityRetryAfter || 0)
-    ) {
-      startCameraWebRtc(
-        camera.name,
-        panel,
-        camera.webrtc_port,
-        desiredQuality,
-        state
-      );
-    }
-    return;
-  }
   if (state && (state.pc || state.retryTimer || state.unavailable || state.attempts >= WEBRTC_MAX_ATTEMPTS)) {
     return;
   }
-  startCameraWebRtc(
-    camera.name,
-    panel,
-    camera.webrtc_port,
-    desiredQuality
-  );
+  startCameraWebRtc(camera.name, panel, camera.webrtc_port);
 }
 
 // Cache the worker port so retries can reconnect without a fresh payload.
-function startCameraWebRtc(
-  cameraName,
-  panel,
-  webrtcPort,
-  quality = getDesiredCameraQuality(cameraName),
-  replacingState = null
-) {
+function startCameraWebRtc(cameraName, panel, webrtcPort) {
   if (pageUnloading) {
     return;
   }
@@ -302,13 +271,7 @@ function startCameraWebRtc(
   if (!port) {
     return;
   }
-  const isQualitySwitch = Boolean(replacingState && replacingState.active);
-  if (isQualitySwitch && pendingCameraWebRtc.has(cameraName)) {
-    return;
-  }
-  const video = isQualitySwitch
-    ? createStagingCameraVideo(panel)
-    : ensureCameraVideo(panel);
+  const video = panel.querySelector(".camera-video");
   const img = panel.querySelector("img.camera-frame");
   const state = {
     pc: null,
@@ -318,41 +281,31 @@ function startCameraWebRtc(
     retryTimer: null,
     statsTimer: null,
     unavailable: Boolean(previous && previous.unavailable),
-    webrtcPort: port,
-    quality,
-    video,
-    replacingState,
-    pending: isQualitySwitch,
-    qualityRetryAfter: 0
+    webrtcPort: port
   };
-  if (isQualitySwitch) {
-    pendingCameraWebRtc.set(cameraName, state);
-  } else {
-    cameraWebRtc.set(cameraName, state);
-  }
+  cameraWebRtc.set(cameraName, state);
   const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
   const hostname = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
   const previewFps = capturePerformanceMode ? CAPTURE_PREVIEW_FPS : NORMAL_PREVIEW_FPS;
   const ws = new WebSocket(
-    `${wsProtocol}://${hostname}:${port}/ws/webrtc?camera=${encodeURIComponent(cameraName)}` +
-    `&fps=${previewFps}&quality=${encodeURIComponent(quality)}`
+    `${wsProtocol}://${hostname}:${port}/ws/webrtc?camera=${encodeURIComponent(cameraName)}&fps=${previewFps}`
   );
   const pc = new RTCPeerConnection();
   state.ws = ws;
   state.pc = pc;
+  state.statsTimer = window.setInterval(() => {
+    void collectWebRtcStats(cameraName, state, pc);
+  }, WEBRTC_STATS_INTERVAL_MS);
   // Every failure signal funnels here; the state.pc === pc guard makes the
   // late duplicates (onerror then onclose, a stale watchdog) no-ops.
   const fail = () => {
-    if (state.pending && pendingCameraWebRtc.get(cameraName) === state && state.pc === pc) {
-      abortPendingQualitySwitch(cameraName, state);
-    } else if (cameraWebRtc.get(cameraName) === state && state.pc === pc) {
+    if (cameraWebRtc.get(cameraName) === state && state.pc === pc) {
       scheduleWebRtcRetry(cameraName, panel);
     }
   };
   const watchdog = window.setTimeout(fail, WEBRTC_FIRST_FRAME_TIMEOUT_MS);
   pc.ontrack = (event) => {
     video.srcObject = event.streams[0];
-    void video.play().catch(() => {});
   };
   pc.onicecandidate = (event) => {
     if (event.candidate && ws.readyState === WebSocket.OPEN) {
@@ -399,57 +352,17 @@ function startCameraWebRtc(
   };
   ws.onerror = fail;
   ws.onclose = fail;
-  video.addEventListener("loadeddata", () => {
-    activateCameraWebRtc(cameraName, state, watchdog);
-  }, { once: true });
-}
-
-function activateCameraWebRtc(cameraName, state, watchdog) {
-  if (state.pending) {
-    if (
-      pendingCameraWebRtc.get(cameraName) !== state ||
-      cameraWebRtc.get(cameraName) !== state.replacingState ||
-      state.quality !== getDesiredCameraQuality(cameraName)
-    ) {
-      abortPendingQualitySwitch(cameraName, state);
+  const onVideoFrame = () => {
+    if (cameraWebRtc.get(cameraName) !== state || state.pc !== pc) {
       return;
     }
-    const oldState = state.replacingState;
-    pendingCameraWebRtc.delete(cameraName);
-    state.pending = false;
-    state.replacingState = null;
-    cameraWebRtc.set(cameraName, state);
-    state.video.classList.remove("camera-video-staging");
-    closeWebRtcState(oldState, true);
-  } else if (cameraWebRtc.get(cameraName) !== state) {
-    return;
-  }
-  state.active = true;
-  state.attempts = 0;
-  window.clearTimeout(watchdog);
-  state.video.style.display = "";
-  const panel = cameraPanels.get(cameraName);
-  const img = panel && panel.querySelector("img.camera-frame");
-  if (img) {
-    img.style.display = "none";
-    img.removeAttribute("src");
-  }
-  const pollState = cameraPollState.get(cameraName);
-  if (pollState) {
-    pollState.displayFrameTimes = [];
-    pollState.rtcStats = {};
-  }
-  state.statsTimer = window.setInterval(() => {
-    void collectWebRtcStats(cameraName, state, state.pc);
-  }, WEBRTC_STATS_INTERVAL_MS);
-  startCameraVideoFrameTracking(cameraName, state);
-}
-
-function startCameraVideoFrameTracking(cameraName, state) {
-  const video = state.video;
-  const onVideoFrame = () => {
-    if (cameraWebRtc.get(cameraName) !== state || !state.active) {
-      return;
+    if (!state.active) {
+      state.active = true;
+      state.attempts = 0;
+      window.clearTimeout(watchdog);
+      video.style.display = "";
+      img.style.display = "none";
+      img.removeAttribute("src");
     }
     recordDisplayedFrame(cameraName);
     video.requestVideoFrameCallback(onVideoFrame);
@@ -457,81 +370,10 @@ function startCameraVideoFrameTracking(cameraName, state) {
   if (video.requestVideoFrameCallback) {
     video.requestVideoFrameCallback(onVideoFrame);
   } else {
-    recordDisplayedFrame(cameraName);
+    // No rVFC (old Firefox): activate on playback start; the fps badge
+    // then reflects backend fps only.
+    video.addEventListener("playing", onVideoFrame, { once: true });
   }
-}
-
-function abortPendingQualitySwitch(cameraName, state) {
-  if (pendingCameraWebRtc.get(cameraName) !== state) {
-    return;
-  }
-  pendingCameraWebRtc.delete(cameraName);
-  closeWebRtcState(state, true);
-  const current = cameraWebRtc.get(cameraName);
-  if (current) {
-    current.qualityRetryAfter = performance.now() + WEBRTC_RETRY_DELAY_MS;
-  }
-}
-
-function closeWebRtcState(state, removeVideo = false) {
-  if (!state) {
-    return;
-  }
-  if (state.retryTimer) {
-    window.clearTimeout(state.retryTimer);
-    state.retryTimer = null;
-  }
-  if (state.statsTimer) {
-    window.clearInterval(state.statsTimer);
-    state.statsTimer = null;
-  }
-  try { if (state.pc) state.pc.close(); } catch {}
-  try { if (state.ws) state.ws.close(); } catch {}
-  state.pc = null;
-  state.ws = null;
-  state.active = false;
-  if (state.video) {
-    state.video.srcObject = null;
-    if (removeVideo) {
-      state.video.remove();
-    } else {
-      state.video.style.display = "none";
-    }
-  }
-}
-
-function ensureCameraVideo(panel) {
-  let video = panel.querySelector(".camera-video");
-  if (!video) {
-    video = document.createElement("video");
-    video.className = "camera-frame camera-video";
-    video.autoplay = true;
-    video.muted = true;
-    video.playsInline = true;
-    video.style.display = "none";
-    panel.querySelector(".camera-body").insertBefore(
-      video,
-      panel.querySelector(".camera-overlay")
-    );
-  }
-  return video;
-}
-
-function createStagingCameraVideo(panel) {
-  const video = document.createElement("video");
-  video.className = "camera-frame camera-video camera-video-staging";
-  video.autoplay = true;
-  video.muted = true;
-  video.playsInline = true;
-  panel.querySelector(".camera-body").insertBefore(
-    video,
-    panel.querySelector(".camera-overlay")
-  );
-  return video;
-}
-
-function getDesiredCameraQuality(cameraName) {
-  return maximizedCameraName === cameraName ? DETAIL_QUALITY : THUMBNAIL_QUALITY;
 }
 
 function scheduleWebRtcRetry(cameraName, panel) {
@@ -541,11 +383,6 @@ function scheduleWebRtcRetry(cameraName, panel) {
   const state = cameraWebRtc.get(cameraName);
   if (!state || state.retryTimer) {
     return;
-  }
-  const pending = pendingCameraWebRtc.get(cameraName);
-  if (pending) {
-    pendingCameraWebRtc.delete(cameraName);
-    closeWebRtcState(pending, true);
   }
   const wasActive = state.active;
   state.active = false;
@@ -557,7 +394,7 @@ function scheduleWebRtcRetry(cameraName, panel) {
   try { if (state.ws) state.ws.close(); } catch {}
   state.pc = null;
   state.ws = null;
-  const video = state.video;
+  const video = panel.querySelector(".camera-video");
   const img = panel.querySelector("img.camera-frame");
   if (video) {
     video.style.display = "none";
@@ -587,18 +424,29 @@ function scheduleWebRtcRetry(cameraName, panel) {
 }
 
 function stopCameraWebRtc(cameraName) {
-  const pending = pendingCameraWebRtc.get(cameraName);
-  if (pending) {
-    pendingCameraWebRtc.delete(cameraName);
-    closeWebRtcState(pending, true);
-  }
   const state = cameraWebRtc.get(cameraName);
-  closeWebRtcState(state, true);
+  if (!state) {
+    return;
+  }
+  if (state.retryTimer) {
+    window.clearTimeout(state.retryTimer);
+    state.retryTimer = null;
+  }
+  if (state.statsTimer) {
+    window.clearInterval(state.statsTimer);
+    state.statsTimer = null;
+  }
+  try { if (state.pc) state.pc.close(); } catch {}
+  try { if (state.ws) state.ws.close(); } catch {}
   const panel = cameraPanels.get(cameraName);
   if (panel) {
+    const video = panel.querySelector(".camera-video");
     const img = panel.querySelector("img.camera-frame");
+    if (video) {
+      video.style.display = "none";
+      video.srcObject = null;
+    }
     if (img) img.style.display = "";
-    ensureCameraVideo(panel);
   }
   cameraWebRtc.delete(cameraName);
 }
@@ -778,21 +626,15 @@ function normalizeRotation(value) {
 
 function toggleCameraMaximized(cameraName) {
   if (maximizedCameraName === cameraName) {
-    maximizedCameraName = null;
     setCameraMaximized(cameraName, false);
-    requestCameraQuality(cameraName);
+    maximizedCameraName = null;
     return;
   }
-  const previousMaximized = maximizedCameraName;
   if (maximizedCameraName) {
     setCameraMaximized(maximizedCameraName, false);
   }
-  maximizedCameraName = cameraName;
   setCameraMaximized(cameraName, true);
-  if (previousMaximized) {
-    requestCameraQuality(previousMaximized);
-  }
-  requestCameraQuality(cameraName);
+  maximizedCameraName = cameraName;
 }
 
 function setCameraMaximized(cameraName, maximized) {
@@ -804,20 +646,4 @@ function setCameraMaximized(cameraName, maximized) {
   panel.classList.toggle("maximized", maximized);
   button.textContent = maximized ? "❐" : "□";
   button.title = maximized ? "Restore" : "Maximize";
-}
-
-function requestCameraQuality(cameraName) {
-  const state = cameraWebRtc.get(cameraName);
-  const panel = cameraPanels.get(cameraName);
-  const quality = getDesiredCameraQuality(cameraName);
-  if (
-    !state ||
-    !state.active ||
-    !panel ||
-    state.quality === quality ||
-    pendingCameraWebRtc.has(cameraName)
-  ) {
-    return;
-  }
-  startCameraWebRtc(cameraName, panel, state.webrtcPort, quality, state);
 }

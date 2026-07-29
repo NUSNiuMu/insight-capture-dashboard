@@ -126,12 +126,10 @@ def build_app(streams: Optional[WebRtcStreams], camera_topic_types: Dict[str, st
             target_fps = max(5, min(30, int(request.query.get("fps", "30"))))
         except (TypeError, ValueError):
             target_fps = 30
-        quality = request.query.get("quality", "detail")
         session = streams.create_session(
             camera_name,
             send_signal,
             target_fps=target_fps,
-            quality=quality,
         )
         try:
             async for message in ws:
