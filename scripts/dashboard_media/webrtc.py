@@ -163,10 +163,16 @@ class WebRtcSession:
     # ── frame ingest (camera worker thread) ─────────────────────────────────
 
     def push_frame(self, data: bytes, fmt: str, width: int, height: int) -> None:
-        now = time.monotonic()
-        if now - self._last_frame_at < 1.0 / self._target_fps:
-            return
-        self._last_frame_at = now
+        # A source nominally running at 30 fps often arrives slightly faster
+        # (for example 30.02 fps). Applying the same 1/30 s wall-clock gate
+        # aliases that cadence down to roughly 15 fps. At the maximum preview
+        # rate, forward every latest-frame delivery and let the leaky appsrc
+        # absorb scheduling jitter; lower capture-mode targets remain capped.
+        if self._target_fps < 30:
+            now = time.monotonic()
+            if now - self._last_frame_at < 1.0 / self._target_fps:
+                return
+            self._last_frame_at = now
         caps_key = (fmt, width, height)
         with self._lock:
             if self._closed:
