@@ -179,8 +179,12 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
         self.pose_lock = threading.Lock()
         self.camera_frame_lock = threading.Lock()
+        self.camera_input_lock = threading.Lock()
         self.latest_camera_frames: Dict[str, Optional[CameraFrame]] = {camera.name: None for camera in self.cameras}
         self.camera_frame_versions: Dict[str, int] = {camera.name: 0 for camera in self.cameras}
+        self.camera_input_times: Dict[str, Deque[float]] = {
+            camera.name: deque(maxlen=120) for camera in self.cameras
+        }
         self.camera_frame_times: Dict[str, Deque[float]] = {camera.name: deque(maxlen=90) for camera in self.cameras}
         self.ros_callback_group = ReentrantCallbackGroup()
         # Unused default QoS waitables can crash this Jetson/rmw_fastrtps executor.
@@ -215,6 +219,19 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._pending_webrtc_frames: Dict[str, Tuple[str, int, int, bytes]] = {}
         self._webrtc_frame_event = threading.Event()
         self._webrtc_available_cached = False
+        self._webrtc_metrics_lock = threading.Lock()
+        self._webrtc_main_metrics: Dict[str, Dict[str, object]] = {
+            camera.name: {
+                "queued": 0,
+                "replaced": 0,
+                "ipc_sent": 0,
+                "queued_fps": 0.0,
+                "replaced_fps": 0.0,
+                "ipc_fps": 0.0,
+            }
+            for camera in self.cameras
+        }
+        self._webrtc_worker_stats: Dict[str, Dict[str, object]] = {}
         self._last_webrtc_fallback_jpeg_at: Dict[str, float] = {}
         self._last_recording_preview_at: Dict[str, float] = {}
         self._webrtc_proc = self._start_webrtc_worker()

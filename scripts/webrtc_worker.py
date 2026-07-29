@@ -152,7 +152,10 @@ def build_app(streams: Optional[WebRtcStreams], camera_topic_types: Dict[str, st
 
     async def handle_healthz(_request: web.Request) -> web.Response:
         available = streams is not None and ipc_server.ready()
-        return web.json_response({"webrtc_available": available})
+        camera_stats = streams.snapshot_stats() if streams is not None else {}
+        return web.json_response(
+            {"webrtc_available": available, "cameras": camera_stats}
+        )
 
     app = web.Application()
     app.router.add_get("/ws/webrtc", handle_webrtc_ws)

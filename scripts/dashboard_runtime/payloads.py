@@ -120,9 +120,34 @@ class PayloadBuilder:
     def build_camera_payload(self) -> Dict[str, object]:
         now = time.monotonic()
         cameras = []
+        with self.owner._webrtc_metrics_lock:
+            main_metrics = {
+                name: dict(metrics)
+                for name, metrics in self.owner._webrtc_main_metrics.items()
+            }
+            worker_stats = {
+                name: dict(metrics)
+                for name, metrics in self.owner._webrtc_worker_stats.items()
+                if isinstance(metrics, dict)
+            }
         with self.owner.camera_frame_lock:
             for camera in self.owner.cameras:
                 frame = self.owner.latest_camera_frames.get(camera.name)
+                with self.owner.camera_input_lock:
+                    input_times = list(
+                        self.owner.camera_input_times.get(camera.name, [])
+                    )
+                recent_input_times = [
+                    item for item in input_times if now - item <= 2.0
+                ]
+                input_fps = 0.0
+                if len(recent_input_times) >= 2:
+                    input_span = max(
+                        recent_input_times[-1] - recent_input_times[0], 1e-6
+                    )
+                    input_fps = (
+                        len(recent_input_times) - 1
+                    ) / input_span
                 frame_times = list(self.owner.camera_frame_times.get(camera.name, []))
                 recent_times = [item for item in frame_times if now - item <= 2.0]
                 fps = 0.0
@@ -138,6 +163,12 @@ class PayloadBuilder:
                         "visible": frame is not None,
                         "stale": stale,
                         "fps": fps,
+                        "webrtc_stats": {
+                            "input_fps": input_fps,
+                            "processed_fps": fps,
+                            "main": main_metrics.get(camera.name, {}),
+                            "worker": worker_stats.get(camera.name, {}),
+                        },
                         "width": 0 if frame is None else frame.width,
                         "height": 0 if frame is None else frame.height,
                         "version": 0 if frame is None else frame.version,

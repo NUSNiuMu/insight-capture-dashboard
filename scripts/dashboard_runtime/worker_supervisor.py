@@ -26,6 +26,18 @@ class WorkerSupervisor:
     def __init__(self, owner) -> None:
         self.owner = owner
 
+    def _queue_webrtc_frame(
+        self, camera_name: str, payload: tuple[str, int, int, bytes]
+    ) -> None:
+        """Publish the newest frame and count overwrites before IPC delivery."""
+        with self.owner._webrtc_metrics_lock:
+            metrics = self.owner._webrtc_main_metrics[camera_name]
+            metrics["queued"] += 1
+            if camera_name in self.owner._pending_webrtc_frames:
+                metrics["replaced"] += 1
+            self.owner._pending_webrtc_frames[camera_name] = payload
+        self.owner._webrtc_frame_event.set()
+
     def _maybe_queue_webrtc_frame(self, camera_name: str, topic_type: str, msg, frame) -> None:
         """Queue a frame only when the camera has active WebRTC viewers."""
         if not self.owner._webrtc_has_sessions.get(camera_name):
@@ -43,8 +55,7 @@ class WorkerSupervisor:
                 return
             fmt, width, height = layout
             data = bytes(msg.data)
-        self.owner._pending_webrtc_frames[camera_name] = (fmt, width, height, data)
-        self.owner._webrtc_frame_event.set()
+        self._queue_webrtc_frame(camera_name, (fmt, width, height, data))
 
     def _start_webrtc_worker(self) -> "subprocess.Popen":
         script_path = Path(__file__).resolve().parents[1] / "webrtc_worker.py"
@@ -199,8 +210,7 @@ class WorkerSupervisor:
                 version=version,
             )
         if self.owner._webrtc_has_sessions.get(camera_name):
-            self.owner._pending_webrtc_frames[camera_name] = ("JPEG", width, height, composited)
-            self.owner._webrtc_frame_event.set()
+            self._queue_webrtc_frame(camera_name, ("JPEG", width, height, composited))
 
     def _webrtc_ipc_loop(self) -> None:
         """Send frames and receive session state over one IPC connection."""
@@ -221,10 +231,15 @@ class WorkerSupervisor:
                     if self.owner._webrtc_frame_event.wait(timeout=0.05):
                         self.owner._webrtc_frame_event.clear()
                         for camera_name in list(self.owner._pending_webrtc_frames.keys()):
-                            payload = self.owner._pending_webrtc_frames.pop(camera_name, None)
+                            with self.owner._webrtc_metrics_lock:
+                                payload = self.owner._pending_webrtc_frames.pop(
+                                    camera_name, None
+                                )
                             if payload is None:
                                 continue
                             conn.send((camera_name,) + payload)
+                            with self.owner._webrtc_metrics_lock:
+                                self.owner._webrtc_main_metrics[camera_name]["ipc_sent"] += 1
             except (EOFError, OSError) as exc:
                 self.owner.get_logger().warning(f"webrtc ipc: lost connection to worker ({exc}); reconnecting")
             finally:
@@ -234,8 +249,12 @@ class WorkerSupervisor:
 
     def _webrtc_healthz_loop(self) -> None:
         """Poll worker health; any failure means WebRTC is unavailable."""
+        previous_at = time.monotonic()
+        previous_main = {}
+        previous_worker = {}
         while rclpy is not None and rclpy.ok():
             available = False
+            worker_stats = {}
             try:
                 conn = http.client.HTTPConnection("127.0.0.1", self.owner.webrtc_port, timeout=2.0)
                 try:
@@ -243,9 +262,56 @@ class WorkerSupervisor:
                     resp = conn.getresponse()
                     payload = json.loads(resp.read())
                     available = bool(payload.get("webrtc_available"))
+                    raw_stats = payload.get("cameras", {})
+                    if isinstance(raw_stats, dict):
+                        worker_stats = raw_stats
                 finally:
                     conn.close()
             except Exception:
                 available = False
+            now = time.monotonic()
+            elapsed = max(now - previous_at, 1e-6)
             self.owner._webrtc_available_cached = available
+            with self.owner._webrtc_metrics_lock:
+                for camera_name, metrics in self.owner._webrtc_main_metrics.items():
+                    prior = previous_main.get(camera_name, {})
+                    for total_key, rate_key in (
+                        ("queued", "queued_fps"),
+                        ("replaced", "replaced_fps"),
+                        ("ipc_sent", "ipc_fps"),
+                    ):
+                        delta = int(metrics.get(total_key, 0)) - int(
+                            prior.get(total_key, 0)
+                        )
+                        metrics[rate_key] = max(0, delta) / elapsed
+                    previous_main[camera_name] = {
+                        key: int(metrics.get(key, 0))
+                        for key in ("queued", "replaced", "ipc_sent")
+                    }
+                enriched_worker_stats = {}
+                for camera_name, metrics in worker_stats.items():
+                    enriched = dict(metrics)
+                    prior = previous_worker.get(camera_name, {})
+                    for total_key, rate_key in (
+                        ("worker_received", "worker_received_fps"),
+                        ("appsrc_pushed", "appsrc_fps"),
+                        ("encoded", "encoded_fps"),
+                        ("throttled", "throttled_fps"),
+                    ):
+                        delta = int(enriched.get(total_key, 0)) - int(
+                            prior.get(total_key, 0)
+                        )
+                        enriched[rate_key] = max(0, delta) / elapsed
+                    enriched_worker_stats[camera_name] = enriched
+                    previous_worker[camera_name] = {
+                        key: int(enriched.get(key, 0))
+                        for key in (
+                            "worker_received",
+                            "appsrc_pushed",
+                            "encoded",
+                            "throttled",
+                        )
+                    }
+                self.owner._webrtc_worker_stats = enriched_worker_stats
+            previous_at = now
             time.sleep(5.0)

@@ -159,10 +159,21 @@ class WebRtcSession:
         self._closed = False
         self._target_fps = max(5, min(30, int(target_fps)))
         self._last_frame_at = 0.0
+        self._stats_lock = threading.Lock()
+        self._stats = {
+            "session_received": 0,
+            "throttled": 0,
+            "caps_mismatch": 0,
+            "appsrc_pushed": 0,
+            "appsrc_failed": 0,
+            "encoded": 0,
+        }
 
     # ── frame ingest (camera worker thread) ─────────────────────────────────
 
     def push_frame(self, data: bytes, fmt: str, width: int, height: int) -> None:
+        with self._stats_lock:
+            self._stats["session_received"] += 1
         # A source nominally running at 30 fps often arrives slightly faster
         # (for example 30.02 fps). Applying the same 1/30 s wall-clock gate
         # aliases that cadence down to roughly 15 fps. At the maximum preview
@@ -171,6 +182,8 @@ class WebRtcSession:
         if self._target_fps < 30:
             now = time.monotonic()
             if now - self._last_frame_at < 1.0 / self._target_fps:
+                with self._stats_lock:
+                    self._stats["throttled"] += 1
                 return
             self._last_frame_at = now
         caps_key = (fmt, width, height)
@@ -189,10 +202,17 @@ class WebRtcSession:
                 # Camera format changed mid-session (e.g. playback of a
                 # different bag). Renegotiating is not worth the complexity;
                 # the viewer reconnects and gets a fresh session.
+                with self._stats_lock:
+                    self._stats["caps_mismatch"] += 1
                 return
             appsrc = self._appsrc
         buf = Gst.Buffer.new_wrapped(data)
-        if appsrc.emit("push-buffer", buf) != Gst.FlowReturn.OK:
+        if appsrc.emit("push-buffer", buf) == Gst.FlowReturn.OK:
+            with self._stats_lock:
+                self._stats["appsrc_pushed"] += 1
+        else:
+            with self._stats_lock:
+                self._stats["appsrc_failed"] += 1
             self._log(f"webrtc[{self.camera_name}]: push-buffer failed; closing session")
             self.close()
 
@@ -222,13 +242,17 @@ class WebRtcSession:
             f"nvvidconv ! video/x-raw(memory:NVMM),format=NV12,width={out_width},height={out_height} ! "
             f"nvv4l2h264enc bitrate={bitrate} insert-sps-pps=true idrinterval=30 "
             f"iframeinterval=30 maxperf-enable=true ! "
-            f"h264parse config-interval=-1 ! "
+            f"h264parse name=parser config-interval=-1 ! "
             f"rtph264pay pt=96 mtu=1200 aggregate-mode=zero-latency config-interval=-1 ! "
             f"application/x-rtp,media=video,encoding-name=H264,payload=96 ! "
             f"webrtcbin name=webrtc bundle-policy=max-bundle"
         )
         pipeline = Gst.parse_launch(description)
         webrtc = pipeline.get_by_name("webrtc")
+        parser = pipeline.get_by_name("parser")
+        parser.get_static_pad("src").add_probe(
+            Gst.PadProbeType.BUFFER, self._on_encoded_buffer
+        )
         webrtc.connect("on-negotiation-needed", self._on_negotiation_needed)
         webrtc.connect("on-ice-candidate", self._on_ice_candidate)
         if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
@@ -243,6 +267,17 @@ class WebRtcSession:
         )
 
     # ── webrtcbin callbacks (GStreamer threads) ─────────────────────────────
+
+    def _on_encoded_buffer(self, _pad, _info):
+        with self._stats_lock:
+            self._stats["encoded"] += 1
+        return Gst.PadProbeReturn.OK
+
+    def snapshot_stats(self) -> Dict[str, int]:
+        with self._stats_lock:
+            stats = dict(self._stats)
+        stats["target_fps"] = self._target_fps
+        return stats
 
     def _on_negotiation_needed(self, webrtc) -> None:
         try:
@@ -359,6 +394,7 @@ class WebRtcStreams:
         self._on_session_state_change = on_session_state_change
         self._lock = threading.Lock()
         self._sessions: Dict[str, List[WebRtcSession]] = {}
+        self._frames_received: Dict[str, int] = {}
         # webrtcbin's ICE/DTLS internals expect a running GLib main loop for
         # their timers; hw_jpeg's pull-based pipelines never needed one, so
         # this module owns it.
@@ -416,8 +452,44 @@ class WebRtcStreams:
     def push_resolved_frame(self, camera_name: str, fmt: str, width: int, height: int, data: bytes) -> None:
         """Fan a resolved frame out to all sessions for its camera."""
         with self._lock:
+            self._frames_received[camera_name] = (
+                self._frames_received.get(camera_name, 0) + 1
+            )
             sessions = list(self._sessions.get(camera_name, ()))
         if not sessions:
             return
         for session in sessions:
             session.push_frame(data, fmt, width, height)
+
+    def snapshot_stats(self) -> Dict[str, Dict[str, int]]:
+        """Return cumulative per-camera counters for the worker lifetime."""
+        with self._lock:
+            received = dict(self._frames_received)
+            sessions_by_camera = {
+                camera_name: list(sessions)
+                for camera_name, sessions in self._sessions.items()
+            }
+        result = {}
+        for camera_name in set(received) | set(sessions_by_camera):
+            session_stats = [
+                session.snapshot_stats()
+                for session in sessions_by_camera.get(camera_name, ())
+            ]
+            aggregate = {
+                "worker_received": received.get(camera_name, 0),
+                "sessions": len(session_stats),
+                "target_fps": (
+                    session_stats[0]["target_fps"] if session_stats else 0
+                ),
+            }
+            for key in (
+                "session_received",
+                "throttled",
+                "caps_mismatch",
+                "appsrc_pushed",
+                "appsrc_failed",
+                "encoded",
+            ):
+                aggregate[key] = sum(stats[key] for stats in session_stats)
+            result[camera_name] = aggregate
+        return result

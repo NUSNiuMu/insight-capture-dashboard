@@ -267,9 +267,15 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 
 ### 6.5 画面卡顿 / 帧率低
 
-- 显示帧率上限约 10fps 属当前设计（录制数据不受影响，bag 里是相机原生帧率）；
-- 明显低于 10fps：先看 `curl -s localhost:8765/api/cameras` 中各路 `fps`
-  是否为 20/30 —— 是则换浏览器/关闭其他标签页；否则按 §6.2 查相机链路。
+- 相机卡片上的数字是浏览器实际呈现帧率；鼠标悬停可查看
+  `source → processed → IPC → appsrc → encoded → browser received/decoded/presented`
+  的逐段速率和累计丢帧。
+- 后端原始统计也可通过
+  `curl -s localhost:8765/api/cameras | python3 -m json.tool` 查看。每路相机的
+  `webrtc_stats` 包含主进程覆盖数、worker 限频数、`appsrc` 失败数和编码速率。
+- `source` 已低于相机标称帧率时按 §6.2 查相机链路；`encoded` 正常但浏览器
+  `received/decoded/presented` 下降时，检查浏览器、网络和 3D/GPU 合成负载。
+- 录制期间 WebRTC 预览会主动降帧，录制数据本身仍保持相机原生帧率。
 
 ### 6.6 CPU 占用异常高（硬件编码回退）
 

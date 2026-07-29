@@ -39,6 +39,8 @@ class ImagePipeline:
         def callback(msg) -> None:
             if is_live == self.owner._playback_mode:
                 return
+            with self.owner.camera_input_lock:
+                self.owner.camera_input_times[camera_name].append(time.monotonic())
             if not self.owner._playback_mode:
                 self.owner._feed_recording_writer(camera_topic, msg)
                 self._maybe_relay_localization_image(camera_name, msg)

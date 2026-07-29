@@ -7,6 +7,7 @@ const CAMERA_POLL_INTERVAL_MS = 250;
 const WEBRTC_RETRY_DELAY_MS = 5000;
 const WEBRTC_MAX_ATTEMPTS = 5;
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 8000;
+const WEBRTC_STATS_INTERVAL_MS = 1000;
 const NORMAL_PREVIEW_FPS = 30;
 const CAPTURE_PREVIEW_FPS = 15;
 const cameraPanels = new Map();
@@ -116,7 +117,7 @@ function renderCameraPanels(cameras, isPlayback = false) {
         maybeStartCameraWebRtc(camera, panel);
       }
     }
-    updateCameraFps(camera.name, Number(camera.fps || 0));
+    updateCameraFps(camera.name, Number(camera.fps || 0), camera.webrtc_stats);
     });
   for (const [name, panel] of cameraPanels.entries()) {
     if (!seen.has(name)) {
@@ -187,6 +188,8 @@ function ensureCameraPanel(camera) {
     version: -1,
     aspectInitialized: false,
     backendFps: 0,
+    backendPipeline: {},
+    rtcStats: {},
     displayFrameTimes: []
   });
   return panel;
@@ -276,6 +279,7 @@ function startCameraWebRtc(cameraName, panel, webrtcPort) {
     active: false,
     attempts: (previous ? previous.attempts : 0) + 1,
     retryTimer: null,
+    statsTimer: null,
     unavailable: Boolean(previous && previous.unavailable),
     webrtcPort: port
   };
@@ -289,6 +293,9 @@ function startCameraWebRtc(cameraName, panel, webrtcPort) {
   const pc = new RTCPeerConnection();
   state.ws = ws;
   state.pc = pc;
+  state.statsTimer = window.setInterval(() => {
+    void collectWebRtcStats(cameraName, state, pc);
+  }, WEBRTC_STATS_INTERVAL_MS);
   // Every failure signal funnels here; the state.pc === pc guard makes the
   // late duplicates (onerror then onclose, a stale watchdog) no-ops.
   const fail = () => {
@@ -379,6 +386,10 @@ function scheduleWebRtcRetry(cameraName, panel) {
   }
   const wasActive = state.active;
   state.active = false;
+  if (state.statsTimer) {
+    window.clearInterval(state.statsTimer);
+    state.statsTimer = null;
+  }
   try { if (state.pc) state.pc.close(); } catch {}
   try { if (state.ws) state.ws.close(); } catch {}
   state.pc = null;
@@ -421,6 +432,10 @@ function stopCameraWebRtc(cameraName) {
     window.clearTimeout(state.retryTimer);
     state.retryTimer = null;
   }
+  if (state.statsTimer) {
+    window.clearInterval(state.statsTimer);
+    state.statsTimer = null;
+  }
   try { if (state.pc) state.pc.close(); } catch {}
   try { if (state.ws) state.ws.close(); } catch {}
   const panel = cameraPanels.get(cameraName);
@@ -448,12 +463,77 @@ window.addEventListener("pagehide", () => {
 // Recording continues in the backend after the tab closes. Warn before a
 // tab/window close or full-page navigation so it is not mistaken for Stop.
 
-function updateCameraFps(cameraName, fps) {
+async function collectWebRtcStats(cameraName, state, pc) {
+  if (cameraWebRtc.get(cameraName) !== state || state.pc !== pc) {
+    return;
+  }
+  try {
+    const reports = await pc.getStats();
+    let inbound = null;
+    reports.forEach((report) => {
+      const mediaKind = report.kind || report.mediaType;
+      if (report.type === "inbound-rtp" && mediaKind === "video" && !report.isRemote) {
+        inbound = report;
+      }
+    });
+    if (!inbound) {
+      return;
+    }
+    const timestamp = Number(inbound.timestamp || performance.now());
+    const hasFramesReceived = Number.isFinite(Number(inbound.framesReceived));
+    const hasFramesDecoded = Number.isFinite(Number(inbound.framesDecoded));
+    const totals = {
+      framesReceived: Number(inbound.framesReceived || 0),
+      framesDecoded: Number(inbound.framesDecoded || 0),
+      framesDropped: Number(inbound.framesDropped || 0),
+      packetsReceived: Number(inbound.packetsReceived || 0),
+      packetsLost: Number(inbound.packetsLost || 0),
+      bytesReceived: Number(inbound.bytesReceived || 0)
+    };
+    const previous = state.rtcTotals;
+    let receivedFps = Number(inbound.framesPerSecond || 0);
+    let decodedFps = 0;
+    if (previous && timestamp > previous.timestamp) {
+      const elapsedSec = (timestamp - previous.timestamp) / 1000;
+      if (elapsedSec > 0) {
+        if (hasFramesReceived) {
+          receivedFps = Math.max(
+            0,
+            (totals.framesReceived - previous.framesReceived) / elapsedSec
+          );
+        }
+        if (hasFramesDecoded) {
+          decodedFps = Math.max(
+            0,
+            (totals.framesDecoded - previous.framesDecoded) / elapsedSec
+          );
+        }
+      }
+    }
+    state.rtcTotals = { timestamp, ...totals };
+    state.rtcStats = {
+      ...totals,
+      receivedFps,
+      decodedFps,
+      jitterMs: Number(inbound.jitter || 0) * 1000
+    };
+    const pollState = cameraPollState.get(cameraName);
+    if (pollState) {
+      pollState.rtcStats = state.rtcStats;
+      renderCameraFps(cameraName);
+    }
+  } catch {
+    // Stats support varies by browser; video playback remains independent.
+  }
+}
+
+function updateCameraFps(cameraName, fps, pipelineStats = {}) {
   const pollState = cameraPollState.get(cameraName);
   if (!pollState) {
     return;
   }
   pollState.backendFps = Number.isFinite(fps) ? fps : 0;
+  pollState.backendPipeline = pipelineStats || {};
   cameraPollState.set(cameraName, pollState);
   renderCameraFps(cameraName);
 }
@@ -499,7 +579,36 @@ function renderCameraFps(cameraName) {
   const displayFps = computeDisplayedFps(pollState.displayFrameTimes);
   const backendFps = Number(pollState.backendFps || 0);
   label.textContent = displayFps > 0 ? `${displayFps.toFixed(1)} fps` : "-- fps";
-  label.title = backendFps > 0 ? `rx ${backendFps.toFixed(1)} fps` : "rx -- fps";
+  const pipeline = pollState.backendPipeline || {};
+  const main = pipeline.main || {};
+  const worker = pipeline.worker || {};
+  const rtc = pollState.rtcStats || {};
+  const sourceFps = Number(pipeline.input_fps || backendFps);
+  const lines = [
+    `source ${sourceFps.toFixed(1)} · processed ${backendFps.toFixed(1)} · presented ${displayFps.toFixed(1)} fps`
+  ];
+  if (Object.keys(main).length > 0) {
+    lines.push(
+      `main queued ${Number(main.queued_fps || 0).toFixed(1)} · IPC ${Number(main.ipc_fps || 0).toFixed(1)} fps · replaced ${Number(main.replaced || 0)} total`
+    );
+  }
+  if (Object.keys(worker).length > 0) {
+    lines.push(
+      `worker received ${Number(worker.worker_received_fps || 0).toFixed(1)} · appsrc ${Number(worker.appsrc_fps || 0).toFixed(1)} · encoded ${Number(worker.encoded_fps || 0).toFixed(1)} fps`
+    );
+    lines.push(
+      `worker totals throttled ${Number(worker.throttled || 0)} · caps mismatch ${Number(worker.caps_mismatch || 0)} · appsrc failed ${Number(worker.appsrc_failed || 0)}`
+    );
+  }
+  if (Object.keys(rtc).length > 0) {
+    lines.push(
+      `browser received ${Number(rtc.receivedFps || 0).toFixed(1)} · decoded ${Number(rtc.decodedFps || 0).toFixed(1)} fps`
+    );
+    lines.push(
+      `browser totals received ${Number(rtc.framesReceived || 0)} · decoded ${Number(rtc.framesDecoded || 0)} · dropped ${Number(rtc.framesDropped || 0)} · packets lost ${Number(rtc.packetsLost || 0)} · jitter ${Number(rtc.jitterMs || 0).toFixed(1)} ms`
+    );
+  }
+  label.title = lines.join("\n");
 }
 
 function normalizeRotation(value) {
