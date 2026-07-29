@@ -22,17 +22,12 @@
 
           <div class="handpose-workspace">
             <aside class="form-surface handpose-config">
-              <div class="step-label"><span>01</span><div><strong>Configure extraction</strong><small>Existing rosbag and pose method</small></div></div>
+              <div class="step-label"><span>01</span><div><strong>Configure extraction</strong><small>Existing rosbag · WiLoR camera-space 3D</small></div></div>
               <label class="field-label" for="handpose-bag-select">Rosbag</label>
               <select id="handpose-bag-select" class="field-control" data-bag-select></select>
               <p id="handpose-bag-meta" class="field-help">Loading bags...</p>
 
-              <label class="field-label" for="handpose-method-select">Method</label>
-              <select id="handpose-method-select" class="field-control">
-                <option value="mediapipe">MediaPipe · hand-relative 3D</option>
-                <option value="wilor">WiLoR · camera-space 3D</option>
-              </select>
-              <p id="handpose-capability-help" class="field-help">Checking installed runtimes and model files...</p>
+              <p id="handpose-capability-help" class="field-help">Checking the WiLoR runtime and model files...</p>
 
               <div class="button-row">
                 <button type="button" id="start-handpose-button" class="primary-button">Extract hand pose</button>
@@ -72,6 +67,6 @@
         </main>
       </section>
     </div>
-    <script type="module" src="/static/pages/handpose.js?v=20260729-stable-hand-tracks"></script>
+    <script type="module" src="/static/pages/handpose.js?v=20260729-wilor-only"></script>
   </body>
 </html>

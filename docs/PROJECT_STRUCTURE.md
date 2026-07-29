@@ -48,7 +48,7 @@ scripts/
   dashboard_runtime/                Dashboard 图像、录制桥接、worker 监管与状态
   dashboard_media/                  硬件 JPEG 和 WebRTC 流实现
   hand_tracking/                    实时手部关键点、手势识别与夹爪跟踪
-  handpose/                         离线 MediaPipe/WiLoR Hand pose 提取与任务管理
+  handpose/                         离线 WiLoR Hand pose 提取与任务管理
   post_processing_core/             bag 完整性、评分、录制、恢复、回放、同步、优化
   insight9_mapping_core/            稀疏/稠密建图和全局定位算法
 web_dashboard/

@@ -24,10 +24,10 @@ function formatTime(milliseconds) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
 }
 
-function handDistance(first, second, method) {
+function handDistance(first, second) {
   const a = first.p || [];
   const b = second.p || [];
-  const length = method === "wilor" ? Math.min(3, a.length, b.length) : Math.min(a.length, b.length);
+  const length = Math.min(3, a.length, b.length);
   if (!length) return Number.POSITIVE_INFINITY;
   let squared = 0;
   for (let index = 0; index < length; index += 1) squared += (Number(a[index]) - Number(b[index])) ** 2;
@@ -52,15 +52,14 @@ function updateTrackLabel(track, observed) {
   return track.label;
 }
 
-export function stabilizeHandedness(records, method) {
+export function stabilizeHandedness(records) {
   const tracks = [];
   let nextId = 0;
   return records.map((frame) => {
     const timestamp = Number(frame.t || 0);
     const hands = (frame.h || []).map((hand) => ({ ...hand }));
-    const timeout = method === "wilor" ? 2000 : 750;
     for (let index = tracks.length - 1; index >= 0; index -= 1) {
-      if (timestamp - tracks[index].time > timeout) tracks.splice(index, 1);
+      if (timestamp - tracks[index].time > 2000) tracks.splice(index, 1);
     }
     const assignments = new Map();
     const usedTracks = new Set();
@@ -78,12 +77,10 @@ export function stabilizeHandedness(records, method) {
       tracks.forEach((track, trackIndex) => {
         if (usedTracks.has(trackIndex) || track.sourceId !== null) return;
         const elapsed = Math.max(1, timestamp - track.time) / 1000;
-        const gate = method === "wilor"
-          ? Math.min(0.35, Math.max(0.05, 4 * elapsed))
-          : Math.min(0.12, Math.max(0.025, 1.5 * elapsed));
-        const distance = handDistance(hand, track.hand, method);
+        const gate = Math.min(0.35, Math.max(0.05, 4 * elapsed));
+        const distance = handDistance(hand, track.hand);
         if (distance <= gate) {
-          const labelPenalty = hand.c === track.label ? 0 : (method === "wilor" ? 0.06 : 0.015);
+          const labelPenalty = hand.c === track.label ? 0 : 0.06;
           candidates.push([distance + labelPenalty, handIndex, trackIndex]);
         }
       });
@@ -114,7 +111,6 @@ export function stabilizeHandedness(records, method) {
       track.hand = hand;
       track.time = timestamp;
     });
-    if (method !== "wilor") return { ...frame, h: hands };
     const labels = new Set();
     const uniqueHands = hands.filter((hand) => {
       if (labels.has(hand.c)) return false;
@@ -129,7 +125,6 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
   const context = canvas.getContext("2d");
   const state = {
     frames: [],
-    method: "",
     index: 0,
     playing: false,
     yaw: 0.5,
@@ -173,15 +168,12 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
 
   function frameGeometry(frame) {
     const sourceHands = frame?.h || [];
-    const hands = sourceHands.map((hand, index) => {
+    const hands = sourceHands.map((hand) => {
       const rawPoints = unpack(hand.p || []);
-      const relativeOffset = state.method === "mediapipe"
-        ? (hand.c === "L" ? -0.09 : (hand.c === "R" ? 0.09 : (index - 0.5) * 0.18))
-        : 0;
       return {
         ...hand,
         rawPoints,
-        points: rawPoints.map(([x, y, z]) => [x + relativeOffset, y, z]),
+        points: rawPoints,
       };
     });
     return { hands };
@@ -284,10 +276,9 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
     timeLabel.textContent = formatTime(frame?.t || 0);
   }
 
-  function setFrames(records, options = {}) {
-    state.method = options.method || "";
+  function setFrames(records) {
     const frames = Array.isArray(records) ? records.filter((frame) => Array.isArray(frame?.h) && frame.h.length) : [];
-    state.frames = stabilizeHandedness(frames, state.method);
+    state.frames = stabilizeHandedness(frames);
     state.view = resultView();
     state.index = 0;
     state.playing = false;

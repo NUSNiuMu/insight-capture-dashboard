@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 DEFAULT_IMAGE_TOPIC = "/insight9_a/camera/color/image_rect_raw/compressed"
-METHODS = ("mediapipe", "wilor")
+METHODS = ("wilor",)
 
 
 def safe_child(root: Path, name: str) -> Path:

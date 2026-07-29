@@ -1,10 +1,9 @@
-import { createHandPoseViewer } from "../handpose/viewer.js?v=20260729-stable-view";
+import { createHandPoseViewer } from "../handpose/viewer.js?v=20260729-wilor-only";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 
 const elements = {
   bag: document.getElementById("handpose-bag-select"),
-  method: document.getElementById("handpose-method-select"),
   capability: document.getElementById("handpose-capability-help"),
   methodChip: document.getElementById("handpose-method-chip"),
   jobChip: document.getElementById("handpose-job-chip"),
@@ -19,6 +18,8 @@ const elements = {
   loadResult: document.getElementById("load-handpose-result-button"),
   preview: document.getElementById("handpose-preview-link"),
 };
+
+const HANDPOSE_METHOD = "wilor";
 
 const viewer = createHandPoseViewer({
   canvas: document.getElementById("handpose-canvas"),
@@ -35,7 +36,7 @@ let autoLoadedResultUrl = "";
 let pollTimer = 0;
 
 function selectedCapability() {
-  return capabilities?.methods?.[elements.method.value] || null;
+  return capabilities?.methods?.[HANDPOSE_METHOD] || null;
 }
 
 function renderCapability() {
@@ -47,13 +48,12 @@ function renderCapability() {
     return;
   }
   if (capability.available) {
-    const space = capability.coordinate_space === "camera" ? "camera-space coordinates" : "hand-relative coordinates";
-    elements.capability.textContent = capability.research_only ? `${space} · research-only runtime` : `${space} · ready`;
-    elements.methodChip.textContent = `${elements.method.value} ready`;
+    elements.capability.textContent = "Camera-space coordinates · ready";
+    elements.methodChip.textContent = "WiLoR ready";
     elements.start.disabled = false;
   } else {
     elements.capability.textContent = `Unavailable: ${capability.missing.join(", ")}`;
-    elements.methodChip.textContent = `${elements.method.value} unavailable`;
+    elements.methodChip.textContent = "WiLoR unavailable";
     elements.start.disabled = true;
   }
 }
@@ -107,7 +107,7 @@ async function loadResult(entry, force = false) {
   if (!entry?.result_url || (!force && entry.result_url === lastLoadedUrl)) return;
   elements.resultTitle.textContent = `Loading ${entry.bag_name} · ${entry.method}`;
   const records = await fetchJson(`${entry.result_url}&ts=${Date.now()}`);
-  viewer.setFrames(records, { method: entry.method });
+  viewer.setFrames(records);
   elements.resultTitle.textContent = `${entry.bag_name} · ${entry.method}`;
   elements.preview.hidden = !entry.preview_ready;
   if (entry.preview_ready) elements.preview.href = entry.preview_url;
@@ -170,7 +170,7 @@ async function startExtraction() {
     renderStatus(await fetchJson("/api/handpose/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bag_name: elements.bag.value, method: elements.method.value }),
+      body: JSON.stringify({ bag_name: elements.bag.value, method: HANDPOSE_METHOD }),
     }));
   } catch (error) {
     elements.status.textContent = `Error: ${error.message}`;
@@ -190,7 +190,6 @@ async function stopExtraction() {
 }
 
 initializeRosbags();
-elements.method.addEventListener("change", renderCapability);
 elements.start.addEventListener("click", () => { void startExtraction(); });
 elements.stop.addEventListener("click", () => { void stopExtraction(); });
 elements.loadResult.addEventListener("click", () => {

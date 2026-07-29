@@ -223,36 +223,15 @@ RUN cd /workspaces/looper-vio-colmap-handoff && \
 # (run_pipeline_from_rosbag.py's --make-plots, currently always "false" from
 # post_processing.py -- installed anyway so flipping that flag doesn't
 # surface an ImportError from a separate subprocess).
-# MediaPipe + rosbags provide the lightweight Hand pose path. WiLoR's minimal
-# offline inference runtime and pinned weights are added separately below.
+# rosbags provides offline Hand pose input. WiLoR's minimal inference runtime
+# and pinned weights are added separately below.
 RUN pip3 install --no-cache-dir \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     "aiohttp==3.13.3" \
     "numpy==1.26.4" \
     "opencv-contrib-python-headless==4.11.0.86" \
-    "absl-py==2.5.0" \
-    "certifi" \
-    "flatbuffers==25.9.23" \
-    "sounddevice==0.5.5" \
     "rosbags==0.11.3" \
     "matplotlib"
-
-# MediaPipe declares the GUI OpenCV distribution as a dependency. Install the
-# package without dependency resolution because the API is fully served by the
-# pinned headless OpenCV above; installing both distributions corrupts cv2.
-RUN pip3 install --no-cache-dir --no-deps \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    "mediapipe==1.0.0"
-
-# Keep the runtime model outside the bind-mounted data directories so customer
-# upgrades cannot hide it. The digest pins the exact model used in validation.
-ENV HANDPOSE_MEDIAPIPE_MODEL=/opt/insight/models/hand_landmarker.task
-RUN mkdir -p /opt/insight/models \
-    && wget -q \
-        https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task \
-        -O "${HANDPOSE_MEDIAPIPE_MODEL}" \
-    && echo "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1  ${HANDPOSE_MEDIAPIPE_MODEL}" \
-        | sha256sum -c -
 
 # ── Minimal offline WiLoR runtime (JetPack 6.1 / CUDA 12.6 / sm_87) ─────────
 # This intentionally does not install WiLoR's declared training/demo stack.

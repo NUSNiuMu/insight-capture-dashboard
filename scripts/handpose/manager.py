@@ -57,12 +57,6 @@ class HandPoseManager:
         self._stop_requested = False
 
     def capabilities(self) -> Dict[str, object]:
-        model = self._mediapipe_model()
-        mediapipe_missing = [
-            name
-            for name in ("mediapipe", "rosbags", "cv2")
-            if importlib.util.find_spec(name) is None
-        ]
         wilor_missing = [
             name
             for name in ("wilor_mini", "torch", "rosbags", "cv2")
@@ -73,17 +67,10 @@ class HandPoseManager:
             wilor_missing.append("bundled WiLoR model files")
         return {
             "methods": {
-                "mediapipe": {
-                    "available": not mediapipe_missing and model is not None,
-                    "missing": mediapipe_missing
-                    + ([] if model is not None else ["hand_landmarker.task"]),
-                    "coordinate_space": "hand_relative",
-                },
                 "wilor": {
                     "available": not wilor_missing,
                     "missing": wilor_missing,
                     "coordinate_space": "camera",
-                    "research_only": True,
                 },
             },
             "input_root": str(self.rosbag_root),
@@ -173,16 +160,10 @@ class HandPoseManager:
             str(bag_path),
             str(pending_path),
         ]
-        if method == "mediapipe":
-            model = self._mediapipe_model()
-            if model is None:
-                raise RuntimeError("MediaPipe model is unavailable")
-            command.extend(["--model", str(model)])
-        elif method == "wilor":
-            model_dir = self._wilor_model_dir()
-            if model_dir is None:
-                raise RuntimeError("WiLoR model files are unavailable")
-            command.extend(["--model-dir", str(model_dir)])
+        model_dir = self._wilor_model_dir()
+        if model_dir is None:
+            raise RuntimeError("WiLoR model files are unavailable")
+        command.extend(["--model-dir", str(model_dir)])
 
         environment = os.environ.copy()
         scripts_root = str(Path(__file__).resolve().parents[1])
@@ -279,25 +260,6 @@ class HandPoseManager:
 
         return "/api/handpose/preview?" + urlencode(
             {"bag_name": bag_name, "method": method}
-        )
-
-    def _mediapipe_model(self) -> Optional[Path]:
-        configured = os.environ.get("HANDPOSE_MEDIAPIPE_MODEL", "").strip()
-        candidates = [
-            Path(configured) if configured else None,
-            self.project_root
-            / "data"
-            / "models"
-            / "handpose"
-            / "hand_landmarker.task",
-        ]
-        return next(
-            (
-                candidate.resolve()
-                for candidate in candidates
-                if candidate is not None and candidate.is_file()
-            ),
-            None,
         )
 
     def _wilor_model_dir(self) -> Optional[Path]:

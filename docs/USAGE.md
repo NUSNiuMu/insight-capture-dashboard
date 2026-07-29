@@ -87,16 +87,15 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 
 **手势录制**（`/settings` 页开关）：默认关闭。开启后双手点赞保持动作可以开始或停止由手势创建的录制；关闭会立即停止识别新的手势，但不会停止已经进行中的网页手动录制或录制任务。该开关与其他 Settings 开关一样在当前后端进程内即时生效，后端重启后恢复设备 profile 的默认关闭状态。
 
-**Hand pose**（`/handpose` 页）：在页面内选择 `rosbags/` 中已有的录制和
-提取方法，点击 **Extract hand pose**。任务直接读取原录制，不会把 bag
-复制到功能目录；结果保存为
-`outputs/handpose/<bag 名>/<方法>/result.json`。MediaPipe 显示以手为原点的
-相对姿态，适合观察手指形状；提取时会按图像中的手腕位置保持双手身份，过滤
-未连续出现的孤立误检，并用 One-Euro Filter 降低 3D 关键点抖动。WiLoR 显示
-相机坐标，所需 CUDA/PyTorch 推理运行时和固定版本权重已包含在 Dashboard
-镜像中，设备离线时也可以提取。完成后可拖动 3D 视图旋转、滚轮缩放、拖动时间轴，并
-点击关键点查看坐标。提取期间的进度按目标图像 topic 已处理帧数除以 rosbag
-记录的该 topic 总帧数计算，不使用耗时或动画估算。
+**Hand pose**（`/handpose` 页）：在页面内选择 `rosbags/` 中已有的录制，点击
+**Extract hand pose**。任务使用 WiLoR 直接读取原录制，不会把 bag 复制到功能
+目录；相机坐标结果保存为
+`outputs/handpose/<bag 名>/wilor/result.json`。所需 CUDA/PyTorch 推理运行时和
+固定版本权重已包含在 Dashboard 镜像中，设备离线时也可以提取。提取过程会保持
+双手时序身份、过滤重复检测，并用 One-Euro Filter 降低 3D 关键点抖动。完成后
+可拖动 3D 视图旋转、滚轮缩放、拖动时间轴，并点击关键点查看坐标。提取期间的
+进度按目标图像 topic 已处理帧数除以 rosbag 记录的该 topic 总帧数计算，不使用
+耗时或动画估算。
 
 
 ### 3.1 标准采集流程
