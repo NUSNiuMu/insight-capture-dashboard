@@ -31,8 +31,8 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
     method: "",
     index: 0,
     playing: false,
-    yaw: -0.45,
-    pitch: 0.25,
+    yaw: 0.5,
+    pitch: 0.35,
     zoom: 1,
     dragging: false,
     lastX: 0,
@@ -56,13 +56,14 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
   }
 
   function rotate(point) {
-    const [x, y, z] = point;
+    const [x, sourceY, z] = point;
+    const y = -sourceY;
     const cy = Math.cos(state.yaw);
     const sy = Math.sin(state.yaw);
     const cp = Math.cos(state.pitch);
     const sp = Math.sin(state.pitch);
-    const rx = x * cy - z * sy;
-    const rz = x * sy + z * cy;
+    const rx = x * cy + z * sy;
+    const rz = -x * sy + z * cy;
     return [rx, y * cp - rz * sp, y * sp + rz * cp];
   }
 
@@ -71,7 +72,7 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
     const hands = sourceHands.map((hand, index) => {
       const rawPoints = unpack(hand.p || []);
       const relativeOffset = state.method === "mediapipe" && sourceHands.length > 1
-        ? (index - (sourceHands.length - 1) / 2) * 0.16
+        ? (index - (sourceHands.length - 1) / 2) * 0.18
         : 0;
       return {
         ...hand,
@@ -79,20 +80,19 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
         points: rawPoints.map(([x, y, z]) => [x + relativeOffset, y, z]),
       };
     });
-    const all = hands.flatMap((hand) => hand.points);
-    if (!all.length) return { hands, center: [0, 0, 0], extent: 1 };
-    const center = [0, 1, 2].map((axis) => all.reduce((sum, point) => sum + point[axis], 0) / all.length);
-    let extent = 0;
-    all.forEach((point) => {
-      extent = Math.max(extent, Math.abs(point[0] - center[0]), Math.abs(point[1] - center[1]), Math.abs(point[2] - center[2]));
-    });
-    return { hands, center, extent: Math.max(extent, 0.025) };
+    return { hands };
   }
 
-  function project(point, center, extent, width, height) {
-    const rotated = rotate(point.map((value, axis) => value - center[axis]));
-    const scale = Math.min(width, height) * 0.34 * state.zoom / extent;
-    return [width / 2 + rotated[0] * scale, height / 2 + rotated[1] * scale, rotated[2]];
+  function project(point, width, height) {
+    const rotated = rotate(point);
+    const cameraDistance = state.method === "wilor" ? 0.05 : 0.42;
+    const depth = Math.max(rotated[2] + cameraDistance, 0.03);
+    const focal = Math.min(width, height) * 0.9 * state.zoom;
+    return [
+      width / 2 + (rotated[0] / depth) * focal,
+      height / 2 + (rotated[1] / depth) * focal,
+      depth,
+    ];
   }
 
   function drawGrid(width, height) {
@@ -123,7 +123,7 @@ export function createHandPoseViewer({ canvas, empty, timeline, playButton, time
     const geometry = frameGeometry(frame);
     const projected = [];
     geometry.hands.forEach((hand, handIndex) => {
-      const points = hand.points.map((point) => project(point, geometry.center, geometry.extent, width, height));
+      const points = hand.points.map((point) => project(point, width, height));
       const color = COLORS[hand.c] || "#ffb020";
       context.strokeStyle = color;
       context.lineWidth = 2;

@@ -19,6 +19,7 @@ from mediapipe.tasks.python.vision import (
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
+from handpose.one_euro import stabilize_mediapipe
 from handpose.schema import DEFAULT_IMAGE_TOPIC
 
 
@@ -49,6 +50,9 @@ def main() -> None:
     parser.add_argument("--max-hands", type=int, default=2)
     parser.add_argument("--detection-confidence", type=float, default=0.5)
     parser.add_argument("--tracking-confidence", type=float, default=0.5)
+    parser.add_argument("--min-cutoff", type=float, default=1.5)
+    parser.add_argument("--beta", type=float, default=0.3)
+    parser.add_argument("--confirmation-frames", type=int, default=2)
     args = parser.parse_args()
 
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -63,8 +67,9 @@ def main() -> None:
         min_tracking_confidence=args.tracking_confidence,
     )
     typestore = get_typestore(Stores.ROS2_HUMBLE)
-    records = []
+    raw_records = []
     frame_count = 0
+    detected_frame_count = 0
     first_stamp_ns = None
     writer = None
 
@@ -123,6 +128,10 @@ def main() -> None:
                             "c": category.category_name[:1].upper(),
                             "s": round(float(category.score), 3),
                             "p": points,
+                            "a": [
+                                round(float(landmarks[0].x), 5),
+                                round(float(landmarks[0].y), 5),
+                            ],
                         }
                     )
                     if args.preview:
@@ -136,8 +145,9 @@ def main() -> None:
                             else (151, 113, 42)
                         )
                         _draw(frame, pixels, color)
+                raw_records.append({"t": elapsed_ms, "h": hands})
                 if hands:
-                    records.append({"t": elapsed_ms, "h": hands})
+                    detected_frame_count += 1
 
                 if args.preview:
                     if writer is None:
@@ -152,7 +162,7 @@ def main() -> None:
                 frame_count += 1
                 if frame_count % 50 == 0:
                     print(
-                        f"HANDPOSE_PROGRESS {frame_count} {len(records)}",
+                        f"HANDPOSE_PROGRESS {frame_count} {detected_frame_count}",
                         flush=True,
                     )
                 if args.max_frames > 0 and frame_count >= args.max_frames:
@@ -160,6 +170,12 @@ def main() -> None:
 
     if writer is not None:
         writer.release()
+    records = stabilize_mediapipe(
+        raw_records,
+        min_cutoff=args.min_cutoff,
+        beta=args.beta,
+        confirmation_frames=args.confirmation_frames,
+    )
     with args.output_json.open("w", encoding="utf-8") as stream:
         json.dump(records, stream, separators=(",", ":"))
     print(

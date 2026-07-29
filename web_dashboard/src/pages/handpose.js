@@ -1,4 +1,4 @@
-import { createHandPoseViewer } from "../handpose/viewer.js";
+import { createHandPoseViewer } from "../handpose/viewer.js?v=20260729-stabilized";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 
