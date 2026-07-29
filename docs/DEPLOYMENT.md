@@ -47,8 +47,7 @@ Dashboard 镜像包含离线 WiLoR 所需的固定版本权重、JetPack PyTorch
 只有 Dockerfile、系统包或 Python 依赖发生变化时才重新 build。
 
 WiLoR 层只保留离线推理路径：不包含 CUDA 编译器/头文件、WiLoR 训练和 demo
-依赖，也不允许运行时自动下载模型或补装 Python 包。其模型仅限研究用途，
-发布或商用前需单独确认模型与数据许可。
+依赖，也不允许运行时自动下载模型或补装 Python 包。
 
 ### 1.3 打包
 
