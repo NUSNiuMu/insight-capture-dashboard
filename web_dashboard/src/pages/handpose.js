@@ -1,4 +1,4 @@
-import { createHandPoseViewer } from "../handpose/viewer.js?v=20260729-stabilized";
+import { createHandPoseViewer } from "../handpose/viewer.js?v=20260729-autofit";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 
@@ -31,6 +31,7 @@ const viewer = createHandPoseViewer({
 
 let capabilities = null;
 let lastLoadedUrl = "";
+let autoLoadedResultUrl = "";
 let pollTimer = 0;
 
 function selectedCapability() {
@@ -133,7 +134,13 @@ function renderStatus(payload) {
   elements.log.textContent = (payload.log_tail || []).join("\n") || "Waiting for a task.";
   elements.log.scrollTop = elements.log.scrollHeight;
   renderResults(payload.results);
-  if (payload.state === "done" && payload.result_ready) {
+  if (running) autoLoadedResultUrl = "";
+  if (
+    payload.state === "done"
+    && payload.result_ready
+    && payload.result_url !== autoLoadedResultUrl
+  ) {
+    autoLoadedResultUrl = payload.result_url;
     void loadResult({
       bag_name: payload.bag_name,
       method: payload.method,
