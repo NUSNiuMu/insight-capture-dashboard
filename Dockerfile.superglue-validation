@@ -1,5 +1,5 @@
-# Internal validation image only. Magic Leap's license limits use to eligible
-# noncommercial internal research and does not permit redistribution.
+# Contains Magic Leap's official SuperPoint/SuperGlue code and weights.
+# Commercial/redistribution use confirmed with Magic Leap.
 FROM nvcr.io/nvidia/pytorch@sha256:d4a2f7f873bf0bbb72c2b15dc07860369c760dfda2348859826947bc71a88248 AS onnx-builder
 
 ARG DEBIAN_FRONTEND=noninteractive

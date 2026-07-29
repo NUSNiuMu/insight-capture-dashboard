@@ -18,6 +18,8 @@ services:
 
     # ── ROS2 requires host network for DDS multicast ─────────────────────────
     network_mode: host
+    # Share Fast DDS transport with the mapping/relocalization containers below.
+    ipc: host
 
     # ── NVIDIA Container Runtime for CUDA acceleration ───────────────────────
     runtime: nvidia
@@ -60,6 +62,9 @@ services:
       - ${HOME}/.ssh:/root/.ssh:ro
 
     restart: unless-stopped
+    depends_on:
+      insight3-global-localizer:
+        condition: service_started
 
     # ── Resource limits ──────────────────────────────────────────────────────
     # Leave a thin reservation for the host OS/sshd/dockerd so a runaway
@@ -73,3 +78,93 @@ services:
       resources:
         limits:
           cpus: '5.8'
+
+  # Official Magic Leap SuperPoint/SuperGlue TensorRT inference, shared by the
+  # mapping/relocalization containers below over a unix-socket volume.
+  superglue-inference:
+    image: insight-superglue-validation:25.04
+    network_mode: host
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - superglue-ipc:/run/superglue
+      - superglue-engines:/opt/insight/engines
+    shm_size: '1gb'
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - /opt/insight/superglue_ipc.py
+        - /run/superglue/matcher.sock
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      # A cold cache compiles device-specific FP16/FP32 engines once; the
+      # engines volume above persists that across upgrades/restarts.
+      start_period: 900s
+    restart: unless-stopped
+
+  insight9-sparse-mapper:
+    image: insight-dashboard:${INSIGHT_VERSION:?Run ./update.sh <image-tarball> first to load an image and set the version}
+    network_mode: host
+    ipc: host
+    runtime: nvidia
+    environment:
+      - ROS_DOMAIN_ID=20
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    volumes:
+      - ./config:/workspaces/insight_capture/config
+      - superglue-ipc:/run/superglue
+    command:
+      - python3
+      - -u
+      - scripts/insight9_sparse_mapper.py
+      - --backend
+      - ipc
+      - --path-publish-hz
+      - "5"
+      - --pose-publish-hz
+      - "50"
+    depends_on:
+      superglue-inference:
+        condition: service_healthy
+    stop_signal: SIGINT
+    restart: unless-stopped
+
+  insight3-global-localizer:
+    image: insight-dashboard:${INSIGHT_VERSION:?Run ./update.sh <image-tarball> first to load an image and set the version}
+    network_mode: host
+    ipc: host
+    environment:
+      - ROS_DOMAIN_ID=20
+    volumes:
+      - ./config:/workspaces/insight_capture/config
+      - superglue-ipc:/run/superglue
+    command:
+      - python3
+      - -u
+      - scripts/insight3_global_localizer.py
+      - --image-topic-template
+      - /insight_mapping/{name}/infra1/image_rect_raw
+      - --path-points
+      - "200"
+      - --path-publish-hz
+      - "5"
+      - --pose-publish-hz
+      - "50"
+      - --ekf-correction-time-constant-sec
+      - "1.0"
+    depends_on:
+      superglue-inference:
+        condition: service_healthy
+      insight9-sparse-mapper:
+        condition: service_started
+    stop_signal: SIGINT
+    restart: unless-stopped
+
+volumes:
+  superglue-ipc:
+  superglue-engines:

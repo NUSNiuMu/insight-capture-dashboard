@@ -23,6 +23,11 @@ sudo ./scripts/host_setup.sh       # 一次性宿主机调优：UDP 缓冲区（
 `update.sh` 会加载镜像、生成 `config/` 等数据目录并启动服务，
 最后等待后端健康检查通过。`host_setup.sh` 只在首次安装（或重刷系统后）需要跑一次。
 
+首次安装或大版本升级后，建图/重定位用的 TensorRT 推理服务需要现场编译一次
+设备专属引擎，最长约 15 分钟；这段时间看板本身已经能正常打开，只是 3D 页面的
+全局轨迹要等引擎编译完才出现，是正常现象，不是卡住。之后的引擎缓存会保留在
+本机，重启和常规升级不会重新触发这次编译。
+
 ## 日常使用
 
 ```bash
@@ -55,6 +60,8 @@ docker compose down                   # 停止
 
 查看本机已有的版本：`docker image ls insight-dashboard`。
 磁盘紧张时用 `docker rmi insight-dashboard:<旧版本>` 清理不再需要的版本。
+建图/重定位用的 `insight-superglue-validation` 镜像不跟着应用版本号走，回滚
+不会影响它，也不需要单独处理。
 
 ## 目录说明
 

@@ -85,9 +85,9 @@ services:
         limits:
           cpus: '5.8'
 
-  # Internal research validation only. This image contains Magic Leap's
-  # research-licensed official code and weights and must never be shipped in
-  # the customer release bundle.
+  # Contains Magic Leap's official SuperPoint/SuperGlue code and weights.
+  # Commercial/redistribution use confirmed with Magic Leap; cleared to ship
+  # in the customer release bundle (see docs/INSIGHT9_SPARSE_MAPPING.md).
   superglue-inference:
     build:
       context: .

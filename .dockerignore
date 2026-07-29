@@ -11,6 +11,7 @@ gesture/
 .claude/
 .gitignore
 CLAUDE.md
+AGENTS.md
 
 # Node build artifacts (dist/ is checked in and needed; node_modules is not)
 web_dashboard/node_modules/

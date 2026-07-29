@@ -50,6 +50,10 @@ release/insight-dashboard-deploy-v1.2.0.tar.gz   # 部署包；只有首次安�
 ```
 
 镜像 tar 通常几 GB（含 COLMAP、CUDA 运行时、Chromium），传输/拷 U 盘预留时间。
+自 v2.0.0 起，`build_release.sh` 会额外构建并保存
+`insight-superglue-validation:25.04`（Insight9 建图/Insight3 全局重定位依赖的
+Magic Leap 官方 SuperPoint/SuperGlue TensorRT 推理，商用分发已确认，见
+`docs/INSIGHT9_SPARSE_MAPPING.md`）到同一个镜像 tar，体积和传输时间进一步增加。
 部署包里打包了 `deploy/docker-compose.yml`、`update.sh`、`README.md`、
 `scripts/run_dashboard.sh`，以及宿主机一次性调优用的 `scripts/host_setup.sh`
 + `scripts/reboot_cameras.sh` + `scripts/systemd/insight-camera-reboot.service`
@@ -68,6 +72,8 @@ host 层设置，见 §3.2）——这几个文件本身不大，但**它们的�
 ### 1.4 发布前检查清单
 
 - [ ] 本地开发机 compose 跑过一遍，关键页面（3d / recording / bags / scoring / handpose / settings）无 console 报错
+- [ ] `superglue-inference` 健康检查能通过（本地至少验证一次冷启动 TensorRT 引擎编译），
+  `insight9-sparse-mapper`/`insight3-global-localizer` 正常起来，3d 页面能看到全局轨迹
 - [ ] 涉及数据库结构/配置字段变化的改动，确认旧版本升级上来后不会因为缺字段崩溃
   （`config/` 目录在首次安装后不会被镜像覆盖，见下文"数据持久化"）
 - [ ] `git status` 干净，且要发布的 commit 已经推到远端（发布包本身不含 git 历史，事后排查靠 commit hash）

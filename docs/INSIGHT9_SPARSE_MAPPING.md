@@ -5,10 +5,9 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图，并发布 RViz 点
 
 ## 当前边界
 
-- 仅用于内部技术验证，不进入客户发布镜像。
 - 官方代码及权重固定到提交
-  `ddcf11f42e7e0732a0c4607648f9448ea8d73590`。官方许可将使用主体和用途限制为
-  符合条件的非商业内部研究，并禁止向第三方分发；使用前仍需由项目方确认适用性。
+  `ddcf11f42e7e0732a0c4607648f9448ea8d73590`。商用/再分发用途已与 Magic Leap
+  确认，v2.0.0 起随客户发布镜像一起分发。
 - `Dockerfile.superglue-validation` 使用多阶段构建：固定 digest 的 NVIDIA
   PyTorch 镜像只负责把官方模型导出为 ONNX；固定 digest 的 NVIDIA TensorRT
   `25.04-py3-igpu` 只作为运行库来源，最终镜像基于 Ubuntu 24.04，仅复制建引擎
@@ -49,13 +48,14 @@ VIO 不被写回，新地标、Insight9 全局 Pose、Path 和 TF 使用校正�
 
 ## 构建和启动官方 GPU 服务
 
-确认内部研究用途符合官方许可后，首次构建：
+开发机首次构建：
 
 ```bash
 docker compose build superglue-inference
 ```
 
-建图已接入开发版 dashboard。之后正常启动 dashboard 即会通过依赖关系同时启动
+建图已接入开发版 dashboard，也已纳入 `scripts/build_release.sh` 的客户发布打包。
+本地开发时，正常启动 dashboard 即会通过依赖关系同时启动
 TensorRT 推理、Insight9 mapper 和 Insight3 localizer：
 
 ```bash
@@ -92,8 +92,8 @@ Web API、前端控制和 WebSocket payload 已停用，建图重定位是唯一
 - `superglue_outdoor.pth`。
 
 构建阶段会校验三份权重的 SHA-256；任一内容不一致即失败。该镜像名为
-`insight-superglue-validation:25.04`，禁止推送到镜像仓库或写入
-`scripts/build_release.sh`。
+`insight-superglue-validation:25.04`（沿用历史命名，未随发布状态改名），
+由 `scripts/build_release.sh` 一并构建并打进客户镜像 tar。
 
 ONNX 在镜像构建阶段一次性导出。首次启动只在当前 Jetson 上编译
 `superpoint_fp16.plan` 和 `superglue_fp32.plan`，不需要也不会加载

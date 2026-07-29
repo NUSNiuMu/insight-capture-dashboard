@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 IMAGE_NAME="insight-dashboard"
+SUPERGLUE_IMAGE="insight-superglue-validation:25.04"
 
 version="${1:?usage: $0 <version, e.g. v1.2.0>}"
 [[ "${version}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-].+)?$ ]] \
@@ -26,9 +27,12 @@ log "Building ${IMAGE_NAME}:${version} ..."
 # --network host: same Jetson iptables raw-table workaround as docker-compose.yml
 docker build --network host -t "${IMAGE_NAME}:${version}" .
 
+log "Building ${SUPERGLUE_IMAGE} (mapping/relocalization dependency) ..."
+docker build --network host -f Dockerfile.superglue-validation -t "${SUPERGLUE_IMAGE}" .
+
 image_tarball="release/${IMAGE_NAME}-${version}.tar.gz"
-log "Saving image to ${image_tarball} (several GB; takes a while)..."
-docker save "${IMAGE_NAME}:${version}" | gzip > "${image_tarball}"
+log "Saving images to ${image_tarball} (several GB; takes a while)..."
+docker save "${IMAGE_NAME}:${version}" "${SUPERGLUE_IMAGE}" | gzip > "${image_tarball}"
 
 log "Assembling deploy bundle..."
 # Keep the installed directory stable; only artifacts and image tags vary.
@@ -58,6 +62,9 @@ log "Done."
 echo
 echo "  Image tarball  : ${image_tarball}  ($(du -h "${image_tarball}" | cut -f1))"
 echo "  Deploy bundle  : ${bundle_tarball}  ($(du -h "${bundle_tarball}" | cut -f1))"
+echo
+echo "Image tarball now bundles ${IMAGE_NAME} and ${SUPERGLUE_IMAGE} (TensorRT/CUDA"
+echo "runtime libs) -- noticeably bigger and slower to transfer than a single-image release."
 echo
 echo "First install: send BOTH files; customer unpacks the bundle, then runs"
 echo "  ./update.sh ${IMAGE_NAME}-${version}.tar.gz"
