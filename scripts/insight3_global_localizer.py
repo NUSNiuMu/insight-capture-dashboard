@@ -31,6 +31,7 @@ from insight9_mapping_core import (  # noqa: E402
     RelocalizationEkfConfig,
     compose_transform,
     left_to_stereo_center,
+    load_tcp_frame_calibrations,
     localize_features,
     matrix_from_pose,
     matrix_from_transform,
@@ -52,7 +53,12 @@ try:
     from sensor_msgs.msg import CameraInfo, Image, PointCloud2
     from std_msgs.msg import String
     from std_srvs.srv import Empty
-    from tf2_ros import Buffer, TransformBroadcaster, TransformListener
+    from tf2_ros import (
+        Buffer,
+        StaticTransformBroadcaster,
+        TransformBroadcaster,
+        TransformListener,
+    )
 except ImportError as exc:  # pragma: no cover - exercised in the ROS image
     raise SystemExit(f"ROS 2 Python dependencies are unavailable: {exc}") from exc
 
@@ -298,9 +304,14 @@ class Insight3GlobalLocalizer(Node):
         self._reset_service = self.create_service(
             Empty, "insight_global/reset", self._on_reset
         )
+        self._tcp_calibrations = load_tcp_frame_calibrations(
+            Path(args.camera_config), CAMERAS
+        )
         self._tf_broadcaster = TransformBroadcaster(self)
+        self._static_tf_broadcaster = StaticTransformBroadcaster(self)
         self._tf_buffer = Buffer(cache_time=Duration(seconds=10.0))
         self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._publish_tcp_static_transforms()
         self.create_subscription(
             PointCloud2,
             args.feature_map_topic,
@@ -347,6 +358,29 @@ class Insight3GlobalLocalizer(Node):
             "SuperPoint global localizer started for insight3_a and insight3_b; "
             f"masking the bottom {self._gripper_mask_height_ratio:.1%} of both images"
         )
+
+    def _publish_tcp_static_transforms(self) -> None:
+        stamp = self.get_clock().now().to_msg()
+        transforms = []
+        for calibration in self._tcp_calibrations.values():
+            transform = TransformStamped()
+            transform.header.frame_id = calibration.parent_frame_id
+            transform.header.stamp = stamp
+            transform.child_frame_id = calibration.child_frame_id
+            transform.transform.translation.x = calibration.translation_m[0]
+            transform.transform.translation.y = calibration.translation_m[1]
+            transform.transform.translation.z = calibration.translation_m[2]
+            transform.transform.rotation.x = calibration.rotation_xyzw[0]
+            transform.transform.rotation.y = calibration.rotation_xyzw[1]
+            transform.transform.rotation.z = calibration.rotation_xyzw[2]
+            transform.transform.rotation.w = calibration.rotation_xyzw[3]
+            transforms.append(transform)
+            self.get_logger().info(
+                f"TCP frame: {calibration.parent_frame_id} -> "
+                f"{calibration.child_frame_id}"
+            )
+        if transforms:
+            self._static_tf_broadcaster.sendTransform(transforms)
 
     def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
         with self._lock:
@@ -860,6 +894,11 @@ class Insight3GlobalLocalizer(Node):
             )
             status["gripper_mask_height_ratio"] = self._gripper_mask_height_ratio
             status["pose_frame"] = f"{name}_global_camera_center"
+            calibration = self._tcp_calibrations.get(name)
+            status["tcp_frame"] = (
+                calibration.child_frame_id if calibration is not None else None
+            )
+            status["tcp_calibrated"] = calibration is not None
             message = String()
             message.data = json.dumps(status, separators=(",", ":"))
             self._status_publishers[name].publish(message)
@@ -867,6 +906,10 @@ class Insight3GlobalLocalizer(Node):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--camera-config",
+        default=str(SCRIPT_DIR.parent / "config" / "cameras.json"),
+    )
     parser.add_argument("--inference-socket", default="/run/superglue/matcher.sock")
     parser.add_argument(
         "--settings-config",

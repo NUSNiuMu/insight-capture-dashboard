@@ -19,6 +19,11 @@
       "dashboard_pose_stream": "/insight_global/insight3_a/pose",
       "dashboard_rotation_deg": 0,
       "teleop_role": "right_hand",
+      "tcp_frame_id": "right_tcp",
+      "camera_center_to_tcp": {
+        "translation_m": [0.0, 0.08, 0.18],
+        "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]
+      },
       "avatar_model": "assets/models/vis_assembly.glb",
       "dashboard_row": 0,
       "dashboard_column": 0
@@ -32,6 +37,11 @@
       "dashboard_pose_stream": "/insight_global/insight3_b/pose",
       "dashboard_rotation_deg": 0,
       "teleop_role": "left_hand",
+      "tcp_frame_id": "left_tcp",
+      "camera_center_to_tcp": {
+        "translation_m": [0.0, 0.08, 0.18],
+        "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]
+      },
       "avatar_model": "assets/models/vis_assembly.glb",
       "dashboard_row": 1,
       "dashboard_column": 0
