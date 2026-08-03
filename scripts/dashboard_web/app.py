@@ -68,6 +68,10 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/settings", settings._handle_settings_get)
     app.router.add_post("/api/settings/avatar-model", settings._handle_settings_avatar_model)
     app.router.add_post("/api/settings/gripper-tracking", settings._handle_settings_gripper_tracking)
+    app.router.add_post(
+        "/api/settings/insight3-gripper-mask",
+        settings._handle_settings_insight3_gripper_mask,
+    )
     app.router.add_post("/api/settings/restart-backend", settings._handle_settings_restart)
     app.router.add_post("/api/settings/hand-overlay", settings._handle_settings_hand_overlay)
     app.router.add_post("/api/settings/stick-figure", settings._handle_settings_stick_figure)

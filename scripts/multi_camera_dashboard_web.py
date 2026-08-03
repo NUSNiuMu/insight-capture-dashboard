@@ -105,6 +105,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         fake_pose: bool = False,
         pose_publish_hz: float = 50.0,
         webrtc_port: int = 8766,
+        post_processing_config_path: Optional[Path] = None,
     ) -> None:
         if rclpy is None:
             raise RuntimeError("rclpy is required to run the web dashboard backend")
@@ -116,6 +117,12 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._payload_builder = PayloadBuilder(self)
         self._mapping_stream = MappingStream(self)
         self.config_path = config_path
+        self.project_root = config_path.resolve().parents[1]
+        self.post_processing_config_path = (
+            Path(post_processing_config_path).resolve()
+            if post_processing_config_path is not None
+            else self.project_root / "config" / "post_processing.json"
+        )
         self.fake_pose = bool(fake_pose)
         self.max_points = 300
 
@@ -124,7 +131,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         enabled_camera_map = {
             camera["name"]: camera for camera in raw_config.get("cameras", []) if camera.get("enabled", True)
         }
-        self.project_root = config_path.resolve().parents[1]
         trajectory_config = config.get("trajectory", {})
         # Reliable image QoS prevents whole-frame loss from fragmented UDP samples.
         self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
@@ -705,7 +711,8 @@ def main() -> None:
     config_path = Path(args.config).resolve()
     raw_config = load_setup(config_path)
     project_root = config_path.resolve().parents[1]
-    post_processing_config = load_post_processing_config(Path(args.post_processing_config).resolve())
+    post_processing_config_path = Path(args.post_processing_config).resolve()
+    post_processing_config = load_post_processing_config(post_processing_config_path)
     ros_domain_id = int(raw_config.get("ros_domain_id", 10))
     if rclpy is None:
         raise RuntimeError("rclpy is not available in this environment")
@@ -748,6 +755,7 @@ def main() -> None:
     rclpy.init(args=None)
     node = PoseBridgeNode(
         config_path,
+        post_processing_config_path=post_processing_config_path,
         fake_pose=args.fake_pose,
         pose_publish_hz=args.pose_publish_hz,
         webrtc_port=args.webrtc_port,

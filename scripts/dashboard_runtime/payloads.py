@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import quote
 
+from insight3_localization_settings import load_gripper_mask_height_ratio
+
 import numpy as np
 
 from camera_setup import AVAILABLE_AVATAR_MODELS
@@ -242,5 +244,8 @@ class PayloadBuilder:
             "stick_figure_mode": bool(self.owner.stick_figure_mode),
             "gesture_recording_enabled": bool(
                 self.owner.gesture_recording_status().get("enabled", False)
+            ),
+            "insight3_gripper_mask_height_ratio": load_gripper_mask_height_ratio(
+                self.owner.post_processing_config_path
             ),
         }

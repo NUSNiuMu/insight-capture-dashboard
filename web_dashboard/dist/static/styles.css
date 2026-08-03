@@ -330,6 +330,9 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .settings-form-grid { display: grid; grid-template-columns: repeat(2,minmax(180px,1fr)); gap: 12px; }
 .settings-form-field { display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 9px; }
 .settings-form-field-wide { grid-column: 1 / -1; }
+.settings-inline-form { display: grid; margin-bottom: 14px; padding: 12px; grid-template-columns: minmax(220px,1fr) auto; align-items: end; gap: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+.settings-inline-form input { width: 100%; min-height: 34px; padding: 6px 9px; border: 1px solid var(--line-dark); border-radius: 6px; color: var(--ink); background: var(--surface); font: inherit; }
+.settings-inline-form small { color: var(--muted-light); line-height: 1.4; }
 
 /* Optional generated capability content */
 .capability-row { padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
@@ -490,7 +493,7 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .record-hero { padding: 20px; }
   .bag-row { grid-template-columns: 1fr; }
   .bag-row-stats, .bag-row-badges, .bag-badges, .bag-row-actions { grid-column: auto; justify-content: flex-start; }
-  .settings-form-grid, .opt-radio-group { grid-template-columns: 1fr; }
+  .settings-form-grid, .settings-inline-form, .opt-radio-group { grid-template-columns: 1fr; }
   .handpose-player { grid-template-columns: auto minmax(80px,1fr); }
   .handpose-player > span { grid-column: 1 / -1; text-align: left; }
   .handpose-coordinates { align-items: flex-start; flex-direction: column; }

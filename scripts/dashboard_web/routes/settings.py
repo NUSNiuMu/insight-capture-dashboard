@@ -10,6 +10,7 @@ from aiohttp import web
 
 from dashboard_web.context import DashboardContext
 from dashboard_web.support import read_json_body
+from insight3_localization_settings import save_gripper_mask_height_ratio
 
 
 class SettingsRoutes:
@@ -58,6 +59,21 @@ class SettingsRoutes:
         if not name or "enabled" not in payload:
             raise ValueError("Fields 'name' and 'enabled' are required.")
         self.context.node.set_gripper_tracking_enabled(name, bool(payload.get("enabled")))
+        return web.json_response(self.context.node.build_settings_payload())
+
+    async def _handle_settings_insight3_gripper_mask(
+        self, request: web.Request
+    ) -> web.Response:
+        payload = await read_json_body(request)
+        if "value" not in payload:
+            raise ValueError("Field 'value' is required.")
+        ratio = save_gripper_mask_height_ratio(
+            self.context.node.post_processing_config_path,
+            payload["value"],
+        )
+        self.context.node.get_logger().info(
+            f"Settings: Insight3 gripper mask height ratio saved as {ratio}"
+        )
         return web.json_response(self.context.node.build_settings_payload())
 
     async def _handle_settings_restart(self, _request: web.Request) -> web.Response:

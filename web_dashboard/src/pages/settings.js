@@ -5,6 +5,8 @@ const settingsStatus = document.getElementById("settings-status");
 const settingsCameraList = document.getElementById("settings-camera-list");
 const settingsRestartMessage = document.getElementById("settings-restart-message");
 const settingsRestartButton = document.getElementById("settings-restart-button");
+const insight3MaskForm = document.getElementById("insight3-mask-form");
+const insight3MaskRatio = document.getElementById("insight3-mask-ratio");
 const ROLE_STYLE = {
   head: { label: "Head" },
   left_hand: { label: "Left Hand" },
@@ -17,6 +19,12 @@ if (settingsPanel) {
 if (settingsRestartButton) {
   settingsRestartButton.addEventListener("click", () => {
     void restartBackend();
+  });
+}
+if (insight3MaskForm) {
+  insight3MaskForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void setInsight3GripperMaskRatio(insight3MaskRatio && insight3MaskRatio.value);
   });
 }
 
@@ -53,6 +61,10 @@ const AVATAR_MODEL_SWITCHING_LOCKED = false;
 function renderSettings(payload) {
   if (!settingsCameraList) {
     return;
+  }
+  if (insight3MaskForm && insight3MaskRatio) {
+    insight3MaskForm.hidden = false;
+    insight3MaskRatio.value = String(payload.insight3_gripper_mask_height_ratio ?? 0.2);
   }
   const stickRow = document.getElementById("stick-figure-row");
   const stickToggle = document.getElementById("stick-figure-toggle");
@@ -131,6 +143,31 @@ function renderSettings(payload) {
       void setHandOverlayEnabled(toggle.dataset.camera, toggle.checked);
     });
   });
+}
+
+async function setInsight3GripperMaskRatio(rawValue) {
+  const value = Number(rawValue);
+  if (!Number.isFinite(value) || value < 0 || value >= 1) {
+    setSettingsStatus("Insight3 gripper mask ratio must be between 0 and 1.");
+    return;
+  }
+  setSettingsStatus("Updating Insight3 gripper mask...");
+  try {
+    const response = await fetch("/api/settings/insight3-gripper-mask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to update Insight3 gripper mask.");
+    }
+    renderSettings(payload);
+    setSettingsStatus(`Insight3 gripper mask ratio updated to ${payload.insight3_gripper_mask_height_ratio}.`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    setSettingsStatus(`Failed to update Insight3 gripper mask: ${message}`);
+  }
 }
 
 async function setStickFigureMode(enabled) {

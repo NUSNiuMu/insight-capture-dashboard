@@ -6,6 +6,9 @@
   "results_dir": "outputs/results",
   "max_cache_size": 104857600,
   "record_topics": [],
+  "insight3_global_localizer": {
+    "gripper_mask_height_ratio": 0.2
+  },
   "gesture_recording": {
     "enabled": false,
     "camera": "insight9_a",

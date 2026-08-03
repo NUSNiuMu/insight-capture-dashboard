@@ -35,6 +35,11 @@ from insight9_mapping_core import (  # noqa: E402
     matrix_from_pose,
     matrix_from_transform,
 )
+from insight3_localization_settings import (  # noqa: E402
+    DEFAULT_GRIPPER_MASK_HEIGHT_RATIO,
+    load_gripper_mask_height_ratio,
+    validate_gripper_mask_height_ratio,
+)
 
 try:
     import rclpy
@@ -53,7 +58,6 @@ except ImportError as exc:  # pragma: no cover - exercised in the ROS image
 
 
 CAMERAS = ("insight3_a", "insight3_b")
-DEFAULT_GRIPPER_MASK_HEIGHT_RATIO = 0.20
 
 
 def stamp_to_ns(stamp) -> int:
@@ -230,8 +234,12 @@ class Insight3GlobalLocalizer(Node):
         super().__init__("insight3_global_localizer")
         self._args = args
         self._map_frame = args.map_frame
-        if not 0.0 <= args.gripper_mask_height_ratio < 1.0:
-            raise ValueError("gripper mask height ratio must be in [0, 1)")
+        self._gripper_mask_height_ratio = validate_gripper_mask_height_ratio(
+            args.gripper_mask_height_ratio
+        )
+        self._settings_config_path = Path(args.settings_config)
+        self._settings_config_mtime_ns: Optional[int] = None
+        self._refresh_gripper_mask_setting(force=True)
         config = GlobalLocalizationConfig(
             ratio_test=args.ratio_test,
             min_similarity=args.min_similarity,
@@ -337,7 +345,7 @@ class Insight3GlobalLocalizer(Node):
         self.create_timer(0.5, self._publish_status)
         self.get_logger().info(
             "SuperPoint global localizer started for insight3_a and insight3_b; "
-            f"masking the bottom {args.gripper_mask_height_ratio:.0%} of both images"
+            f"masking the bottom {self._gripper_mask_height_ratio:.1%} of both images"
         )
 
     def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
@@ -546,6 +554,7 @@ class Insight3GlobalLocalizer(Node):
     def _worker_main(self) -> None:
         period = 1.0 / max(self._args.localization_hz, 0.1)
         while not self._stop.wait(0.05):
+            self._refresh_gripper_mask_setting()
             for name, state in self._cameras.items():
                 now = time.monotonic()
                 if now < state.next_process_monotonic:
@@ -609,7 +618,7 @@ class Insight3GlobalLocalizer(Node):
                     feature_keep = static_gripper_feature_keep_mask(
                         features.keypoints,
                         image.shape,
-                        self._args.gripper_mask_height_ratio,
+                        self._gripper_mask_height_ratio,
                     )
                     query_keypoints = features.keypoints[feature_keep]
                     query_descriptors = features.descriptors[feature_keep]
@@ -632,7 +641,7 @@ class Insight3GlobalLocalizer(Node):
                     diagnostics["raw_query_features"] = int(len(features.keypoints))
                     diagnostics["masked_query_features"] = masked_query_features
                     diagnostics["gripper_mask_height_ratio"] = (
-                        self._args.gripper_mask_height_ratio
+                        self._gripper_mask_height_ratio
                     )
                     with self._lock:
                         transition = state.consensus.observe(candidate)
@@ -727,6 +736,32 @@ class Insight3GlobalLocalizer(Node):
                         ),
                     }
                     self.get_logger().error(f"{name} localization failed: {exc}")
+
+    def _refresh_gripper_mask_setting(self, *, force: bool = False) -> None:
+        try:
+            mtime_ns = self._settings_config_path.stat().st_mtime_ns
+        except OSError:
+            mtime_ns = -1
+        if not force and mtime_ns == self._settings_config_mtime_ns:
+            return
+        self._settings_config_mtime_ns = mtime_ns
+        try:
+            ratio = load_gripper_mask_height_ratio(
+                self._settings_config_path,
+                default=self._args.gripper_mask_height_ratio,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            self.get_logger().warning(
+                f"keeping gripper mask ratio {self._gripper_mask_height_ratio}: {exc}"
+            )
+            return
+        if ratio == self._gripper_mask_height_ratio:
+            return
+        previous = self._gripper_mask_height_ratio
+        self._gripper_mask_height_ratio = ratio
+        self.get_logger().info(
+            f"updated gripper mask height ratio from {previous} to {ratio}"
+        )
 
     def _start_new_path_segment(self, state: CameraState) -> None:
         state.transformed_history.clear()
@@ -823,6 +858,7 @@ class Insight3GlobalLocalizer(Node):
             status["jump_rotation_deg"] = (
                 state.relocalization_policy.config.jump_rotation_deg
             )
+            status["gripper_mask_height_ratio"] = self._gripper_mask_height_ratio
             status["pose_frame"] = f"{name}_global_camera_center"
             message = String()
             message.data = json.dumps(status, separators=(",", ":"))
@@ -832,6 +868,10 @@ class Insight3GlobalLocalizer(Node):
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inference-socket", default="/run/superglue/matcher.sock")
+    parser.add_argument(
+        "--settings-config",
+        default=str(SCRIPT_DIR.parent / "config" / "post_processing.json"),
+    )
     parser.add_argument(
         "--feature-map-topic", default="/insight9_sparse_map/features"
     )
