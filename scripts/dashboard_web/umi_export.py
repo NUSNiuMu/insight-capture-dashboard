@@ -255,7 +255,9 @@ class UmiExportManager:
                 if error_lines
                 else "\n".join(output_tail).strip() or "UMI exporter failed"
             )
-        manifest_path = self.output_root / f"{item.dataset_name}.manifest.json"
+        manifest_path = item.output_path.with_name(
+            f"{item.dataset_name}.manifest.json"
+        )
         return json.loads(manifest_path.read_text(encoding="utf-8"))
 
     def _item_payload(self, item: _UmiExportItem) -> Dict[str, object]:
