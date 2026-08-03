@@ -53,6 +53,7 @@ except ImportError as exc:  # pragma: no cover - exercised in the ROS image
 
 
 CAMERAS = ("insight3_a", "insight3_b")
+DEFAULT_GRIPPER_MASK_HEIGHT_RATIO = 0.20
 
 
 def stamp_to_ns(stamp) -> int:
@@ -79,6 +80,25 @@ def grayscale_image(message: Image) -> np.ndarray:
         luma_height = total_rows * 2 // 3
         return raw[: luma_height * step].reshape(luma_height, step)[:, :width].copy()
     raise ValueError(f"unsupported global localization image: {message.encoding}")
+
+
+def static_gripper_feature_keep_mask(
+    keypoints: np.ndarray,
+    image_shape: tuple[int, int],
+    mask_height_ratio: float,
+) -> np.ndarray:
+    """Return features outside the static gripper strip at the image bottom."""
+
+    points = np.asarray(keypoints)
+    if points.ndim != 2 or points.shape[1] != 2:
+        raise ValueError("keypoints must have shape (N, 2)")
+    if len(image_shape) < 2 or int(image_shape[0]) <= 0:
+        raise ValueError("image shape must contain a positive height")
+    ratio = float(mask_height_ratio)
+    if not 0.0 <= ratio < 1.0:
+        raise ValueError("gripper mask height ratio must be in [0, 1)")
+    cutoff_y = float(image_shape[0]) * (1.0 - ratio)
+    return points[:, 1] < cutoff_y
 
 
 def rotation_to_quaternion(rotation: np.ndarray) -> tuple[float, float, float, float]:
@@ -210,6 +230,8 @@ class Insight3GlobalLocalizer(Node):
         super().__init__("insight3_global_localizer")
         self._args = args
         self._map_frame = args.map_frame
+        if not 0.0 <= args.gripper_mask_height_ratio < 1.0:
+            raise ValueError("gripper mask height ratio must be in [0, 1)")
         config = GlobalLocalizationConfig(
             ratio_test=args.ratio_test,
             min_similarity=args.min_similarity,
@@ -314,7 +336,8 @@ class Insight3GlobalLocalizer(Node):
         )
         self.create_timer(0.5, self._publish_status)
         self.get_logger().info(
-            "SuperPoint global localizer started for insight3_a and insight3_b"
+            "SuperPoint global localizer started for insight3_a and insight3_b; "
+            f"masking the bottom {args.gripper_mask_height_ratio:.0%} of both images"
         )
 
     def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
@@ -583,18 +606,33 @@ class Insight3GlobalLocalizer(Node):
                 try:
                     image = grayscale_image(message)
                     features = self._matcher.extract(image)
+                    feature_keep = static_gripper_feature_keep_mask(
+                        features.keypoints,
+                        image.shape,
+                        self._args.gripper_mask_height_ratio,
+                    )
+                    query_keypoints = features.keypoints[feature_keep]
+                    query_descriptors = features.descriptors[feature_keep]
+                    masked_query_features = int(
+                        len(features.keypoints) - len(query_keypoints)
+                    )
                     odom_to_left = compose_transform(
                         matrix_from_pose(pose), imu_to_left
                     )
                     candidate, diagnostics = localize_features(
-                        features.keypoints,
-                        features.descriptors,
+                        query_keypoints,
+                        query_descriptors,
                         map_points,
                         map_descriptors,
                         camera_matrix,
                         odom_to_left,
                         image.shape,
                         state.consensus.config,
+                    )
+                    diagnostics["raw_query_features"] = int(len(features.keypoints))
+                    diagnostics["masked_query_features"] = masked_query_features
+                    diagnostics["gripper_mask_height_ratio"] = (
+                        self._args.gripper_mask_height_ratio
                     )
                     with self._lock:
                         transition = state.consensus.observe(candidate)
@@ -803,6 +841,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--map-frame", default="insight9_map")
     parser.add_argument("--localization-hz", type=float, default=1.0)
+    parser.add_argument(
+        "--gripper-mask-height-ratio",
+        type=float,
+        default=DEFAULT_GRIPPER_MASK_HEIGHT_RATIO,
+        help="mask this fraction of each Insight3 image from the bottom",
+    )
     parser.add_argument("--max-map-features", type=int, default=20_000)
     parser.add_argument("--min-map-features", type=int, default=80)
     parser.add_argument("--ratio-test", type=float, default=0.80)
