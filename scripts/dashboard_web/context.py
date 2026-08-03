@@ -9,6 +9,7 @@ from post_processing import OptimizationManager, PlaybackManager, RecordingManag
 
 from .gripper_extraction import GripperExtractionManager
 from .scoring import ScoringManager
+from .umi_export import UmiExportManager
 
 
 @dataclass
@@ -23,6 +24,7 @@ class DashboardContext:
     optimization_manager: OptimizationManager = field(init=False)
     handpose_manager: HandPoseManager = field(init=False)
     gripper_extraction_manager: GripperExtractionManager = field(init=False)
+    umi_export_manager: UmiExportManager = field(init=False)
     _image_capabilities_cache: Optional[Dict[str, object]] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -53,6 +55,10 @@ class DashboardContext:
             rosbag_root=self.recording_manager.rosbag_root,
         )
         self.gripper_extraction_manager = GripperExtractionManager(
+            project_root=self.project_root,
+            rosbag_root=self.recording_manager.rosbag_root,
+        )
+        self.umi_export_manager = UmiExportManager(
             project_root=self.project_root,
             rosbag_root=self.recording_manager.rosbag_root,
         )

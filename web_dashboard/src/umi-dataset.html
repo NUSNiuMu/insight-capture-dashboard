@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Insight UMI Dataset</title><link rel="stylesheet" href="/static/styles.css?v=20260803-umi-v1">
+  </head>
+  <body data-dashboard-view="umi-dataset">
+    <div class="app-shell">
+      <aside class="app-sidebar">
+        <a class="app-brand" href="/3d"><span class="brand-mark">I</span><span>INSIGHT<small>Capture Studio</small></span></a>
+        <div class="workspace-card"><span><i></i> Active workspace</span><strong>Jetson NX</strong><small>ROS 2 · Domain 20</small></div>
+        <nav class="side-nav" aria-label="Dashboard pages"><p>Monitor</p><a href="/3d"><b>01</b><span>Spatial view</span></a><p>Capture</p><a href="/recording"><b>02</b><span>Recording</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/umi-dataset" class="is-active"><b>04</b><span>UMI dataset</span></a><a href="/scoring"><b>05</b><span>Scoring</span></a><a href="/handpose"><b>06</b><span>Hand pose</span></a><a href="/optimization"><b>07</b><span>Optimization</span></a><p>System</p><a href="/settings"><b>08</b><span>Settings</span></a></nav>
+        <div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
+      </aside>
+      <section class="app-main">
+        <header class="app-topbar"><span>Process / <strong>UMI dataset</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
+        <main class="page-content">
+          <header class="content-heading"><div><p class="section-kicker">Training data</p><h1>UMI Dataset</h1><p>Synchronize bimanual TCP poses, gripper openings and three camera streams into a training-ready Zarr.</p></div><span class="heading-stat"><strong>20 Hz</strong><span>UMI replay buffer</span></span></header>
+          <div class="umi-workspace">
+            <section class="data-surface umi-source-surface">
+              <div class="section-heading"><div><p class="section-kicker">01 · Episodes</p><h2>Select rosbags</h2></div><button id="umi-select-all" class="quiet-button" type="button">Select all</button></div>
+              <div id="umi-bag-list" class="umi-bag-list"><div class="empty-state">Loading rosbags...</div></div>
+            </section>
+            <section class="data-surface umi-export-surface">
+              <div class="section-heading"><div><p class="section-kicker">02 · Export</p><h2>Build replay buffer</h2></div><span>Right · Left · Head</span></div>
+              <label><span class="field-label">Dataset name</span><input id="umi-dataset-name" class="field-control" value="bimanual_demo" spellcheck="false"><small class="field-help">Creates outputs/umi_datasets/&lt;name&gt;.zarr.zip</small></label>
+              <div class="umi-schema-grid">
+                <span><small>camera0 / robot0</small><strong>Right hand · insight3_a</strong></span>
+                <span><small>camera1 / robot1</small><strong>Left hand · insight3_b</strong></span>
+                <span><small>camera2</small><strong>Global view · insight9_a</strong></span>
+                <span><small>Images</small><strong>224×224 RGB · 20 Hz</strong></span>
+              </div>
+              <button id="umi-export-button" class="primary-button umi-export-button" type="button">Build UMI dataset</button>
+              <div class="umi-progress">
+                <div><span id="umi-status-label">Ready</span><strong id="umi-progress-value">0%</strong></div>
+                <div class="opt-progress-track"><div id="umi-progress-fill" class="opt-progress-fill" style="width:0%"></div></div>
+                <pre id="umi-status-detail" class="recording-output">Select one rosbag per demonstration episode.</pre>
+              </div>
+              <div id="umi-result" class="umi-result" hidden></div>
+            </section>
+          </div>
+        </main>
+      </section>
+    </div>
+    <script type="module" src="/static/pages/umi-dataset.js?v=20260803-umi-v1"></script>
+  </body>
+</html>

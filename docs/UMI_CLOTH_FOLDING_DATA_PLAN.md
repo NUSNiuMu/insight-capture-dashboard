@@ -4,6 +4,6 @@ Jetson NX 的 camera_center → TCP 实测外参已录入并发布 TF。
 修复校准工具的 mono8/8UC1 解码。
 实现 rosbag 离线 gripper extractor。
 生成开合可视化曲线和 marker overlay 视频做人工验证。
-将 TCP pose、opening 与三路图像对齐到 20 Hz。
-输出双臂 20 维 UMI action。
-最后再导出 UMI Zarr/LeRobot。
+已实现从 rosbag 将 TCP pose、opening 与三路图像对齐到 20 Hz。
+已实现双臂 20 维 action 对应的 UMI Zarr 与训练配置导出。
+后续按需要增加 LeRobot 导出。

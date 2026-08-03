@@ -48,6 +48,7 @@ for (const [name, buf] of Object.entries(preserved)) {
 
 copyFile(path.join(srcDir, "3d.html"), path.join(distDir, "3d.html"));
 copyFile(path.join(srcDir, "bags.html"), path.join(distDir, "bags.html"));
+copyFile(path.join(srcDir, "umi-dataset.html"), path.join(distDir, "umi-dataset.html"));
 copyFile(path.join(srcDir, "recording.html"), path.join(distDir, "recording.html"));
 copyFile(path.join(srcDir, "scoring.html"), path.join(distDir, "scoring.html"));
 copyFile(path.join(srcDir, "handpose.html"), path.join(distDir, "handpose.html"));

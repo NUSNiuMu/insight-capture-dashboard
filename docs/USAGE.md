@@ -97,10 +97,23 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 进度按目标图像 topic 已处理帧数除以 rosbag 记录的该 topic 总帧数计算，不使用
 耗时或动画估算。
 
-**离线夹爪提取**：打开 `/bags`，在 **Gripper extraction** 中选择 rosbag，填写
-相机名（Insight3 A 为 `insight3_a`）后点击 **Run extraction**。页面会显示已处理帧数、
-双二维码命中数、检测率和处理速度，完成后可直接下载 JSON。图像 topic 通常留空自动
-选择；同一相机存在多个图像 topic 时再显式填写。
+**UMI 训练数据导出**：打开 `/umi-dataset`，将每次完整示教对应的 rosbag 勾选为
+episode，填写数据集名称后点击 **Build UMI dataset**。后台会在 recorder timeline 上
+把右手、左手和头部三路图像、左右全局 pose、TCP 外参与夹爪二维码检测统一对齐到
+20 Hz，并输出可由官方 `UmiDataset` 直接读取的
+`outputs/umi_datasets/<名称>.zarr.zip`。页面同时提供：
+
+- `<名称>.umi.yaml`：双臂三相机 `shape_meta`，动作维度为 20；复制到 UMI 仓库的
+  `diffusion_policy/config/task/` 并修改 `dataset_path` 后即可用于训练；
+- `<名称>.manifest.json`：episode、帧数、同步偏差和夹爪检测率等质量摘要。
+
+Zarr 内相机顺序固定为右腕 `camera0`、左腕 `camera1`、头部 `camera2`；机器人顺序
+固定为右手 `robot0`、左手 `robot1`。`robot*_gripper_width` 使用归一化 opening，
+语义为 `0=闭合，1=张开`，并记录在 Zarr 根属性中。每个输入 bag 必须包含三路默认
+图像 topic、左右 `/insight_global/.../pose`，且两只夹爪均已完成开合标定。
+
+**单路离线夹爪诊断**：底层 `gripper_extract.py` 仍可单独运行，用于检查某一路
+Insight3 图像中的二维码检测质量。
 
 底层 `gripper_extract.py` 直接读取 rosbag 图像，逐帧检测 UMI 夹爪的 ArUco ID 1/0。
 结果默认保存到
@@ -125,7 +138,8 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 1. 打开 `/3d`，确认三路画面都在动（面板无 stale 灰标）；
 2. `/recording` → `Refresh Topics` → 勾选要录的 topic（支持按相机整组勾选）→ `Start`；
 3. 采集完成 → `Stop`,等待录包流程结束；
-4. **校验数据完整性并打分**：打开 `/scoring` 页，选中刚录的 bag，点
+4. `/umi-dataset` 选择一条或多条完整示教，导出 Zarr、训练配置与 manifest；
+5. **校验数据完整性并打分**：打开 `/scoring` 页，选中刚录的 bag，点
    **Scoring**（一个按钮同时做两件事：先跑完整性校验，报告先出来；随后
    不论完整性结果如何都自动接着跑轨迹评分）。
 

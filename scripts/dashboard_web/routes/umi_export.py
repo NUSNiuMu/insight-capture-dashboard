@@ -1,0 +1,57 @@
+"""UMI dataset export HTTP handlers."""
+
+from __future__ import annotations
+
+from aiohttp import web
+
+from dashboard_web.context import DashboardContext
+from dashboard_web.support import read_json_body
+
+
+class UmiExportRoutes:
+    def __init__(self, context: DashboardContext) -> None:
+        self.context = context
+
+    async def _handle_start(self, request: web.Request) -> web.Response:
+        body = await read_json_body(request)
+        bag_names = body.get("bag_names", [])
+        if not isinstance(bag_names, list) or not all(
+            isinstance(name, str) for name in bag_names
+        ):
+            raise ValueError("bag_names must be a list of strings")
+        try:
+            payload = self.context.umi_export_manager.start(
+                str(body.get("dataset_name", "")), bag_names
+            )
+        except RuntimeError as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        except FileNotFoundError as exc:
+            return web.json_response({"error": str(exc)}, status=404)
+        return web.json_response(payload)
+
+    async def _handle_status(self, _request: web.Request) -> web.Response:
+        return web.json_response(self.context.umi_export_manager.status())
+
+    async def _handle_result(self, request: web.Request) -> web.StreamResponse:
+        return self._file_response(request, artifact="dataset")
+
+    async def _handle_manifest(self, request: web.Request) -> web.StreamResponse:
+        return self._file_response(request, artifact="manifest")
+
+    async def _handle_config(self, request: web.Request) -> web.StreamResponse:
+        return self._file_response(request, artifact="config")
+
+    def _file_response(self, request: web.Request, *, artifact: str) -> web.FileResponse:
+        try:
+            path = self.context.umi_export_manager.result_path(
+                request.query.get("dataset_name", ""), artifact=artifact
+            )
+        except FileNotFoundError as exc:
+            raise web.HTTPNotFound(text=str(exc)) from exc
+        response = web.FileResponse(path)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Disposition"] = f'attachment; filename="{path.name}"'
+        return response
+
+    async def _on_shutdown(self, _app: web.Application) -> None:
+        self.context.umi_export_manager.stop()

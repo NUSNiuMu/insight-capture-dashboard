@@ -25,6 +25,9 @@ class StaticRoutes:
     async def _handle_bags_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.context.web_root / "bags.html")
 
+    async def _handle_umi_dataset_page(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.context.web_root / "umi-dataset.html")
+
     async def _handle_scoring_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.context.web_root / "scoring.html")
 
