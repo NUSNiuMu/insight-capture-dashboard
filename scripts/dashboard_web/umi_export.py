@@ -33,6 +33,7 @@ class _UmiExportJob:
     bag_names: list[str]
     image_size: Optional[int]
     camera_names: list[str]
+    episode_mode: str
     items: list[_UmiExportItem]
     status: str = "running"
     stage: str = "starting"
@@ -80,6 +81,7 @@ class UmiExportManager:
                     "original" if job.image_size is None else str(job.image_size)
                 ),
                 "camera_names": job.camera_names,
+                "episode_mode": job.episode_mode,
                 "items": [self._item_payload(item) for item in job.items],
             }
             if job.finished_at:
@@ -93,6 +95,7 @@ class UmiExportManager:
         bag_names: list[str],
         image_mode: str = "original",
         camera_names: Optional[list[str]] = None,
+        episode_mode: str = "bag",
     ) -> Dict[str, object]:
         image_mode = str(image_mode).strip().lower()
         if image_mode == "original":
@@ -101,6 +104,9 @@ class UmiExportManager:
             image_size = int(image_mode)
         else:
             raise ValueError("Image resolution must be original, 224, or 384.")
+        episode_mode = str(episode_mode).strip().lower()
+        if episode_mode not in {"bag", "auto_pause"}:
+            raise ValueError("Episode mode must be bag or auto_pause.")
         if not bag_names:
             raise ValueError("Select at least one rosbag.")
         if len(bag_names) > 1000:
@@ -139,6 +145,7 @@ class UmiExportManager:
                 bag_names=list(bag_names),
                 image_size=image_size,
                 camera_names=camera_names,
+                episode_mode=episode_mode,
                 items=items,
                 started_at=time.time(),
             )
@@ -226,6 +233,8 @@ class UmiExportManager:
             str(self.project_root / "config" / "gripper_calibration.json"),
             "--image-size",
             "original" if job.image_size is None else str(job.image_size),
+            "--episode-mode",
+            job.episode_mode,
         ]
         for camera_name in job.camera_names:
             command.extend(("--camera", camera_name))

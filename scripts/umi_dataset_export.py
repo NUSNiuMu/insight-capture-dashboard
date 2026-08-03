@@ -31,10 +31,15 @@ POSE_TYPES = {
     "geometry_msgs/msg/PoseWithCovarianceStamped",
 }
 ROLE_ORDER = ("right_hand", "left_hand", "head")
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DEFAULT_MAX_POSITION_STEP_M = 0.05
 DEFAULT_MAX_ORIENTATION_STEP_DEG = 45.0
 DEFAULT_MAX_POSE_GAP_MS = 100.0
+DEFAULT_IDLE_DURATION_S = 0.8
+DEFAULT_IDLE_LINEAR_SPEED_M_S = 0.02
+DEFAULT_IDLE_ANGULAR_SPEED_DEG_S = 10.0
+DEFAULT_IDLE_GRIPPER_SPEED_M_S = 0.005
+DEFAULT_IDLE_GAP_TOLERANCE_S = 0.15
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,7 @@ class EpisodePlan:
     detection_rates: Dict[str, float]
     max_image_skew_ms: float
     pose_quality_events: Dict[str, Dict[str, int]]
+    segmentation: Dict[str, object]
 
 
 class ZarrV2Writer:
@@ -441,14 +447,14 @@ def _tcp_sample_positions(
     return positions + rotations.apply(spec.tcp_translation_m)
 
 
-def _pose_quality_events(
+def _pose_discontinuities(
     pose_data: tuple[np.ndarray, np.ndarray, np.ndarray],
     spec: CameraSpec,
     *,
     max_position_step_m: float,
     max_orientation_step_deg: float,
     max_pose_gap_ms: float,
-) -> Dict[str, int]:
+) -> Dict[str, np.ndarray]:
     stamps = pose_data[0]
     tcp_positions = _tcp_sample_positions(pose_data, spec)
     stamp_deltas = np.diff(stamps)
@@ -459,9 +465,9 @@ def _pose_quality_events(
     jump_breaks = position_steps > max_position_step_m
     orientation_breaks = orientation_steps > math.radians(max_orientation_step_deg)
     return {
-        "position_jumps": int(np.count_nonzero(jump_breaks)),
-        "orientation_jumps": int(np.count_nonzero(orientation_breaks)),
-        "tracking_gaps": int(np.count_nonzero(gap_breaks)),
+        "position_jumps": stamps[1:][jump_breaks],
+        "orientation_jumps": stamps[1:][orientation_breaks],
+        "tracking_gaps": stamps[1:][gap_breaks],
     }
 
 
@@ -489,6 +495,91 @@ def _resampled_pose_events(
     }
 
 
+def _idle_cut_indices(
+    positions: Dict[str, np.ndarray],
+    rotvecs: Dict[str, np.ndarray],
+    openings: Dict[str, np.ndarray],
+    *,
+    fps: float,
+    idle_duration_s: float,
+    idle_linear_speed_m_s: float,
+    idle_angular_speed_deg_s: float,
+    idle_gripper_speed_m_s: float,
+    idle_gap_tolerance_s: float,
+    minimum_frames: int,
+) -> tuple[list[int], list[Dict[str, object]]]:
+    frame_count = len(next(iter(positions.values())))
+    stationary = np.ones(frame_count - 1, dtype=bool)
+    for name, values in positions.items():
+        linear_speed = np.linalg.norm(
+            np.diff(values.astype(np.float64), axis=0), axis=1
+        ) * fps
+        rotations = Rotation.from_rotvec(rotvecs[name].astype(np.float64))
+        angular_speed = (
+            (rotations[:-1].inv() * rotations[1:]).magnitude()
+            * (180.0 / math.pi)
+            * fps
+        )
+        gripper_speed = np.abs(
+            np.diff(openings[name][:, 0].astype(np.float64))
+        ) * fps
+        stationary &= linear_speed <= idle_linear_speed_m_s
+        stationary &= angular_speed <= idle_angular_speed_deg_s
+        stationary &= gripper_speed <= idle_gripper_speed_m_s
+
+    maximum_gap_intervals = int(math.floor(idle_gap_tolerance_s * fps))
+    moving_padded = np.concatenate(([False], ~stationary, [False])).astype(np.int8)
+    moving_changes = np.flatnonzero(np.diff(moving_padded)).reshape(-1, 2)
+    for start, end in moving_changes:
+        if (
+            end - start <= maximum_gap_intervals
+            and start > 0
+            and end < len(stationary)
+        ):
+            stationary[start:end] = True
+
+    minimum_idle_intervals = max(1, int(math.ceil(idle_duration_s * fps)))
+    padded = np.concatenate(([False], stationary, [False])).astype(np.int8)
+    changes = np.flatnonzero(np.diff(padded)).reshape(-1, 2)
+    cuts = []
+    pauses = []
+    previous_cut = 0
+    for start, end in changes:
+        interval_count = int(end - start)
+        if (
+            interval_count < minimum_idle_intervals
+            or start == 0
+            or end == len(stationary)
+        ):
+            continue
+        cut = int((start + end + 1) // 2)
+        if cut - previous_cut < minimum_frames or frame_count - cut < minimum_frames:
+            continue
+        cuts.append(cut)
+        pauses.append(
+            {
+                "start_frame": int(start),
+                "end_frame": int(end),
+                "duration_s": round(interval_count / fps, 3),
+                "cut_frame": cut,
+            }
+        )
+        previous_cut = cut
+    return cuts, pauses
+
+
+def _slice_has_timestamp(
+    timestamps_ns: np.ndarray,
+    segment: slice,
+    event_stamps_ns: np.ndarray,
+) -> bool:
+    if not len(event_stamps_ns):
+        return False
+    start_ns = timestamps_ns[segment.start]
+    end_ns = timestamps_ns[segment.stop - 1]
+    return bool(np.any((event_stamps_ns > start_ns) & (event_stamps_ns <= end_ns)))
+
+
 def build_episode_plans(
     bag_name: str,
     scan: StreamScan,
@@ -500,7 +591,15 @@ def build_episode_plans(
     max_position_step_m: float = DEFAULT_MAX_POSITION_STEP_M,
     max_orientation_step_deg: float = DEFAULT_MAX_ORIENTATION_STEP_DEG,
     max_pose_gap_ms: float = DEFAULT_MAX_POSE_GAP_MS,
+    episode_mode: str = "bag",
+    idle_duration_s: float = DEFAULT_IDLE_DURATION_S,
+    idle_linear_speed_m_s: float = DEFAULT_IDLE_LINEAR_SPEED_M_S,
+    idle_angular_speed_deg_s: float = DEFAULT_IDLE_ANGULAR_SPEED_DEG_S,
+    idle_gripper_speed_m_s: float = DEFAULT_IDLE_GRIPPER_SPEED_M_S,
+    idle_gap_tolerance_s: float = DEFAULT_IDLE_GAP_TOLERANCE_S,
 ) -> list[EpisodePlan]:
+    if episode_mode not in {"bag", "auto_pause"}:
+        raise ValueError(f"unsupported episode mode: {episode_mode}")
     starts = [values[0] for values in scan.image_stamps.values()]
     ends = [values[-1] for values in scan.image_stamps.values()]
     for stamps, _, _ in scan.poses.values():
@@ -524,58 +623,14 @@ def build_episode_plans(
         valid &= skew <= max_skew_ns
         observed_max_skew_ns = max(observed_max_skew_ns, int(skew.max()))
 
-    if not np.all(valid):
-        invalid_frames = int(np.count_nonzero(~valid))
-        raise ValueError(
-            f"episode rejected: {invalid_frames} synchronized frames exceed "
-            f"the {max_image_skew_ms:g} ms image skew limit"
-        )
-
     hand_specs = [spec for spec in specs if spec.role != "head"]
+    positions = {}
+    rotvecs = {}
+    openings = {}
+    discontinuities = {}
     pose_quality_events = {}
     for spec in hand_specs:
-        events = _pose_quality_events(
-            scan.poses[spec.name],
-            spec,
-            max_position_step_m=max_position_step_m,
-            max_orientation_step_deg=max_orientation_step_deg,
-            max_pose_gap_ms=max_pose_gap_ms,
-        )
-        pose_quality_events[spec.name] = events
-    source_event_count = sum(
-        count for events in pose_quality_events.values() for count in events.values()
-    )
-    if source_event_count:
-        details = ", ".join(
-            f"{name} {event}={count}"
-            for name, events in pose_quality_events.items()
-            for event, count in events.items()
-            if count
-        )
-        raise ValueError(
-            f"episode rejected by source pose continuity gate: {details}"
-        )
-
-    lowdim = {}
-    for robot_index, spec in enumerate(hand_specs):
         position, rotvec = _interpolate_tcp(scan.poses[spec.name], timeline, spec)
-        resampled_events = _resampled_pose_events(
-            position,
-            rotvec,
-            max_position_step_m=max_position_step_m,
-            max_orientation_step_deg=max_orientation_step_deg,
-        )
-        pose_quality_events[spec.name].update(resampled_events)
-        if any(resampled_events.values()):
-            details = ", ".join(
-                f"{event}={count}"
-                for event, count in resampled_events.items()
-                if count
-            )
-            raise ValueError(
-                f"episode rejected by 20 Hz pose continuity gate: "
-                f"{spec.name} {details}"
-            )
         opening_stamps, opening_values = scan.openings[spec.name]
         opening_base = opening_stamps[0]
         opening = np.interp(
@@ -583,27 +638,153 @@ def build_episode_plans(
             (opening_stamps - opening_base).astype(np.float64),
             opening_values,
         ).astype(np.float32)[:, None]
-        pose = np.concatenate((position, rotvec), axis=1).astype(np.float32)
-        lowdim[f"robot{robot_index}_eef_pos"] = position
-        lowdim[f"robot{robot_index}_eef_rot_axis_angle"] = rotvec
-        lowdim[f"robot{robot_index}_gripper_width"] = opening
-        lowdim[f"robot{robot_index}_demo_start_pose"] = np.repeat(
-            pose[:1], len(pose), axis=0
+        positions[spec.name] = position
+        rotvecs[spec.name] = rotvec
+        openings[spec.name] = opening
+        discontinuities[spec.name] = _pose_discontinuities(
+            scan.poses[spec.name],
+            spec,
+            max_position_step_m=max_position_step_m,
+            max_orientation_step_deg=max_orientation_step_deg,
+            max_pose_gap_ms=max_pose_gap_ms,
         )
-        lowdim[f"robot{robot_index}_demo_end_pose"] = np.repeat(
-            pose[-1:], len(pose), axis=0
+        pose_quality_events[spec.name] = {
+            name: len(stamps)
+            for name, stamps in discontinuities[spec.name].items()
+        }
+
+    cuts = []
+    pauses = []
+    if episode_mode == "auto_pause":
+        cuts, pauses = _idle_cut_indices(
+            positions,
+            rotvecs,
+            openings,
+            fps=fps,
+            idle_duration_s=idle_duration_s,
+            idle_linear_speed_m_s=idle_linear_speed_m_s,
+            idle_angular_speed_deg_s=idle_angular_speed_deg_s,
+            idle_gripper_speed_m_s=idle_gripper_speed_m_s,
+            idle_gap_tolerance_s=idle_gap_tolerance_s,
+            minimum_frames=minimum_frames,
         )
-    return [
-        EpisodePlan(
-            bag_name=bag_name,
-            timestamps_ns=timeline,
-            image_indices=image_indices,
-            lowdim=lowdim,
-            detection_rates=scan.detection_rates,
-            max_image_skew_ms=round(observed_max_skew_ns / 1e6, 3),
-            pose_quality_events=pose_quality_events,
-        )
+        event_stamps = [
+            stamp
+            for camera_events in discontinuities.values()
+            for stamps in camera_events.values()
+            for stamp in stamps
+        ]
+        for pause_index, pause in enumerate(pauses):
+            pause_start_ns = timeline[int(pause["start_frame"])]
+            pause_end_ns = timeline[int(pause["end_frame"])]
+            pause_events = sorted(
+                stamp
+                for stamp in event_stamps
+                if pause_start_ns < stamp <= pause_end_ns
+            )
+            if not pause_events:
+                pause["cut_reason"] = "stationary_midpoint"
+                continue
+            cut = int(np.searchsorted(timeline, pause_events[0], side="left"))
+            cuts[pause_index] = cut
+            pause["cut_frame"] = cut
+            pause["cut_reason"] = "pose_discontinuity_during_pause"
+
+    boundaries = [0, *cuts, len(timeline)]
+    candidate_segments = [
+        slice(int(start), int(end))
+        for start, end in zip(boundaries[:-1], boundaries[1:])
+        if end - start >= minimum_frames
     ]
+    plans = []
+    rejected_segments = 0
+    rejected_segment_details = []
+    for segment_index, segment in enumerate(candidate_segments):
+        rejection_reasons = []
+        invalid_image_frames = int(np.count_nonzero(~valid[segment]))
+        if invalid_image_frames:
+            rejection_reasons.append(f"image_skew_frames={invalid_image_frames}")
+        for spec in hand_specs:
+            for event_name, event_stamps in discontinuities[spec.name].items():
+                if _slice_has_timestamp(timeline, segment, event_stamps):
+                    rejection_reasons.append(f"{spec.name}_{event_name}")
+            resampled_events = _resampled_pose_events(
+                positions[spec.name][segment],
+                rotvecs[spec.name][segment],
+                max_position_step_m=max_position_step_m,
+                max_orientation_step_deg=max_orientation_step_deg,
+            )
+            rejection_reasons.extend(
+                f"{spec.name}_{name}={count}"
+                for name, count in resampled_events.items()
+                if count
+            )
+        if rejection_reasons:
+            rejected_segments += 1
+            rejected_segment_details.append(
+                {
+                    "source_segment_index": segment_index,
+                    "reasons": rejection_reasons,
+                }
+            )
+            if episode_mode == "bag":
+                raise ValueError(
+                    "episode rejected by continuity gate: "
+                    + ", ".join(rejection_reasons)
+                )
+            print(
+                f"UMI_WARNING rejected segment {segment_index}: "
+                + ", ".join(rejection_reasons),
+                flush=True,
+            )
+            continue
+
+        lowdim = {}
+        for robot_index, spec in enumerate(hand_specs):
+            position = positions[spec.name][segment]
+            rotvec = rotvecs[spec.name][segment]
+            opening = openings[spec.name][segment]
+            pose = np.concatenate((position, rotvec), axis=1).astype(np.float32)
+            lowdim[f"robot{robot_index}_eef_pos"] = position
+            lowdim[f"robot{robot_index}_eef_rot_axis_angle"] = rotvec
+            lowdim[f"robot{robot_index}_gripper_width"] = opening
+            lowdim[f"robot{robot_index}_demo_start_pose"] = np.repeat(
+                pose[:1], len(pose), axis=0
+            )
+            lowdim[f"robot{robot_index}_demo_end_pose"] = np.repeat(
+                pose[-1:], len(pose), axis=0
+            )
+        plans.append(
+            EpisodePlan(
+                bag_name=bag_name,
+                timestamps_ns=timeline[segment],
+                image_indices={
+                    name: values[segment] for name, values in image_indices.items()
+                },
+                lowdim=lowdim,
+                detection_rates=scan.detection_rates,
+                max_image_skew_ms=round(observed_max_skew_ns / 1e6, 3),
+                pose_quality_events={
+                    name: {event: 0 for event in events}
+                    for name, events in pose_quality_events.items()
+                },
+                segmentation={
+                    "mode": episode_mode,
+                    "source_segment_index": segment_index,
+                    "source_start_s": round(segment.start / fps, 3),
+                    "source_end_s": round(segment.stop / fps, 3),
+                    "detected_pause_count": len(pauses),
+                    "detected_pauses": pauses,
+                    "rejected_segment_count": rejected_segments,
+                },
+            )
+        )
+    if not plans:
+        raise ValueError("no valid episodes remain after automatic segmentation")
+    for plan in plans:
+        plan.segmentation["rejected_segment_count"] = rejected_segments
+        plan.segmentation["rejected_segments"] = rejected_segment_details
+    return plans
 
 
 def _fixed_square_roi(shape: tuple[int, int]) -> tuple[int, int, int, int]:
@@ -796,6 +977,12 @@ def export_umi_dataset(
     max_position_step_m: float = DEFAULT_MAX_POSITION_STEP_M,
     max_orientation_step_deg: float = DEFAULT_MAX_ORIENTATION_STEP_DEG,
     max_pose_gap_ms: float = DEFAULT_MAX_POSE_GAP_MS,
+    episode_mode: str = "bag",
+    idle_duration_s: float = DEFAULT_IDLE_DURATION_S,
+    idle_linear_speed_m_s: float = DEFAULT_IDLE_LINEAR_SPEED_M_S,
+    idle_angular_speed_deg_s: float = DEFAULT_IDLE_ANGULAR_SPEED_DEG_S,
+    idle_gripper_speed_m_s: float = DEFAULT_IDLE_GRIPPER_SPEED_M_S,
+    idle_gap_tolerance_s: float = DEFAULT_IDLE_GAP_TOLERANCE_S,
     camera_names: Optional[list[str]] = None,
 ) -> dict[str, object]:
     specs = load_camera_specs(camera_config, camera_names)
@@ -832,6 +1019,12 @@ def export_umi_dataset(
             max_position_step_m=max_position_step_m,
             max_orientation_step_deg=max_orientation_step_deg,
             max_pose_gap_ms=max_pose_gap_ms,
+            episode_mode=episode_mode,
+            idle_duration_s=idle_duration_s,
+            idle_linear_speed_m_s=idle_linear_speed_m_s,
+            idle_angular_speed_deg_s=idle_angular_speed_deg_s,
+            idle_gripper_speed_m_s=idle_gripper_speed_m_s,
+            idle_gap_tolerance_s=idle_gap_tolerance_s,
         )
         planned_episodes.extend((bag_path, plan) for plan in plans)
     if not planned_episodes:
@@ -911,6 +1104,7 @@ def export_umi_dataset(
                     "gripper_detection_rates": plan.detection_rates,
                     "max_image_skew_ms": plan.max_image_skew_ms,
                     "pose_quality_events": plan.pose_quality_events,
+                    "segmentation": plan.segmentation,
                 }
             )
         for name, parts in lowdim_parts.items():
@@ -943,7 +1137,20 @@ def export_umi_dataset(
                     "max_position_step_m": float(max_position_step_m),
                     "max_orientation_step_deg": float(max_orientation_step_deg),
                     "max_pose_gap_ms": float(max_pose_gap_ms),
-                    "behavior": "reject_rosbag_episode_on_discontinuity",
+                    "behavior": (
+                        "reject_rosbag_episode_on_discontinuity"
+                        if episode_mode == "bag"
+                        else "reject_only_affected_pause_segment"
+                    ),
+                },
+                "episode_segmentation": {
+                    "mode": episode_mode,
+                    "idle_duration_s": float(idle_duration_s),
+                    "idle_linear_speed_m_s": float(idle_linear_speed_m_s),
+                    "idle_angular_speed_deg_s": float(idle_angular_speed_deg_s),
+                    "idle_gripper_speed_m_s": float(idle_gripper_speed_m_s),
+                    "idle_gap_tolerance_s": float(idle_gap_tolerance_s),
+                    "pose_reference": "per_episode_start",
                 },
                 "source_bags": [path.name for path in bag_paths],
             }
@@ -979,6 +1186,15 @@ def export_umi_dataset(
             "max_position_step_m": float(max_position_step_m),
             "max_orientation_step_deg": float(max_orientation_step_deg),
             "max_pose_gap_ms": float(max_pose_gap_ms),
+        },
+        "episode_segmentation": {
+            "mode": episode_mode,
+            "idle_duration_s": float(idle_duration_s),
+            "idle_linear_speed_m_s": float(idle_linear_speed_m_s),
+            "idle_angular_speed_deg_s": float(idle_angular_speed_deg_s),
+            "idle_gripper_speed_m_s": float(idle_gripper_speed_m_s),
+            "idle_gap_tolerance_s": float(idle_gap_tolerance_s),
+            "pose_reference": "per_episode_start",
         },
         "episodes": episode_summaries,
         "size_bytes": output_path.stat().st_size,
@@ -1024,6 +1240,35 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-image-skew-ms", type=float, default=40.0)
     parser.add_argument("--minimum-frames", type=int, default=24)
     parser.add_argument(
+        "--episode-mode",
+        choices=("bag", "auto_pause"),
+        default="bag",
+        help="use one episode per bag or split long bags at stationary pauses",
+    )
+    parser.add_argument(
+        "--idle-duration-s", type=float, default=DEFAULT_IDLE_DURATION_S
+    )
+    parser.add_argument(
+        "--idle-linear-speed-m-s",
+        type=float,
+        default=DEFAULT_IDLE_LINEAR_SPEED_M_S,
+    )
+    parser.add_argument(
+        "--idle-angular-speed-deg-s",
+        type=float,
+        default=DEFAULT_IDLE_ANGULAR_SPEED_DEG_S,
+    )
+    parser.add_argument(
+        "--idle-gripper-speed-m-s",
+        type=float,
+        default=DEFAULT_IDLE_GRIPPER_SPEED_M_S,
+    )
+    parser.add_argument(
+        "--idle-gap-tolerance-s",
+        type=float,
+        default=DEFAULT_IDLE_GAP_TOLERANCE_S,
+    )
+    parser.add_argument(
         "--max-position-step-m",
         type=float,
         default=DEFAULT_MAX_POSITION_STEP_M,
@@ -1063,6 +1308,11 @@ def main() -> int:
         or args.max_position_step_m <= 0
         or args.max_orientation_step_deg <= 0
         or args.max_pose_gap_ms <= 0
+        or args.idle_duration_s <= 0
+        or args.idle_linear_speed_m_s <= 0
+        or args.idle_angular_speed_deg_s <= 0
+        or args.idle_gripper_speed_m_s <= 0
+        or args.idle_gap_tolerance_s < 0
     ):
         print("ERROR: invalid export parameters", file=sys.stderr)
         return 2
@@ -1079,6 +1329,12 @@ def main() -> int:
             max_position_step_m=args.max_position_step_m,
             max_orientation_step_deg=args.max_orientation_step_deg,
             max_pose_gap_ms=args.max_pose_gap_ms,
+            episode_mode=args.episode_mode,
+            idle_duration_s=args.idle_duration_s,
+            idle_linear_speed_m_s=args.idle_linear_speed_m_s,
+            idle_angular_speed_deg_s=args.idle_angular_speed_deg_s,
+            idle_gripper_speed_m_s=args.idle_gripper_speed_m_s,
+            idle_gap_tolerance_s=args.idle_gap_tolerance_s,
             camera_names=args.camera_names,
         )
     except (OSError, RuntimeError, ValueError) as exc:

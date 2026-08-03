@@ -6,6 +6,7 @@ const cameraLayoutInput = document.getElementById("umi-camera-layout");
 const layoutSummary = document.getElementById("umi-layout-summary");
 const schemaGrid = document.getElementById("umi-schema-grid");
 const imageModeInput = document.getElementById("umi-image-mode");
+const episodeModeInput = document.getElementById("umi-episode-mode");
 const exportButton = document.getElementById("umi-export-button");
 const statusLabel = document.getElementById("umi-status-label");
 const statusDetail = document.getElementById("umi-status-detail");
@@ -45,7 +46,7 @@ function renderLayout() {
   layoutSummary.textContent = layout.label;
   schemaGrid.innerHTML = layout.schema.map(([key, value]) =>
     `<span><small>${escapeHtml(key)}</small><strong>${escapeHtml(value)}</strong></span>`
-  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `Fixed lower ROI → ${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span><span><small>Gripper / pose</small><strong>0–0.083 m · one bag per episode</strong></span><span><small>Output folder</small><strong>outputs/umi_datasets/&lt;rosbag&gt;_umi/</strong></span>`;
+  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `Fixed lower ROI → ${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span><span><small>Episodes</small><strong>${episodeModeInput.value === "auto_pause" ? "Auto-split at ~1 s pauses" : "One rosbag = one episode"}</strong></span><span><small>Gripper / pose</small><strong>0–0.083 m · relative per episode</strong></span><span><small>Output folder</small><strong>outputs/umi_datasets/&lt;rosbag&gt;_umi/</strong></span>`;
 }
 
 function formatBytes(bytes) {
@@ -89,6 +90,7 @@ function setLocked(locked) {
   exportButton.disabled = locked;
   cameraLayoutInput.disabled = locked;
   imageModeInput.disabled = locked;
+  episodeModeInput.disabled = locked;
   selectAllButton.disabled = locked;
   bagList.querySelectorAll("input").forEach((input) => { input.disabled = locked; });
 }
@@ -124,7 +126,7 @@ function renderStatus(payload) {
     return `<div class="umi-result-item${isDone ? "" : " is-error"}">
       <span><small>Source rosbag</small><strong>${escapeHtml(item.bag_name || "--")}</strong></span>
       <span><small>${isDone ? "Saved on device" : "Export failed"}</small><strong>${escapeHtml(isDone ? item.output_path || "--" : item.error || "Unknown error")}</strong></span>
-      <span><small>Summary</small><strong>${isDone ? `${Number(result.total_frames || 0).toLocaleString()} frames · ${formatBytes(result.size_bytes)}` : "No output written"}</strong></span>
+      <span><small>Summary</small><strong>${isDone ? `${Number(result.episode_count || 0)} episode(s) · ${Number(result.total_frames || 0).toLocaleString()} frames · ${formatBytes(result.size_bytes)}` : "No output written"}</strong></span>
     </div>`;
   }).join("");
   resultElement.hidden = false;
@@ -155,6 +157,8 @@ imageModeInput.addEventListener("change", () => {
   renderLayout();
 });
 
+episodeModeInput.addEventListener("change", renderLayout);
+
 cameraLayoutInput.addEventListener("change", renderLayout);
 
 exportButton.addEventListener("click", async () => {
@@ -178,6 +182,7 @@ exportButton.addEventListener("click", async () => {
       body: JSON.stringify({
         bag_names: bagNames,
         image_mode: imageModeInput.value,
+        episode_mode: episodeModeInput.value,
         camera_names: selectedLayout().cameras,
       }),
     });
