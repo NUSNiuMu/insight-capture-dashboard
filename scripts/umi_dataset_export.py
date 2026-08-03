@@ -31,7 +31,7 @@ POSE_TYPES = {
     "geometry_msgs/msg/PoseWithCovarianceStamped",
 }
 ROLE_ORDER = ("right_hand", "left_hand", "head")
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_MAX_POSITION_STEP_M = 0.05
 DEFAULT_MAX_ORIENTATION_STEP_DEG = 45.0
 DEFAULT_MAX_POSE_GAP_MS = 100.0
@@ -606,6 +606,14 @@ def build_episode_plans(
     ]
 
 
+def _fixed_square_roi(shape: tuple[int, int]) -> tuple[int, int, int, int]:
+    """Return the fixed bottom-center square training ROI as x, y, width, height."""
+
+    height, width = shape
+    side = min(height, width)
+    return ((width - side) // 2, height - side, side, side)
+
+
 def _prepare_rgb(image: np.ndarray, size: Optional[int]) -> np.ndarray:
     if image.ndim == 2:
         image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
@@ -613,8 +621,10 @@ def _prepare_rgb(image: np.ndarray, size: Optional[int]) -> np.ndarray:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     if size is None:
         return np.ascontiguousarray(image)
-    interpolation = cv2.INTER_AREA if max(image.shape[:2]) > size else cv2.INTER_LINEAR
-    return cv2.resize(image, (size, size), interpolation=interpolation)
+    x, y, width, height = _fixed_square_roi(image.shape[:2])
+    roi = image[y : y + height, x : x + width]
+    interpolation = cv2.INTER_AREA if width > size else cv2.INTER_LINEAR
+    return cv2.resize(roi, (size, size), interpolation=interpolation)
 
 
 def append_episode_images(
@@ -835,6 +845,15 @@ def export_umi_dataset(
         )
         for spec in specs
     }
+    crop_boxes = (
+        {
+            spec.name: list(_fixed_square_roi(source_shapes[spec.name]))
+            for spec in specs
+        }
+        if image_size is not None
+        else {}
+    )
+    image_mode = "original" if image_size is None else "fixed_roi_square"
 
     total_frames = sum(len(plan.timestamps_ns) for _, plan in planned_episodes)
     episode_summaries = []
@@ -905,11 +924,15 @@ def export_umi_dataset(
                 "format": "umi_replay_buffer",
                 "schema_version": SCHEMA_VERSION,
                 "fps": float(fps),
-                "image_mode": "original" if image_size is None else "resized_square",
+                "image_mode": image_mode,
                 "camera_image_sizes": {
                     spec.name: [output_shapes[spec.name][1], output_shapes[spec.name][0]]
                     for spec in specs
                 },
+                "camera_crop_boxes_xywh": crop_boxes,
+                "crop_policy": (
+                    None if image_size is None else "bottom_center_max_square"
+                ),
                 "camera_order": [spec.name for spec in specs],
                 "robot_order": [spec.name for spec in specs if spec.role != "head"],
                 "pose_topics": {
@@ -939,11 +962,13 @@ def export_umi_dataset(
         "duration_s": round(total_frames / fps, 3),
         "processing_seconds": round(elapsed, 3),
         "fps": float(fps),
-        "image_mode": "original" if image_size is None else "resized_square",
+        "image_mode": image_mode,
         "camera_image_sizes": {
             spec.name: [output_shapes[spec.name][1], output_shapes[spec.name][0]]
             for spec in specs
         },
+        "camera_crop_boxes_xywh": crop_boxes,
+        "crop_policy": None if image_size is None else "bottom_center_max_square",
         "camera_order": [spec.name for spec in specs],
         "robot_order": [spec.name for spec in specs if spec.role != "head"],
         "pose_topics": {
@@ -991,7 +1016,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--image-size",
         default="original",
-        help="original, or a positive square output size such as 224",
+        help=(
+            "original, or a positive output size such as 224; square outputs use "
+            "a fixed bottom-center crop before scaling"
+        ),
     )
     parser.add_argument("--max-image-skew-ms", type=float, default=40.0)
     parser.add_argument("--minimum-frames", type=int, default=24)

@@ -102,7 +102,9 @@ episode，选择单臂 A、单臂 B 或双臂采集布局和训练图像分辨�
 点击 **Build UMI outputs**。每个选中的 rosbag 会独立处理并自动保存为
 `outputs/umi_datasets/<rosbag 名>_umi/`，不需要再点击下载。
 **Original resolution** 保留每路相机在 rosbag 中的原始宽高，不进行缩放；图像只转换为
-UMI 需要的 RGB 三通道，Zarr 使用无损压缩。`224 × 224` 和 `384 × 384` 仅作为兼容选项。
+UMI 需要的 RGB 三通道，Zarr 使用无损压缩。`224 × 224` 和 `384 × 384` 会先固定裁剪
+水平居中、底部对齐的最大方形操作区，再等比缩放为训练副本，不会把 portrait 图像直接
+拉伸成正方形。导出的 manifest 会记录每路相机的 `camera_crop_boxes_xywh`。
 后台会在 recorder timeline 上把所选图像、pose、TCP 外参与夹爪二维码检测统一对齐到
 20 Hz。每个输出目录包含：
 

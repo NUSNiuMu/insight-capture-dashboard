@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Insight UMI Dataset</title><link rel="stylesheet" href="/static/styles.css?v=20260803-umi-v2">
+    <title>Insight UMI Dataset</title><link rel="stylesheet" href="/static/styles.css?v=20260803-umi-v3">
   </head>
   <body data-dashboard-view="umi-dataset">
     <div class="app-shell">
@@ -24,7 +24,7 @@
             <section class="data-surface umi-export-surface">
               <div class="section-heading"><div><p class="section-kicker">02 · Export</p><h2>Build replay buffer</h2></div><span id="umi-layout-summary">Single arm · Insight3 A</span></div>
               <label><span class="field-label">Capture layout</span><select id="umi-camera-layout" class="field-control"><option value="single_a" selected>Single arm · Insight3 A (right)</option><option value="single_b">Single arm · Insight3 B (left)</option><option value="bimanual">Bimanual · Insight3 A + B + Insight9</option></select><small class="field-help">Single-arm maps the selected Insight3 to camera0 / robot0 and uses its native VIO pose. Bimanual uses global poses.</small></label>
-              <label class="umi-resolution-field"><span class="field-label">Training image resolution</span><select id="umi-image-mode" class="field-control"><option value="original" selected>Original resolution</option><option value="384">384 × 384 compatibility</option><option value="224">224 × 224 UMI default</option></select><small class="field-help">Original keeps each camera's source width and height. Each rosbag remains one episode; pose discontinuities reject the whole rosbag instead of splitting it.</small></label>
+              <label class="umi-resolution-field"><span class="field-label">Training image resolution</span><select id="umi-image-mode" class="field-control"><option value="original" selected>Original resolution</option><option value="384">384 × 384 · fixed lower ROI</option><option value="224">224 × 224 · fixed lower ROI (UMI default)</option></select><small class="field-help">Square modes crop a fixed bottom-center operation ROI before proportional scaling, preserving the gripper, markers and work surface without stretching portrait video. Original keeps the source width and height.</small></label>
               <div id="umi-schema-grid" class="umi-schema-grid">
                 <span><small>camera0 / robot0</small><strong>Right hand · insight3_a · VIO</strong></span>
                 <span><small>Images</small><strong id="umi-image-summary">Original RGB · 20 Hz</strong></span>
@@ -42,6 +42,6 @@
         </main>
       </section>
     </div>
-    <script type="module" src="/static/pages/umi-dataset.js?v=20260803-umi-v2"></script>
+    <script type="module" src="/static/pages/umi-dataset.js?v=20260803-umi-v3"></script>
   </body>
 </html>
