@@ -26,6 +26,8 @@ const HAND_RIG_EDGES = [
 const HAND_RIG_SCALE = 0.09;
 const HAND_RIG_COLOR = "#ff0000";
 const HAND_RIG_RADIUS = 0.004;
+const DEFAULT_HARDWARE_SCALING_LEVEL = 1.8;
+const CAPTURE_HARDWARE_SCALING_LEVEL = 2.0;
 const DEFAULT_TRAIL_ENABLED = {
   head: true,
   left_hand: true,
@@ -36,9 +38,9 @@ let engine = null;
 let scene = null;
 if (canvas) {
   try {
-    engine = new BABYLON.Engine(canvas, true, {
+    engine = new BABYLON.Engine(canvas, false, {
       preserveDrawingBuffer: false,
-      stencil: true,
+      stencil: false,
     });
     scene = createScene(engine, canvas);
   } catch (error) {
@@ -67,7 +69,7 @@ let traceCapacity = 300;
 
 if (engine && scene) {
   let sceneRenderBudgetMs = 0;
-  engine.setHardwareScalingLevel(1.4);
+  engine.setHardwareScalingLevel(DEFAULT_HARDWARE_SCALING_LEVEL);
   engine.runRenderLoop(() => {
     sceneRenderBudgetMs += engine.getDeltaTime();
     if (sceneRenderBudgetMs < sceneFrameIntervalMs) return;
@@ -95,7 +97,11 @@ export function setAvatarLoadStage(stage) {
 export function setCapturePerformanceMode(enabled) {
   capturePerformanceMode = Boolean(enabled);
   if (engine) {
-    engine.setHardwareScalingLevel(capturePerformanceMode ? 2.0 : 1.4);
+    engine.setHardwareScalingLevel(
+      capturePerformanceMode
+        ? CAPTURE_HARDWARE_SCALING_LEVEL
+        : DEFAULT_HARDWARE_SCALING_LEVEL
+    );
     engine.resize();
   }
   refreshSceneFrameInterval();

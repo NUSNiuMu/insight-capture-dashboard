@@ -189,7 +189,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .camera-actions button { display: grid; width: 28px; height: 28px; padding: 0; place-items: center; border: 1px solid var(--line-dark); border-radius: 7px; color: var(--muted); background: var(--surface-soft); cursor: pointer; }
 .camera-actions button:hover { color: var(--ink); border-color: var(--accent); }
 .camera-body { position: relative; min-height: 140px; overflow: hidden; background: var(--screen-deep); aspect-ratio: var(--camera-aspect, 16 / 9); }
-.camera-frame { display: block; width: 100%; height: 100%; object-fit: contain; transform: rotate(var(--camera-rotation, 0deg)); transform-origin: center; }
+.camera-frame { display: block; width: 100%; height: 100%; object-fit: contain; }
+.camera-body.camera-rotated .camera-frame { transform: rotate(var(--camera-rotation)); transform-origin: center; }
 img.camera-frame:not([src]) { visibility: hidden; }
 .camera-overlay { position: absolute; top: 10px; right: 10px; display: flex; padding: 5px 9px; align-items: center; gap: 7px; border: 1px solid rgba(255, 176, 32, 0.35); border-radius: 6px; color: #b9ac91; background: rgba(13, 11, 7, 0.78); font-family: var(--mono); font-size: 8px; backdrop-filter: blur(8px); }
 .camera-fps { color: var(--accent-fill); }
@@ -361,7 +362,7 @@ body[data-dashboard-view="3d"] { height: 100%; overflow: hidden; color-scheme: l
 .camera-wall-heading > span { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-family: var(--mono); font-size: 7px; letter-spacing: .1em; }
 .camera-wall-heading > span i { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(31, 138, 85, 0.1); }
 .spatial-camera-dock { display: grid; min-height: 0; flex: 1; grid-template-rows: repeat(3,minmax(0,1fr)); gap: 10px; overflow: auto; }
-.spatial-camera-dock .camera-panel { width: 100%; max-width: none; min-height: 0; resize: none; }
+.spatial-camera-dock .camera-panel { width: 100%; max-width: none; min-height: 0; resize: none; contain: paint; box-shadow: none; }
 .spatial-camera-dock .camera-header { min-height: 54px; padding: 9px 10px; }
 .spatial-camera-dock .camera-body { min-height: 0; flex: 1; aspect-ratio: auto; }
 .spatial-camera-dock .camera-actions button { width: 25px; height: 25px; }
@@ -375,6 +376,23 @@ body[data-dashboard-view="3d"] { height: 100%; overflow: hidden; color-scheme: l
 .stage-status small { color: var(--muted); font-family: var(--mono); font-size: 7px; }
 .hud { position: absolute; top: 20px; right: 22px; left: 22px; z-index: 15; display: grid; grid-template-columns: minmax(0,1fr) 280px; align-items: start; gap: 10px; pointer-events: none; }
 .spatial-playback, .mapping-panel, .legend { border: 1px solid var(--line-dark); border-radius: 12px; color: var(--ink); background: rgba(255, 252, 245, 0.92); box-shadow: 0 18px 44px rgba(20, 16, 8, 0.28); backdrop-filter: blur(18px); pointer-events: auto; }
+body[data-dashboard-view="3d"] .stage-status,
+body[data-dashboard-view="3d"] .spatial-playback,
+body[data-dashboard-view="3d"] .mapping-panel,
+body[data-dashboard-view="3d"] .legend,
+body[data-dashboard-view="3d"] .camera-overlay {
+  box-shadow: none;
+  backdrop-filter: none;
+}
+body[data-dashboard-view="3d"] .stage-status,
+body[data-dashboard-view="3d"] .spatial-playback,
+body[data-dashboard-view="3d"] .mapping-panel,
+body[data-dashboard-view="3d"] .legend {
+  background: rgba(255, 252, 245, 0.98);
+}
+body[data-dashboard-view="3d"] .camera-overlay {
+  background: rgba(13, 11, 7, 0.96);
+}
 body.capture-performance .spatial-playback,
 body.capture-performance .mapping-panel,
 body.capture-performance .legend,

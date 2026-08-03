@@ -198,7 +198,13 @@ function ensureCameraPanel(camera) {
 function updateCameraPanelAspect(panel, camera) {
   const body = panel.querySelector(".camera-body");
   const rotation = normalizeRotation(camera.rotation_deg || 0);
-  body.style.setProperty("--camera-rotation", `${rotation}deg`);
+  const rotatedFrame = rotation !== 0;
+  body.classList.toggle("camera-rotated", rotatedFrame);
+  if (rotatedFrame) {
+    body.style.setProperty("--camera-rotation", `${rotation}deg`);
+  } else {
+    body.style.removeProperty("--camera-rotation");
+  }
   if (camera.width && camera.height) {
     const rotated = rotation === 90 || rotation === 270;
     const aspectWidth = rotated ? camera.height : camera.width;
