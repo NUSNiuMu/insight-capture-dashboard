@@ -131,6 +131,8 @@ compressed topic，导出只做解码，不会再增加一次有损压缩，但�
 episode；20 Hz 相邻 TCP 位置变化超过 5 cm、姿态变化超过 45°或 VIO pose 间隔超过
 100 ms 时拒绝整条 rosbag，禁止跨越重定位、跟踪丢失或坐标重置插值。通过质量门的事件
 计数写入 manifest。
+录制页会默认同时勾选每路相机的原始 `vio_100hz` 和配置的 dashboard/global pose，确保
+后续 UMI 单臂导出不依赖用户手动补选原始 VIO。
 
 需要在一条长录制中连续完成多次示教时，可在 UMI 页面选择 **Auto-split long recording
 at pauses**。每一小节结束后保持 TCP 和夹爪静止约 1 秒；检测阈值为连续静止至少 0.8 秒。
