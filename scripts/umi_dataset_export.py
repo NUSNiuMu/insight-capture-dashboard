@@ -42,6 +42,10 @@ DEFAULT_IDLE_GRIPPER_SPEED_M_S = 0.005
 DEFAULT_IDLE_GAP_TOLERANCE_S = 0.15
 
 
+class BagQualityError(ValueError):
+    """The source bag cannot produce a trustworthy UMI episode."""
+
+
 @dataclass(frozen=True)
 class CameraSpec:
     name: str
@@ -263,7 +267,7 @@ def _message_pose(message: object) -> tuple[np.ndarray, np.ndarray]:
     )
     norm = float(np.linalg.norm(quaternion))
     if not np.isfinite(norm) or norm <= 1e-9:
-        raise ValueError("pose contains an invalid quaternion")
+        raise BagQualityError("pose contains an invalid quaternion")
     return position, quaternion / norm
 
 
@@ -347,11 +351,13 @@ def scan_bag(
             if spec.role != "head" or spec.name not in image_shapes:
                 image = decode_image(message, topic_types[topic])
                 if image is None:
-                    raise ValueError(f"failed to decode the first {spec.name} image")
+                    raise BagQualityError(
+                        f"failed to decode the first {spec.name} image"
+                    )
                 shape = (int(image.shape[0]), int(image.shape[1]))
                 previous_shape = image_shapes.setdefault(spec.name, shape)
                 if previous_shape != shape:
-                    raise ValueError(
+                    raise BagQualityError(
                         f"{spec.name} image resolution changed from "
                         f"{previous_shape[1]}x{previous_shape[0]} to {shape[1]}x{shape[0]}"
                     )
@@ -390,13 +396,15 @@ def scan_bag(
     }
     for name, stamps in image_arrays.items():
         if stamps.size < 2:
-            raise ValueError(f"{name} has fewer than two image frames")
+            raise BagQualityError(f"{name} has fewer than two image frames")
     for name, (stamps, _, _) in poses.items():
         if stamps.size < 2:
-            raise ValueError(f"{name} has fewer than two poses")
+            raise BagQualityError(f"{name} has fewer than two poses")
     for name, (stamps, _) in openings.items():
         if stamps.size < 2:
-            raise ValueError(f"{name} has fewer than two dual-marker detections")
+            raise BagQualityError(
+                f"{name} has fewer than two dual-marker detections"
+            )
     detection_rates = {
         name: round(len(openings[name][0]) / len(image_arrays[name]), 6)
         for name in openings
@@ -611,7 +619,9 @@ def build_episode_plans(
     start_ns = int(math.ceil(start_ns / step_ns) * step_ns)
     timeline = np.arange(start_ns, end_ns + 1, step_ns, dtype=np.int64)
     if timeline.size < minimum_frames:
-        raise ValueError("overlapping streams are shorter than the minimum episode length")
+        raise BagQualityError(
+            "overlapping streams are shorter than the minimum episode length"
+        )
 
     image_indices = {}
     valid = np.ones(timeline.shape, dtype=bool)
@@ -728,7 +738,7 @@ def build_episode_plans(
                 }
             )
             if episode_mode == "bag":
-                raise ValueError(
+                raise BagQualityError(
                     "episode rejected by continuity gate: "
                     + ", ".join(rejection_reasons)
                 )
@@ -780,7 +790,9 @@ def build_episode_plans(
             )
         )
     if not plans:
-        raise ValueError("no valid episodes remain after automatic segmentation")
+        raise BagQualityError(
+            "no valid episodes remain after automatic segmentation"
+        )
     for plan in plans:
         plan.segmentation["rejected_segment_count"] = rejected_segments
         plan.segmentation["rejected_segments"] = rejected_segment_details
@@ -844,11 +856,11 @@ def append_episode_images(
         message = deserialize_message(raw, message_classes[topic])
         image = decode_image(message, topic_types[topic])
         if image is None:
-            raise ValueError(f"failed to decode {topic} frame {current_index}")
+            raise BagQualityError(f"failed to decode {topic} frame {current_index}")
         actual_shape = (int(image.shape[0]), int(image.shape[1]))
         expected_source_shape = output_shapes[spec.name]
         if size is None and actual_shape != expected_source_shape:
-            raise ValueError(
+            raise BagQualityError(
                 f"{spec.name} image resolution changed from "
                 f"{expected_source_shape[1]}x{expected_source_shape[0]} to "
                 f"{actual_shape[1]}x{actual_shape[0]}"
@@ -865,7 +877,7 @@ def append_episode_images(
         if count != len(plan.timestamps_ns)
     }
     if missing:
-        raise ValueError(f"failed to write selected image frames: {missing}")
+        raise BagQualityError(f"failed to write selected image frames: {missing}")
 
 
 def _zip_store(directory: Path, output_path: Path) -> None:
@@ -1337,6 +1349,9 @@ def main() -> int:
             idle_gap_tolerance_s=args.idle_gap_tolerance_s,
             camera_names=args.camera_names,
         )
+    except BagQualityError as exc:
+        print(f"UMI_REJECTED_BAG {exc}", file=sys.stderr)
+        return 2
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

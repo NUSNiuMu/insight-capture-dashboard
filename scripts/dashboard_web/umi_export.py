@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -26,6 +27,12 @@ class _UmiExportItem:
     status: str = "pending"
     result: Optional[Dict[str, object]] = None
     error: Optional[str] = None
+    source_deleted: bool = False
+    source_delete_error: Optional[str] = None
+
+
+class _RejectedRosbagError(RuntimeError):
+    """The exporter rejected a bag because its recorded data is unusable."""
 
 
 @dataclass
@@ -170,6 +177,7 @@ class UmiExportManager:
         completed_frames = 0
         successful_items = 0
         failed_items = 0
+        rejected_items: list[_UmiExportItem] = []
         for item_index, item in enumerate(job.items):
             with self._lock:
                 if job.cancelled:
@@ -189,6 +197,8 @@ class UmiExportManager:
                 with self._lock:
                     item.status = "error"
                     item.error = str(exc)
+                if isinstance(exc, _RejectedRosbagError):
+                    rejected_items.append(item)
                 try:
                     item.output_path.parent.rmdir()
                 except OSError:
@@ -199,6 +209,12 @@ class UmiExportManager:
                     job.completed_bags = item_index + 1
                     job.total_frames = completed_frames
                     self._process = None
+
+        if not job.cancelled:
+            with self._lock:
+                job.stage = "cleanup"
+            for item in rejected_items:
+                self._delete_rejected_source(item)
 
         with self._lock:
             job.finished_at = time.time()
@@ -259,6 +275,13 @@ class UmiExportManager:
                     job.current_bag = item.bag_name
                     job.total_frames = completed_frames + int(fields[5])
         if process.wait() != 0:
+            rejected_lines = [
+                line.removeprefix("UMI_REJECTED_BAG ")
+                for line in output_tail
+                if line.startswith("UMI_REJECTED_BAG ")
+            ]
+            if rejected_lines:
+                raise _RejectedRosbagError(rejected_lines[-1])
             error_lines = [
                 line.removeprefix("ERROR: ")
                 for line in output_tail
@@ -275,6 +298,17 @@ class UmiExportManager:
         result = json.loads(manifest_path.read_text(encoding="utf-8"))
         self._make_output_user_manageable(item.output_path.parent)
         return result
+
+    def _delete_rejected_source(self, item: _UmiExportItem) -> None:
+        try:
+            bag_path = item.bag_path.resolve()
+            if not bag_path.is_relative_to(self.rosbag_root):
+                raise RuntimeError("Rejected rosbag resolved outside rosbag root.")
+            if bag_path.is_dir():
+                shutil.rmtree(bag_path)
+            item.source_deleted = not bag_path.exists()
+        except (OSError, RuntimeError) as exc:
+            item.source_delete_error = str(exc)
 
     @staticmethod
     def _make_output_user_manageable(directory: Path) -> None:
@@ -299,6 +333,9 @@ class UmiExportManager:
             payload["result"] = item.result
         if item.error:
             payload["error"] = item.error
+        payload["source_deleted"] = item.source_deleted
+        if item.source_delete_error:
+            payload["source_delete_error"] = item.source_delete_error
         return payload
 
     def _bag_path(self, bag_name: str) -> Path:
