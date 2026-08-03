@@ -98,21 +98,23 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 耗时或动画估算。
 
 **UMI 训练数据导出**：打开 `/umi-dataset`，将每次完整示教对应的 rosbag 勾选为
-episode，选择单臂 A、单臂 B 或双臂采集布局，填写数据集名称并选择训练图像分辨率后
-点击 **Build UMI dataset**。默认的
+episode，选择单臂 A、单臂 B 或双臂采集布局和训练图像分辨率后
+点击 **Build UMI outputs**。每个选中的 rosbag 会独立处理并自动保存为
+`outputs/umi_datasets/<rosbag 名>_umi/`，不需要再点击下载。
 **Original resolution** 保留每路相机在 rosbag 中的原始宽高，不进行缩放；图像只转换为
 UMI 需要的 RGB 三通道，Zarr 使用无损压缩。`224 × 224` 和 `384 × 384` 仅作为兼容选项。
 后台会在 recorder timeline 上把所选图像、pose、TCP 外参与夹爪二维码检测统一对齐到
-20 Hz，并输出可由官方 `UmiDataset` 直接读取的
-`outputs/umi_datasets/<名称>.zarr.zip`。页面同时提供：
+20 Hz。每个输出目录包含：
 
-- `<名称>.umi.yaml`：按所选布局生成 `shape_meta`；单臂动作维度为 10，双臂为 20。
+- `<rosbag 名>_umi.zarr.zip`：可由官方 `UmiDataset` 直接读取的数据集；
+- `<rosbag 名>_umi.umi.yaml`：按所选布局生成 `shape_meta`；单臂动作维度为 10，双臂为 20。
   复制到 UMI 仓库的
   `diffusion_policy/config/task/` 并修改 `dataset_path` 后即可用于训练；
-- `<名称>.manifest.json`：episode、帧数、同步偏差和夹爪检测率等质量摘要。
+- `<rosbag 名>_umi.manifest.json`：episode、帧数、同步偏差和夹爪检测率等质量摘要。
 
-原始分辨率模式允许三路相机使用不同尺寸，并会把各自的 `[C,H,W]` 写入训练配置。
-同一路相机在多个输入 bag 中必须保持相同分辨率，否则导出会停止并指出不一致的相机。
+原始分辨率模式允许多路相机使用不同尺寸，并会把各自的 `[C,H,W]` 写入训练配置。
+批量处理时某个 rosbag 导出失败不会阻止后续 rosbag，页面会逐包显示设备端保存路径或
+失败原因。
 原始分辨率会显著增加数据集大小、训练 I/O 和显存占用；rosbag 本身若记录的是 JPEG
 compressed topic，导出只做解码，不会再增加一次有损压缩，但无法恢复采集时已经丢失的细节。
 

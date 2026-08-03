@@ -27,7 +27,6 @@ class UmiExportRoutes:
             raise ValueError("camera_names must be a list of strings")
         try:
             payload = self.context.umi_export_manager.start(
-                str(body.get("dataset_name", "")),
                 bag_names,
                 str(body.get("image_mode", "original")),
                 camera_names,
@@ -40,27 +39,6 @@ class UmiExportRoutes:
 
     async def _handle_status(self, _request: web.Request) -> web.Response:
         return web.json_response(self.context.umi_export_manager.status())
-
-    async def _handle_result(self, request: web.Request) -> web.StreamResponse:
-        return self._file_response(request, artifact="dataset")
-
-    async def _handle_manifest(self, request: web.Request) -> web.StreamResponse:
-        return self._file_response(request, artifact="manifest")
-
-    async def _handle_config(self, request: web.Request) -> web.StreamResponse:
-        return self._file_response(request, artifact="config")
-
-    def _file_response(self, request: web.Request, *, artifact: str) -> web.FileResponse:
-        try:
-            path = self.context.umi_export_manager.result_path(
-                request.query.get("dataset_name", ""), artifact=artifact
-            )
-        except FileNotFoundError as exc:
-            raise web.HTTPNotFound(text=str(exc)) from exc
-        response = web.FileResponse(path)
-        response.headers["Cache-Control"] = "no-store"
-        response.headers["Content-Disposition"] = f'attachment; filename="{path.name}"'
-        return response
 
     async def _on_shutdown(self, _app: web.Application) -> None:
         self.context.umi_export_manager.stop()

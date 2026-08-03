@@ -2,7 +2,6 @@ import { escapeHtml, formatDuration } from "../shared/format.js";
 
 const bagList = document.getElementById("umi-bag-list");
 const selectAllButton = document.getElementById("umi-select-all");
-const datasetNameInput = document.getElementById("umi-dataset-name");
 const cameraLayoutInput = document.getElementById("umi-camera-layout");
 const layoutSummary = document.getElementById("umi-layout-summary");
 const schemaGrid = document.getElementById("umi-schema-grid");
@@ -46,7 +45,7 @@ function renderLayout() {
   layoutSummary.textContent = layout.label;
   schemaGrid.innerHTML = layout.schema.map(([key, value]) =>
     `<span><small>${escapeHtml(key)}</small><strong>${escapeHtml(value)}</strong></span>`
-  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span>`;
+  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span><span><small>Output folder</small><strong>outputs/umi_datasets/&lt;rosbag&gt;_umi/</strong></span>`;
 }
 
 function formatBytes(bytes) {
@@ -88,7 +87,6 @@ async function loadBags() {
 
 function setLocked(locked) {
   exportButton.disabled = locked;
-  datasetNameInput.disabled = locked;
   cameraLayoutInput.disabled = locked;
   imageModeInput.disabled = locked;
   selectAllButton.disabled = locked;
@@ -110,28 +108,25 @@ function renderStatus(payload) {
     return;
   }
   setLocked(false);
-  if (payload.status === "error") {
-    statusLabel.textContent = "Export failed";
-    progressValue.textContent = "ERROR";
-    progressFill.classList.add("is-error");
-    statusDetail.textContent = payload.error || "Unknown export error.";
-    resultElement.hidden = true;
-    return;
-  }
-  const result = payload.result || {};
-  statusLabel.textContent = "Dataset ready";
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  const successful = items.filter((item) => item.status === "done");
+  const failed = items.filter((item) => item.status === "error");
+  statusLabel.textContent = payload.status === "done"
+    ? "Outputs saved"
+    : payload.status === "partial" ? "Completed with errors" : "Export failed";
   progressValue.textContent = "100%";
-  progressFill.classList.remove("is-error");
+  progressFill.classList.toggle("is-error", failed.length > 0);
   progressFill.style.width = "100%";
-  const sizes = Object.entries(result.camera_image_sizes || {}).map(([name, size]) => `${name} ${size[0]}×${size[1]}`).join(" · ");
-  statusDetail.textContent = `${Number(result.episode_count || 0)} episodes · ${Number(result.total_frames || 0).toLocaleString()} frames · ${formatDuration(Number(result.duration_s || 0))}\nCamera order: ${(result.camera_order || []).join(" · ")}\nImages: ${sizes || "--"}`;
-  resultElement.innerHTML = `
-    <div><small>Zarr archive</small><strong>${formatBytes(result.size_bytes)}</strong></div>
-    <div><small>Episodes</small><strong>${Number(result.episode_count || 0)}</strong></div>
-    <div><small>Frames</small><strong>${Number(result.total_frames || 0).toLocaleString()}</strong></div>
-    <a class="primary-button" href="${escapeHtml(payload.result_url || "#")}">Download Zarr</a>
-    <a class="quiet-button" href="${escapeHtml(payload.config_url || "#")}">Training config</a>
-    <a class="quiet-button" href="${escapeHtml(payload.manifest_url || "#")}">Manifest</a>`;
+  statusDetail.textContent = `${successful.length}/${items.length} rosbags saved · ${Number(payload.total_frames || 0).toLocaleString()} total frames${failed.length ? `\n${failed.length} failed; see per-bag details below.` : ""}`;
+  resultElement.innerHTML = items.map((item) => {
+    const result = item.result || {};
+    const isDone = item.status === "done";
+    return `<div class="umi-result-item${isDone ? "" : " is-error"}">
+      <span><small>Source rosbag</small><strong>${escapeHtml(item.bag_name || "--")}</strong></span>
+      <span><small>${isDone ? "Saved on device" : "Export failed"}</small><strong>${escapeHtml(isDone ? item.output_path || "--" : item.error || "Unknown error")}</strong></span>
+      <span><small>Summary</small><strong>${isDone ? `${Number(result.total_frames || 0).toLocaleString()} frames · ${formatBytes(result.size_bytes)}` : "No output written"}</strong></span>
+    </div>`;
+  }).join("");
   resultElement.hidden = false;
 }
 
@@ -164,10 +159,9 @@ cameraLayoutInput.addEventListener("change", renderLayout);
 
 exportButton.addEventListener("click", async () => {
   const bagNames = selectedBags();
-  const datasetName = datasetNameInput.value.trim();
-  if (!bagNames.length || !datasetName) {
+  if (!bagNames.length) {
     statusLabel.textContent = "Configuration required";
-    statusDetail.textContent = "Select at least one rosbag and enter a dataset name.";
+    statusDetail.textContent = "Select at least one rosbag.";
     return;
   }
   window.clearTimeout(pollTimer);
@@ -182,7 +176,6 @@ exportButton.addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        dataset_name: datasetName,
         bag_names: bagNames,
         image_mode: imageModeInput.value,
         camera_names: selectedLayout().cameras,

@@ -12,19 +12,28 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
-from urllib.parse import quote
 
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 @dataclass
-class _UmiExportJob:
+class _UmiExportItem:
+    bag_name: str
+    bag_path: Path
     dataset_name: str
-    bag_names: list[str]
     output_path: Path
+    status: str = "pending"
+    result: Optional[Dict[str, object]] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class _UmiExportJob:
+    bag_names: list[str]
     image_size: Optional[int]
     camera_names: list[str]
+    items: list[_UmiExportItem]
     status: str = "running"
     stage: str = "starting"
     current_bag: str = ""
@@ -32,12 +41,12 @@ class _UmiExportJob:
     total_frames: int = 0
     started_at: float = 0.0
     finished_at: float = 0.0
-    result: Optional[Dict[str, object]] = None
     error: Optional[str] = None
+    cancelled: bool = False
 
 
 class UmiExportManager:
-    """Run one rosbag-to-UMI export without blocking the dashboard."""
+    """Export each selected rosbag to an independent UMI dataset."""
 
     _SCRIPT = Path(__file__).resolve().parents[1] / "umi_dataset_export.py"
 
@@ -57,7 +66,6 @@ class UmiExportManager:
             payload: Dict[str, object] = {
                 "status": job.status,
                 "stage": job.stage,
-                "dataset_name": job.dataset_name,
                 "bag_names": job.bag_names,
                 "current_bag": job.current_bag,
                 "completed_bags": job.completed_bags,
@@ -68,27 +76,20 @@ class UmiExportManager:
                     "original" if job.image_size is None else str(job.image_size)
                 ),
                 "camera_names": job.camera_names,
+                "items": [self._item_payload(item) for item in job.items],
             }
             if job.finished_at:
                 payload["finished_at"] = job.finished_at
             if job.error:
                 payload["error"] = job.error
-            if job.result is not None:
-                payload["result"] = job.result
-                query = quote(job.dataset_name, safe="")
-                payload["result_url"] = f"/api/umi-export/result?dataset_name={query}"
-                payload["manifest_url"] = f"/api/umi-export/manifest?dataset_name={query}"
-                payload["config_url"] = f"/api/umi-export/config?dataset_name={query}"
             return payload
 
     def start(
         self,
-        dataset_name: str,
         bag_names: list[str],
         image_mode: str = "original",
         camera_names: Optional[list[str]] = None,
     ) -> Dict[str, object]:
-        dataset_name = self._validate_name(dataset_name, "dataset name")
         image_mode = str(image_mode).strip().lower()
         if image_mode == "original":
             image_size = None
@@ -114,55 +115,107 @@ class UmiExportManager:
             raise ValueError("Too many cameras selected.")
         if len(set(camera_names)) != len(camera_names):
             raise ValueError("Duplicate camera names are not allowed.")
-        output_path = self.output_root / f"{dataset_name}.zarr.zip"
+        items = [
+            _UmiExportItem(
+                bag_name=bag_name,
+                bag_path=bag_path,
+                dataset_name=f"{bag_name}_umi",
+                output_path=(
+                    self.output_root
+                    / f"{bag_name}_umi"
+                    / f"{bag_name}_umi.zarr.zip"
+                ),
+            )
+            for bag_name, bag_path in zip(bag_names, resolved_bags)
+        ]
         with self._lock:
             if self._current_job and self._current_job.status == "running":
                 raise RuntimeError("A UMI export job is already running.")
             job = _UmiExportJob(
-                dataset_name=dataset_name,
                 bag_names=list(bag_names),
-                output_path=output_path,
                 image_size=image_size,
                 camera_names=camera_names,
+                items=items,
                 started_at=time.time(),
             )
             self._current_job = job
         threading.Thread(
             target=self._worker,
-            args=(job, resolved_bags),
+            args=(job,),
             daemon=True,
             name="umi_export",
         ).start()
         return self.status()
 
-    def result_path(self, dataset_name: str, *, artifact: str = "dataset") -> Path:
-        dataset_name = self._validate_name(dataset_name, "dataset name")
-        suffixes = {
-            "dataset": ".zarr.zip",
-            "manifest": ".manifest.json",
-            "config": ".umi.yaml",
-        }
-        if artifact not in suffixes:
-            raise ValueError("Invalid UMI artifact type.")
-        suffix = suffixes[artifact]
-        path = self.output_root / f"{dataset_name}{suffix}"
-        if not path.is_file():
-            raise FileNotFoundError("UMI dataset result not found.")
-        return path
-
     def stop(self) -> None:
         with self._lock:
             process = self._process
+            if self._current_job is not None:
+                self._current_job.cancelled = True
         if process is not None and process.poll() is None:
             process.terminate()
 
-    def _worker(self, job: _UmiExportJob, bag_paths: list[Path]) -> None:
+    def _worker(self, job: _UmiExportJob) -> None:
+        completed_frames = 0
+        successful_items = 0
+        failed_items = 0
+        for item_index, item in enumerate(job.items):
+            with self._lock:
+                if job.cancelled:
+                    break
+                item.status = "running"
+                job.stage = "starting"
+                job.current_bag = item.bag_name
+                job.total_frames = completed_frames
+            try:
+                result = self._export_item(job, item, completed_frames)
+                with self._lock:
+                    item.result = result
+                    item.status = "done"
+                completed_frames += int(result.get("total_frames", 0))
+                successful_items += 1
+            except Exception as exc:
+                with self._lock:
+                    item.status = "error"
+                    item.error = str(exc)
+                try:
+                    item.output_path.parent.rmdir()
+                except OSError:
+                    pass
+                failed_items += 1
+            finally:
+                with self._lock:
+                    job.completed_bags = item_index + 1
+                    job.total_frames = completed_frames
+                    self._process = None
+
+        with self._lock:
+            job.finished_at = time.time()
+            if job.cancelled:
+                job.status = "error"
+                job.stage = "error"
+                job.error = "UMI export stopped."
+            elif failed_items and successful_items:
+                job.status = "partial"
+                job.stage = "done"
+                job.error = f"{failed_items} of {len(job.items)} rosbags failed."
+            elif failed_items:
+                job.status = "error"
+                job.stage = "error"
+                job.error = f"All {failed_items} rosbags failed."
+            else:
+                job.status = "done"
+                job.stage = "done"
+
+    def _export_item(
+        self, job: _UmiExportJob, item: _UmiExportItem, completed_frames: int
+    ) -> Dict[str, object]:
         command = [
             "/usr/bin/python3",
             str(self._SCRIPT),
-            *(str(path) for path in bag_paths),
+            str(item.bag_path),
             "--output",
-            str(job.output_path),
+            str(item.output_path),
             "--camera-config",
             str(self.project_root / "config" / "cameras.json"),
             "--calibration",
@@ -173,56 +226,56 @@ class UmiExportManager:
         for camera_name in job.camera_names:
             command.extend(("--camera", camera_name))
         output_tail = deque(maxlen=12)
-        try:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=os.environ.copy(),
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=os.environ.copy(),
+        )
+        with self._lock:
+            self._process = process
+        assert process.stdout is not None
+        for line in process.stdout:
+            output_tail.append(line.rstrip())
+            fields = line.strip().split(maxsplit=6)
+            if len(fields) >= 6 and fields[0] == "UMI_PROGRESS":
+                with self._lock:
+                    job.stage = fields[3]
+                    job.current_bag = item.bag_name
+                    job.total_frames = completed_frames + int(fields[5])
+        if process.wait() != 0:
+            error_lines = [
+                line.removeprefix("ERROR: ")
+                for line in output_tail
+                if line.startswith("ERROR: ")
+            ]
+            raise RuntimeError(
+                error_lines[-1]
+                if error_lines
+                else "\n".join(output_tail).strip() or "UMI exporter failed"
             )
-            with self._lock:
-                self._process = process
-            assert process.stdout is not None
-            for line in process.stdout:
-                output_tail.append(line.rstrip())
-                fields = line.strip().split(maxsplit=6)
-                if len(fields) >= 6 and fields[0] == "UMI_PROGRESS":
-                    with self._lock:
-                        job.completed_bags = max(int(fields[1]) - 1, 0)
-                        job.stage = fields[3]
-                        job.current_bag = fields[4]
-                        job.total_frames = int(fields[5])
-            return_code = process.wait()
-            if return_code != 0:
-                error_lines = [
-                    line.removeprefix("ERROR: ")
-                    for line in output_tail
-                    if line.startswith("ERROR: ")
-                ]
-                raise RuntimeError(
-                    error_lines[-1]
-                    if error_lines
-                    else "\n".join(output_tail).strip() or "UMI exporter failed"
-                )
-            manifest_path = self.output_root / f"{job.dataset_name}.manifest.json"
-            result = json.loads(manifest_path.read_text(encoding="utf-8"))
-            with self._lock:
-                job.status = "done"
-                job.stage = "done"
-                job.completed_bags = len(job.bag_names)
-                job.total_frames = int(result.get("total_frames", 0))
-                job.result = result
-                job.finished_at = time.time()
-        except Exception as exc:
-            with self._lock:
-                job.status = "error"
-                job.stage = "error"
-                job.error = str(exc)
-                job.finished_at = time.time()
-        finally:
-            with self._lock:
-                self._process = None
+        manifest_path = self.output_root / f"{item.dataset_name}.manifest.json"
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    def _item_payload(self, item: _UmiExportItem) -> Dict[str, object]:
+        manifest_path = item.output_path.with_name(
+            f"{item.dataset_name}.manifest.json"
+        )
+        config_path = item.output_path.with_name(f"{item.dataset_name}.umi.yaml")
+        payload: Dict[str, object] = {
+            "bag_name": item.bag_name,
+            "dataset_name": item.dataset_name,
+            "status": item.status,
+            "output_path": str(item.output_path.relative_to(self.project_root)),
+            "manifest_path": str(manifest_path.relative_to(self.project_root)),
+            "config_path": str(config_path.relative_to(self.project_root)),
+        }
+        if item.result is not None:
+            payload["result"] = item.result
+        if item.error:
+            payload["error"] = item.error
+        return payload
 
     def _bag_path(self, bag_name: str) -> Path:
         bag_name = self._validate_name(bag_name, "bag name")

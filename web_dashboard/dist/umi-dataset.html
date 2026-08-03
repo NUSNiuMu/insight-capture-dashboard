@@ -23,18 +23,18 @@
             </section>
             <section class="data-surface umi-export-surface">
               <div class="section-heading"><div><p class="section-kicker">02 · Export</p><h2>Build replay buffer</h2></div><span id="umi-layout-summary">Single arm · Insight3 A</span></div>
-              <label><span class="field-label">Dataset name</span><input id="umi-dataset-name" class="field-control" value="single_arm_demo" spellcheck="false"><small class="field-help">Creates outputs/umi_datasets/&lt;name&gt;.zarr.zip</small></label>
-              <label class="umi-resolution-field"><span class="field-label">Capture layout</span><select id="umi-camera-layout" class="field-control"><option value="single_a" selected>Single arm · Insight3 A (right)</option><option value="single_b">Single arm · Insight3 B (left)</option><option value="bimanual">Bimanual · Insight3 A + B + Insight9</option></select><small class="field-help">Single-arm maps the selected Insight3 to camera0 / robot0 and uses its native VIO pose. Bimanual uses global poses.</small></label>
+              <label><span class="field-label">Capture layout</span><select id="umi-camera-layout" class="field-control"><option value="single_a" selected>Single arm · Insight3 A (right)</option><option value="single_b">Single arm · Insight3 B (left)</option><option value="bimanual">Bimanual · Insight3 A + B + Insight9</option></select><small class="field-help">Single-arm maps the selected Insight3 to camera0 / robot0 and uses its native VIO pose. Bimanual uses global poses.</small></label>
               <label class="umi-resolution-field"><span class="field-label">Training image resolution</span><select id="umi-image-mode" class="field-control"><option value="original" selected>Original resolution</option><option value="384">384 × 384 compatibility</option><option value="224">224 × 224 UMI default</option></select><small class="field-help">Original keeps each camera's source width and height. Zarr compression is lossless.</small></label>
               <div id="umi-schema-grid" class="umi-schema-grid">
                 <span><small>camera0 / robot0</small><strong>Right hand · insight3_a · VIO</strong></span>
                 <span><small>Images</small><strong id="umi-image-summary">Original RGB · 20 Hz</strong></span>
+                <span><small>Output folder</small><strong>outputs/umi_datasets/&lt;rosbag&gt;_umi/</strong></span>
               </div>
-              <button id="umi-export-button" class="primary-button umi-export-button" type="button">Build UMI dataset</button>
+              <button id="umi-export-button" class="primary-button umi-export-button" type="button">Build UMI outputs</button>
               <div class="umi-progress">
                 <div><span id="umi-status-label">Ready</span><strong id="umi-progress-value">0%</strong></div>
                 <div class="opt-progress-track"><div id="umi-progress-fill" class="opt-progress-fill" style="width:0%"></div></div>
-                <pre id="umi-status-detail" class="recording-output">Select one rosbag per demonstration episode.</pre>
+                <pre id="umi-status-detail" class="recording-output">Each selected rosbag is saved in its own &lt;rosbag&gt;_umi folder.</pre>
               </div>
               <div id="umi-result" class="umi-result" hidden></div>
             </section>

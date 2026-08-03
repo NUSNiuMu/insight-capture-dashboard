@@ -238,8 +238,11 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .umi-progress > div:first-child { display: flex; align-items: baseline; justify-content: space-between; color: var(--muted); font-family: var(--mono); font-size: 9px; }
 .umi-progress > div:first-child strong { color: var(--accent); font-size: 18px; }
 .umi-progress .recording-output { min-height: 96px; max-height: 180px; }
-.umi-result { display: grid; margin-top: 12px; grid-template-columns: repeat(3,minmax(90px,1fr)) auto auto auto; gap: 8px; }
-.umi-result > div { display: flex; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); flex-direction: column; gap: 4px; }
+.umi-result { display: flex; margin-top: 12px; flex-direction: column; gap: 8px; }
+.umi-result-item { display: grid; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); grid-template-columns: minmax(160px,.8fr) minmax(260px,1.5fr) minmax(140px,.7fr); gap: 12px; }
+.umi-result-item.is-error { border-color: rgba(194, 69, 62, 0.4); background: rgba(194, 69, 62, 0.05); }
+.umi-result-item > span { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.umi-result-item strong { overflow-wrap: anywhere; }
 
 /* Recording */
 .record-hero { display: flex; min-height: 132px; margin-bottom: 18px; padding: 24px 26px; align-items: center; justify-content: space-between; gap: 24px; border: 1px solid var(--line-dark); border-radius: 14px; color: var(--ink); background: linear-gradient(135deg, rgba(255, 176, 32, 0.12), transparent 45%), var(--surface); box-shadow: var(--shadow-md); }
@@ -516,6 +519,7 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .record-hero { padding: 20px; }
   .bag-row { grid-template-columns: 1fr; }
   .umi-schema-grid, .umi-result { grid-template-columns: 1fr; }
+  .umi-result-item { grid-template-columns: 1fr; }
   .bag-row-stats, .bag-row-badges, .bag-badges, .bag-row-actions { grid-column: auto; justify-content: flex-start; }
   .settings-form-grid, .settings-inline-form, .opt-radio-group { grid-template-columns: 1fr; }
   .handpose-player { grid-template-columns: auto minmax(80px,1fr); }
