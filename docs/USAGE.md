@@ -123,10 +123,10 @@ compressed topic，导出只做解码，不会再增加一次有损压缩，但�
 包含图像和 VIO topic，且该夹爪已完成开合标定。双臂布局的顺序为右腕 `camera0`、左腕
 `camera1`、头部 `camera2`，机器人顺序为右手 `robot0`、左手 `robot1`，并使用左右
 `/insight_global/.../pose` 保证统一坐标系。`robot*_gripper_width` 使用夹爪标定得到的真实
-开口宽度，单位为米，并记录在 Zarr 根属性中。导出默认在 20 Hz 相邻 TCP 位置变化超过
-5 cm、姿态变化超过 45°或 VIO pose 间隔超过 100 ms 时切断 episode；跳变边界两侧分别插值，禁止跨越
-重定位、跟踪丢失或坐标重置直接插值。切分后不足最小帧数的片段不会进入数据集，详细
-质量事件写入 manifest。
+开口宽度，单位为米，并记录在 Zarr 根属性中。每条 rosbag 固定对应一个 episode，不会
+因质量门自动拆分。导出默认在 20 Hz 相邻 TCP 位置变化超过 5 cm、姿态变化超过 45°或
+VIO pose 间隔超过 100 ms 时拒绝整条 rosbag，禁止跨越重定位、跟踪丢失或坐标重置插值。
+通过质量门的事件计数写入 manifest。
 
 **单路离线夹爪诊断**：底层 `gripper_extract.py` 仍可单独运行，用于检查某一路
 Insight3 图像中的二维码检测质量。
@@ -154,7 +154,7 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
     "width_calibration": [
       {"distance_px": 54.55, "width_m": 0.0},
       {"distance_px": 140.0, "width_m": 0.038},
-      {"distance_px": 247.28, "width_m": 0.09}
+      {"distance_px": 247.28, "width_m": 0.083}
     ]
   }
 }

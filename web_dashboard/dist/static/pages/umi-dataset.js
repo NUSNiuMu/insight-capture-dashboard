@@ -45,7 +45,7 @@ function renderLayout() {
   layoutSummary.textContent = layout.label;
   schemaGrid.innerHTML = layout.schema.map(([key, value]) =>
     `<span><small>${escapeHtml(key)}</small><strong>${escapeHtml(value)}</strong></span>`
-  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span><span><small>Gripper / pose</small><strong>Calibrated metres · continuity gated</strong></span><span><small>Output folder</small><strong>outputs/umi_datasets/&lt;rosbag&gt;_umi/</strong></span>`;
+  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span><span><small>Gripper / pose</small><strong>0–0.083 m · one bag per episode</strong></span><span><small>Output folder</small><strong>outputs/umi_datasets/&lt;rosbag&gt;_umi/</strong></span>`;
 }
 
 function formatBytes(bytes) {

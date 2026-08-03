@@ -441,15 +441,14 @@ def _tcp_sample_positions(
     return positions + rotations.apply(spec.tcp_translation_m)
 
 
-def _pose_segment_labels(
+def _pose_quality_events(
     pose_data: tuple[np.ndarray, np.ndarray, np.ndarray],
-    target_ns: np.ndarray,
     spec: CameraSpec,
     *,
     max_position_step_m: float,
     max_orientation_step_deg: float,
     max_pose_gap_ms: float,
-) -> tuple[np.ndarray, list[slice], Dict[str, int]]:
+) -> Dict[str, int]:
     stamps = pose_data[0]
     tcp_positions = _tcp_sample_positions(pose_data, spec)
     stamp_deltas = np.diff(stamps)
@@ -459,97 +458,35 @@ def _pose_segment_labels(
     gap_breaks = (stamp_deltas <= 0) | (stamp_deltas > max_pose_gap_ms * 1e6)
     jump_breaks = position_steps > max_position_step_m
     orientation_breaks = orientation_steps > math.radians(max_orientation_step_deg)
-    breaks = gap_breaks | jump_breaks | orientation_breaks
-    boundaries = np.concatenate(([0], np.flatnonzero(breaks) + 1, [len(stamps)]))
-    source_segments = [
-        slice(int(start), int(end))
-        for start, end in zip(boundaries[:-1], boundaries[1:])
-        if end - start >= 2
-    ]
-    labels = np.full(len(target_ns), -1, dtype=np.int64)
-    for label, segment in enumerate(source_segments):
-        first = stamps[segment.start]
-        last = stamps[segment.stop - 1]
-        labels[(target_ns >= first) & (target_ns <= last)] = label
-    return labels, source_segments, {
+    return {
         "position_jumps": int(np.count_nonzero(jump_breaks)),
         "orientation_jumps": int(np.count_nonzero(orientation_breaks)),
         "tracking_gaps": int(np.count_nonzero(gap_breaks)),
     }
 
 
-def _contiguous_segments(
-    mask: np.ndarray,
-    minimum_frames: int,
-    *,
-    labels: Iterable[np.ndarray] = (),
-) -> list[slice]:
-    label_arrays = list(labels)
-    segments = []
-    start = None
-    for index in range(len(mask) + 1):
-        is_valid = index < len(mask) and bool(mask[index])
-        if is_valid:
-            is_valid = all(values[index] >= 0 for values in label_arrays)
-        label_changed = bool(
-            is_valid
-            and start is not None
-            and any(values[index] != values[index - 1] for values in label_arrays)
-        )
-        if start is not None and (not is_valid or label_changed):
-            if index - start >= minimum_frames:
-                segments.append(slice(start, index))
-            start = None
-        if is_valid and start is None:
-            start = index
-    return segments
-
-
-def _split_on_resampled_pose_jumps(
-    segments: list[slice],
-    timeline: np.ndarray,
-    scan: StreamScan,
-    hand_specs: list[CameraSpec],
-    pose_labels: Dict[str, np.ndarray],
-    pose_source_segments: Dict[str, list[slice]],
+def _resampled_pose_events(
+    positions: np.ndarray,
+    rotvecs: np.ndarray,
     *,
     max_position_step_m: float,
     max_orientation_step_deg: float,
-    minimum_frames: int,
-) -> list[slice]:
-    refined = []
-    for segment in segments:
-        timestamps = timeline[segment]
-        boundaries = {segment.start, segment.stop}
-        for spec in hand_specs:
-            label = int(pose_labels[spec.name][segment.start])
-            source_segment = pose_source_segments[spec.name][label]
-            pose_data = tuple(
-                values[source_segment] for values in scan.poses[spec.name]
+) -> Dict[str, int]:
+    position_steps = np.linalg.norm(
+        np.diff(positions.astype(np.float64), axis=0), axis=1
+    )
+    rotations = Rotation.from_rotvec(rotvecs.astype(np.float64))
+    orientation_steps = (rotations[:-1].inv() * rotations[1:]).magnitude()
+    return {
+        "resampled_position_jumps": int(
+            np.count_nonzero(position_steps > max_position_step_m)
+        ),
+        "resampled_orientation_jumps": int(
+            np.count_nonzero(
+                orientation_steps > math.radians(max_orientation_step_deg)
             )
-            positions, rotvecs = _interpolate_tcp(pose_data, timestamps, spec)
-            jumps = np.flatnonzero(
-                np.linalg.norm(
-                    np.diff(positions.astype(np.float64), axis=0), axis=1
-                )
-                > max_position_step_m
-            )
-            boundaries.update(segment.start + int(index) + 1 for index in jumps)
-            rotations = Rotation.from_rotvec(rotvecs.astype(np.float64))
-            orientation_jumps = np.flatnonzero(
-                (rotations[:-1].inv() * rotations[1:]).magnitude()
-                > math.radians(max_orientation_step_deg)
-            )
-            boundaries.update(
-                segment.start + int(index) + 1 for index in orientation_jumps
-            )
-        ordered = sorted(boundaries)
-        refined.extend(
-            slice(start, end)
-            for start, end in zip(ordered[:-1], ordered[1:])
-            if end - start >= minimum_frames
-        )
-    return refined
+        ),
+    }
 
 
 def build_episode_plans(
@@ -587,91 +524,86 @@ def build_episode_plans(
         valid &= skew <= max_skew_ns
         observed_max_skew_ns = max(observed_max_skew_ns, int(skew.max()))
 
+    if not np.all(valid):
+        invalid_frames = int(np.count_nonzero(~valid))
+        raise ValueError(
+            f"episode rejected: {invalid_frames} synchronized frames exceed "
+            f"the {max_image_skew_ms:g} ms image skew limit"
+        )
+
     hand_specs = [spec for spec in specs if spec.role != "head"]
-    pose_labels = {}
-    pose_source_segments = {}
     pose_quality_events = {}
     for spec in hand_specs:
-        labels, source_segments, events = _pose_segment_labels(
+        events = _pose_quality_events(
             scan.poses[spec.name],
-            timeline,
             spec,
             max_position_step_m=max_position_step_m,
             max_orientation_step_deg=max_orientation_step_deg,
             max_pose_gap_ms=max_pose_gap_ms,
         )
-        pose_labels[spec.name] = labels
-        pose_source_segments[spec.name] = source_segments
         pose_quality_events[spec.name] = events
+    source_event_count = sum(
+        count for events in pose_quality_events.values() for count in events.values()
+    )
+    if source_event_count:
+        details = ", ".join(
+            f"{name} {event}={count}"
+            for name, events in pose_quality_events.items()
+            for event, count in events.items()
+            if count
+        )
+        raise ValueError(
+            f"episode rejected by source pose continuity gate: {details}"
+        )
 
-    segments = _contiguous_segments(
-        valid,
-        minimum_frames,
-        labels=pose_labels.values(),
-    )
-    segments = _split_on_resampled_pose_jumps(
-        segments,
-        timeline,
-        scan,
-        hand_specs,
-        pose_labels,
-        pose_source_segments,
-        max_position_step_m=max_position_step_m,
-        max_orientation_step_deg=max_orientation_step_deg,
-        minimum_frames=minimum_frames,
-    )
-    if not segments:
-        raise ValueError(
-            f"no synchronized segment has at least {minimum_frames} frames "
-            f"within {max_image_skew_ms:g} ms image skew and pose continuity limits"
+    lowdim = {}
+    for robot_index, spec in enumerate(hand_specs):
+        position, rotvec = _interpolate_tcp(scan.poses[spec.name], timeline, spec)
+        resampled_events = _resampled_pose_events(
+            position,
+            rotvec,
+            max_position_step_m=max_position_step_m,
+            max_orientation_step_deg=max_orientation_step_deg,
         )
-    plans = []
-    for segment in segments:
-        timestamps = timeline[segment]
-        lowdim = {}
-        for robot_index, spec in enumerate(hand_specs):
-            label = int(pose_labels[spec.name][segment.start])
-            source_segment = pose_source_segments[spec.name][label]
-            pose_data = tuple(
-                values[source_segment] for values in scan.poses[spec.name]
+        pose_quality_events[spec.name].update(resampled_events)
+        if any(resampled_events.values()):
+            details = ", ".join(
+                f"{event}={count}"
+                for event, count in resampled_events.items()
+                if count
             )
-            position, rotvec = _interpolate_tcp(pose_data, timestamps, spec)
-            opening_stamps, opening_values = scan.openings[spec.name]
-            opening_base = opening_stamps[0]
-            opening = np.interp(
-                (timestamps - opening_base).astype(np.float64),
-                (opening_stamps - opening_base).astype(np.float64),
-                opening_values,
-            ).astype(np.float32)[:, None]
-            pose = np.concatenate((position, rotvec), axis=1).astype(np.float32)
-            lowdim[f"robot{robot_index}_eef_pos"] = position
-            lowdim[f"robot{robot_index}_eef_rot_axis_angle"] = rotvec
-            lowdim[f"robot{robot_index}_gripper_width"] = opening
-            lowdim[f"robot{robot_index}_demo_start_pose"] = np.repeat(
-                pose[:1], len(pose), axis=0
+            raise ValueError(
+                f"episode rejected by 20 Hz pose continuity gate: "
+                f"{spec.name} {details}"
             )
-            lowdim[f"robot{robot_index}_demo_end_pose"] = np.repeat(
-                pose[-1:], len(pose), axis=0
-            )
-        plans.append(
-            EpisodePlan(
-                bag_name=bag_name,
-                timestamps_ns=timestamps,
-                image_indices={
-                    name: values[segment] for name, values in image_indices.items()
-                },
-                lowdim=lowdim,
-                detection_rates=scan.detection_rates,
-                max_image_skew_ms=round(observed_max_skew_ns / 1e6, 3),
-                pose_quality_events=pose_quality_events,
-            )
+        opening_stamps, opening_values = scan.openings[spec.name]
+        opening_base = opening_stamps[0]
+        opening = np.interp(
+            (timeline - opening_base).astype(np.float64),
+            (opening_stamps - opening_base).astype(np.float64),
+            opening_values,
+        ).astype(np.float32)[:, None]
+        pose = np.concatenate((position, rotvec), axis=1).astype(np.float32)
+        lowdim[f"robot{robot_index}_eef_pos"] = position
+        lowdim[f"robot{robot_index}_eef_rot_axis_angle"] = rotvec
+        lowdim[f"robot{robot_index}_gripper_width"] = opening
+        lowdim[f"robot{robot_index}_demo_start_pose"] = np.repeat(
+            pose[:1], len(pose), axis=0
         )
-    if not plans:
-        raise ValueError(
-            "all synchronized segments failed the "
-            f"{max_position_step_m:g} m per-frame pose continuity gate"
+        lowdim[f"robot{robot_index}_demo_end_pose"] = np.repeat(
+            pose[-1:], len(pose), axis=0
         )
-    return plans
+    return [
+        EpisodePlan(
+            bag_name=bag_name,
+            timestamps_ns=timeline,
+            image_indices=image_indices,
+            lowdim=lowdim,
+            detection_rates=scan.detection_rates,
+            max_image_skew_ms=round(observed_max_skew_ns / 1e6, 3),
+            pose_quality_events=pose_quality_events,
+        )
+    ]
 
 
 def _prepare_rgb(image: np.ndarray, size: Optional[int]) -> np.ndarray:
@@ -988,7 +920,7 @@ def export_umi_dataset(
                     "max_position_step_m": float(max_position_step_m),
                     "max_orientation_step_deg": float(max_orientation_step_deg),
                     "max_pose_gap_ms": float(max_pose_gap_ms),
-                    "behavior": "split_episode_without_cross_boundary_interpolation",
+                    "behavior": "reject_rosbag_episode_on_discontinuity",
                 },
                 "source_bags": [path.name for path in bag_paths],
             }
@@ -1067,19 +999,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-position-step-m",
         type=float,
         default=DEFAULT_MAX_POSITION_STEP_M,
-        help="split episodes when consecutive TCP samples exceed this distance",
+        help="reject an episode when consecutive TCP samples exceed this distance",
     )
     parser.add_argument(
         "--max-orientation-step-deg",
         type=float,
         default=DEFAULT_MAX_ORIENTATION_STEP_DEG,
-        help="split episodes when consecutive TCP orientations exceed this angle",
+        help="reject an episode when consecutive TCP orientations exceed this angle",
     )
     parser.add_argument(
         "--max-pose-gap-ms",
         type=float,
         default=DEFAULT_MAX_POSE_GAP_MS,
-        help="split episodes across longer VIO tracking gaps",
+        help="reject an episode when VIO tracking gaps exceed this duration",
     )
     parser.add_argument(
         "--camera",
