@@ -54,6 +54,10 @@ class UmiExportManager:
         self.project_root = project_root.resolve()
         self.rosbag_root = rosbag_root.resolve()
         self.output_root = self.project_root / "outputs" / "umi_datasets"
+        self.output_root.mkdir(parents=True, exist_ok=True)
+        # Container root is root-squashed on some bind-mounted workspaces. Keep
+        # generated datasets manageable by the workstation user.
+        self.output_root.chmod(0o777)
         self._lock = threading.Lock()
         self._current_job: Optional[_UmiExportJob] = None
         self._process: Optional[subprocess.Popen[str]] = None
@@ -232,6 +236,7 @@ class UmiExportManager:
             stderr=subprocess.STDOUT,
             text=True,
             env=os.environ.copy(),
+            umask=0,
         )
         with self._lock:
             self._process = process
@@ -258,7 +263,15 @@ class UmiExportManager:
         manifest_path = item.output_path.with_name(
             f"{item.dataset_name}.manifest.json"
         )
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
+        result = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self._make_output_user_manageable(item.output_path.parent)
+        return result
+
+    @staticmethod
+    def _make_output_user_manageable(directory: Path) -> None:
+        for path in directory.rglob("*"):
+            path.chmod(0o777 if path.is_dir() else 0o666)
+        directory.chmod(0o777)
 
     def _item_payload(self, item: _UmiExportItem) -> Dict[str, object]:
         manifest_path = item.output_path.with_name(
