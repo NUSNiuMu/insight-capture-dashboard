@@ -97,6 +97,23 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 进度按目标图像 topic 已处理帧数除以 rosbag 记录的该 topic 总帧数计算，不使用
 耗时或动画估算。
 
+**离线夹爪提取**：`gripper_extract.py` 直接读取 rosbag 图像，逐帧检测 UMI
+夹爪的 ArUco ID 1/0。结果默认保存到
+`outputs/gripper/<bag 名>/<相机名>.json`，包含 recorder/header 纳秒时间戳、
+左右 marker 中心、像素距离和归一化开合度（`0=闭合，1=张开`）。例如：
+
+```bash
+docker exec -w /workspaces/insight_capture insight-dashboard \
+  /entrypoint.sh python3 scripts/gripper_extract.py \
+  rosbags/insight3_a_left_20260803_115721 --camera insight3_a
+```
+
+提取器默认从 `config/gripper_calibration.json` 按相机名读取全开/全闭像素距离。
+尚未标定时仍会输出 marker 中心和 `distance_px`，但 `opening` 为 `null`；需要强制
+要求开合度时加 `--require-calibration`。也可用
+`--open-px <值> --closed-px <值>` 临时覆盖标定。多图像 topic 的 bag 应显式传
+`--topic`，具体参数见 `scripts/gripper_extract.py --help`。
+
 
 ### 3.1 标准采集流程
 

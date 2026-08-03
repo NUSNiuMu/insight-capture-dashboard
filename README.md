@@ -159,7 +159,7 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 | `Dockerfile.superglue-validation` | 内部研究验证专用 NVIDIA Jetson TensorRT/SuperGlue GPU 镜像 |
 | `scripts/camera_setup.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |
 | `scripts/reboot_cameras.sh` | 扫描 `169.254.x.x` 网段并批量重启相机 |
-| `scripts/gripper_tracking.py` / `gripper_calibrate.py` | 夹爪张合度识别与标定 |
+| `scripts/gripper_tracking.py` / `gripper_calibrate.py` / `gripper_extract.py` | 夹爪张合度识别、标定与 rosbag 离线提取 |
 | `scripts/traj_score.py` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
 | `web_dashboard/` | Babylon.js Web 前端源码，`npm run build` 生成 `dist/` 静态页面 |
 | `config/post_processing.json` | Web 版 rosbag 默认录制配置（`rosbag_dir` 等） |

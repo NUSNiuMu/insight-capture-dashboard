@@ -12,7 +12,7 @@
 | `dashboard_web/` | aiohttp 应用和 Web API |
 | `dashboard_runtime/` | Dashboard 运行时协调 |
 | `dashboard_media/` | 硬件 JPEG 和 WebRTC 流 |
-| `hand_tracking/` | 实时手部感知、手势和夹爪 |
+| `hand_tracking/` | 实时手部感知、手势、夹爪及 rosbag 离线夹爪提取 |
 | `handpose/` | 离线 Hand pose |
 | `post_processing_core/` | rosbag 完整性、评分与离线处理 |
 | `insight9_mapping_core/` | 建图和定位算法 |
