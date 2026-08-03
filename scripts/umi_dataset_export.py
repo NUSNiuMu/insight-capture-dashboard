@@ -31,7 +31,10 @@ POSE_TYPES = {
     "geometry_msgs/msg/PoseWithCovarianceStamped",
 }
 ROLE_ORDER = ("right_hand", "left_hand", "head")
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+DEFAULT_MAX_POSITION_STEP_M = 0.05
+DEFAULT_MAX_ORIENTATION_STEP_DEG = 45.0
+DEFAULT_MAX_POSE_GAP_MS = 100.0
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,7 @@ class EpisodePlan:
     lowdim: Dict[str, np.ndarray]
     detection_rates: Dict[str, float]
     max_image_skew_ms: float
+    pose_quality_events: Dict[str, Dict[str, int]]
 
 
 class ZarrV2Writer:
@@ -315,6 +319,15 @@ def scan_bag(
         raise ValueError(
             f"missing gripper calibration: {', '.join(invalid_calibrations)}"
         )
+    missing_metric_calibrations = [
+        name for name, value in calibrations.items() if not value.has_metric_width
+    ]
+    if missing_metric_calibrations:
+        raise ValueError(
+            "missing metric gripper width calibration for "
+            f"{', '.join(missing_metric_calibrations)}; add at least two measured "
+            "width_calibration points with distance_px and width_m"
+        )
 
     image_by_topic = {spec.image_topic: spec for spec in specs}
     pose_by_topic = {spec.pose_topic: spec for spec in specs if spec.pose_topic}
@@ -341,9 +354,9 @@ def scan_bag(
                 distance = result.distance_px if result is not None else None
                 if distance is not None:
                     opening_stamps[spec.name].append(int(record_stamp_ns))
-                    opening_values[spec.name].append(
-                        float(calibrations[spec.name].normalize(distance))
-                    )
+                    width_m = calibrations[spec.name].width_m(distance)
+                    assert width_m is not None
+                    opening_values[spec.name].append(width_m)
         elif topic in pose_by_topic:
             spec = pose_by_topic[topic]
             position, quaternion = _message_pose(message)
@@ -420,14 +433,123 @@ def _interpolate_tcp(
     return tcp_position.astype(np.float32), tcp_rotation.as_rotvec().astype(np.float32)
 
 
-def _contiguous_segments(mask: np.ndarray, minimum_frames: int) -> list[slice]:
-    padded = np.concatenate(([False], mask, [False])).astype(np.int8)
-    changes = np.flatnonzero(np.diff(padded))
-    return [
+def _tcp_sample_positions(
+    pose_data: tuple[np.ndarray, np.ndarray, np.ndarray], spec: CameraSpec
+) -> np.ndarray:
+    _, positions, quaternions = pose_data
+    rotations = Rotation.from_quat(quaternions)
+    return positions + rotations.apply(spec.tcp_translation_m)
+
+
+def _pose_segment_labels(
+    pose_data: tuple[np.ndarray, np.ndarray, np.ndarray],
+    target_ns: np.ndarray,
+    spec: CameraSpec,
+    *,
+    max_position_step_m: float,
+    max_orientation_step_deg: float,
+    max_pose_gap_ms: float,
+) -> tuple[np.ndarray, list[slice], Dict[str, int]]:
+    stamps = pose_data[0]
+    tcp_positions = _tcp_sample_positions(pose_data, spec)
+    stamp_deltas = np.diff(stamps)
+    position_steps = np.linalg.norm(np.diff(tcp_positions, axis=0), axis=1)
+    rotations = Rotation.from_quat(pose_data[2])
+    orientation_steps = (rotations[:-1].inv() * rotations[1:]).magnitude()
+    gap_breaks = (stamp_deltas <= 0) | (stamp_deltas > max_pose_gap_ms * 1e6)
+    jump_breaks = position_steps > max_position_step_m
+    orientation_breaks = orientation_steps > math.radians(max_orientation_step_deg)
+    breaks = gap_breaks | jump_breaks | orientation_breaks
+    boundaries = np.concatenate(([0], np.flatnonzero(breaks) + 1, [len(stamps)]))
+    source_segments = [
         slice(int(start), int(end))
-        for start, end in changes.reshape(-1, 2)
-        if end - start >= minimum_frames
+        for start, end in zip(boundaries[:-1], boundaries[1:])
+        if end - start >= 2
     ]
+    labels = np.full(len(target_ns), -1, dtype=np.int64)
+    for label, segment in enumerate(source_segments):
+        first = stamps[segment.start]
+        last = stamps[segment.stop - 1]
+        labels[(target_ns >= first) & (target_ns <= last)] = label
+    return labels, source_segments, {
+        "position_jumps": int(np.count_nonzero(jump_breaks)),
+        "orientation_jumps": int(np.count_nonzero(orientation_breaks)),
+        "tracking_gaps": int(np.count_nonzero(gap_breaks)),
+    }
+
+
+def _contiguous_segments(
+    mask: np.ndarray,
+    minimum_frames: int,
+    *,
+    labels: Iterable[np.ndarray] = (),
+) -> list[slice]:
+    label_arrays = list(labels)
+    segments = []
+    start = None
+    for index in range(len(mask) + 1):
+        is_valid = index < len(mask) and bool(mask[index])
+        if is_valid:
+            is_valid = all(values[index] >= 0 for values in label_arrays)
+        label_changed = bool(
+            is_valid
+            and start is not None
+            and any(values[index] != values[index - 1] for values in label_arrays)
+        )
+        if start is not None and (not is_valid or label_changed):
+            if index - start >= minimum_frames:
+                segments.append(slice(start, index))
+            start = None
+        if is_valid and start is None:
+            start = index
+    return segments
+
+
+def _split_on_resampled_pose_jumps(
+    segments: list[slice],
+    timeline: np.ndarray,
+    scan: StreamScan,
+    hand_specs: list[CameraSpec],
+    pose_labels: Dict[str, np.ndarray],
+    pose_source_segments: Dict[str, list[slice]],
+    *,
+    max_position_step_m: float,
+    max_orientation_step_deg: float,
+    minimum_frames: int,
+) -> list[slice]:
+    refined = []
+    for segment in segments:
+        timestamps = timeline[segment]
+        boundaries = {segment.start, segment.stop}
+        for spec in hand_specs:
+            label = int(pose_labels[spec.name][segment.start])
+            source_segment = pose_source_segments[spec.name][label]
+            pose_data = tuple(
+                values[source_segment] for values in scan.poses[spec.name]
+            )
+            positions, rotvecs = _interpolate_tcp(pose_data, timestamps, spec)
+            jumps = np.flatnonzero(
+                np.linalg.norm(
+                    np.diff(positions.astype(np.float64), axis=0), axis=1
+                )
+                > max_position_step_m
+            )
+            boundaries.update(segment.start + int(index) + 1 for index in jumps)
+            rotations = Rotation.from_rotvec(rotvecs.astype(np.float64))
+            orientation_jumps = np.flatnonzero(
+                (rotations[:-1].inv() * rotations[1:]).magnitude()
+                > math.radians(max_orientation_step_deg)
+            )
+            boundaries.update(
+                segment.start + int(index) + 1 for index in orientation_jumps
+            )
+        ordered = sorted(boundaries)
+        refined.extend(
+            slice(start, end)
+            for start, end in zip(ordered[:-1], ordered[1:])
+            if end - start >= minimum_frames
+        )
+    return refined
 
 
 def build_episode_plans(
@@ -438,6 +560,9 @@ def build_episode_plans(
     fps: float,
     max_image_skew_ms: float,
     minimum_frames: int,
+    max_position_step_m: float = DEFAULT_MAX_POSITION_STEP_M,
+    max_orientation_step_deg: float = DEFAULT_MAX_ORIENTATION_STEP_DEG,
+    max_pose_gap_ms: float = DEFAULT_MAX_POSE_GAP_MS,
 ) -> list[EpisodePlan]:
     starts = [values[0] for values in scan.image_stamps.values()]
     ends = [values[-1] for values in scan.image_stamps.values()]
@@ -462,19 +587,55 @@ def build_episode_plans(
         valid &= skew <= max_skew_ns
         observed_max_skew_ns = max(observed_max_skew_ns, int(skew.max()))
 
-    segments = _contiguous_segments(valid, minimum_frames)
+    hand_specs = [spec for spec in specs if spec.role != "head"]
+    pose_labels = {}
+    pose_source_segments = {}
+    pose_quality_events = {}
+    for spec in hand_specs:
+        labels, source_segments, events = _pose_segment_labels(
+            scan.poses[spec.name],
+            timeline,
+            spec,
+            max_position_step_m=max_position_step_m,
+            max_orientation_step_deg=max_orientation_step_deg,
+            max_pose_gap_ms=max_pose_gap_ms,
+        )
+        pose_labels[spec.name] = labels
+        pose_source_segments[spec.name] = source_segments
+        pose_quality_events[spec.name] = events
+
+    segments = _contiguous_segments(
+        valid,
+        minimum_frames,
+        labels=pose_labels.values(),
+    )
+    segments = _split_on_resampled_pose_jumps(
+        segments,
+        timeline,
+        scan,
+        hand_specs,
+        pose_labels,
+        pose_source_segments,
+        max_position_step_m=max_position_step_m,
+        max_orientation_step_deg=max_orientation_step_deg,
+        minimum_frames=minimum_frames,
+    )
     if not segments:
         raise ValueError(
             f"no synchronized segment has at least {minimum_frames} frames "
-            f"within {max_image_skew_ms:g} ms image skew"
+            f"within {max_image_skew_ms:g} ms image skew and pose continuity limits"
         )
     plans = []
-    hand_specs = [spec for spec in specs if spec.role != "head"]
     for segment in segments:
         timestamps = timeline[segment]
         lowdim = {}
         for robot_index, spec in enumerate(hand_specs):
-            position, rotvec = _interpolate_tcp(scan.poses[spec.name], timestamps, spec)
+            label = int(pose_labels[spec.name][segment.start])
+            source_segment = pose_source_segments[spec.name][label]
+            pose_data = tuple(
+                values[source_segment] for values in scan.poses[spec.name]
+            )
+            position, rotvec = _interpolate_tcp(pose_data, timestamps, spec)
             opening_stamps, opening_values = scan.openings[spec.name]
             opening_base = opening_stamps[0]
             opening = np.interp(
@@ -502,7 +663,13 @@ def build_episode_plans(
                 lowdim=lowdim,
                 detection_rates=scan.detection_rates,
                 max_image_skew_ms=round(observed_max_skew_ns / 1e6, 3),
+                pose_quality_events=pose_quality_events,
             )
+        )
+    if not plans:
+        raise ValueError(
+            "all synchronized segments failed the "
+            f"{max_position_step_m:g} m per-frame pose continuity gate"
         )
     return plans
 
@@ -684,6 +851,9 @@ def export_umi_dataset(
     image_size: Optional[int] = None,
     max_image_skew_ms: float = 40.0,
     minimum_frames: int = 24,
+    max_position_step_m: float = DEFAULT_MAX_POSITION_STEP_M,
+    max_orientation_step_deg: float = DEFAULT_MAX_ORIENTATION_STEP_DEG,
+    max_pose_gap_ms: float = DEFAULT_MAX_POSE_GAP_MS,
     camera_names: Optional[list[str]] = None,
 ) -> dict[str, object]:
     specs = load_camera_specs(camera_config, camera_names)
@@ -717,6 +887,9 @@ def export_umi_dataset(
             fps=fps,
             max_image_skew_ms=max_image_skew_ms,
             minimum_frames=minimum_frames,
+            max_position_step_m=max_position_step_m,
+            max_orientation_step_deg=max_orientation_step_deg,
+            max_pose_gap_ms=max_pose_gap_ms,
         )
         planned_episodes.extend((bag_path, plan) for plan in plans)
     if not planned_episodes:
@@ -786,6 +959,7 @@ def export_umi_dataset(
                     "duration_s": round(len(plan.timestamps_ns) / fps, 3),
                     "gripper_detection_rates": plan.detection_rates,
                     "max_image_skew_ms": plan.max_image_skew_ms,
+                    "pose_quality_events": plan.pose_quality_events,
                 }
             )
         for name, parts in lowdim_parts.items():
@@ -809,7 +983,13 @@ def export_umi_dataset(
                 "pose_topics": {
                     spec.name: spec.pose_topic for spec in specs if spec.pose_topic
                 },
-                "gripper_width_semantics": "normalized_opening_0_closed_1_open",
+                "gripper_width_semantics": "physical_jaw_width_m",
+                "pose_quality_gate": {
+                    "max_position_step_m": float(max_position_step_m),
+                    "max_orientation_step_deg": float(max_orientation_step_deg),
+                    "max_pose_gap_ms": float(max_pose_gap_ms),
+                    "behavior": "split_episode_without_cross_boundary_interpolation",
+                },
                 "source_bags": [path.name for path in bag_paths],
             }
         )
@@ -836,6 +1016,12 @@ def export_umi_dataset(
         "robot_order": [spec.name for spec in specs if spec.role != "head"],
         "pose_topics": {
             spec.name: spec.pose_topic for spec in specs if spec.pose_topic
+        },
+        "gripper_width_semantics": "physical_jaw_width_m",
+        "pose_quality_gate": {
+            "max_position_step_m": float(max_position_step_m),
+            "max_orientation_step_deg": float(max_orientation_step_deg),
+            "max_pose_gap_ms": float(max_pose_gap_ms),
         },
         "episodes": episode_summaries,
         "size_bytes": output_path.stat().st_size,
@@ -878,6 +1064,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-image-skew-ms", type=float, default=40.0)
     parser.add_argument("--minimum-frames", type=int, default=24)
     parser.add_argument(
+        "--max-position-step-m",
+        type=float,
+        default=DEFAULT_MAX_POSITION_STEP_M,
+        help="split episodes when consecutive TCP samples exceed this distance",
+    )
+    parser.add_argument(
+        "--max-orientation-step-deg",
+        type=float,
+        default=DEFAULT_MAX_ORIENTATION_STEP_DEG,
+        help="split episodes when consecutive TCP orientations exceed this angle",
+    )
+    parser.add_argument(
+        "--max-pose-gap-ms",
+        type=float,
+        default=DEFAULT_MAX_POSE_GAP_MS,
+        help="split episodes across longer VIO tracking gaps",
+    )
+    parser.add_argument(
         "--camera",
         dest="camera_names",
         action="append",
@@ -896,6 +1100,9 @@ def main() -> int:
         args.fps <= 0
         or (image_size is not None and image_size <= 0)
         or args.minimum_frames < 2
+        or args.max_position_step_m <= 0
+        or args.max_orientation_step_deg <= 0
+        or args.max_pose_gap_ms <= 0
     ):
         print("ERROR: invalid export parameters", file=sys.stderr)
         return 2
@@ -909,6 +1116,9 @@ def main() -> int:
             image_size=image_size,
             max_image_skew_ms=args.max_image_skew_ms,
             minimum_frames=args.minimum_frames,
+            max_position_step_m=args.max_position_step_m,
+            max_orientation_step_deg=args.max_orientation_step_deg,
+            max_pose_gap_ms=args.max_pose_gap_ms,
             camera_names=args.camera_names,
         )
     except (OSError, RuntimeError, ValueError) as exc:

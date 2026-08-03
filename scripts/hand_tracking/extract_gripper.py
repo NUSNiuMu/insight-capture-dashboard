@@ -150,10 +150,16 @@ def load_calibration(
             raise ValueError(f"incomplete gripper calibration for '{camera_name}'")
         else:
             try:
-                calibration = GripperCalibration(
-                    float(entry_open_px), float(entry_closed_px)
+                width_calibration = tuple(
+                    (float(point["distance_px"]), float(point["width_m"]))
+                    for point in entry.get("width_calibration", [])
                 )
-            except (TypeError, ValueError) as exc:
+                calibration = GripperCalibration(
+                    float(entry_open_px),
+                    float(entry_closed_px),
+                    width_calibration,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
                 raise ValueError(
                     f"non-numeric gripper calibration for '{camera_name}'"
                 ) from exc

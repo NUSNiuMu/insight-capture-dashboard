@@ -122,8 +122,11 @@ compressed topic，导出只做解码，不会再增加一次有损压缩，但�
 `/<namespace>/camera/vio_100hz`，每个 episode 使用自己的 VIO 坐标系；输入 bag 必须同时
 包含图像和 VIO topic，且该夹爪已完成开合标定。双臂布局的顺序为右腕 `camera0`、左腕
 `camera1`、头部 `camera2`，机器人顺序为右手 `robot0`、左手 `robot1`，并使用左右
-`/insight_global/.../pose` 保证统一坐标系。`robot*_gripper_width` 使用归一化 opening，
-语义为 `0=闭合，1=张开`，并记录在 Zarr 根属性中。
+`/insight_global/.../pose` 保证统一坐标系。`robot*_gripper_width` 使用夹爪标定得到的真实
+开口宽度，单位为米，并记录在 Zarr 根属性中。导出默认在 20 Hz 相邻 TCP 位置变化超过
+5 cm、姿态变化超过 45°或 VIO pose 间隔超过 100 ms 时切断 episode；跳变边界两侧分别插值，禁止跨越
+重定位、跟踪丢失或坐标重置直接插值。切分后不足最小帧数的片段不会进入数据集，详细
+质量事件写入 manifest。
 
 **单路离线夹爪诊断**：底层 `gripper_extract.py` 仍可单独运行，用于检查某一路
 Insight3 图像中的二维码检测质量。
@@ -139,7 +142,27 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
   rosbags/insight3_a_left_20260803_115721 --camera insight3_a
 ```
 
-提取器默认从 `config/gripper_calibration.json` 按相机名读取全开/全闭像素距离。
+提取器默认从 `config/gripper_calibration.json` 按相机名读取全开/全闭像素距离。UMI
+数据集导出还要求每个夹爪提供实测的 `width_calibration`，并按标定点进行分段插值，输出
+单位为米。例如（数值仅展示格式，必须替换为实测值）：
+
+```json
+{
+  "insight3_a": {
+    "open_px": 247.28,
+    "closed_px": 54.55,
+    "width_calibration": [
+      {"distance_px": 54.55, "width_m": 0.0},
+      {"distance_px": 140.0, "width_m": 0.038},
+      {"distance_px": 247.28, "width_m": 0.09}
+    ]
+  }
+}
+```
+
+不要直接把归一化开合比例乘以最大宽度；如果机械结构或成像关系不是线性的，应增加中间
+实测点。`gripper_calibrate.py` 可通过 `--closed-width-m` 和 `--open-width-m` 写入端点，
+中间点可在标定 JSON 中补充。
 尚未标定时仍会输出 marker 中心和 `distance_px`，但 `opening` 为 `null`；需要强制
 要求开合度时加 `--require-calibration`。也可用
 `--open-px <值> --closed-px <值>` 临时覆盖标定。多图像 topic 的 bag 应显式传

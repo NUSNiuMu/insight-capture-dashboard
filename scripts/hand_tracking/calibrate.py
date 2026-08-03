@@ -111,7 +111,23 @@ def main() -> None:
     )
     parser.add_argument("--config", default=str(project_root / "config" / "cameras.json"))
     parser.add_argument("--calibration-out", default=DEFAULT_CALIBRATION_PATH)
+    parser.add_argument(
+        "--open-width-m",
+        type=float,
+        help="measured physical jaw width at the fully open capture",
+    )
+    parser.add_argument(
+        "--closed-width-m",
+        type=float,
+        help="measured physical jaw width at the fully closed capture",
+    )
     args = parser.parse_args()
+    if (args.open_width_m is None) != (args.closed_width_m is None):
+        parser.error("--open-width-m and --closed-width-m must be provided together")
+    if args.open_width_m is not None and (
+        args.open_width_m < 0 or args.closed_width_m < 0
+    ):
+        parser.error("physical jaw widths must be non-negative")
 
     raw_config = load_setup(Path(args.config))
     dashboard_config = build_dashboard_config(raw_config)
@@ -147,7 +163,27 @@ def main() -> None:
             data = json.loads(calibration_path.read_text())
         except (OSError, ValueError):
             data = {}
-    data[args.camera] = {"open_px": open_px, "closed_px": closed_px}
+    existing_entry = data.get(args.camera, {})
+    entry = {"open_px": open_px, "closed_px": closed_px}
+    if args.open_width_m is not None:
+        points = sorted(
+            (
+                {"distance_px": closed_px, "width_m": args.closed_width_m},
+                {"distance_px": open_px, "width_m": args.open_width_m},
+            ),
+            key=lambda point: point["distance_px"],
+        )
+        entry["width_calibration"] = points
+    elif isinstance(existing_entry, dict) and "width_calibration" in existing_entry:
+        entry["width_calibration"] = existing_entry["width_calibration"]
+        print("Preserved existing metric width calibration points.")
+    else:
+        print(
+            "NOTE: UMI export also requires measured metric width calibration; "
+            "rerun with --closed-width-m and --open-width-m, or add multiple "
+            "width_calibration points for a non-linear mapping."
+        )
+    data[args.camera] = entry
     calibration_path.parent.mkdir(parents=True, exist_ok=True)
     calibration_path.write_text(json.dumps(data, indent=2) + "\n")
     print(f"Saved to {calibration_path}")

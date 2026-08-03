@@ -31,6 +31,7 @@ DEFAULT_CALIBRATION_PATH = str(
 class GripperCalibration:
     open_px: Optional[float] = None
     closed_px: Optional[float] = None
+    width_calibration: Tuple[Tuple[float, float], ...] = ()
 
     @property
     def is_valid(self) -> bool:
@@ -45,6 +46,36 @@ class GripperCalibration:
             return None
         opening = (distance_px - self.closed_px) / (self.open_px - self.closed_px)
         return float(min(1.0, max(0.0, opening)))
+
+    @property
+    def has_metric_width(self) -> bool:
+        if len(self.width_calibration) < 2:
+            return False
+        points = np.asarray(self.width_calibration, dtype=np.float64)
+        if points.shape != (len(self.width_calibration), 2):
+            return False
+        width_deltas = np.diff(points[:, 1])
+        return bool(
+            np.all(np.isfinite(points))
+            and np.all(np.diff(points[:, 0]) > 1e-3)
+            and np.all(points[:, 1] >= 0.0)
+            and (np.all(width_deltas > 0.0) or np.all(width_deltas < 0.0))
+        )
+
+    def width_m(self, distance_px: float) -> Optional[float]:
+        """Map marker distance to measured jaw width using calibration points."""
+        if not self.has_metric_width:
+            return None
+        points = np.asarray(self.width_calibration, dtype=np.float64)
+        return float(
+            np.interp(
+                float(distance_px),
+                points[:, 0],
+                points[:, 1],
+                left=points[0, 1],
+                right=points[-1, 1],
+            )
+        )
 
 
 @dataclass
@@ -123,6 +154,13 @@ class GripperTrackingMixin:
                 continue
             calib.open_px = entry.get("open_px")
             calib.closed_px = entry.get("closed_px")
+            try:
+                calib.width_calibration = tuple(
+                    (float(point["distance_px"]), float(point["width_m"]))
+                    for point in entry.get("width_calibration", [])
+                )
+            except (KeyError, TypeError, ValueError):
+                calib.width_calibration = ()
 
     def _process_gripper_image(self, camera_name: str, image_bgr: np.ndarray) -> None:
         if camera_name not in self.gripper_tracking_cameras or self.gripper_detector is None:
