@@ -16,6 +16,18 @@
         <header class="app-topbar"><span>Capture / <strong>Rosbags</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
         <main class="page-content">
           <header class="content-heading"><div><p class="section-kicker">Capture library</p><h1>Rosbags</h1><p>Review recording health, storage footprint and processing state.</p></div><button type="button" id="refresh-bags-button" class="quiet-button">Refresh index</button></header>
+          <section class="data-surface gripper-extraction-surface">
+            <div class="section-heading"><div><p class="section-kicker">Offline processing</p><h2>Gripper extraction</h2></div><span>ArUco · 0 closed / 1 open</span></div>
+            <div class="gripper-extraction-grid">
+              <label><span class="field-label">Rosbag</span><select id="gripper-bag-select" class="field-control" data-bag-select></select></label>
+              <label><span class="field-label">Camera</span><input id="gripper-camera-name" class="field-control" value="insight3_a" spellcheck="false"></label>
+              <label><span class="field-label">Image topic <small>optional</small></span><input id="gripper-topic" class="field-control" placeholder="Auto-select for camera" spellcheck="false"></label>
+              <label class="gripper-calibration-toggle"><input id="gripper-require-calibration" type="checkbox" checked><span>Require camera calibration</span></label>
+              <button type="button" id="gripper-extract-button" class="primary-button">Run extraction</button>
+            </div>
+            <div id="gripper-extraction-status" class="gripper-extraction-status" aria-live="polite">Ready to process a saved rosbag.</div>
+            <div id="gripper-extraction-result" class="gripper-extraction-result" hidden></div>
+          </section>
           <section class="data-surface">
             <div class="section-heading"><div><p class="section-kicker">Local rosbag index</p><h2 id="bag-list-status">Loading bags...</h2></div><span>Newest first</span></div>
             <div id="bag-list" class="bag-list"></div>

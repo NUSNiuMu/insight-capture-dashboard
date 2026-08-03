@@ -97,8 +97,13 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 进度按目标图像 topic 已处理帧数除以 rosbag 记录的该 topic 总帧数计算，不使用
 耗时或动画估算。
 
-**离线夹爪提取**：`gripper_extract.py` 直接读取 rosbag 图像，逐帧检测 UMI
-夹爪的 ArUco ID 1/0。结果默认保存到
+**离线夹爪提取**：打开 `/bags`，在 **Gripper extraction** 中选择 rosbag，填写
+相机名（Insight3 A 为 `insight3_a`）后点击 **Run extraction**。页面会显示已处理帧数、
+双二维码命中数、检测率和处理速度，完成后可直接下载 JSON。图像 topic 通常留空自动
+选择；同一相机存在多个图像 topic 时再显式填写。
+
+底层 `gripper_extract.py` 直接读取 rosbag 图像，逐帧检测 UMI 夹爪的 ArUco ID 1/0。
+结果默认保存到
 `outputs/gripper/<bag 名>/<相机名>.json`，包含 recorder/header 纳秒时间戳、
 左右 marker 中心、像素距离和归一化开合度（`0=闭合，1=张开`）。例如：
 

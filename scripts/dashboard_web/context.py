@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 from handpose import HandPoseManager
 from post_processing import OptimizationManager, PlaybackManager, RecordingManager
 
+from .gripper_extraction import GripperExtractionManager
 from .scoring import ScoringManager
 
 
@@ -21,6 +22,7 @@ class DashboardContext:
     playback_manager: PlaybackManager = field(init=False)
     optimization_manager: OptimizationManager = field(init=False)
     handpose_manager: HandPoseManager = field(init=False)
+    gripper_extraction_manager: GripperExtractionManager = field(init=False)
     _image_capabilities_cache: Optional[Dict[str, object]] = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -47,6 +49,10 @@ class DashboardContext:
             pipeline_script=pipeline_script,
         )
         self.handpose_manager = HandPoseManager(
+            project_root=self.project_root,
+            rosbag_root=self.recording_manager.rosbag_root,
+        )
+        self.gripper_extraction_manager = GripperExtractionManager(
             project_root=self.project_root,
             rosbag_root=self.recording_manager.rosbag_root,
         )
