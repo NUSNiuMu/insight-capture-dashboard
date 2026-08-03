@@ -24,6 +24,7 @@ class _UmiExportJob:
     bag_names: list[str]
     output_path: Path
     image_size: Optional[int]
+    camera_names: list[str]
     status: str = "running"
     stage: str = "starting"
     current_bag: str = ""
@@ -66,6 +67,7 @@ class UmiExportManager:
                 "image_mode": (
                     "original" if job.image_size is None else str(job.image_size)
                 ),
+                "camera_names": job.camera_names,
             }
             if job.finished_at:
                 payload["finished_at"] = job.finished_at
@@ -80,7 +82,11 @@ class UmiExportManager:
             return payload
 
     def start(
-        self, dataset_name: str, bag_names: list[str], image_mode: str = "original"
+        self,
+        dataset_name: str,
+        bag_names: list[str],
+        image_mode: str = "original",
+        camera_names: Optional[list[str]] = None,
     ) -> Dict[str, object]:
         dataset_name = self._validate_name(dataset_name, "dataset name")
         image_mode = str(image_mode).strip().lower()
@@ -97,6 +103,17 @@ class UmiExportManager:
         resolved_bags = [self._bag_path(name) for name in bag_names]
         if len(set(bag_names)) != len(bag_names):
             raise ValueError("Duplicate rosbag names are not allowed.")
+        if camera_names is None:
+            camera_names = ["insight3_a", "insight3_b", "insight9_a"]
+        if not camera_names:
+            raise ValueError("Select at least one camera.")
+        camera_names = [
+            self._validate_name(name, "camera name") for name in camera_names
+        ]
+        if len(camera_names) > 10:
+            raise ValueError("Too many cameras selected.")
+        if len(set(camera_names)) != len(camera_names):
+            raise ValueError("Duplicate camera names are not allowed.")
         output_path = self.output_root / f"{dataset_name}.zarr.zip"
         with self._lock:
             if self._current_job and self._current_job.status == "running":
@@ -106,6 +123,7 @@ class UmiExportManager:
                 bag_names=list(bag_names),
                 output_path=output_path,
                 image_size=image_size,
+                camera_names=camera_names,
                 started_at=time.time(),
             )
             self._current_job = job
@@ -152,6 +170,8 @@ class UmiExportManager:
             "--image-size",
             "original" if job.image_size is None else str(job.image_size),
         ]
+        for camera_name in job.camera_names:
+            command.extend(("--camera", camera_name))
         output_tail = deque(maxlen=12)
         try:
             process = subprocess.Popen(

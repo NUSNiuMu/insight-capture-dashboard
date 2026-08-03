@@ -3,8 +3,10 @@ import { escapeHtml, formatDuration } from "../shared/format.js";
 const bagList = document.getElementById("umi-bag-list");
 const selectAllButton = document.getElementById("umi-select-all");
 const datasetNameInput = document.getElementById("umi-dataset-name");
+const cameraLayoutInput = document.getElementById("umi-camera-layout");
+const layoutSummary = document.getElementById("umi-layout-summary");
+const schemaGrid = document.getElementById("umi-schema-grid");
 const imageModeInput = document.getElementById("umi-image-mode");
-const imageSummary = document.getElementById("umi-image-summary");
 const exportButton = document.getElementById("umi-export-button");
 const statusLabel = document.getElementById("umi-status-label");
 const statusDetail = document.getElementById("umi-status-detail");
@@ -13,6 +15,39 @@ const progressFill = document.getElementById("umi-progress-fill");
 const resultElement = document.getElementById("umi-result");
 let bags = [];
 let pollTimer = null;
+const CAMERA_LAYOUTS = {
+  single_a: {
+    label: "Single arm · Insight3 A",
+    cameras: ["insight3_a"],
+    schema: [["camera0 / robot0", "Right hand · insight3_a · VIO"]],
+  },
+  single_b: {
+    label: "Single arm · Insight3 B",
+    cameras: ["insight3_b"],
+    schema: [["camera0 / robot0", "Left hand · insight3_b · VIO"]],
+  },
+  bimanual: {
+    label: "Bimanual · A + B + head",
+    cameras: ["insight3_a", "insight3_b", "insight9_a"],
+    schema: [
+      ["camera0 / robot0", "Right hand · insight3_a"],
+      ["camera1 / robot1", "Left hand · insight3_b"],
+      ["camera2", "Global view · insight9_a"],
+    ],
+  },
+};
+
+function selectedLayout() {
+  return CAMERA_LAYOUTS[cameraLayoutInput.value] || CAMERA_LAYOUTS.single_a;
+}
+
+function renderLayout() {
+  const layout = selectedLayout();
+  layoutSummary.textContent = layout.label;
+  schemaGrid.innerHTML = layout.schema.map(([key, value]) =>
+    `<span><small>${escapeHtml(key)}</small><strong>${escapeHtml(value)}</strong></span>`
+  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span>`;
+}
 
 function formatBytes(bytes) {
   let value = Number(bytes || 0);
@@ -54,6 +89,7 @@ async function loadBags() {
 function setLocked(locked) {
   exportButton.disabled = locked;
   datasetNameInput.disabled = locked;
+  cameraLayoutInput.disabled = locked;
   imageModeInput.disabled = locked;
   selectAllButton.disabled = locked;
   bagList.querySelectorAll("input").forEach((input) => { input.disabled = locked; });
@@ -121,10 +157,10 @@ selectAllButton.addEventListener("click", () => {
 });
 
 imageModeInput.addEventListener("change", () => {
-  imageSummary.textContent = imageModeInput.value === "original"
-    ? "Original RGB · 20 Hz"
-    : `${imageModeInput.value}×${imageModeInput.value} RGB · 20 Hz`;
+  renderLayout();
 });
+
+cameraLayoutInput.addEventListener("change", renderLayout);
 
 exportButton.addEventListener("click", async () => {
   const bagNames = selectedBags();
@@ -145,7 +181,12 @@ exportButton.addEventListener("click", async () => {
     const response = await fetch("/api/umi-export/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataset_name: datasetName, bag_names: bagNames, image_mode: imageModeInput.value }),
+      body: JSON.stringify({
+        dataset_name: datasetName,
+        bag_names: bagNames,
+        image_mode: imageModeInput.value,
+        camera_names: selectedLayout().cameras,
+      }),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not start UMI export.");
@@ -159,4 +200,5 @@ exportButton.addEventListener("click", async () => {
 });
 
 void loadBags();
+renderLayout();
 void pollStatus();

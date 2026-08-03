@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Convert recorded bimanual ROS 2 bags into an official-style UMI Zarr."""
+"""Convert recorded ROS 2 bags into an official-style UMI Zarr."""
 
 from __future__ import annotations
 
@@ -144,25 +144,52 @@ class ZarrV2Writer:
         )
 
 
-def _pose_topic(camera: dict) -> str:
-    value = str(camera.get("dashboard_pose_stream", "vio_100hz")).strip()
+def _pose_topic(camera: dict, *, single_arm: bool = False) -> str:
+    key = "umi_single_arm_pose_stream" if single_arm else "dashboard_pose_stream"
+    value = str(camera.get(key, "vio_100hz")).strip()
     if value.startswith("/"):
         return value
     return f"/{camera['namespace']}/camera/{value}"
 
 
-def load_camera_specs(config_path: Path) -> list[CameraSpec]:
+def load_camera_specs(
+    config_path: Path, camera_names: Optional[list[str]] = None
+) -> list[CameraSpec]:
     setup = load_setup(config_path)
+    enabled = [
+        item for item in setup.get("cameras", []) if item.get("enabled", True)
+    ]
     by_role = {
         str(item.get("teleop_role")): item
-        for item in setup.get("cameras", [])
-        if item.get("enabled", True)
+        for item in enabled
     }
-    missing = [role for role in ROLE_ORDER if role not in by_role]
-    if missing:
-        raise ValueError(f"camera config is missing roles: {', '.join(missing)}")
+    if camera_names is None:
+        missing = [role for role in ROLE_ORDER if role not in by_role]
+        if missing:
+            raise ValueError(f"camera config is missing roles: {', '.join(missing)}")
+        selected_roles = list(ROLE_ORDER)
+    else:
+        if not camera_names:
+            raise ValueError("select at least one camera")
+        if len(set(camera_names)) != len(camera_names):
+            raise ValueError("duplicate camera names are not allowed")
+        by_name = {str(item.get("name")): item for item in enabled}
+        missing = [name for name in camera_names if name not in by_name]
+        if missing:
+            raise ValueError(f"camera config is missing cameras: {', '.join(missing)}")
+        selected_by_role = {
+            str(by_name[name].get("teleop_role")): by_name[name]
+            for name in camera_names
+        }
+        if len(selected_by_role) != len(camera_names):
+            raise ValueError("selected cameras must have unique teleoperation roles")
+        selected_roles = [role for role in ROLE_ORDER if role in selected_by_role]
+        if not any(role != "head" for role in selected_roles):
+            raise ValueError("UMI export requires at least one hand camera")
+        by_role = selected_by_role
     specs = []
-    for role in ROLE_ORDER:
+    single_arm = sum(role != "head" for role in selected_roles) == 1
+    for role in selected_roles:
         camera = by_role[role]
         stream = str(camera["dashboard_image_stream"])
         if stream not in IMAGE_STREAMS:
@@ -175,7 +202,11 @@ def load_camera_specs(config_path: Path) -> list[CameraSpec]:
                 name=str(camera["name"]),
                 role=role,
                 image_topic=image_topic(str(camera["namespace"]), stream),
-                pose_topic=_pose_topic(camera) if role != "head" else None,
+                pose_topic=(
+                    _pose_topic(camera, single_arm=single_arm)
+                    if role != "head"
+                    else None
+                ),
                 tcp_translation_m=(
                     np.asarray(tcp["translation_m"], dtype=np.float64)
                     if tcp is not None
@@ -562,6 +593,7 @@ def _write_training_config(
     dataset_name: str,
     fps: float,
     camera_shapes: list[tuple[int, int]],
+    robot_count: int,
 ) -> Path:
     config_path = output_path.with_name(f"{dataset_name}.umi.yaml")
     observations = []
@@ -577,7 +609,7 @@ def _write_training_config(
                 "      ignore_by_policy: false",
             ]
         )
-    for robot_index in range(2):
+    for robot_index in range(robot_count):
         observations.extend(
             [
                 f"    robot{robot_index}_eef_pos:",
@@ -614,7 +646,7 @@ def _write_training_config(
             "  obs:",
             *observations,
             "  action:",
-            "    shape: [20]",
+            f"    shape: [{robot_count * 10}]",
             "    horizon: 16",
             "    latency_steps: 0",
             "    down_sample_steps: 1",
@@ -652,8 +684,10 @@ def export_umi_dataset(
     image_size: Optional[int] = None,
     max_image_skew_ms: float = 40.0,
     minimum_frames: int = 24,
+    camera_names: Optional[list[str]] = None,
 ) -> dict[str, object]:
-    specs = load_camera_specs(camera_config)
+    specs = load_camera_specs(camera_config, camera_names)
+    robot_count = sum(spec.role != "head" for spec in specs)
     bag_paths = [path.resolve() for path in bag_paths]
     output_path = output_path.resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -772,6 +806,9 @@ def export_umi_dataset(
                 },
                 "camera_order": [spec.name for spec in specs],
                 "robot_order": [spec.name for spec in specs if spec.role != "head"],
+                "pose_topics": {
+                    spec.name: spec.pose_topic for spec in specs if spec.pose_topic
+                },
                 "gripper_width_semantics": "normalized_opening_0_closed_1_open",
                 "source_bags": [path.name for path in bag_paths],
             }
@@ -797,6 +834,9 @@ def export_umi_dataset(
         },
         "camera_order": [spec.name for spec in specs],
         "robot_order": [spec.name for spec in specs if spec.role != "head"],
+        "pose_topics": {
+            spec.name: spec.pose_topic for spec in specs if spec.pose_topic
+        },
         "episodes": episode_summaries,
         "size_bytes": output_path.stat().st_size,
     }
@@ -805,6 +845,7 @@ def export_umi_dataset(
         output_path.name.removesuffix(".zarr.zip"),
         fps,
         [output_shapes[spec.name] for spec in specs],
+        robot_count,
     )
     summary["training_config_path"] = str(training_config)
     manifest_path = output_path.with_name(
@@ -836,6 +877,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--max-image-skew-ms", type=float, default=40.0)
     parser.add_argument("--minimum-frames", type=int, default=24)
+    parser.add_argument(
+        "--camera",
+        dest="camera_names",
+        action="append",
+        help="camera name to include; repeat for multiple cameras",
+    )
     return parser
 
 
@@ -862,6 +909,7 @@ def main() -> int:
             image_size=image_size,
             max_image_skew_ms=args.max_image_skew_ms,
             minimum_frames=args.minimum_frames,
+            camera_names=args.camera_names,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

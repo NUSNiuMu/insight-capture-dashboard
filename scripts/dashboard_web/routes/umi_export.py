@@ -19,11 +19,18 @@ class UmiExportRoutes:
             isinstance(name, str) for name in bag_names
         ):
             raise ValueError("bag_names must be a list of strings")
+        camera_names = body.get("camera_names")
+        if camera_names is not None and (
+            not isinstance(camera_names, list)
+            or not all(isinstance(name, str) for name in camera_names)
+        ):
+            raise ValueError("camera_names must be a list of strings")
         try:
             payload = self.context.umi_export_manager.start(
                 str(body.get("dataset_name", "")),
                 bag_names,
                 str(body.get("image_mode", "original")),
+                camera_names,
             )
         except RuntimeError as exc:
             return web.json_response({"error": str(exc)}, status=409)

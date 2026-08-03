@@ -15,20 +15,19 @@
       <section class="app-main">
         <header class="app-topbar"><span>Process / <strong>UMI dataset</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
         <main class="page-content">
-          <header class="content-heading"><div><p class="section-kicker">Training data</p><h1>UMI Dataset</h1><p>Synchronize bimanual TCP poses, gripper openings and three camera streams into a training-ready Zarr.</p></div><span class="heading-stat"><strong>20 Hz</strong><span>UMI replay buffer</span></span></header>
+          <header class="content-heading"><div><p class="section-kicker">Training data</p><h1>UMI Dataset</h1><p>Synchronize selected Insight camera streams, TCP poses and gripper openings into a training-ready Zarr.</p></div><span class="heading-stat"><strong>20 Hz</strong><span>UMI replay buffer</span></span></header>
           <div class="umi-workspace">
             <section class="data-surface umi-source-surface">
               <div class="section-heading"><div><p class="section-kicker">01 · Episodes</p><h2>Select rosbags</h2></div><button id="umi-select-all" class="quiet-button" type="button">Select all</button></div>
               <div id="umi-bag-list" class="umi-bag-list"><div class="empty-state">Loading rosbags...</div></div>
             </section>
             <section class="data-surface umi-export-surface">
-              <div class="section-heading"><div><p class="section-kicker">02 · Export</p><h2>Build replay buffer</h2></div><span>Right · Left · Head</span></div>
-              <label><span class="field-label">Dataset name</span><input id="umi-dataset-name" class="field-control" value="bimanual_demo" spellcheck="false"><small class="field-help">Creates outputs/umi_datasets/&lt;name&gt;.zarr.zip</small></label>
+              <div class="section-heading"><div><p class="section-kicker">02 · Export</p><h2>Build replay buffer</h2></div><span id="umi-layout-summary">Single arm · Insight3 A</span></div>
+              <label><span class="field-label">Dataset name</span><input id="umi-dataset-name" class="field-control" value="single_arm_demo" spellcheck="false"><small class="field-help">Creates outputs/umi_datasets/&lt;name&gt;.zarr.zip</small></label>
+              <label class="umi-resolution-field"><span class="field-label">Capture layout</span><select id="umi-camera-layout" class="field-control"><option value="single_a" selected>Single arm · Insight3 A (right)</option><option value="single_b">Single arm · Insight3 B (left)</option><option value="bimanual">Bimanual · Insight3 A + B + Insight9</option></select><small class="field-help">Single-arm maps the selected Insight3 to camera0 / robot0 and uses its native VIO pose. Bimanual uses global poses.</small></label>
               <label class="umi-resolution-field"><span class="field-label">Training image resolution</span><select id="umi-image-mode" class="field-control"><option value="original" selected>Original resolution</option><option value="384">384 × 384 compatibility</option><option value="224">224 × 224 UMI default</option></select><small class="field-help">Original keeps each camera's source width and height. Zarr compression is lossless.</small></label>
-              <div class="umi-schema-grid">
-                <span><small>camera0 / robot0</small><strong>Right hand · insight3_a</strong></span>
-                <span><small>camera1 / robot1</small><strong>Left hand · insight3_b</strong></span>
-                <span><small>camera2</small><strong>Global view · insight9_a</strong></span>
+              <div id="umi-schema-grid" class="umi-schema-grid">
+                <span><small>camera0 / robot0</small><strong>Right hand · insight3_a · VIO</strong></span>
                 <span><small>Images</small><strong id="umi-image-summary">Original RGB · 20 Hz</strong></span>
               </div>
               <button id="umi-export-button" class="primary-button umi-export-button" type="button">Build UMI dataset</button>
