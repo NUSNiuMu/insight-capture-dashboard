@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Insight UMI Dataset</title><link rel="stylesheet" href="/static/styles.css?v=20260803-umi-v1">
+    <title>Insight UMI Dataset</title><link rel="stylesheet" href="/static/styles.css?v=20260803-umi-v2">
   </head>
   <body data-dashboard-view="umi-dataset">
     <div class="app-shell">
@@ -24,11 +24,12 @@
             <section class="data-surface umi-export-surface">
               <div class="section-heading"><div><p class="section-kicker">02 · Export</p><h2>Build replay buffer</h2></div><span>Right · Left · Head</span></div>
               <label><span class="field-label">Dataset name</span><input id="umi-dataset-name" class="field-control" value="bimanual_demo" spellcheck="false"><small class="field-help">Creates outputs/umi_datasets/&lt;name&gt;.zarr.zip</small></label>
+              <label class="umi-resolution-field"><span class="field-label">Training image resolution</span><select id="umi-image-mode" class="field-control"><option value="original" selected>Original resolution</option><option value="384">384 × 384 compatibility</option><option value="224">224 × 224 UMI default</option></select><small class="field-help">Original keeps each camera's source width and height. Zarr compression is lossless.</small></label>
               <div class="umi-schema-grid">
                 <span><small>camera0 / robot0</small><strong>Right hand · insight3_a</strong></span>
                 <span><small>camera1 / robot1</small><strong>Left hand · insight3_b</strong></span>
                 <span><small>camera2</small><strong>Global view · insight9_a</strong></span>
-                <span><small>Images</small><strong>224×224 RGB · 20 Hz</strong></span>
+                <span><small>Images</small><strong id="umi-image-summary">Original RGB · 20 Hz</strong></span>
               </div>
               <button id="umi-export-button" class="primary-button umi-export-button" type="button">Build UMI dataset</button>
               <div class="umi-progress">
@@ -42,6 +43,6 @@
         </main>
       </section>
     </div>
-    <script type="module" src="/static/pages/umi-dataset.js?v=20260803-umi-v1"></script>
+    <script type="module" src="/static/pages/umi-dataset.js?v=20260803-umi-v2"></script>
   </body>
 </html>

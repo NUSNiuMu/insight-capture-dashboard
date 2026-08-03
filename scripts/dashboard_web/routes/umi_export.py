@@ -21,7 +21,9 @@ class UmiExportRoutes:
             raise ValueError("bag_names must be a list of strings")
         try:
             payload = self.context.umi_export_manager.start(
-                str(body.get("dataset_name", "")), bag_names
+                str(body.get("dataset_name", "")),
+                bag_names,
+                str(body.get("image_mode", "original")),
             )
         except RuntimeError as exc:
             return web.json_response({"error": str(exc)}, status=409)

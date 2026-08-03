@@ -23,6 +23,7 @@ class _UmiExportJob:
     dataset_name: str
     bag_names: list[str]
     output_path: Path
+    image_size: Optional[int]
     status: str = "running"
     stage: str = "starting"
     current_bag: str = ""
@@ -62,6 +63,9 @@ class UmiExportManager:
                 "bag_count": len(job.bag_names),
                 "total_frames": job.total_frames,
                 "started_at": job.started_at,
+                "image_mode": (
+                    "original" if job.image_size is None else str(job.image_size)
+                ),
             }
             if job.finished_at:
                 payload["finished_at"] = job.finished_at
@@ -75,8 +79,17 @@ class UmiExportManager:
                 payload["config_url"] = f"/api/umi-export/config?dataset_name={query}"
             return payload
 
-    def start(self, dataset_name: str, bag_names: list[str]) -> Dict[str, object]:
+    def start(
+        self, dataset_name: str, bag_names: list[str], image_mode: str = "original"
+    ) -> Dict[str, object]:
         dataset_name = self._validate_name(dataset_name, "dataset name")
+        image_mode = str(image_mode).strip().lower()
+        if image_mode == "original":
+            image_size = None
+        elif image_mode in {"224", "384"}:
+            image_size = int(image_mode)
+        else:
+            raise ValueError("Image resolution must be original, 224, or 384.")
         if not bag_names:
             raise ValueError("Select at least one rosbag.")
         if len(bag_names) > 1000:
@@ -92,6 +105,7 @@ class UmiExportManager:
                 dataset_name=dataset_name,
                 bag_names=list(bag_names),
                 output_path=output_path,
+                image_size=image_size,
                 started_at=time.time(),
             )
             self._current_job = job
@@ -135,6 +149,8 @@ class UmiExportManager:
             str(self.project_root / "config" / "cameras.json"),
             "--calibration",
             str(self.project_root / "config" / "gripper_calibration.json"),
+            "--image-size",
+            "original" if job.image_size is None else str(job.image_size),
         ]
         output_tail = deque(maxlen=12)
         try:

@@ -47,6 +47,7 @@ class CameraSpec:
 @dataclass
 class StreamScan:
     image_stamps: Dict[str, np.ndarray]
+    image_shapes: Dict[str, tuple[int, int]]
     poses: Dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]
     openings: Dict[str, tuple[np.ndarray, np.ndarray]]
     detection_rates: Dict[str, float]
@@ -249,6 +250,7 @@ def scan_bag(
         topic: get_message(topic_types[topic]) for topic in topics
     }
     image_stamps: Dict[str, list[int]] = {spec.name: [] for spec in specs}
+    image_shapes: Dict[str, tuple[int, int]] = {}
     pose_stamps: Dict[str, list[int]] = {
         spec.name: [] for spec in specs if spec.pose_topic
     }
@@ -291,8 +293,19 @@ def scan_bag(
         if topic in image_by_topic:
             spec = image_by_topic[topic]
             image_stamps[spec.name].append(int(record_stamp_ns))
-            if spec.role != "head":
+            image = None
+            if spec.role != "head" or spec.name not in image_shapes:
                 image = decode_image(message, topic_types[topic])
+                if image is None:
+                    raise ValueError(f"failed to decode the first {spec.name} image")
+                shape = (int(image.shape[0]), int(image.shape[1]))
+                previous_shape = image_shapes.setdefault(spec.name, shape)
+                if previous_shape != shape:
+                    raise ValueError(
+                        f"{spec.name} image resolution changed from "
+                        f"{previous_shape[1]}x{previous_shape[0]} to {shape[1]}x{shape[0]}"
+                    )
+            if spec.role != "head":
                 result = detectors[spec.name].detect(image) if image is not None else None
                 distance = result.distance_px if result is not None else None
                 if distance is not None:
@@ -340,6 +353,7 @@ def scan_bag(
     }
     return StreamScan(
         image_stamps=image_arrays,
+        image_shapes=image_shapes,
         poses=poses,
         openings=openings,
         detection_rates=detection_rates,
@@ -462,11 +476,13 @@ def build_episode_plans(
     return plans
 
 
-def _rgb_resize(image: np.ndarray, size: int) -> np.ndarray:
+def _prepare_rgb(image: np.ndarray, size: Optional[int]) -> np.ndarray:
     if image.ndim == 2:
         image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
     else:
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    if size is None:
+        return np.ascontiguousarray(image)
     interpolation = cv2.INTER_AREA if max(image.shape[:2]) > size else cv2.INTER_LINEAR
     return cv2.resize(image, (size, size), interpolation=interpolation)
 
@@ -477,7 +493,8 @@ def append_episode_images(
     specs: list[CameraSpec],
     plan: EpisodePlan,
     *,
-    size: int,
+    size: Optional[int],
+    output_shapes: Dict[str, tuple[int, int]],
     output_offset: int,
 ) -> None:
     from rclpy.serialization import deserialize_message
@@ -507,10 +524,18 @@ def append_episode_images(
         image = decode_image(message, topic_types[topic])
         if image is None:
             raise ValueError(f"failed to decode {topic} frame {current_index}")
+        actual_shape = (int(image.shape[0]), int(image.shape[1]))
+        expected_source_shape = output_shapes[spec.name]
+        if size is None and actual_shape != expected_source_shape:
+            raise ValueError(
+                f"{spec.name} image resolution changed from "
+                f"{expected_source_shape[1]}x{expected_source_shape[0]} to "
+                f"{actual_shape[1]}x{actual_shape[0]}"
+            )
         writer.write_frame(
             f"data/camera{camera_index}_rgb",
             output_offset + target_index,
-            _rgb_resize(image, size),
+            _prepare_rgb(image, size),
         )
         written[spec.name] += 1
     missing = {
@@ -533,15 +558,18 @@ def _zip_store(directory: Path, output_path: Path) -> None:
 
 
 def _write_training_config(
-    output_path: Path, dataset_name: str, fps: float, image_size: int
+    output_path: Path,
+    dataset_name: str,
+    fps: float,
+    camera_shapes: list[tuple[int, int]],
 ) -> Path:
     config_path = output_path.with_name(f"{dataset_name}.umi.yaml")
     observations = []
-    for camera_index in range(3):
+    for camera_index, (height, width) in enumerate(camera_shapes):
         observations.extend(
             [
                 f"    camera{camera_index}_rgb:",
-                f"      shape: [3, {image_size}, {image_size}]",
+                f"      shape: [3, {height}, {width}]",
                 "      horizon: 2",
                 "      latency_steps: 0",
                 "      down_sample_steps: 1",
@@ -621,7 +649,7 @@ def export_umi_dataset(
     camera_config: Path,
     calibration_path: Path,
     fps: float = 20.0,
-    image_size: int = 224,
+    image_size: Optional[int] = None,
     max_image_skew_ms: float = 40.0,
     minimum_frames: int = 24,
 ) -> dict[str, object]:
@@ -631,6 +659,7 @@ def export_umi_dataset(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.perf_counter()
     planned_episodes: list[tuple[Path, EpisodePlan]] = []
+    source_shapes: Optional[Dict[str, tuple[int, int]]] = None
     for bag_index, bag_path in enumerate(bag_paths):
         bag_path = bag_path.resolve()
         print(
@@ -638,6 +667,15 @@ def export_umi_dataset(
             flush=True,
         )
         scan = scan_bag(bag_path, specs, calibration_path)
+        if source_shapes is None:
+            source_shapes = dict(scan.image_shapes)
+        elif scan.image_shapes != source_shapes:
+            details = ", ".join(
+                f"{name}: {source_shapes.get(name)} -> {scan.image_shapes.get(name)}"
+                for name in sorted(set(source_shapes) | set(scan.image_shapes))
+                if source_shapes.get(name) != scan.image_shapes.get(name)
+            )
+            raise ValueError(f"camera resolutions differ between rosbags: {details}")
         plans = build_episode_plans(
             bag_path.name,
             scan,
@@ -649,6 +687,15 @@ def export_umi_dataset(
         planned_episodes.extend((bag_path, plan) for plan in plans)
     if not planned_episodes:
         raise ValueError("no valid episodes were generated")
+    assert source_shapes is not None
+    output_shapes = {
+        spec.name: (
+            (int(image_size), int(image_size))
+            if image_size is not None
+            else source_shapes[spec.name]
+        )
+        for spec in specs
+    }
 
     total_frames = sum(len(plan.timestamps_ns) for _, plan in planned_episodes)
     episode_summaries = []
@@ -660,11 +707,12 @@ def export_umi_dataset(
         writer = ZarrV2Writer(store_path)
         writer.create_group("data")
         writer.create_group("meta")
-        for camera_index in range(len(specs)):
+        for camera_index, spec in enumerate(specs):
+            height, width = output_shapes[spec.name]
             writer.create_array(
                 f"data/camera{camera_index}_rgb",
-                (total_frames, image_size, image_size, 3),
-                (1, image_size, image_size, 3),
+                (total_frames, height, width, 3),
+                (1, height, width, 3),
                 np.uint8,
                 compression_level=1,
             )
@@ -686,6 +734,7 @@ def export_umi_dataset(
                 specs,
                 plan,
                 size=image_size,
+                output_shapes=source_shapes,
                 output_offset=output_offset,
             )
             for name, values in plan.lowdim.items():
@@ -716,7 +765,11 @@ def export_umi_dataset(
                 "format": "umi_replay_buffer",
                 "schema_version": SCHEMA_VERSION,
                 "fps": float(fps),
-                "image_size": [int(image_size), int(image_size)],
+                "image_mode": "original" if image_size is None else "resized_square",
+                "camera_image_sizes": {
+                    spec.name: [output_shapes[spec.name][1], output_shapes[spec.name][0]]
+                    for spec in specs
+                },
                 "camera_order": [spec.name for spec in specs],
                 "robot_order": [spec.name for spec in specs if spec.role != "head"],
                 "gripper_width_semantics": "normalized_opening_0_closed_1_open",
@@ -737,7 +790,11 @@ def export_umi_dataset(
         "duration_s": round(total_frames / fps, 3),
         "processing_seconds": round(elapsed, 3),
         "fps": float(fps),
-        "image_size": [image_size, image_size],
+        "image_mode": "original" if image_size is None else "resized_square",
+        "camera_image_sizes": {
+            spec.name: [output_shapes[spec.name][1], output_shapes[spec.name][0]]
+            for spec in specs
+        },
         "camera_order": [spec.name for spec in specs],
         "robot_order": [spec.name for spec in specs if spec.role != "head"],
         "episodes": episode_summaries,
@@ -747,7 +804,7 @@ def export_umi_dataset(
         output_path,
         output_path.name.removesuffix(".zarr.zip"),
         fps,
-        image_size,
+        [output_shapes[spec.name] for spec in specs],
     )
     summary["training_config_path"] = str(training_config)
     manifest_path = output_path.with_name(
@@ -772,7 +829,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=project_root / "config" / "gripper_calibration.json",
     )
     parser.add_argument("--fps", type=float, default=20.0)
-    parser.add_argument("--image-size", type=int, default=224)
+    parser.add_argument(
+        "--image-size",
+        default="original",
+        help="original, or a positive square output size such as 224",
+    )
     parser.add_argument("--max-image-skew-ms", type=float, default=40.0)
     parser.add_argument("--minimum-frames", type=int, default=24)
     return parser
@@ -780,7 +841,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    if args.fps <= 0 or args.image_size <= 0 or args.minimum_frames < 2:
+    try:
+        image_size = None if args.image_size == "original" else int(args.image_size)
+    except ValueError:
+        image_size = -1
+    if (
+        args.fps <= 0
+        or (image_size is not None and image_size <= 0)
+        or args.minimum_frames < 2
+    ):
         print("ERROR: invalid export parameters", file=sys.stderr)
         return 2
     try:
@@ -790,7 +859,7 @@ def main() -> int:
             camera_config=args.camera_config,
             calibration_path=args.calibration,
             fps=args.fps,
-            image_size=args.image_size,
+            image_size=image_size,
             max_image_skew_ms=args.max_image_skew_ms,
             minimum_frames=args.minimum_frames,
         )

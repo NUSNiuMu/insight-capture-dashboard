@@ -98,7 +98,10 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 耗时或动画估算。
 
 **UMI 训练数据导出**：打开 `/umi-dataset`，将每次完整示教对应的 rosbag 勾选为
-episode，填写数据集名称后点击 **Build UMI dataset**。后台会在 recorder timeline 上
+episode，填写数据集名称并选择训练图像分辨率后点击 **Build UMI dataset**。默认的
+**Original resolution** 保留每路相机在 rosbag 中的原始宽高，不进行缩放；图像只转换为
+UMI 需要的 RGB 三通道，Zarr 使用无损压缩。`224 × 224` 和 `384 × 384` 仅作为兼容选项。
+后台会在 recorder timeline 上
 把右手、左手和头部三路图像、左右全局 pose、TCP 外参与夹爪二维码检测统一对齐到
 20 Hz，并输出可由官方 `UmiDataset` 直接读取的
 `outputs/umi_datasets/<名称>.zarr.zip`。页面同时提供：
@@ -106,6 +109,11 @@ episode，填写数据集名称后点击 **Build UMI dataset**。后台会在 re
 - `<名称>.umi.yaml`：双臂三相机 `shape_meta`，动作维度为 20；复制到 UMI 仓库的
   `diffusion_policy/config/task/` 并修改 `dataset_path` 后即可用于训练；
 - `<名称>.manifest.json`：episode、帧数、同步偏差和夹爪检测率等质量摘要。
+
+原始分辨率模式允许三路相机使用不同尺寸，并会把各自的 `[C,H,W]` 写入训练配置。
+同一路相机在多个输入 bag 中必须保持相同分辨率，否则导出会停止并指出不一致的相机。
+原始分辨率会显著增加数据集大小、训练 I/O 和显存占用；rosbag 本身若记录的是 JPEG
+compressed topic，导出只做解码，不会再增加一次有损压缩，但无法恢复采集时已经丢失的细节。
 
 Zarr 内相机顺序固定为右腕 `camera0`、左腕 `camera1`、头部 `camera2`；机器人顺序
 固定为右手 `robot0`、左手 `robot1`。`robot*_gripper_width` 使用归一化 opening，

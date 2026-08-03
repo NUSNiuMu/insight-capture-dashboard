@@ -3,6 +3,8 @@ import { escapeHtml, formatDuration } from "../shared/format.js";
 const bagList = document.getElementById("umi-bag-list");
 const selectAllButton = document.getElementById("umi-select-all");
 const datasetNameInput = document.getElementById("umi-dataset-name");
+const imageModeInput = document.getElementById("umi-image-mode");
+const imageSummary = document.getElementById("umi-image-summary");
 const exportButton = document.getElementById("umi-export-button");
 const statusLabel = document.getElementById("umi-status-label");
 const statusDetail = document.getElementById("umi-status-detail");
@@ -52,6 +54,7 @@ async function loadBags() {
 function setLocked(locked) {
   exportButton.disabled = locked;
   datasetNameInput.disabled = locked;
+  imageModeInput.disabled = locked;
   selectAllButton.disabled = locked;
   bagList.querySelectorAll("input").forEach((input) => { input.disabled = locked; });
 }
@@ -84,7 +87,8 @@ function renderStatus(payload) {
   progressValue.textContent = "100%";
   progressFill.classList.remove("is-error");
   progressFill.style.width = "100%";
-  statusDetail.textContent = `${Number(result.episode_count || 0)} episodes · ${Number(result.total_frames || 0).toLocaleString()} frames · ${formatDuration(Number(result.duration_s || 0))}\nCamera order: ${(result.camera_order || []).join(" · ")}`;
+  const sizes = Object.entries(result.camera_image_sizes || {}).map(([name, size]) => `${name} ${size[0]}×${size[1]}`).join(" · ");
+  statusDetail.textContent = `${Number(result.episode_count || 0)} episodes · ${Number(result.total_frames || 0).toLocaleString()} frames · ${formatDuration(Number(result.duration_s || 0))}\nCamera order: ${(result.camera_order || []).join(" · ")}\nImages: ${sizes || "--"}`;
   resultElement.innerHTML = `
     <div><small>Zarr archive</small><strong>${formatBytes(result.size_bytes)}</strong></div>
     <div><small>Episodes</small><strong>${Number(result.episode_count || 0)}</strong></div>
@@ -116,6 +120,12 @@ selectAllButton.addEventListener("click", () => {
   selectAllButton.textContent = shouldSelect ? "Clear all" : "Select all";
 });
 
+imageModeInput.addEventListener("change", () => {
+  imageSummary.textContent = imageModeInput.value === "original"
+    ? "Original RGB · 20 Hz"
+    : `${imageModeInput.value}×${imageModeInput.value} RGB · 20 Hz`;
+});
+
 exportButton.addEventListener("click", async () => {
   const bagNames = selectedBags();
   const datasetName = datasetNameInput.value.trim();
@@ -135,7 +145,7 @@ exportButton.addEventListener("click", async () => {
     const response = await fetch("/api/umi-export/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataset_name: datasetName, bag_names: bagNames }),
+      body: JSON.stringify({ dataset_name: datasetName, bag_names: bagNames, image_mode: imageModeInput.value }),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Could not start UMI export.");
