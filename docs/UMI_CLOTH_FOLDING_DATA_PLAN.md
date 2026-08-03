@@ -1,6 +1,6 @@
 给 Insight3 global localizer 增加左右夹爪静态 mask。
 左右 TCP 坐标系已定义，见 [UMI TCP 坐标系](UMI_TCP_FRAMES.md)。
-标定 camera_center → TCP。
+Jetson NX 的 camera_center → TCP 实测外参已录入并发布 TF。
 修复校准工具的 mono8/8UC1 解码。
 实现 rosbag 离线 gripper extractor。
 生成开合可视化曲线和 marker overlay 视频做人工验证。

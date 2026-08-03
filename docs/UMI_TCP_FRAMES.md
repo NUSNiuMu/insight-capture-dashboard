@@ -25,8 +25,22 @@ T_map_tcp = T_map_camera_center * T_camera_center_tcp
 T_camera_center_tcp.rotation = identity
 ```
 
-`T_camera_center_tcp.translation` 必须通过实物标定获取，不复用 UMI GoPro 的机械尺寸。
-在标定值落盘前，系统不发布 `camera_center → tcp` 的 TF，避免下游把占位值当成真实 TCP。
+Jetson NX 当前实测的左右外参一致：
+
+```text
+translation_m = [0.00, 0.08, 0.18]
+rotation_xyzw = [0.00, 0.00, 0.00, 1.00]
+```
+
+即 TCP 相对 `camera_center` 向下 8 cm、向前 18 cm，旋转为 identity。
+Insight3 global localizer 发布以下静态 TF：
+
+```text
+insight3_a_global_camera_center -> right_tcp
+insight3_b_global_camera_center -> left_tcp
+```
+
+其他设备 profile 仍需单独实测，不复用 Jetson NX 或 UMI GoPro 的机械尺寸。
 
 ## 数据约定
 

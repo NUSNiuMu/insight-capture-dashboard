@@ -40,6 +40,7 @@ from .global_localization import (
 )
 from .synchronization import PoseBuffer, StereoPair, StereoPairSynchronizer
 from .relocalization_ekf import RelocalizationEkf, RelocalizationEkfConfig
+from .tcp_frames import TcpFrameCalibration, load_tcp_frame_calibrations
 
 __all__ = [
     "AdaptiveRelocalizationConfig",
@@ -66,9 +67,11 @@ __all__ = [
     "StereoPair",
     "StereoCalibration",
     "StereoPairSynchronizer",
+    "TcpFrameCalibration",
     "compose_transform",
     "interpolate_pose",
     "left_to_stereo_center",
+    "load_tcp_frame_calibrations",
     "matrix_from_pose",
     "matrix_from_transform",
     "localize_features",
