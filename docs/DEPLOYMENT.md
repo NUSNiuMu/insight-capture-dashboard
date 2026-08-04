@@ -175,8 +175,9 @@ cd insight_capture
 
 1. 选定/校验设备 profile（见上）；
 2. 检查 docker + NVIDIA container runtime 是否就绪（硬件 JPEG/H.264 编解码依赖它注入 GStreamer 插件）；
-3. 调用 `scripts/host_setup.sh`（与使用者路径共用，见 §3.2）：写 `/etc/sysctl.d/99-dds-rx-buffers.conf`、
-   安装并启用开机自动重启相机的 systemd unit、检查 CPU 是否满核在线；
+3. 调用 `scripts/host_setup.sh`（与使用者路径共用，见 §3.2）：写 `/etc/sysctl.d/99-dds-rx-buffers.conf`
+   （含 `ipfrag_max_dist=4096`）、安装相机 USB 网卡 RPS 与开机相机恢复的 systemd unit、
+   检查 CPU 是否满核在线；jetson-nx profile 的恢复流程同时校正相机为 CycloneDDS；
 4. `docker compose build`（首次在设备上编译 COLMAP，约 20-40 分钟，只支持 Orin NX，不支持 Nano）；
 5. 拉起 `./scripts/run_dashboard.sh`（可以 `--no-start` 跳过，只做环境准备）。
 
@@ -246,10 +247,14 @@ cd insight-dashboard-deploy
 
 **装完 update.sh 之后，还有一步不能漏**：跑一次部署包自带的宿主机调优脚本
 （`scripts/host_setup.sh` 由 `build_release.sh` 一起打进部署包，跟开发者路径
-`setup_host.sh` 用的是同一份逻辑）——它做两件事：写内核 UDP 接收缓冲区调优
-（不做这步录制会丢 10-24% 图像帧）、装并启用开机自动重启相机的 systemd unit
+`setup_host.sh` 用的是同一份逻辑）——它会写内核 UDP 接收缓冲与 IP 分片调优、为相机
+USB 网卡启用 RPS（把集中在 CPU0 的协议处理分散到其余核心），并装好开机自动
+恢复相机的 systemd unit。jetson-nx profile 还会把相机 DDS 模式幂等校正为
+CycloneDDS；FastDDS 的约 65 KB UDP 报文会在多路大图订阅时触发分片/重传风暴。
+缺少这些调优时，多路录制会在写盘之前丢包，
+开机恢复 unit 则处理相机与 Jetson 的 DDS 启动时序
 （相机比 Jetson 先启动完，DDS participant 会卡在错误的网络状态，见其脚本注释）。
-这两项不在 `update.sh` 的职责范围内（它只管容器生命周期），必须单独跑一次：
+这些宿主机配置不在 `update.sh` 的职责范围内（它只管容器生命周期），必须单独跑一次：
 
 ```bash
 ./scripts/host_setup.sh

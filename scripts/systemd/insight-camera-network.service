@@ -1,0 +1,17 @@
+# Configure receive packet steering after the camera USB network links appear.
+
+[Unit]
+Description=Configure Insight camera USB network receive steering
+# Camera reboots can recreate cdc_ncm interfaces and reset rps_cpus to 00.
+After=network.target insight-camera-reboot.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/nvidia/insight-capture-dashboard
+Environment=INSIGHT_NETWORK_TUNING_TIMEOUT=180
+ExecStart=/home/nvidia/insight-capture-dashboard/scripts/configure_camera_network.sh
+TimeoutStartSec=240
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -17,11 +17,12 @@
 tar xzf insight-dashboard-deploy-vX.Y.Z.tar.gz
 cd insight-dashboard-deploy        # 解压出的目录不带版本号——它是常驻安装目录，名字跨版本不变
 ./update.sh /path/to/insight-dashboard-vX.Y.Z.tar.gz
-sudo ./scripts/host_setup.sh       # 一次性宿主机调优：UDP 缓冲区（不做录制丢 10-24% 帧）+ 开机自动重启相机
+sudo ./scripts/host_setup.sh       # 一次性调优：CycloneDDS/UDP 分片、RPS + 开机相机恢复
 ```
 
 `update.sh` 会加载镜像、生成 `config/` 等数据目录并启动服务，
-最后等待后端健康检查通过。`host_setup.sh` 只在首次安装（或重刷系统后）需要跑一次。
+最后等待后端健康检查通过。`host_setup.sh` 只在首次安装（或重刷系统后）需要跑一次；
+jetson-nx profile 会在下一次开机相机恢复流程中把相机 DDS 模式校正为 CycloneDDS。
 
 首次安装或大版本升级后，建图/重定位用的 TensorRT 推理服务需要现场编译一次
 设备专属引擎，最长约 15 分钟；这段时间看板本身已经能正常打开，只是 3D 页面的

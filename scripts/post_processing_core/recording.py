@@ -23,6 +23,11 @@ from .topic_catalog import (
     discover_live_topics,
 )
 from .recovery import RecordingRecovery
+from .network_audit import (
+    capture_network_snapshot,
+    compare_network_snapshots,
+    format_network_audit,
+)
 from .sync import RecordingSync
 
 try:
@@ -149,6 +154,9 @@ class RecordingManager:
         self._stop_image_recording = stop_image_recording
         self._image_writer_active = False
         self._image_header_audit: Optional[Dict[str, object]] = None
+        self._network_snapshot_start: Optional[Dict[str, object]] = None
+        self._network_audit: Optional[Dict[str, object]] = None
+        self._recording_manifest: Optional[Dict[str, object]] = None
         # Group recorder processes by camera namespace.
         self.processes: Dict[str, subprocess.Popen] = {}
         self._staging_dir: Optional[Path] = None
@@ -160,7 +168,7 @@ class RecordingManager:
         self._stdout_threads: List[threading.Thread] = []
         self._lock = threading.Lock()
         self._merge_thread: Optional[threading.Thread] = None
-        self.merge_state: str = "idle"  # idle | merging | done | error
+        self.merge_state: str = "idle"  # idle | merging | syncing | done | error
         self.merge_error: Optional[str] = None
         self._last_topic_refresh_monotonic: float = 0.0
         self.last_sync_status: Dict[str, object] = {
@@ -234,8 +242,10 @@ class RecordingManager:
             self._cleanup_if_exited_unlocked()
             if self.processes or self._image_writer_active:
                 raise RuntimeError("Recording is already running.")
-            if self.merge_state == "merging":
-                raise RuntimeError("Still merging the previous recording -- wait for it to finish.")
+            if self.merge_state in {"merging", "syncing"}:
+                raise RuntimeError(
+                    f"Previous recording is still {self.merge_state} -- wait for it to finish."
+                )
 
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             if bag_name:
@@ -246,6 +256,7 @@ class RecordingManager:
             output_path = self.rosbag_root / name
             staging_dir = self.rosbag_root / "_staging" / name
             staging_dir.mkdir(parents=True, exist_ok=True)
+            network_snapshot_start = capture_network_snapshot()
 
             if self._start_image_recording is not None:
                 image_topics = [t for t in selected_topics if t in self._image_topics]
@@ -307,9 +318,17 @@ class RecordingManager:
             self._staging_dir = staging_dir
             self._image_writer_active = image_writer_active
             self._image_header_audit = None
+            self._network_snapshot_start = network_snapshot_start
+            self._network_audit = None
             self.output_path = str(output_path)
             self.started_at = time.time()
             self.current_topics = list(selected_topics)
+            self._recording_manifest = {
+                "version": 1,
+                "bag_name": name,
+                "selected_topics": list(selected_topics),
+                "started_at_epoch_s": self.started_at,
+            }
             self._output_lines.clear()
             self.merge_state = "idle"
             self.merge_error = None
@@ -329,9 +348,26 @@ class RecordingManager:
             staging_dir = self._staging_dir
             output_path = self.output_path
             image_writer_active = self._image_writer_active
+            network_snapshot_start = self._network_snapshot_start
+            network_snapshot_end = capture_network_snapshot()
             self._image_writer_active = False
             if not processes and not image_writer_active:
                 return self.status()
+
+        if network_snapshot_start is not None:
+            network_audit = compare_network_snapshots(
+                network_snapshot_start, network_snapshot_end
+            )
+            self._network_audit = network_audit
+            self._output_lines.append(f"[network] {format_network_audit(network_audit)}")
+        if self._recording_manifest is not None:
+            stopped_at = time.time()
+            self._recording_manifest.update({
+                "stopped_at_epoch_s": stopped_at,
+                "duration_s": round(max(0.0, stopped_at - float(self.started_at or stopped_at)), 3),
+                "image_header_audit": "image_header_audit.json" if image_writer_active else None,
+                "network_audit": "recording_network_audit.json" if self._network_audit else None,
+            })
 
         # Stop subprocesses together before detaching image writers.
         for process in processes.values():
@@ -416,6 +452,14 @@ class RecordingManager:
                 (output_path / "image_header_audit.json").write_text(
                     json.dumps(self._image_header_audit, indent=2, sort_keys=True)
                 )
+            if self._network_audit is not None:
+                (output_path / "recording_network_audit.json").write_text(
+                    json.dumps(self._network_audit, indent=2, sort_keys=True)
+                )
+            if self._recording_manifest is not None:
+                (output_path / "recording_manifest.json").write_text(
+                    json.dumps(self._recording_manifest, indent=2, sort_keys=True)
+                )
             if trim["trimmed_ns"] > 0:
                 self._output_lines.append(
                     f"[merge] Trimmed {trim['trimmed_ns'] / 1e9:.2f}s of unsynced camera-startup "
@@ -430,11 +474,15 @@ class RecordingManager:
                 )
 
             shutil.rmtree(staging_dir, ignore_errors=True)
-            with self._lock:
-                self.merge_state = "done"
             self._output_lines.append(f"[merge] Combined {len(part_bags)} recorder(s) into {output_path}")
             if self.sync_to_host_on_stop:
-                self.sync_recording_to_host(str(output_path))
+                with self._lock:
+                    self.merge_state = "syncing"
+                self._output_lines.append("[sync] Waiting for automatic host sync to finish")
+                sync_status = self.sync_recording_to_host(str(output_path))
+                self._output_lines.append(f"[sync] {sync_status.get('message', 'Host sync finished')}")
+            with self._lock:
+                self.merge_state = "done"
         except Exception as exc:  # noqa: BLE001 - surfaced via merge_error, not crashing the thread
             with self._lock:
                 self.merge_state = "error"
@@ -504,4 +552,8 @@ class RecordingManager:
                 "output_path": self.output_path,
                 "topic_catalog": catalog,
                 "recent_output": output_lines,
+                "network_audit": self._network_audit,
+                "merge_state": self.merge_state,
+                "merge_error": self.merge_error,
+                "sync_status": dict(self.last_sync_status),
             }

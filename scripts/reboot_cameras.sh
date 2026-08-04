@@ -14,6 +14,26 @@ PING_INTERVAL=3         # seconds between ping attempts
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
+configured_dds_type() {
+    if [[ -n "${INSIGHT_CAMERA_DDS_TYPE:-}" ]]; then
+        echo "${INSIGHT_CAMERA_DDS_TYPE}"
+        return
+    fi
+    python3 - "${SCRIPT_DIR}/../config/cameras.json" 2>/dev/null <<'PY' || true
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("camera_dds_type", ""))
+except Exception:
+    pass
+PY
+}
+
+current_dds_type() {
+    local url="$1"
+    ${CLI} --device-base-url "${url}" dds show 2>/dev/null \
+        | awk -F: '/DDS Type/{gsub(/[[:space:]]/, "", $2); print $2; exit}'
+}
+
 # Use monotonic SECONDS because boot-time clock synchronization can jump.
 
 # Wait for the configured camera count because USB links enumerate gradually.
@@ -98,11 +118,31 @@ wait_for_device() {
 }
 
 # Send reboot command to all devices in parallel
-log "Sending reboot command to all cameras..."
+TARGET_DDS_TYPE="$(configured_dds_type)"
+if [[ -n "${TARGET_DDS_TYPE}" && "${TARGET_DDS_TYPE}" != "cyclonedds" \
+        && "${TARGET_DDS_TYPE}" != "fastrtps" ]]; then
+    log "ERROR: unsupported camera_dds_type '${TARGET_DDS_TYPE}'"
+    exit 1
+fi
+
+reboot_or_configure_device() {
+    local url="$1" current
+    current="$(current_dds_type "${url}" || true)"
+    if [[ -n "${TARGET_DDS_TYPE}" && "${current}" != "${TARGET_DDS_TYPE}" ]]; then
+        log "Changing ${url} DDS mode ${current:-unknown} -> ${TARGET_DDS_TYPE} (device reboots)..."
+        # Some firmware closes HTTP immediately after accepting the setting,
+        # so a non-zero CLI exit can still mean the reboot was initiated.
+        ${CLI} --device-base-url "${url}" dds set "${TARGET_DDS_TYPE}" -y || true
+    else
+        log "Rebooting ${url} (DDS=${current:-unchanged})..."
+        ${CLI} --device-base-url "${url}" system reboot -y || true
+    fi
+}
+
+log "Preparing all cameras (target DDS=${TARGET_DDS_TYPE:-unchanged})..."
 pids=()
 for url in "${DEVICES[@]}"; do
-    log "Rebooting ${url}..."
-    ${CLI} --device-base-url "${url}" system reboot -y &
+    reboot_or_configure_device "${url}" &
     pids+=($!)
 done
 

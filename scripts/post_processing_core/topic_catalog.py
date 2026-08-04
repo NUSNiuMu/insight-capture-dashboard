@@ -63,9 +63,15 @@ def filter_recordable_live_topics(raw_config: Dict, live_topics: Sequence[str]) 
         str(camera["namespace"]): camera
         for camera in enabled_cameras(raw_config)
     }
+    excluded = set(_normalize_topics(raw_config.get("recording_excluded_topics") or []))
     filtered: List[str] = []
     for topic in live_topics:
         normalized = _normalize_topic_name(topic)
+        # Some camera firmwares advertise inactive publisher variants forever.
+        # Keep the exclusion device-profile specific so a future firmware that
+        # actually emits one of these streams can opt it back in.
+        if normalized in excluded:
+            continue
         if normalized == "/tf_static":
             filtered.append(normalized)
             continue

@@ -1,5 +1,15 @@
 {
   "ros_domain_id": 20,
+  "camera_dds_type": "cyclonedds",
+  "recording_excluded_topics": [
+    "/insight3_a/camera/infra1/image_raw",
+    "/insight3_a/camera/infra2/image_raw",
+    "/insight3_b/camera/infra1/image_raw",
+    "/insight3_b/camera/infra2/image_raw",
+    "/insight9_a/camera/color/image_raw/compressed",
+    "/insight9_a/camera/infra1/image_raw",
+    "/insight9_a/camera/infra2/image_raw"
+  ],
   "dashboard": {
     "trajectory": {
       "display_fps_limit": 20,

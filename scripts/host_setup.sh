@@ -16,9 +16,13 @@ fi
 
 # ── kernel UDP buffers for large DDS image samples (both directions) ─────────
 if [[ -f "${SYSCTL_FILE}" ]] \
+        && grep -qE '^net\.core\.rps_sock_flow_entries[[:space:]]*=[[:space:]]*32768$' "${SYSCTL_FILE}" \
+        && grep -qE '^net\.ipv4\.ipfrag_max_dist[[:space:]]*=[[:space:]]*4096$' "${SYSCTL_FILE}" \
         && [[ "$(sysctl -n net.core.rmem_max)" -ge 67108864 ]] \
         && [[ "$(sysctl -n net.core.wmem_max)" -ge 67108864 ]] \
-        && [[ "$(sysctl -n net.core.netdev_max_backlog)" -ge 8192 ]]; then
+        && [[ "$(sysctl -n net.core.netdev_max_backlog)" -ge 8192 ]] \
+        && [[ "$(sysctl -n net.core.rps_sock_flow_entries)" -ge 32768 ]] \
+        && [[ "$(sysctl -n net.ipv4.ipfrag_max_dist)" -eq 4096 ]]; then
     log "sysctl buffers already configured: OK"
 else
     log "writing ${SYSCTL_FILE} (sudo password may be prompted)..."
@@ -30,11 +34,40 @@ net.core.wmem_max = 67108864
 net.core.wmem_default = 67108864
 # IP fragment reassembly headroom for the fragmented UDP datagrams.
 net.ipv4.ipfrag_high_thresh = 134217728
+# CycloneDDS uses smaller RTPS datagrams than FastDDS, but concurrent camera
+# streams still interleave more than the kernel default distance of 64. A
+# 300-second, 44-topic capture still accumulated reassembly failures at 1024;
+# 4096 completed with every receive-path loss counter unchanged.
+net.ipv4.ipfrag_max_dist = 4096
 # Increase NAPI backlog for camera USB-ethernet bursts.
 net.core.netdev_max_backlog = 8192
+# Global receive-flow table used by per-camera RPS/RFS queues below.
+net.core.rps_sock_flow_entries = 32768
 EOF
     sudo sysctl -p "${SYSCTL_FILE}"
     log "sysctl buffers: applied + persisted"
+fi
+
+# ── boot-time camera receive steering ───────────────────────────────────────
+NETWORK_SCRIPT="${SCRIPT_DIR}/configure_camera_network.sh"
+NETWORK_UNIT_SRC="${SCRIPT_DIR}/systemd/insight-camera-network.service"
+NETWORK_UNIT_DST=/etc/systemd/system/insight-camera-network.service
+if [[ -f "${NETWORK_SCRIPT}" && -f "${NETWORK_UNIT_SRC}" ]]; then
+    chmod +x "${NETWORK_SCRIPT}"
+    rendered_network_unit="$(sed \
+        -e "s#^WorkingDirectory=.*#WorkingDirectory=${ROOT_DIR}#" \
+        -e "s#^ExecStart=.*#ExecStart=${NETWORK_SCRIPT}#" \
+        "${NETWORK_UNIT_SRC}")"
+    if [[ "$(cat "${NETWORK_UNIT_DST}" 2>/dev/null || true)" != "${rendered_network_unit}" ]]; then
+        log "installing camera network steering unit..."
+        echo "${rendered_network_unit}" | sudo tee "${NETWORK_UNIT_DST}" >/dev/null
+        sudo systemctl daemon-reload
+    fi
+    sudo systemctl enable insight-camera-network.service >/dev/null 2>&1
+    sudo systemctl restart insight-camera-network.service
+    log "camera RPS/RFS steering: applied + enabled"
+else
+    log "WARNING: camera network steering files missing; skipping RPS setup."
 fi
 
 # ── boot-time camera reboot unit ─────────────────────────────────────────────

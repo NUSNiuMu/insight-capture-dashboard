@@ -4,6 +4,7 @@
 
 import argparse
 import glob
+import json
 import sqlite3
 import struct
 import sys
@@ -11,29 +12,39 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# Expected publish rate by topic-name fragment; extend when new sensors
-# join the fleet. None = skip rate analysis (event-style topics).
-NOMINAL_HZ = [
-    ("/imu", 400.0),
-    ("image_rect_raw/compressed", 30.0),
-    ("image_rect_raw", 20.0),
-    ("camera_info", None),  # follows its image stream; resolved below
-    # VIO's measured steady-state ceiling is slightly below its 100 Hz label.
-    ("vio_100hz", 99.0),
-    ("vio_image_cov", 20.0),
-]
-
 DEFAULT_MAX_LOSS_PCT = 0.5
 # New bags are startup-trimmed; --warmup remains for legacy recordings.
 DEFAULT_WARMUP_S = 0.0
 
 
 def nominal_for(topic: str) -> Optional[float]:
-    for fragment, hz in NOMINAL_HZ:
-        if fragment in topic:
-            if fragment == "camera_info":
-                return 30.0 if "color" in topic else 20.0
-            return hz
+    """Return the measured/configured rate for continuous fleet topics."""
+
+    if topic.endswith("/imu"):
+        return 400.0
+    if topic.endswith("/vio_100hz"):
+        # Insight3 B is a measured 97 Hz source even without a recorder.
+        return 97.0 if topic.startswith("/insight3_b/") else 99.0
+    if topic.startswith(("/insight_global/", "/insight9_sparse_map/")):
+        # Mapping/localization output is conditional: pose/path streams can be
+        # silent until a map exists or localization succeeds.
+        return None
+    if "/camera/" not in topic:
+        return None
+    if topic.startswith("/insight3_"):
+        if "/depth/" in topic:
+            # Insight3 B firmware 2.1.3 emits depth at 13 Hz (65-96 ms
+            # intervals); it is not synchronized to the 50 Hz IR streams.
+            return 13.0
+        if any(fragment in topic for fragment in ("/image_raw", "/image_rect_raw", "camera_info", "vio_image")):
+            return 50.0
+    if topic.startswith("/insight9_"):
+        if "/color/" in topic:
+            return 30.0 if any(
+                fragment in topic for fragment in ("/image_raw", "/image_rect_raw", "camera_info")
+            ) else None
+        if any(fragment in topic for fragment in ("/image_raw", "/image_rect_raw", "camera_info", "vio_image")):
+            return 20.0
     return None
 
 
@@ -65,11 +76,18 @@ def header_stamp_ns(blob: bytes) -> int:
 
 
 def gap_stats(ts, nominal_hz):
-    """Estimate missing messages from inter-arrival gaps > 1.5 periods."""
+    """Report long gaps and estimate net missing messages across the span."""
     period_ns = 1e9 / nominal_hz
     gaps = [b - a for a, b in zip(ts, ts[1:])]
     events = [(g, i) for i, g in enumerate(gaps) if g > 1.5 * period_ns]
-    missing = sum(round(g / period_ns) - 1 for g, _ in events)
+    # VIO publishers are deliberately non-uniform: an 18-22 ms interval is
+    # commonly followed by a shorter interval. Summing every long interval
+    # therefore invents drops even when the source delivered the full count.
+    # Only a complete missing period is evidence of a lost sample. Rounding
+    # makes a stable 12.99 Hz source fail against its measured 13 Hz nominal
+    # whenever the finite capture window lands just beyond half a period.
+    expected = max(1, int((ts[-1] - ts[0]) / period_ns) + 1) if ts else 0
+    missing = max(0, expected - len(ts))
     worst = sorted(events, reverse=True)[:3]
     return missing, len(events), [
         f"{g / 1e6:.0f}ms@t+{(ts[i] - ts[0]) / 1e9:.1f}s" for g, i in worst
@@ -87,19 +105,59 @@ def _read_topic_windows(bag_dir: Path) -> Dict[str, Dict[str, int]]:
             conn = sqlite3.connect(f"file:{db3}?mode=ro", uri=True)
             with conn:
                 rows = conn.execute(
-                    "SELECT topics.name, COUNT(*), MIN(messages.timestamp), MAX(messages.timestamp) "
-                    "FROM messages JOIN topics ON messages.topic_id = topics.id "
-                    "GROUP BY messages.topic_id"
+                    "SELECT topics.name, COUNT(messages.id), MIN(messages.timestamp), MAX(messages.timestamp) "
+                    "FROM topics LEFT JOIN messages ON messages.topic_id = topics.id "
+                    "GROUP BY topics.id"
                 ).fetchall()
             conn.close()
         except sqlite3.Error as exc:
             raise ValueError(f"cannot read {db3}: {exc}") from exc
         for name, count, first_ns, last_ns in rows:
-            item = windows.setdefault(name, {"msgs": 0, "first_ns": first_ns, "last_ns": last_ns})
+            if first_ns is None or last_ns is None:
+                windows.setdefault(name, {"msgs": 0, "first_ns": 0, "last_ns": 0})
+                continue
+            item = windows.get(name)
+            if item is None or item["msgs"] == 0:
+                item = {"msgs": 0, "first_ns": first_ns, "last_ns": last_ns}
+                windows[name] = item
             item["msgs"] += int(count)
             item["first_ns"] = min(item["first_ns"], int(first_ns))
             item["last_ns"] = max(item["last_ns"], int(last_ns))
     return windows
+
+
+def _selected_topics(bag_dir: Path) -> List[str]:
+    manifest_path = bag_dir / "recording_manifest.json"
+    try:
+        payload = json.loads(manifest_path.read_text())
+    except (OSError, ValueError, TypeError):
+        return []
+    topics = payload.get("selected_topics")
+    if not isinstance(topics, list):
+        return []
+    return [str(topic) for topic in topics if str(topic).startswith("/")]
+
+
+def _add_missing_selected_topics(
+    bag_dir: Path, topics: List[Dict[str, object]]
+) -> None:
+    present = {str(topic["name"]) for topic in topics}
+    for name in _selected_topics(bag_dir):
+        if name in present:
+            continue
+        nominal = nominal_for(name)
+        topics.append({
+            "name": name,
+            "ok": nominal is None,
+            "msgs": 0,
+            "audit": "selected_topic_presence" if nominal is not None else "source_silent",
+            "error": (
+                "selected continuous topic is absent from the bag"
+                if nominal is not None
+                else "selected conditional/event topic was silent; loss cannot be calculated"
+            ),
+        })
+    topics.sort(key=lambda topic: str(topic["name"]))
 
 
 def _analyze_fast(
@@ -117,6 +175,17 @@ def _analyze_fast(
             topics.append(latched_static_result(name, msgs))
             continue
         nominal = nominal_for(name)
+        if msgs == 0:
+            topics.append({
+                "name": name, "ok": nominal is None, "msgs": 0,
+                "audit": "topic_presence" if nominal is not None else "source_silent",
+                "error": (
+                    "continuous topic exists in bag metadata but contains no messages"
+                    if nominal is not None
+                    else "conditional/event topic was silent; loss cannot be calculated"
+                ),
+            })
+            continue
         if nominal is None:
             # Event streams remain visible but cannot be checked for drops.
             topics.append({
@@ -135,7 +204,7 @@ def _analyze_fast(
             })
             continue
         # Include both endpoints and use this topic's span, not the bag's.
-        expected = max(1, round(span_s * nominal + 1 - warmup_s * nominal))
+        expected = max(1, int(span_s * nominal - warmup_s * nominal) + 1)
         missing = max(0, expected - msgs)
         loss_pct = missing / expected * 100 if expected > 0 else 0.0
         topics.append({
@@ -148,6 +217,7 @@ def _analyze_fast(
             "missing": missing,
             "loss_pct": round(loss_pct, 2),
         })
+    _add_missing_selected_topics(bag_dir, topics)
     return topics
 
 
@@ -175,6 +245,20 @@ def _analyze_deep(
                 continue
             nominal = nominal_for(name)
             if nominal is None:
+                msgs = int(conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE topic_id=?", (tid,)
+                ).fetchone()[0])
+                topics.append({
+                    "name": name,
+                    "ok": True,
+                    "msgs": msgs,
+                    "avg_hz": 0.0,
+                    "audit": "unconfigured_rate_presence" if msgs > 0 else "source_silent",
+                    "error": (
+                        "recorded; event/unknown-rate topic checked for presence only"
+                        if msgs > 0 else "conditional/event topic was silent; loss cannot be calculated"
+                    ),
+                })
                 continue
             # Read only the 12-byte stamp instead of full image payloads.
             rows = conn.execute(
@@ -188,17 +272,17 @@ def _analyze_deep(
                     "error": f"only {len(rows)} message(s)",
                 })
                 continue
-            recv = [r[0] for r in rows]
             stamps = [header_stamp_ns(r[1]) for r in rows]
-            span = (recv[-1] - recv[0]) / 1e9
-            avg_hz = (len(recv) - 1) / span if span > 0 else 0.0
             cutoff = stamps[0] + int(warmup_s * 1e9)
             settled = [t for t in stamps if t >= cutoff] or stamps
+            source_span = (settled[-1] - settled[0]) / 1e9
+            avg_hz = (len(settled) - 1) / source_span if source_span > 0 else 0.0
             missing, events, worst = gap_stats(settled, nominal)
-            loss_pct = missing / (len(rows) + missing) * 100 if missing else 0.0
+            loss_pct = missing / (len(settled) + missing) * 100 if missing else 0.0
             topics.append({
                 "name": name,
                 "ok": loss_pct <= max_loss_pct,
+                "audit": "header_stamp_gaps",
                 "msgs": len(rows),
                 "avg_hz": round(avg_hz, 2),
                 "nominal_hz": nominal,
@@ -207,6 +291,7 @@ def _analyze_deep(
                 "gap_events": events,
                 "worst_gaps": worst,
             })
+    _add_missing_selected_topics(bag_dir, topics)
     return topics
 
 
@@ -226,12 +311,18 @@ def analyze_bag(
         method = "timestamp_aggregates"
 
     failed = [t["name"] for t in topics if not t["ok"]]
+    network_audit = None
+    try:
+        network_audit = json.loads((bag_dir / "recording_network_audit.json").read_text())
+    except (OSError, ValueError, TypeError):
+        pass
     return {
         "bag": bag_dir.name,
         "path": str(bag_dir),
         "ok": bool(topics) and not failed,
         "failed_topics": failed,
         "topics": topics,
+        "network_audit": network_audit,
         "method": method,
         "max_loss_pct": max_loss_pct,
         "warmup_s": warmup_s,
@@ -288,6 +379,11 @@ def main():
         if topic.get("worst_gaps"):
             line += f" worst={topic['worst_gaps']}"
         print(line)
+
+    network_audit = report.get("network_audit")
+    if isinstance(network_audit, dict) and not network_audit.get("ok", True):
+        issues = network_audit.get("issues") or {}
+        print(f"WARN  kernel receive audit reported counter increments: {issues}")
 
     print()
     if not report["ok"]:

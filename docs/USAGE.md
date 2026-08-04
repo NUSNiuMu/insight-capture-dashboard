@@ -353,35 +353,50 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
    net.core.rmem_max = 67108864
    net.core.rmem_default = 67108864
    net.ipv4.ipfrag_high_thresh = 134217728
+   net.ipv4.ipfrag_max_dist = 4096
    EOF
    sudo sysctl -p /etc/sysctl.d/99-dds-rx-buffers.conf
    docker restart insight-dashboard
    ```
    然后重录一段用 `check_bag.py` 复验；
-2. **只有高频小消息 topic（400Hz IMU 等）分散丢几个百分点、image/camera_info
-   完好** → 与上一条是不同的内核层：不是 socket 接收缓冲（那个已经够大），是
-   NAPI 每核 backlog 队列太浅——这台机型相机 USB 网口的中断全部落在同一个
-   CPU 核上（`cat /proc/interrupts | grep xhci` 只有一列非零可确认），该核
-   默认 1000 条的 backlog 队列在多相机流量突发时会溢出，包在到达任何
+2. **高频小消息或增加 raw image 后丢帧** → 与上一条是不同的内核层：不是
+   socket 接收缓冲（那个已经够大），是 NAPI 每核 backlog 与单核处理能力不足——
+   这台机型相机 USB 网口的中断全部落在 CPU0（`cat /proc/interrupts | grep xhci`
+   只有一列非零可确认）。未配置 RPS 时，协议处理也全部留在 CPU0；多相机流量
+   突发会让该核的 backlog 溢出，包在到达任何
    DDS socket 之前就已经在内核网络层被丢弃，`ip -s link show <相机对应网口>`
    的 `dropped` 计数会在录制窗口内持续增长。验证与恢复：
    ```bash
    sysctl net.core.netdev_max_backlog   # 正常应 >= 8192；默认值 1000 即命中
-   cat /proc/net/softnet_stat | head -1 # 第2列(16进制)=丢包数在录制前后应几乎不变
+   cat /proc/net/softnet_stat           # 每行第2列(16进制)=丢包数，录制前后应不变
+   for f in /sys/class/net/enx*/queues/rx-0/rps_cpus; do echo "$f: $(cat "$f")"; done
+                                        # 相机 cdc_ncm 网卡不能是 00；6 核 Jetson 应为 3e
    ```
-   恢复（与上一条同一个 `/etc/sysctl.d/99-dds-rx-buffers.conf` 文件，
-   `scripts/host_setup.sh` 会一并写入两项设置，重跑一次即可持久化）：
+   恢复（`scripts/host_setup.sh` 会同时持久化 sysctl，安装并立即运行
+   `insight-camera-network.service`）：
    ```bash
-   sudo sysctl -w net.core.netdev_max_backlog=8192   # 立即生效，未持久化
-   ./scripts/host_setup.sh                            # 持久化进 99-dds-rx-buffers.conf
+   sudo ./scripts/host_setup.sh
    ```
-   然后重录一段用 `check_bag.py` 复验（此问题实测 IMU 丢帧
-   0.47-0.94%，修复后为 0.0%，验证于 2026-07-14）；
-3. **所有 topic 在同一时间段一起断** → 录制期间设备被其他任务抢占，
+   然后重录一段用 `check_bag.py` 复验；
+3. **softnet/网卡/UDP 都不丢，但多路 raw image 仍缺帧** → 检查 DDS 模式与 IP 分片重组：
+   ```bash
+   python3 looper_cli/looper_cli.py --device-base-url http://<相机IP> dds show
+   sysctl net.ipv4.ipfrag_max_dist     # jetson-nx 应为 4096
+   nstat -az IpReasmFails IpReasmTimeout UdpInErrors UdpRcvbufErrors
+   ```
+   每个新 bag 的 `recording_network_audit.json` 已保存这些计数在录制窗口内的增量，
+   `recording_manifest.json` 则保存当时实际选择的 topic。`IpReasmFails` 大量增长说明
+   大图 UDP 包已到主机、但在 DDS 之前重组失败。jetson-nx 应使用
+   `config/cameras.json` 的 `camera_dds_type=cyclonedds`；开机恢复流程会幂等校正设备，
+   `sudo ./scripts/host_setup.sh` 会持久化内核阈值。不要通过换 SSD 或提高 SQLite
+   同步级别处理。保留失败 bag 与这两个 JSON 后报障；
+4. **所有 topic 在同一时间段一起断** → 录制期间设备被其他任务抢占，
    `docker stats insight-dashboard` 观察 CPU；录制时避免同时跑评分/优化任务；
-4. **某台相机自己的全部 topic（含 IMU/VIO）同时断** → 相机侧停顿，
-   与主机无关；复现请记录相机名与时间点后报障；
-5. **磁盘写满**：见 §3.2。
+5. **某台相机自己的全部 topic（含 IMU/VIO）同时断** → 相机侧停顿，
+   与主机无关；若 `recording_network_audit.json` 全部为零且 writer queue 也未丢弃，
+   同一相机多个 topic 在同一 header 时间点一起缺样同样属于发布端节拍缺口。复现请
+   记录相机名与时间点后报障；
+6. **磁盘写满**：见 §3.2。
 
 ### 6.4 录制无法开始 / 停止异常
 

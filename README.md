@@ -6,7 +6,7 @@
 > 流程、故障排查诊断树；不含安装——环境由我们出厂配置好）。
 > **怎么打包发布镜像 / 给设备升级 / 全新设备怎么部署，见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
 > （开发者打包手册 + 使用者升级手册 + 全新 Jetson 首次部署，两条路径）。
-> 内部装机用 `./scripts/setup_host.sh`（幂等：runtime 检查 + DDS 缓冲 sysctl +
+> 内部装机用 `./scripts/setup_host.sh`（幂等：runtime 检查 + CycloneDDS/分片/RPS 调优 +
 > 构建 + 启动）；录制后数据完整性检查用 `scripts/check_bag.py`。
 > 本 README 侧重功能与配置参考。
 
@@ -73,6 +73,8 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 - dashboard 显示哪几路图像、用哪几路 VIO
 - 默认 `ROS_DOMAIN_ID`
+- jetson-nx 相机使用的 `camera_dds_type`，以及固件只声明但不发数据的
+  `recording_excluded_topics`
 
 每个 camera 条目的常用字段：
 

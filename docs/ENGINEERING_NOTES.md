@@ -10,6 +10,19 @@
   复用既有 reader，以 2 Hz 发布 `/insight_mapping/...` 定位图；localizer
   只订阅该中继。实机 A/B 测试中，这使 Insight3 B 从 13–14 FPS 恢复到 20 FPS。
 - 当前机队在 2026-07-13 的实测中，图像 QoS 使用 `best_effort` 会因单个 UDP 分片丢失而丢掉整帧；设备配置选择 `reliable` 后，多轮录制没有再观察到对应散落丢帧。
+- 2026-08-04 的 51-topic 实测确认 jetson-nx 上 FastDDS 相机发送端会产生 IP
+  分片/可靠重传风暴：SSD iowait 与 writer queue 均为零，但 Insight3 图像严重断流。
+  三台相机切到 CycloneDDS 后，44 个实际发布 topic 的 300 秒阶梯测试中，
+  `ipfrag_max_dist=1024` 仍累计 342 次重组失败；4096 下 softnet、NIC、IP
+  reassembly 与 UDP 丢失计数全部为零，writer queue 也为零。此组合由
+  `camera_dds_type`、`host_setup.sh` 和开机相机恢复 unit 共同保持。
+- 同一轮 4096 长测仍观察到 Insight3 B 的一次同步源节拍缺口：infra1/infra2、
+  camera_info 与 VIO image 在同一 header 时间点共同缺样；depth 也有固有的
+  120 ms 间隔。它们发生时主机网络与 writer 计数均为零，不能归因于 SSD 或
+  recorder。完整性报告必须区分“已发布消息未被写入”和“相机未发布样本”。
+- jetson-nx 固件广告的七个未校正 `image_raw` publisher 实测持续不发 payload；
+  profile 用 `recording_excluded_topics` 将它们从“可录制”目录排除。对应 rectified
+  图像是实际数据流，不得据此忽略任何有 payload 的 topic。
 - 录制期间预览可以降频，但原始录制帧不能降频。WebRTC 预览当前限制为 10 FPS，停止录制后立即恢复。
 
 ## rosbag 可靠性
@@ -23,6 +36,8 @@
 - 全局 Pose 与各自相机小消息共用 recorder；完整 Path 是 Pose 可重建的冗余
   调试数据，不默认录制。不要为全局 namespace 再增加两个 recorder 进程。
 - staging 恢复中的 reindex、salvage、convert 和输出验证是一个完整流程；`ros2 bag convert` 成功返回不代表输出一定可信。
+- 自动 host sync 与合包同属录制收尾；同步完成前禁止开始下一段，避免大 bag 的
+  rsync 读盘/CPU 负载与新一段采集重叠。
 
 ## WebRTC 与预览
 
