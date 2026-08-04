@@ -7,7 +7,7 @@
   "max_cache_size": 104857600,
   "record_topics": [],
   "insight3_global_localizer": {
-    "gripper_mask_height_ratio": 0.2
+    "gripper_mask_height_ratio": 0.0
   },
   "gesture_recording": {
     "enabled": false

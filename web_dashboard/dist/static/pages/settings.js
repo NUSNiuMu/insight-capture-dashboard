@@ -64,7 +64,7 @@ function renderSettings(payload) {
   }
   if (insight3MaskForm && insight3MaskRatio) {
     insight3MaskForm.hidden = false;
-    insight3MaskRatio.value = String(payload.insight3_gripper_mask_height_ratio ?? 0.2);
+    insight3MaskRatio.value = String(payload.insight3_gripper_mask_height_ratio ?? 0);
   }
   const stickRow = document.getElementById("stick-figure-row");
   const stickToggle = document.getElementById("stick-figure-toggle");
