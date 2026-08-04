@@ -11,6 +11,8 @@ const optimizationResultPanel = document.getElementById("optimization-result-pan
 const optimizationLogLink = document.getElementById("optimization-log-link");
 let optimizationBusy = false;
 let optimizationPollTimer = null;
+const BABYLON_SCRIPT_URL = "/static/babylon.js?v=69119e74";
+let babylonLoadPromise = null;
 
 initializeRosbags();
 if (startOptimizationButton) {
@@ -229,7 +231,7 @@ async function renderOptimizationResult(result, runName) {
     const res = await fetch(`/api/optimization/trajectories?run_name=${encodeURIComponent(name)}`, { cache: "no-store" });
     const data = await res.json();
     if (!res.ok) return;
-    buildOptTrajScene(data.vio || [], data.colmap || [], name);
+    await buildOptTrajScene(data.vio || [], data.colmap || [], name);
   } catch (_) {}
 }
 
@@ -258,11 +260,12 @@ async function loadSavedOptRun() {
 let _optEngine = null;
 let _optRenderedRun = null;
 
-function buildOptTrajScene(vioPoints, colmapPoints, runName) {
+async function buildOptTrajScene(vioPoints, colmapPoints, runName) {
   if (runName && runName === _optRenderedRun) return;
+  await loadBabylon();
   _optRenderedRun = runName || null;
   const canvas = document.getElementById("opt-traj-canvas");
-  if (!canvas || typeof BABYLON === "undefined") return;
+  if (!canvas) return;
 
   if (_optEngine) {
     _optEngine.dispose();
@@ -321,4 +324,18 @@ function buildOptTrajScene(vioPoints, colmapPoints, runName) {
     canvas.height = canvas.offsetHeight;
     engine.resize();
   });
+}
+
+function loadBabylon() {
+  if (typeof BABYLON !== "undefined") return Promise.resolve();
+  if (babylonLoadPromise) return babylonLoadPromise;
+  babylonLoadPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = BABYLON_SCRIPT_URL;
+    script.async = true;
+    script.addEventListener("load", resolve, { once: true });
+    script.addEventListener("error", () => reject(new Error("Failed to load the 3D renderer.")), { once: true });
+    document.head.append(script);
+  });
+  return babylonLoadPromise;
 }

@@ -21,3 +21,18 @@ def create_json_error_middleware(context: DashboardContext):
             return web.json_response({"error": str(exc)}, status=500)
 
     return json_error_middleware
+
+
+def create_static_cache_middleware():
+    @web.middleware
+    async def static_cache_middleware(request: web.Request, handler):
+        response = await handler(request)
+        if request.path.startswith("/static/") and response.status < 400:
+            response.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable"
+                if request.query.get("v")
+                else "public, max-age=3600"
+            )
+        return response
+
+    return static_cache_middleware

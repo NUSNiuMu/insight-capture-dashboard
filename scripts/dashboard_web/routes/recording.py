@@ -27,7 +27,12 @@ class RecordingRoutes:
         return web.json_response(payload)
 
     async def _handle_recording_topics(self, _request: web.Request) -> web.Response:
-        return web.json_response(self.context.recording_manager.current_topic_catalog(refresh=True))
+        loop = asyncio.get_running_loop()
+        catalog = await loop.run_in_executor(
+            None,
+            lambda: self.context.recording_manager.current_topic_catalog(refresh=True),
+        )
+        return web.json_response(catalog)
 
     async def _handle_recording_start(self, request: web.Request) -> web.Response:
         payload = {}

@@ -3,7 +3,7 @@
 from aiohttp import web
 
 from .context import DashboardContext
-from .middleware import create_json_error_middleware
+from .middleware import create_json_error_middleware, create_static_cache_middleware
 from .routes.cameras import CameraRoutes
 from .routes.gripper import GripperExtractionRoutes
 from .routes.handpose import HandPoseRoutes
@@ -18,7 +18,12 @@ from .websocket import PoseWebSocketService
 
 
 def create_app(context: DashboardContext) -> web.Application:
-    app = web.Application(middlewares=[create_json_error_middleware(context)])
+    app = web.Application(
+        middlewares=[
+            create_json_error_middleware(context),
+            create_static_cache_middleware(),
+        ]
+    )
     websocket = PoseWebSocketService(context)
     cameras = CameraRoutes(context)
     gripper = GripperExtractionRoutes(context)
