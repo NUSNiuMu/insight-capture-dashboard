@@ -8,9 +8,9 @@
 | 使用者 | 拿到镜像包，给已经在跑的设备升级/回滚 | `deploy/update.sh` |
 | 任何人 | 全新 Jetson 首次部署 | `scripts/setup_host.sh`（开发者路径）或 `deploy/update.sh`（使用者路径，见下） |
 
-三者的关系：`build_release.sh` 在开发机上跑，产出「镜像 tar」+「部署包 tar」两个文件；
-部署包只在**首次安装**时需要（它带着 `update.sh` 本身、`docker-compose.yml`、
-`README.md`）；之后每次升级只需要发一个新的镜像 tar，使用者已有的 `update.sh` 不变。
+三者的关系：`build_release.sh` 在开发机上跑，产出 Dashboard 镜像、稳定的 SuperGlue
+依赖镜像和部署包三个压缩文件。后两者只在**首次安装**时需要；之后每次升级只需要发
+一个新的 Dashboard 镜像，使用者已有的 `update.sh` 和 SuperGlue 镜像不变。
 
 ### 设备与 config profile
 
@@ -47,7 +47,9 @@ Dashboard 镜像包含离线 WiLoR 所需的固定版本权重、JetPack PyTorch
 只有 Dockerfile、系统包或 Python 依赖发生变化时才重新 build。
 
 WiLoR 层只保留离线推理路径：不包含 CUDA 编译器/头文件、WiLoR 训练和 demo
-依赖，也不允许运行时自动下载模型或补装 Python 包。
+依赖，也不允许运行时自动下载模型或补装 Python 包。上游 2.56GB FP32 checkpoint
+会在构建时转换为约 1.28GB FP16 推理权重；Jetson GPU 路径原本就在加载前把模型
+转换为 FP16，因此这不会增加运行时量化步骤，同时降低镜像体积和模型加载内存。
 
 Dockerfile 自 `v2.0.2` 起拆成 `runtime`/`dev` 两个 target：`dev`（`runtime`
 基础上追加 Playwright headless Chromium，仅用于 CLAUDE.md 里的无头页面验证）
@@ -65,14 +67,16 @@ Dockerfile 自 `v2.0.2` 起拆成 `runtime`/`dev` 两个 target：`dev`（`runti
 
 ```
 release/insight-dashboard-v1.2.0.tar.gz          # 镜像；每次升级都发这个
+release/insight-superglue-validation-25.04.tar.gz # 稳定依赖；仅首次安装发送
 release/insight-dashboard-deploy-v1.2.0.tar.gz   # 部署包；只有首次安装的设备需要
 ```
 
-镜像 tar 通常几 GB（含 COLMAP、CUDA 运行时、Chromium），传输/拷 U 盘预留时间。
+镜像 tar 通常几 GB（含 COLMAP、CUDA 运行时、Firefox），传输/拷 U 盘预留时间。
 自 v2.0.0 起，`build_release.sh` 会额外构建并保存
 `insight-superglue-validation:25.04`（Insight9 建图/Insight3 全局重定位依赖的
 Magic Leap 官方 SuperPoint/SuperGlue TensorRT 推理，商用分发已确认，见
-`docs/INSIGHT9_SPARSE_MAPPING.md`）到同一个镜像 tar，体积和传输时间进一步增加。
+`docs/INSIGHT9_SPARSE_MAPPING.md`）。它现在单独保存为稳定依赖包，避免每个
+Dashboard 日常升级包都重复携带同一份 TensorRT/CUDA 内容。
 部署包里打包了 `deploy/docker-compose.yml`、`update.sh`、`README.md`、
 `scripts/run_dashboard.sh`，以及宿主机一次性调优用的 `scripts/host_setup.sh`
 + `scripts/reboot_cameras.sh` + `scripts/systemd/insight-camera-reboot.service`
@@ -100,8 +104,8 @@ host 层设置，见 §3.2）——这几个文件本身不大，但**它们的�
 
 ### 1.6 交付
 
-- **首次安装**：把镜像 tar + 部署包 tar 都发给对方（U 盘/scp 均可）。
-- **升级**：只发镜像 tar，对方在已有的部署目录里跑 `./update.sh <镜像tar>`。
+- **首次安装**：把 Dashboard 镜像、SuperGlue 依赖和部署包三个压缩文件都发给对方。
+- **升级**：只发 Dashboard 镜像，对方在已有的部署目录里跑 `./update.sh <镜像tar>`。
 
 ---
 
@@ -186,7 +190,7 @@ cd insight_capture
 **注意**：目前只有 `jetson-nx` 这个 profile 会走 §1 打成正式发布镜像——`deploy/lite`、
 `deploy/lite-779` 是两台开发机，只用 `select_device.sh` 切本地 config，不发布镜像。
 
-### 3.2 使用者路径（拿到部署包 + 镜像 tar，机器上没有源码）
+### 3.2 使用者路径（拿到部署包 + 两个镜像 tar，机器上没有源码）
 
 前提：JetPack 6.x、已装 docker 与 nvidia-container-runtime、当前用户在 `docker` 组里。
 这几项本身不在 `update.sh` 的自动化范围内——它假设 docker 已经能跑。走这条路径前
@@ -241,6 +245,9 @@ tar xzf insight-dashboard-deploy-vX.Y.Z.tar.gz
 cd insight-dashboard-deploy
 ./update.sh ../insight-dashboard-vX.Y.Z.tar.gz
 ```
+
+首次安装时把 `insight-superglue-validation-25.04.tar.gz` 和 Dashboard 镜像放在
+同一目录；`update.sh` 检测到本机缺少该依赖后会自动加载。日常升级不再需要它。
 
 首次运行时 `update.sh` 会额外从镜像里把 `config/` 目录播种到宿主机（这台设备
 还没有自己的机群配置/标定），此后这个 `config/` 就是本机独有的、不受镜像升级影响。

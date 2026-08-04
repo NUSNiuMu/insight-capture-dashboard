@@ -270,6 +270,18 @@ RUN pip3 install --no-cache-dir \
     && find /usr/local/lib/python3.10/dist-packages/torch/bin \
         -maxdepth 1 -type f ! -name torch_shm_manager -delete
 
+# NVIDIA's JetPack PyTorch wheel links this CUDA JIT runtime directly, while
+# the CUDA library packages above do not declare it as a transitive dependency.
+# Install it before importing torch to convert the bundled WiLoR checkpoint.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnvjitlink-12-6 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY docker/convert_wilor_checkpoint.py /tmp/convert_wilor_checkpoint.py
+
+# Jetson inference constructs the WiLoR module as FP16 before loading the
+# checkpoint. Store those exact inference weights directly instead of shipping
+# a second FP32 copy that is immediately quantized at runtime.
 RUN mkdir -p "${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models" \
     && wget -q \
         "https://huggingface.co/warmshao/WiLoR-mini/resolve/${WILOR_MODEL_REVISION}/pretrained_models/wilor_final.ckpt" \
@@ -290,7 +302,10 @@ RUN mkdir -p "${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models" \
     && echo "45d60aa3b27ef9107a7afd4e00808f307fd91111e1cfa35afd5c4a62de264767  ${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/MANO_RIGHT.pkl" \
         | sha256sum -c - \
     && echo "efc0ec58e4a5cef78f3abfb4e8f91623b8950be9eff8b8e0dbb0d036ebc63988  ${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/mano_mean_params.npz" \
-        | sha256sum -c -
+        | sha256sum -c - \
+    && python3 /tmp/convert_wilor_checkpoint.py \
+        "${HANDPOSE_WILOR_MODEL_DIR}/pretrained_models/wilor_final.ckpt" \
+    && rm /tmp/convert_wilor_checkpoint.py
 
 COPY docker/wilor-runtime.patch /tmp/wilor-runtime.patch
 RUN git clone --filter=blob:none --no-checkout \
@@ -385,12 +400,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-gi \
     gir1.2-gst-plugins-base-1.0 \
     gir1.2-gst-plugins-bad-1.0 \
-    && rm -rf /var/lib/apt/lists/*
-
-# NVIDIA's JetPack PyTorch wheel links this CUDA JIT runtime directly, while
-# the CUDA library packages above do not declare it as a transitive dependency.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libnvjitlink-12-6 \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Interactive shells: source ROS2 for plain `docker exec -it ... bash` ────

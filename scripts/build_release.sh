@@ -32,8 +32,11 @@ log "Building ${SUPERGLUE_IMAGE} (mapping/relocalization dependency) ..."
 docker build --network host -f Dockerfile.superglue-validation -t "${SUPERGLUE_IMAGE}" .
 
 image_tarball="release/${IMAGE_NAME}-${version}.tar.gz"
-log "Saving images to ${image_tarball} (several GB; takes a while)..."
-docker save "${IMAGE_NAME}:${version}" "${SUPERGLUE_IMAGE}" | gzip > "${image_tarball}"
+superglue_tarball="release/insight-superglue-validation-25.04.tar.gz"
+log "Saving dashboard image to ${image_tarball} (several GB; takes a while)..."
+docker save "${IMAGE_NAME}:${version}" | gzip > "${image_tarball}"
+log "Saving first-install dependency to ${superglue_tarball} ..."
+docker save "${SUPERGLUE_IMAGE}" | gzip > "${superglue_tarball}"
 
 log "Assembling deploy bundle..."
 # Keep the installed directory stable; only artifacts and image tags vary.
@@ -66,11 +69,11 @@ rm -rf "${bundle_dir}"
 log "Done."
 echo
 echo "  Image tarball  : ${image_tarball}  ($(du -h "${image_tarball}" | cut -f1))"
+echo "  Dependency     : ${superglue_tarball}  ($(du -h "${superglue_tarball}" | cut -f1))"
 echo "  Deploy bundle  : ${bundle_tarball}  ($(du -h "${bundle_tarball}" | cut -f1))"
 echo
-echo "Image tarball now bundles ${IMAGE_NAME} and ${SUPERGLUE_IMAGE} (TensorRT/CUDA"
-echo "runtime libs) -- noticeably bigger and slower to transfer than a single-image release."
-echo
-echo "First install: send BOTH files; customer unpacks the bundle, then runs"
+echo "First install: send all three files. Keep the two image archives together;"
+echo "update.sh auto-loads ${SUPERGLUE_IMAGE} when it is not installed, then runs"
 echo "  ./update.sh ${IMAGE_NAME}-${version}.tar.gz"
-echo "Upgrade: send only the image tarball; customer runs the same command."
+echo "Upgrade: send only ${IMAGE_NAME}-${version}.tar.gz; the stable SuperGlue"
+echo "dependency already on the device is reused."

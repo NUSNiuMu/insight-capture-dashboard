@@ -11,7 +11,8 @@
 
 ## 首次安装
 
-把部署包和镜像压缩包拷到设备上（U 盘 / scp 均可）：
+把部署包、Dashboard 镜像和首次安装依赖包拷到设备上（U 盘 / scp 均可）。
+两个镜像压缩包放在同一目录；稳定的 SuperGlue 依赖只在首次安装时传一次：
 
 ```bash
 tar xzf insight-dashboard-deploy-vX.Y.Z.tar.gz
@@ -20,7 +21,9 @@ cd insight-dashboard-deploy        # 解压出的目录不带版本号——它�
 sudo ./scripts/host_setup.sh       # 一次性调优：CycloneDDS/UDP 分片、RPS + 开机相机恢复
 ```
 
-`update.sh` 会加载镜像、生成 `config/` 等数据目录并启动服务，
+`update.sh` 会加载 Dashboard 镜像；如果本机还没有
+`insight-superglue-validation:25.04`，会自动从 Dashboard 镜像旁边的
+`insight-superglue-validation-25.04.tar.gz` 加载。随后生成 `config/` 等数据目录并启动服务，
 最后等待后端健康检查通过。`host_setup.sh` 只在首次安装（或重刷系统后）需要跑一次；
 jetson-nx profile 会在下一次开机相机恢复流程中把相机 DDS 模式校正为 CycloneDDS。
 

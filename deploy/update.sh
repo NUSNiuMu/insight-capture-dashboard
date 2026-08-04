@@ -14,6 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 PORT="${DASHBOARD_PORT:-8765}"
 IMAGE_NAME="insight-dashboard"
+SUPERGLUE_IMAGE="insight-superglue-validation:25.04"
+SUPERGLUE_TARBALL="insight-superglue-validation-25.04.tar.gz"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -64,6 +66,31 @@ else
     tag="$(sed -n "s/^Loaded image: ${IMAGE_NAME}://p" <<<"${load_output}" | head -1)"
     [[ -n "${tag}" ]] || die "tarball did not contain an ${IMAGE_NAME}:* image (got: ${load_output})"
     version="${tag}"
+fi
+
+# The stable mapping/relocalization dependency ships as a separate archive so
+# routine dashboard upgrades do not resend it. First install auto-discovers the
+# dependency beside the dashboard archive (or in this deployment directory).
+if ! docker image inspect "${SUPERGLUE_IMAGE}" >/dev/null 2>&1; then
+    dependency_dirs=("${SCRIPT_DIR}")
+    if [[ -n "${tarball}" ]]; then
+        tarball_dir="$(cd "$(dirname "${tarball}")" && pwd)"
+        dependency_dirs=("${tarball_dir}" "${SCRIPT_DIR}")
+    fi
+    dependency_loaded=false
+    for dependency_dir in "${dependency_dirs[@]}"; do
+        dependency_tarball="${dependency_dir}/${SUPERGLUE_TARBALL}"
+        if [[ -f "${dependency_tarball}" ]]; then
+            log "Loading first-install dependency from ${dependency_tarball} ..."
+            docker load -i "${dependency_tarball}"
+            dependency_loaded=true
+            break
+        fi
+    done
+    if [[ "${dependency_loaded}" != "true" ]] \
+            || ! docker image inspect "${SUPERGLUE_IMAGE}" >/dev/null 2>&1; then
+        die "missing ${SUPERGLUE_IMAGE}; place ${SUPERGLUE_TARBALL} beside the dashboard archive and retry"
+    fi
 fi
 
 # ── Data directories (persist across upgrades) ───────────────────────────────

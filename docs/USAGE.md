@@ -298,6 +298,8 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 ```
 
 录制数据、标定结果、配置全部保留。回滚：`./update.sh --rollback vX.Y.Z`。
+固定版本的 SuperGlue 依赖已从日常升级包拆出；只有全新设备首次安装时需要额外提供
+`insight-superglue-validation-25.04.tar.gz`，已有设备不会重复加载或传输。
 
 完整的升级排查步骤、回滚细节、全新设备部署方式见 [DEPLOYMENT.md](DEPLOYMENT.md)。
 
