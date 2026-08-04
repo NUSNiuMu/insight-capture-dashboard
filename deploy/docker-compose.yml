@@ -25,7 +25,7 @@ services:
     runtime: nvidia
 
     # Docker's 64MB default /dev/shm is too small for the kiosk browser's
-    # Firefox GPU processes — see the dev compose for the full story.
+    # Chromium GPU process — see the dev compose for the full story.
     shm_size: '2gb'
 
     environment:

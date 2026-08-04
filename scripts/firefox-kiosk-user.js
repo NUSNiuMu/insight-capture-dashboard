@@ -15,9 +15,6 @@ user_pref("browser.tabs.warnOnClose", false);
 user_pref("browser.sessionstore.resume_from_crash", false);
 user_pref("app.normandy.first_run", false);
 user_pref("trailhead.firstrun.didSeeAboutWelcome", true);
-// The split camera renderer is a managed borderless window. Its browser
-// chrome is hidden by chrome/userChrome.css in a dedicated ephemeral profile.
-user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
 // Send real-IP ICE candidates instead of mDNS-obfuscated <uuid>.local ones
 // (privacy default, pointless on a kiosk viewing its own localhost backend).
 // The backend can resolve mDNS candidates itself (webrtc_stream.py), but

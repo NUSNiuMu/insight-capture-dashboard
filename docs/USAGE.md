@@ -56,18 +56,6 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 ./scripts/run_dashboard.sh --jetson
 ```
 
-本机 3D 看板默认使用单 Firefox。需要继续做浏览器合成 A/B 时，可启用双 Firefox
-实验模式；它会把相机墙无缝覆盖到原来的左侧区域。导航到 Recording、Rosbags、
-Settings 等页面时相机窗口自动隐藏，返回 3D 时恢复；放大单路相机时覆盖全屏，
-退出后回到原位：
-
-```bash
-INSIGHT_KIOSK_SPLIT=1 ./scripts/run_dashboard.sh --jetson
-```
-
-当前设备实测双窗口的 presented FPS 未优于单窗口，说明瓶颈仍在两个 Firefox 共享的
-GPU/桌面合成侧，因此该模式暂不作为客户默认配置。
-
 ### 2.2 浏览器访问
 
 - 同一局域网：`http://<设备IP>:8765/`
@@ -420,9 +408,6 @@ curl -s localhost:8765/api/images/capabilities | python3 -m json.tool
 - 先用其他电脑的浏览器访问同一地址：能打开说明后端正常，只是本机窗口问题；
 - SSH 登录执行时需指定显示器：`DISPLAY=:0 ./scripts/run_dashboard.sh --jetson`；
 - 仍白屏：`docker restart insight-dashboard` 后重试。
-- 启用双窗口实验模式后，若只有左侧相机墙或右侧 3D 异常，分别检查
-  `/tmp/insight-kiosk-camera-firefox.log` 和 `/tmp/insight-kiosk-firefox.log`；启动脚本会在
-  任一 Firefox 实例意外退出后自动重启该实例。
 
 ### 6.9 时间不对（录制目录名/日志时间差 8 小时）
 

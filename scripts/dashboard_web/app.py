@@ -7,7 +7,6 @@ from .middleware import create_json_error_middleware
 from .routes.cameras import CameraRoutes
 from .routes.gripper import GripperExtractionRoutes
 from .routes.handpose import HandPoseRoutes
-from .routes.kiosk import KioskRoutes
 from .routes.mapping import MappingRoutes
 from .routes.optimization import OptimizationRoutes
 from .routes.playback import PlaybackRoutes
@@ -24,7 +23,6 @@ def create_app(context: DashboardContext) -> web.Application:
     cameras = CameraRoutes(context)
     gripper = GripperExtractionRoutes(context)
     handpose = HandPoseRoutes(context)
-    kiosk = KioskRoutes(context)
     mapping = MappingRoutes(context)
     recording = RecordingRoutes(context)
     playback = PlaybackRoutes(context)
@@ -45,8 +43,6 @@ def create_app(context: DashboardContext) -> web.Application:
     )
     app.router.add_get("/api/mapping", mapping._handle_snapshot)
     app.router.add_post("/api/mapping/reset", mapping._handle_reset)
-    app.router.add_get("/api/kiosk/state", kiosk._handle_state_get)
-    app.router.add_post("/api/kiosk/state", kiosk._handle_state_post)
     app.router.add_get("/api/cameras/{camera_name}/frame", cameras._handle_camera_frame)
     app.router.add_get("/api/images/capabilities", cameras._handle_image_capabilities)
     app.router.add_get("/api/recording/status", recording._handle_recording_status)
@@ -97,7 +93,6 @@ def create_app(context: DashboardContext) -> web.Application:
     if context.web_root and context.web_root.exists():
         app.router.add_get("/", static._handle_index)
         app.router.add_get("/3d", static._handle_index)
-        app.router.add_get("/camera-wall", static._handle_camera_wall_page)
         app.router.add_get("/images", static._handle_images_page)
         app.router.add_get("/bags", static._handle_bags_page)
         app.router.add_get("/umi-dataset", static._handle_umi_dataset_page)

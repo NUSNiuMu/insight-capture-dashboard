@@ -1,7 +1,7 @@
 import {
   setCameraCapturePerformanceMode,
   startCameraDashboard,
-} from "../camera/dashboard.js?v=20260804-split-kiosk";
+} from "../camera/dashboard.js?v=20260729-compositor-lite";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 import {
@@ -13,7 +13,7 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260804-split-kiosk";
+} from "../spatial/renderer.js?v=20260729-compositor-lite";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");
@@ -31,7 +31,6 @@ const newMapButton = document.getElementById("new-map-button");
 const obsModeToggle = document.getElementById("obs-mode-toggle");
 const POSE_STREAM_STALE_MS = 4000;
 const OBS_MODE_STORAGE_KEY = "insight.obs-performance-mode";
-const splitSceneMode = document.documentElement.dataset.kioskRole === "scene";
 const wsUrl = resolveWebSocketUrl();
 let playbackBusy = false;
 let playbackPollTimer = null;
@@ -63,9 +62,7 @@ window.addEventListener("pagehide", () => {
 function scheduleStartup() {
   // Keep the viewport responsive before heavier camera, trace, and avatar work.
   scheduleStartupTask(() => {
-    if (!splitSceneMode) {
-      startCameraDashboard({ cameraStaggerMs: 450 });
-    }
+    startCameraDashboard({ cameraStaggerMs: 450 });
     void refreshMappingStatus();
     mappingPollTimer = window.setInterval(() => { void refreshMappingStatus(); }, 500);
   }, 250);
@@ -141,25 +138,10 @@ function applyObsMode(enabled) {
   document.body.classList.toggle("capture-performance", enabled);
   setCapturePerformanceMode(enabled);
   setCameraCapturePerformanceMode(enabled);
-  if (splitSceneMode) {
-    void syncKioskState(enabled);
-  }
   if (obsModeToggle) {
     obsModeToggle.classList.toggle("is-active", enabled);
     obsModeToggle.setAttribute("aria-pressed", String(enabled));
     obsModeToggle.textContent = enabled ? "OBS mode: on" : "OBS mode";
-  }
-}
-
-async function syncKioskState(capturePerformance) {
-  try {
-    await fetch("/api/kiosk/state", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ capture_performance: Boolean(capturePerformance) }),
-    });
-  } catch (_error) {
-    // The camera window polls the state endpoint and will catch up after reconnect.
   }
 }
 

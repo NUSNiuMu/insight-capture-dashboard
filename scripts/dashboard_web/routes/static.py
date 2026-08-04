@@ -19,9 +19,6 @@ class StaticRoutes:
     async def _handle_recording_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.context.web_root / "recording.html")
 
-    async def _handle_camera_wall_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.context.web_root / "camera-wall.html")
-
     async def _handle_images_page(self, _request: web.Request) -> web.FileResponse:
         raise web.HTTPFound("/3d")
 

@@ -155,13 +155,11 @@ if [[ "${jetson_mode}" == "true" ]]; then
     # Run the bundled browser with the current desktop's DISPLAY.
     if [[ "${logs_mode}" == "true" ]]; then
         # Detach the GUI so this shell can continue following logs.
-        docker exec -d -e DISPLAY="${DISPLAY}" \
-            -e INSIGHT_KIOSK_SPLIT="${INSIGHT_KIOSK_SPLIT:-0}" insight-dashboard \
+        docker exec -d -e DISPLAY="${DISPLAY}" insight-dashboard \
             /workspaces/insight_capture/scripts/open_web_3d_right.sh
         log "Kiosk launched in the background; following backend logs below."
     else
-        exec docker exec -it -e DISPLAY="${DISPLAY}" \
-            -e INSIGHT_KIOSK_SPLIT="${INSIGHT_KIOSK_SPLIT:-0}" insight-dashboard \
+        exec docker exec -it -e DISPLAY="${DISPLAY}" insight-dashboard \
             /workspaces/insight_capture/scripts/open_web_3d_right.sh
     fi
 fi
