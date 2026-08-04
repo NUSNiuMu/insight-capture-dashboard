@@ -334,6 +334,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtk-3-0 \
     libx11-xcb1 \
     libasound2 \
+    wmctrl \
+    x11-utils \
+    xdotool \
     && rm -rf /var/lib/apt/lists/* \
     && wget -q "https://download-installer.cdn.mozilla.net/pub/firefox/releases/${FIREFOX_VERSION}/linux-aarch64/en-US/firefox-${FIREFOX_VERSION}.tar.xz" -O /tmp/firefox.tar.xz \
     && tar xf /tmp/firefox.tar.xz -C /opt \

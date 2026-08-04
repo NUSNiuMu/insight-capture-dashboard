@@ -1,0 +1,14 @@
+/* The camera renderer is a managed product surface, not a browser window. */
+#navigator-toolbox,
+#titlebar,
+#TabsToolbar,
+#nav-bar,
+#PersonalToolbar {
+  display: none !important;
+}
+
+#browser,
+#appcontent {
+  margin: 0 !important;
+  padding: 0 !important;
+}

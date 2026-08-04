@@ -21,10 +21,10 @@
 ```bash
 docker compose build   # 首次构建，之后代码不变可跳过
 ./scripts/run_dashboard.sh            # 只启动后端，打印 SSH 隧道命令，供笔记本电脑远程连
-./scripts/run_dashboard.sh --jetson   # 额外拉起本机全屏 3D kiosk，接了显示器的场景用
+./scripts/run_dashboard.sh --jetson   # 额外拉起本机全屏 kiosk，接了显示器的场景用
 ```
 
-`run_dashboard.sh` 内部就是 `docker compose up -d` + 健康检查，幂等，可以随时重复跑。容器用 `restart: unless-stopped`，SSH 断开、机器重启后 Docker 会自动拉起来。
+`run_dashboard.sh` 内部就是 `docker compose up -d` + 健康检查，幂等，可以随时重复跑。容器用 `restart: unless-stopped`，SSH 断开、机器重启后 Docker 会自动拉起来。需要继续做浏览器合成 A/B 时，可用 `INSIGHT_KIOSK_SPLIT=1 ./scripts/run_dashboard.sh --jetson` 启用双 Firefox：相机墙覆盖在原相机栏位置，3D、导航和其他页面由主窗口负责；切换页面和放大相机时窗口会自动拼接、隐藏或复位，操作上仍是一套界面。当前设备实测双窗口 presented FPS 未优于单窗口，因此默认仍使用单窗口。
 镜像内置 WiLoR 权重和 GPU 推理运行时，首次或无缓存构建会下载并导出数 GB
 固定内容；日常 Python/前端改动由源码 bind mount 生效，通常只需重启
 `insight-dashboard`，不要每次都先执行完整 `docker compose build`。
@@ -147,7 +147,7 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 | `scripts/multi_camera_dashboard_web.py` | Web dashboard 稳定进程入口与 ROS 生命周期组合 |
 | `scripts/dashboard_web/` / `dashboard_runtime/` | Web API、WebSocket 与 Dashboard 运行时领域实现 |
 | `scripts/dashboard_media/` | 硬件 JPEG 编解码与 WebRTC 流实现 |
-| `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
+| `scripts/open_web_3d_right.sh` | 本机 Firefox kiosk 启动器；可选监管相机/3D 双渲染器拼接 |
 | `scripts/post_processing.py` | Web 版 rosbag 录制管理、topic 发现分组、COLMAP 优化 pipeline 调度 |
 | `scripts/post_processing_core/` | 完整性、评分、录制、恢复、回放、同步、bag catalog 与优化实现 |
 | `scripts/hand_tracking/` | 实时手部 landmark、双手手势识别和夹爪跟踪 |

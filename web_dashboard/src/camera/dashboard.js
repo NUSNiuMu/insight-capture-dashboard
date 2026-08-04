@@ -652,4 +652,7 @@ function setCameraMaximized(cameraName, maximized) {
   panel.classList.toggle("maximized", maximized);
   button.textContent = maximized ? "❐" : "□";
   button.title = maximized ? "Restore" : "Maximize";
+  window.dispatchEvent(new CustomEvent("insight:camera-maximized", {
+    detail: { cameraName, maximized },
+  }));
 }

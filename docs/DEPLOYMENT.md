@@ -261,4 +261,6 @@ cd insight-dashboard-deploy
 （本项目目前是：insight3_a / insight3_b / insight9_a）无需额外执行轨迹对齐操作。
 
 浏览器访问 `http://<设备IP>:8765/`，或 `./scripts/run_dashboard.sh --jetson`
-在设备屏幕本机打开全屏看板。日常操作和故障排查见 `docs/USAGE.md`。
+在设备屏幕本机打开全屏看板。普通远程浏览器和本机默认均使用单页面；双 Firefox
+无缝拼接相机墙和 3D 区域的 A/B 模式可通过 `INSIGHT_KIOSK_SPLIT=1` 显式启用，
+当前不作为客户默认配置。日常操作和故障排查见 `docs/USAGE.md`。

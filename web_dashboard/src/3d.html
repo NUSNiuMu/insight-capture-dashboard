@@ -4,7 +4,27 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Insight 3D Workspace</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260729-compositor-lite">
+    <script>
+      (() => {
+        const roleKey = "insight.kiosk-role";
+        const query = new URLSearchParams(window.location.search);
+        const role = query.get("kiosk-role")
+          || window.sessionStorage.getItem(roleKey);
+        if (role === "scene") {
+          window.sessionStorage.setItem(roleKey, role);
+          document.documentElement.dataset.kioskRole = role;
+          const cameraWidth = Number(query.get("kiosk-camera-width"));
+          if (cameraWidth >= 500 && cameraWidth <= 800) {
+            document.documentElement.style.setProperty(
+              "--kiosk-camera-width",
+              `${cameraWidth}px`,
+            );
+          }
+          document.title = "Insight 3D Workspace [insight-kiosk-scene]";
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="/static/styles.css?v=20260804-split-kiosk">
     <script src="/static/babylon.js"></script>
     <script src="/static/babylonjs.loaders.min.js"></script>
   </head>
@@ -74,6 +94,6 @@
         </section>
       </main>
     </div>
-    <script type="module" src="/static/pages/spatial.js?v=20260729-compositor-lite"></script>
+    <script type="module" src="/static/pages/spatial.js?v=20260804-split-kiosk"></script>
   </body>
 </html>

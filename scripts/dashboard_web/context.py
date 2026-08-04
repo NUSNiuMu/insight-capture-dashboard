@@ -26,6 +26,10 @@ class DashboardContext:
     gripper_extraction_manager: GripperExtractionManager = field(init=False)
     umi_export_manager: UmiExportManager = field(init=False)
     _image_capabilities_cache: Optional[Dict[str, object]] = field(default=None, init=False)
+    kiosk_state: Dict[str, object] = field(
+        default_factory=lambda: {"capture_performance": False},
+        init=False,
+    )
 
     def __post_init__(self) -> None:
         self.web_root = self.web_root.resolve() if self.web_root else None
