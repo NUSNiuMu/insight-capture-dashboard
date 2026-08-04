@@ -145,6 +145,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     # Utilities
     curl \
+    ffmpeg \
     # iproute2 (`ip`) & iputils-ping (`ping`): needed by scripts/reboot_cameras.sh
     # to discover cameras on 169.254.x.x links and wait for them after reboot.
     # Absent from the ros base image, so these commands silently fail (exit 127)
@@ -230,6 +231,7 @@ RUN pip3 install --no-cache-dir \
     "aiohttp==3.13.3" \
     "numpy==1.26.4" \
     "opencv-contrib-python-headless==4.11.0.86" \
+    "pyarrow==17.0.0" \
     "rosbags==0.11.3" \
     "matplotlib"
 

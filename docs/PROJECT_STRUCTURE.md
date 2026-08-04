@@ -44,6 +44,7 @@ scripts/
   *_worker.py / *_mapper.py         稳定的进程入口；只做参数、I/O 和生命周期
   multi_camera_dashboard_web.py     Dashboard ROS 组合入口兼容面
   post_processing.py                离线处理公共导入兼容面
+  lerobot_dataset_export.py         HiFi-UMI 风格 LeRobot v3 数据集导出
   dashboard_web/                    HTTP app、context、middleware、routes、WebSocket
   dashboard_runtime/                Dashboard 图像、录制桥接、worker 监管与状态
   dashboard_media/                  硬件 JPEG 和 WebRTC 流实现
