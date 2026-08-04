@@ -8,4 +8,4 @@ Jetson NX 的 camera_center → TCP 实测外参已录入并发布 TF。
 已实现双臂 20 维 action 对应的 UMI Zarr 与训练配置导出。
 UMI 导出默认保留三路相机各自的原始分辨率；224/384 方形兼容选项固定裁剪水平居中、
 底部对齐的最大方形操作区后再等比缩放，避免 portrait 图像形变。
-后续按需要增加 LeRobot 导出。
+标准归档现已使用 HiFi-UMI 风格的 LeRobot v3 导出；UMI Zarr 保留为旧训练栈兼容格式。

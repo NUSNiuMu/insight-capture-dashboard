@@ -31,6 +31,8 @@ class UmiExportRoutes:
                 str(body.get("image_mode", "original")),
                 camera_names,
                 str(body.get("episode_mode", "bag")),
+                str(body.get("export_format", "umi")),
+                str(body.get("task", "")),
             )
         except RuntimeError as exc:
             return web.json_response({"error": str(exc)}, status=409)

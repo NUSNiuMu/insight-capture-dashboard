@@ -5,6 +5,9 @@ const selectAllButton = document.getElementById("umi-select-all");
 const cameraLayoutInput = document.getElementById("umi-camera-layout");
 const layoutSummary = document.getElementById("umi-layout-summary");
 const schemaGrid = document.getElementById("umi-schema-grid");
+const exportFormatInput = document.getElementById("umi-export-format");
+const taskField = document.getElementById("umi-task-field");
+const taskInput = document.getElementById("umi-task");
 const imageModeInput = document.getElementById("umi-image-mode");
 const episodeModeInput = document.getElementById("umi-episode-mode");
 const exportButton = document.getElementById("umi-export-button");
@@ -43,10 +46,14 @@ function selectedLayout() {
 
 function renderLayout() {
   const layout = selectedLayout();
+  const isLeRobot = exportFormatInput.value === "lerobot";
   layoutSummary.textContent = layout.label;
+  taskField.hidden = !isLeRobot;
+  taskInput.required = isLeRobot;
+  exportButton.textContent = isLeRobot ? "Build LeRobot dataset" : "Build UMI outputs";
   schemaGrid.innerHTML = layout.schema.map(([key, value]) =>
     `<span><small>${escapeHtml(key)}</small><strong>${escapeHtml(value)}</strong></span>`
-  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `Fixed lower ROI → ${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span><span><small>Episodes</small><strong>${episodeModeInput.value === "auto_pause" ? "Auto-split at ~1 s pauses" : "One rosbag = one episode"}</strong></span><span><small>Gripper / pose</small><strong>0–0.083 m · relative per episode</strong></span><span><small>Output folder</small><strong>outputs/umi_datasets/&lt;rosbag&gt;_umi/</strong></span>`;
+  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `Fixed lower ROI → ${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span><span><small>Episodes</small><strong>${episodeModeInput.value === "auto_pause" ? "Auto-split at ~1 s pauses" : "One rosbag = one episode"}</strong></span><span><small>State / action</small><strong>${isLeRobot ? "20D · xyz + rot6d + width · next-state action" : "0–0.083 m · relative in training"}</strong></span><span><small>Output folder</small><strong>${isLeRobot ? "outputs/lerobot_datasets/&lt;rosbag&gt;_lerobot/" : "outputs/umi_datasets/&lt;rosbag&gt;_umi/"}</strong></span>`;
 }
 
 function formatBytes(bytes) {
@@ -88,6 +95,8 @@ async function loadBags() {
 
 function setLocked(locked) {
   exportButton.disabled = locked;
+  exportFormatInput.disabled = locked;
+  taskInput.disabled = locked;
   cameraLayoutInput.disabled = locked;
   imageModeInput.disabled = locked;
   episodeModeInput.disabled = locked;
@@ -105,7 +114,7 @@ function renderStatus(payload) {
     statusLabel.textContent = payload.stage === "images"
       ? "Encoding synchronized images"
       : payload.stage === "package"
-        ? "Packaging Zarr"
+        ? (payload.export_format === "lerobot" ? "Writing Parquet and MP4 metadata" : "Packaging Zarr")
         : payload.stage === "cleanup"
           ? "Removing rejected rosbags"
           : "Scanning rosbag streams";
@@ -170,6 +179,8 @@ imageModeInput.addEventListener("change", () => {
   renderLayout();
 });
 
+exportFormatInput.addEventListener("change", renderLayout);
+
 episodeModeInput.addEventListener("change", renderLayout);
 
 cameraLayoutInput.addEventListener("change", renderLayout);
@@ -179,6 +190,12 @@ exportButton.addEventListener("click", async () => {
   if (!bagNames.length) {
     statusLabel.textContent = "Configuration required";
     statusDetail.textContent = "Select at least one rosbag.";
+    return;
+  }
+  if (exportFormatInput.value === "lerobot" && !taskInput.value.trim()) {
+    statusLabel.textContent = "Configuration required";
+    statusDetail.textContent = "Enter a task instruction for π0.5 language conditioning.";
+    taskInput.focus();
     return;
   }
   window.clearTimeout(pollTimer);
@@ -197,6 +214,8 @@ exportButton.addEventListener("click", async () => {
         image_mode: imageModeInput.value,
         episode_mode: episodeModeInput.value,
         camera_names: selectedLayout().cameras,
+        export_format: exportFormatInput.value,
+        task: taskInput.value.trim(),
       }),
     });
     const payload = await response.json();

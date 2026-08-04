@@ -2,41 +2,43 @@
 <html lang="en">
   <head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Insight UMI Dataset</title><link rel="stylesheet" href="/static/styles.css?v=20260803-umi-auto-v4">
+    <title>Insight Training Datasets</title><link rel="stylesheet" href="/static/styles.css?v=20260804-lerobot-v1">
   </head>
   <body data-dashboard-view="umi-dataset">
     <div class="app-shell">
       <aside class="app-sidebar">
         <a class="app-brand" href="/3d"><span class="brand-mark">I</span><span>INSIGHT<small>Capture Studio</small></span></a>
         <div class="workspace-card"><span><i></i> Active workspace</span><strong>Jetson NX</strong><small>ROS 2 · Domain 20</small></div>
-        <nav class="side-nav" aria-label="Dashboard pages"><p>Monitor</p><a href="/3d"><b>01</b><span>Spatial view</span></a><p>Capture</p><a href="/recording"><b>02</b><span>Recording</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/umi-dataset" class="is-active"><b>04</b><span>UMI dataset</span></a><a href="/scoring"><b>05</b><span>Scoring</span></a><a href="/handpose"><b>06</b><span>Hand pose</span></a><a href="/optimization"><b>07</b><span>Optimization</span></a><p>System</p><a href="/settings"><b>08</b><span>Settings</span></a></nav>
+        <nav class="side-nav" aria-label="Dashboard pages"><p>Monitor</p><a href="/3d"><b>01</b><span>Spatial view</span></a><p>Capture</p><a href="/recording"><b>02</b><span>Recording</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/umi-dataset" class="is-active"><b>04</b><span>Datasets</span></a><a href="/scoring"><b>05</b><span>Scoring</span></a><a href="/handpose"><b>06</b><span>Hand pose</span></a><a href="/optimization"><b>07</b><span>Optimization</span></a><p>System</p><a href="/settings"><b>08</b><span>Settings</span></a></nav>
         <div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
       </aside>
       <section class="app-main">
-        <header class="app-topbar"><span>Process / <strong>UMI dataset</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
+        <header class="app-topbar"><span>Process / <strong>Training datasets</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
         <main class="page-content">
-          <header class="content-heading"><div><p class="section-kicker">Training data</p><h1>UMI Dataset</h1><p>Synchronize selected Insight camera streams, TCP poses and gripper openings into a training-ready Zarr.</p></div><span class="heading-stat"><strong>20 Hz</strong><span>UMI replay buffer</span></span></header>
+          <header class="content-heading"><div><p class="section-kicker">Training data</p><h1>Dataset Export</h1><p>Synchronize three Insight camera streams, TCP poses and gripper openings into a standard training dataset.</p></div><span class="heading-stat"><strong>LeRobot v3</strong><span>HiFi-UMI profile · 20 Hz</span></span></header>
           <div class="umi-workspace">
             <section class="data-surface umi-source-surface">
               <div class="section-heading"><div><p class="section-kicker">01 · Episodes</p><h2>Select rosbags</h2></div><button id="umi-select-all" class="quiet-button" type="button">Select all</button></div>
               <div id="umi-bag-list" class="umi-bag-list"><div class="empty-state">Loading rosbags...</div></div>
             </section>
             <section class="data-surface umi-export-surface">
-              <div class="section-heading"><div><p class="section-kicker">02 · Export</p><h2>Build replay buffer</h2></div><span id="umi-layout-summary">Single arm · Insight3 A</span></div>
-              <label><span class="field-label">Capture layout</span><select id="umi-camera-layout" class="field-control"><option value="single_a" selected>Single arm · Insight3 A (right)</option><option value="single_b">Single arm · Insight3 B (left)</option><option value="bimanual">Bimanual · Insight3 A + B + Insight9</option></select><small class="field-help">Single-arm maps the selected Insight3 to camera0 / robot0 and uses its native VIO pose. Bimanual uses global poses.</small></label>
-              <label class="umi-resolution-field"><span class="field-label">Episode segmentation</span><select id="umi-episode-mode" class="field-control"><option value="bag" selected>One rosbag = one episode</option><option value="auto_pause">Auto-split long recording at pauses</option></select><small class="field-help">Pause for about 1 second between actions. Auto mode cuts after at least 0.8 seconds of stable TCP translation, rotation and gripper width. Each segment gets its own relative pose reference, so it does not require returning to the same absolute VIO position.</small></label>
-              <label class="umi-resolution-field"><span class="field-label">Training image resolution</span><select id="umi-image-mode" class="field-control"><option value="original" selected>Original resolution</option><option value="384">384 × 384 · fixed lower ROI</option><option value="224">224 × 224 · fixed lower ROI (UMI default)</option></select><small class="field-help">Square modes crop a fixed bottom-center operation ROI before proportional scaling. In auto mode, a segment containing image skew or a VIO discontinuity is rejected without contaminating the other segments.</small></label>
+              <div class="section-heading"><div><p class="section-kicker">02 · Export</p><h2>Build dataset</h2></div><span id="umi-layout-summary">Bimanual · A + B + head</span></div>
+              <label><span class="field-label">Dataset format</span><select id="umi-export-format" class="field-control"><option value="lerobot" selected>LeRobot v3 · HiFi-UMI profile</option><option value="umi">Legacy UMI · Zarr replay buffer</option></select><small class="field-help">LeRobot is the canonical archive. π0.5-specific relative actions and input naming belong in its training adapter.</small></label>
+              <label id="umi-task-field" class="umi-resolution-field"><span class="field-label">Task instruction</span><input id="umi-task" class="field-control" type="text" maxlength="500" placeholder="e.g. Fold the towel in half"><small class="field-help">Saved in tasks.parquet and referenced by every frame for language-conditioned training.</small></label>
+              <label><span class="field-label">Capture layout</span><select id="umi-camera-layout" class="field-control"><option value="single_a">Single arm · Insight3 A (right)</option><option value="single_b">Single arm · Insight3 B (left)</option><option value="bimanual" selected>Bimanual · Insight3 A + B + Insight9</option></select><small class="field-help">Single-arm keeps the fixed 20D schema and masks the missing hand. Bimanual uses the shared global poses and all three live camera streams. Every selected Insight3 gripper must have metric width_calibration.</small></label>
+              <label class="umi-resolution-field"><span class="field-label">Episode segmentation</span><select id="umi-episode-mode" class="field-control"><option value="bag" selected>One rosbag = one episode</option><option value="auto_pause">Auto-split long recording at pauses</option></select><small class="field-help">Pause for about 1 second between actions. Auto mode cuts after at least 0.8 seconds of stable TCP translation, rotation and gripper width. Episode boundaries let the training adapter establish an independent relative reference without returning to the same VIO position.</small></label>
+              <label class="umi-resolution-field"><span class="field-label">Training image resolution</span><select id="umi-image-mode" class="field-control"><option value="224" selected>224 × 224 · fixed lower ROI (π0.5)</option><option value="384">384 × 384 · fixed lower ROI</option><option value="original">Original resolution</option></select><small class="field-help">Square modes crop a fixed bottom-center operation ROI before proportional scaling. In auto mode, a segment containing image skew or a VIO discontinuity is rejected without contaminating the other segments.</small></label>
               <p class="field-help">After the batch completes, a source rosbag rejected for unusable recorded data is permanently deleted. Successful bags and bags blocked by configuration or system errors are retained.</p>
               <div id="umi-schema-grid" class="umi-schema-grid">
                 <span><small>camera0 / robot0</small><strong>Right hand · insight3_a · VIO</strong></span>
                 <span><small>Images</small><strong id="umi-image-summary">Original RGB · 20 Hz</strong></span>
-                <span><small>Output folder</small><strong>outputs/umi_datasets/&lt;rosbag&gt;_umi/</strong></span>
+                <span><small>Output folder</small><strong>outputs/lerobot_datasets/&lt;rosbag&gt;_lerobot/</strong></span>
               </div>
-              <button id="umi-export-button" class="primary-button umi-export-button" type="button">Build UMI outputs</button>
+              <button id="umi-export-button" class="primary-button umi-export-button" type="button">Build LeRobot dataset</button>
               <div class="umi-progress">
                 <div><span id="umi-status-label">Ready</span><strong id="umi-progress-value">0%</strong></div>
                 <div class="opt-progress-track"><div id="umi-progress-fill" class="opt-progress-fill" style="width:0%"></div></div>
-                <pre id="umi-status-detail" class="recording-output">Each selected rosbag is saved in its own &lt;rosbag&gt;_umi folder.</pre>
+                <pre id="umi-status-detail" class="recording-output">Each selected rosbag is saved as an independent LeRobot dataset.</pre>
               </div>
               <div id="umi-result" class="umi-result" hidden></div>
             </section>
@@ -44,6 +46,6 @@
         </main>
       </section>
     </div>
-    <script type="module" src="/static/pages/umi-dataset.js?v=20260803-umi-cleanup-v5"></script>
+    <script type="module" src="/static/pages/umi-dataset.js?v=20260804-lerobot-v1"></script>
   </body>
 </html>

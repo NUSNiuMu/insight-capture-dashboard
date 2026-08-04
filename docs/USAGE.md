@@ -97,16 +97,40 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 进度按目标图像 topic 已处理帧数除以 rosbag 记录的该 topic 总帧数计算，不使用
 耗时或动画估算。
 
-**UMI 训练数据导出**：打开 `/umi-dataset`，将每次完整示教对应的 rosbag 勾选为
-episode，选择单臂 A、单臂 B 或双臂采集布局和训练图像分辨率后
-点击 **Build UMI outputs**。每个选中的 rosbag 会独立处理并自动保存为
-`outputs/umi_datasets/<rosbag 名>_umi/`，不需要再点击下载。
-**Original resolution** 保留每路相机在 rosbag 中的原始宽高，不进行缩放；图像只转换为
-UMI 需要的 RGB 三通道，Zarr 使用无损压缩。`224 × 224` 和 `384 × 384` 会先固定裁剪
-水平居中、底部对齐的最大方形操作区，再等比缩放为训练副本，不会把 portrait 图像直接
-拉伸成正方形。导出的 manifest 会记录每路相机的 `camera_crop_boxes_xywh`。
-后台会在 recorder timeline 上把所选图像、pose、TCP 外参与夹爪二维码检测统一对齐到
-20 Hz。每个输出目录包含：
+**训练数据集导出**：打开 `/umi-dataset`，将每次完整示教对应的 rosbag 勾选为
+episode，填写英文任务指令，选择单臂 A、单臂 B 或双臂采集布局和训练图像分辨率后，
+点击 **Build LeRobot dataset**。默认输出是与 HiFi-UMI-2K 对齐的 LeRobot v3 目录：
+`outputs/lerobot_datasets/<rosbag 名>_lerobot/`。每个选中的 rosbag 会独立处理并保存在设备上。
+
+LeRobot 输出包含：
+
+- `data/chunk-000/file-000.parquet`：逐帧 `observation.state`、`action`、validity mask、
+  timestamp、episode/frame/task index；
+- `videos/observation.images.*/chunk-000/file-000.mp4`：所选相机的同步 H.264 视频；三相机
+  分别映射为 `right_hand_up`、`left_hand_up`、`head_main`；
+- `meta/info.json`、`stats.json`、`tasks.parquet`、`modality.json` 和 episode parquet：
+  LeRobot v3 schema、归一化统计、语言任务、语义切片和视频/数据分片索引；
+- `meta/manifest.json`：设备端导出摘要和数据来源。
+
+状态和动作固定使用 HiFi-UMI 风格的 20 维布局：`[right_10d, left_10d]`，每手为
+`xyz + rotation_6d + gripper`。Insight 的夹爪量是经实测标定的物理开口宽度（米），不是
+HiFi-UMI 硬件的开口角（弧度），单位会写入 `modality.json`。单臂数据仍保留 20 维，缺失
+手对应的 10 维填零并在 `observation.state_valid` / `action_valid` 中标为 false，训练时必须
+按 mask 丢弃。`action` 是同一 episode 的下一帧绝对状态，末帧重复末状态；不要在标准
+数据里提前写死 π0.5 的机器人相对动作约定。
+
+所选的每个 Insight3 夹爪都必须在 `config/gripper_calibration.json` 中提供实测的
+`width_calibration`；因此双臂导出要求 A、B 两侧均完成米制开口宽度标定。配置缺失会使
+该 bag 保留并报告配置错误，不会输出伪造的宽度或误删源数据。
+
+OpenPI π0.5 训练配置应把 LeRobot 相机 key、任务文本和 20 维状态映射到模型输入，并在
+data transform 中将绝对下一状态转换为部署机器人需要的相对动作。训练前按相同 validity
+过滤规则运行 OpenPI 的 `compute_norm_stats.py`，不要直接复用其他机器人或 HiFi-UMI
+设备的归一化统计。
+
+**Legacy UMI Zarr**：需要继续使用官方 UMI Diffusion Policy 时，在 Dataset format 中
+选择 **Legacy UMI · Zarr replay buffer**。输出仍保存到
+`outputs/umi_datasets/<rosbag 名>_umi/`，包含：
 
 - `<rosbag 名>_umi.zarr.zip`：可由官方 `UmiDataset` 直接读取的数据集；
 - `<rosbag 名>_umi.umi.yaml`：按所选布局生成 `shape_meta`；单臂动作维度为 10，双臂为 20。
@@ -114,36 +138,45 @@ UMI 需要的 RGB 三通道，Zarr 使用无损压缩。`224 × 224` 和 `384 ×
   `diffusion_policy/config/task/` 并修改 `dataset_path` 后即可用于训练；
 - `<rosbag 名>_umi.manifest.json`：episode、帧数、同步偏差和夹爪检测率等质量摘要。
 
-原始分辨率模式允许多路相机使用不同尺寸，并会把各自的 `[C,H,W]` 写入训练配置。
+**Original resolution** 保留每路相机在 rosbag 中的原始宽高，不进行缩放；`224 × 224`
+和 `384 × 384` 会先固定裁剪水平居中、底部对齐的最大方形操作区，再缩放为训练副本，
+不会把 portrait 图像直接拉伸成正方形。UMI Zarr 图像使用无损压缩；LeRobot 视频使用
+H.264 CRF 18/yuv420p。导出的 metadata 会记录每路相机的 crop box 和编码参数。
+后台会在 recorder timeline 上把所选图像、pose、TCP 外参与夹爪二维码检测统一对齐到
+20 Hz。
+
+原始分辨率模式允许多路相机使用不同尺寸；UMI 会把各自的 `[C,H,W]` 写入训练配置，
+LeRobot 会把各自的 `[H,W,C]` 和视频参数写入 `info.json`。
 批量处理时某个 rosbag 导出失败不会阻止后续 rosbag，页面会逐包显示设备端保存路径或
 失败原因。批处理结束后，因 VIO 连续性、有效帧数、图像解码或夹爪检测等录制数据质量
 问题而无法生成任何有效 episode 的源 rosbag 会自动删除；至少生成一个有效 episode 的
 rosbag 会保留。相机布局、标定、权限、磁盘或程序异常不会触发删除，避免误删可恢复数据。
-原始分辨率会显著增加数据集大小、训练 I/O 和显存占用；rosbag 本身若记录的是 JPEG
-compressed topic，导出只做解码，不会再增加一次有损压缩，但无法恢复采集时已经丢失的细节。
+原始分辨率会显著增加数据集大小、训练 I/O 和显存占用。UMI Zarr 对 JPEG compressed
+topic 只解码后无损保存；LeRobot 会统一转码为 H.264，因此会增加一次受控的有损编码。
+两种格式都无法恢复采集时已经丢失的细节。
 
-单臂布局只输出所选 Insight3 的 `camera0` 和 `robot0`，pose 来自该相机原生的
+单臂布局的 pose 来自所选 Insight3 原生的
 `/<namespace>/camera/vio_100hz`，每个 episode 使用自己的 VIO 坐标系；输入 bag 必须同时
-包含图像和 VIO topic，且该夹爪已完成开合标定。双臂布局的顺序为右腕 `camera0`、左腕
-`camera1`、头部 `camera2`，机器人顺序为右手 `robot0`、左手 `robot1`，并使用左右
-`/insight_global/.../pose` 保证统一坐标系。`robot*_gripper_width` 使用夹爪标定得到的真实
-开口宽度，单位为米，并记录在 Zarr 根属性中。默认模式下每条 rosbag 固定对应一个
+包含图像和 VIO topic，且该夹爪已完成开合标定。UMI 输出 `camera0` / `robot0`；LeRobot
+仍使用 20 维双手 schema，并 mask 缺失侧。双臂布局使用右腕、左腕、头部三路图像，并用
+左右 `/insight_global/.../pose` 保证统一坐标系。夹爪开口宽度来自实测标定，单位为米，
+记录在 UMI Zarr 根属性或 LeRobot `modality.json` 中。默认模式下每条 rosbag 固定对应一个
 episode；20 Hz 相邻 TCP 位置变化超过 5 cm、姿态变化超过 45°或 VIO pose 间隔超过
 100 ms 时拒绝整条 rosbag，禁止跨越重定位、跟踪丢失或坐标重置插值。通过质量门的事件
 计数写入 manifest。
 录制页会默认同时勾选每路相机的原始 `vio_100hz` 和配置的 dashboard/global pose，确保
 后续 UMI 单臂导出不依赖用户手动补选原始 VIO。
 
-需要在一条长录制中连续完成多次示教时，可在 UMI 页面选择 **Auto-split long recording
+需要在一条长录制中连续完成多次示教时，可在 Dataset 页面选择 **Auto-split long recording
 at pauses**。每一小节结束后保持 TCP 和夹爪静止约 1 秒；检测阈值为连续静止至少 0.8 秒。
 导出器会同时检查 20 Hz 下的
 平移速度（默认不超过 0.02 m/s）、旋转速度（不超过 10°/s）和夹爪宽度变化速度
 （不超过 0.005 m/s），并在静止段中点建立 episode 边界。最多 0.15 秒的单帧检测毛刺
 会被忽略。
 
-自动切分不要求每次回到同一个绝对位置。每个 episode 单独写入自身的
-`demo_start_pose`，训练配置继续使用 `pose_repr: relative`，因此前一小节积累的缓慢 VIO
-漂移不会作为下一小节的绝对参考。若某个候选小节跨越 VIO 突跳、跟踪空洞或图像同步
+自动切分不要求每次回到同一个绝对位置。UMI 为每个 episode 单独写入自身的
+`demo_start_pose`，训练配置继续使用 `pose_repr: relative`；LeRobot 保留采集坐标系的绝对
+下一状态，由 π0.5 data transform 按 episode 转为所需相对动作。若某个候选小节跨越 VIO 突跳、跟踪空洞或图像同步
 异常，只丢弃该小节，其他完整小节仍会导出；若坐标重置恰好发生在静止段内，边界会
 对齐到重置时刻，重置前后的小节都可保留。没有检测到足够长停顿时，整条长录制仍作为
 一个 episode；因此采集时应有意停稳约 1 秒。

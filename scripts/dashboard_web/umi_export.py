@@ -24,6 +24,7 @@ class _UmiExportItem:
     bag_path: Path
     dataset_name: str
     output_path: Path
+    export_format: str
     status: str = "pending"
     result: Optional[Dict[str, object]] = None
     error: Optional[str] = None
@@ -41,6 +42,8 @@ class _UmiExportJob:
     image_size: Optional[int]
     camera_names: list[str]
     episode_mode: str
+    export_format: str
+    task: str
     items: list[_UmiExportItem]
     status: str = "running"
     stage: str = "starting"
@@ -54,18 +57,26 @@ class _UmiExportJob:
 
 
 class UmiExportManager:
-    """Export each selected rosbag to an independent UMI dataset."""
+    """Export each selected rosbag to an independent training dataset."""
 
-    _SCRIPT = Path(__file__).resolve().parents[1] / "umi_dataset_export.py"
+    _UMI_SCRIPT = Path(__file__).resolve().parents[1] / "umi_dataset_export.py"
+    _LEROBOT_SCRIPT = (
+        Path(__file__).resolve().parents[1] / "lerobot_dataset_export.py"
+    )
 
     def __init__(self, project_root: Path, rosbag_root: Path) -> None:
         self.project_root = project_root.resolve()
         self.rosbag_root = rosbag_root.resolve()
-        self.output_root = self.project_root / "outputs" / "umi_datasets"
-        self.output_root.mkdir(parents=True, exist_ok=True)
+        self.umi_output_root = self.project_root / "outputs" / "umi_datasets"
+        self.lerobot_output_root = (
+            self.project_root / "outputs" / "lerobot_datasets"
+        )
+        self.umi_output_root.mkdir(parents=True, exist_ok=True)
+        self.lerobot_output_root.mkdir(parents=True, exist_ok=True)
         # Container root is root-squashed on some bind-mounted workspaces. Keep
         # generated datasets manageable by the workstation user.
-        self.output_root.chmod(0o777)
+        self.umi_output_root.chmod(0o777)
+        self.lerobot_output_root.chmod(0o777)
         self._lock = threading.Lock()
         self._current_job: Optional[_UmiExportJob] = None
         self._process: Optional[subprocess.Popen[str]] = None
@@ -89,6 +100,8 @@ class UmiExportManager:
                 ),
                 "camera_names": job.camera_names,
                 "episode_mode": job.episode_mode,
+                "export_format": job.export_format,
+                "task": job.task,
                 "items": [self._item_payload(item) for item in job.items],
             }
             if job.finished_at:
@@ -103,6 +116,8 @@ class UmiExportManager:
         image_mode: str = "original",
         camera_names: Optional[list[str]] = None,
         episode_mode: str = "bag",
+        export_format: str = "umi",
+        task: str = "",
     ) -> Dict[str, object]:
         image_mode = str(image_mode).strip().lower()
         if image_mode == "original":
@@ -114,6 +129,14 @@ class UmiExportManager:
         episode_mode = str(episode_mode).strip().lower()
         if episode_mode not in {"bag", "auto_pause"}:
             raise ValueError("Episode mode must be bag or auto_pause.")
+        export_format = str(export_format).strip().lower()
+        if export_format not in {"lerobot", "umi"}:
+            raise ValueError("Dataset format must be lerobot or umi.")
+        task = " ".join(str(task).split())
+        if export_format == "lerobot" and not task:
+            raise ValueError("Task instruction is required for LeRobot export.")
+        if len(task) > 500:
+            raise ValueError("Task instruction is too long.")
         if not bag_names:
             raise ValueError("Select at least one rosbag.")
         if len(bag_names) > 1000:
@@ -132,27 +155,37 @@ class UmiExportManager:
             raise ValueError("Too many cameras selected.")
         if len(set(camera_names)) != len(camera_names):
             raise ValueError("Duplicate camera names are not allowed.")
-        items = [
-            _UmiExportItem(
-                bag_name=bag_name,
-                bag_path=bag_path,
-                dataset_name=f"{bag_name}_umi",
-                output_path=(
-                    self.output_root
-                    / f"{bag_name}_umi"
-                    / f"{bag_name}_umi.zarr.zip"
-                ),
+        items = []
+        for bag_name, bag_path in zip(bag_names, resolved_bags):
+            if export_format == "lerobot":
+                dataset_name = f"{bag_name}_lerobot"
+                output_path = self.lerobot_output_root / dataset_name
+            else:
+                dataset_name = f"{bag_name}_umi"
+                output_path = (
+                    self.umi_output_root
+                    / dataset_name
+                    / f"{dataset_name}.zarr.zip"
+                )
+            items.append(
+                _UmiExportItem(
+                    bag_name=bag_name,
+                    bag_path=bag_path,
+                    dataset_name=dataset_name,
+                    output_path=output_path,
+                    export_format=export_format,
+                )
             )
-            for bag_name, bag_path in zip(bag_names, resolved_bags)
-        ]
         with self._lock:
             if self._current_job and self._current_job.status == "running":
-                raise RuntimeError("A UMI export job is already running.")
+                raise RuntimeError("A dataset export job is already running.")
             job = _UmiExportJob(
                 bag_names=list(bag_names),
                 image_size=image_size,
                 camera_names=camera_names,
                 episode_mode=episode_mode,
+                export_format=export_format,
+                task=task,
                 items=items,
                 started_at=time.time(),
             )
@@ -199,10 +232,11 @@ class UmiExportManager:
                     item.error = str(exc)
                 if isinstance(exc, _RejectedRosbagError):
                     rejected_items.append(item)
-                try:
-                    item.output_path.parent.rmdir()
-                except OSError:
-                    pass
+                if item.export_format == "umi":
+                    try:
+                        item.output_path.parent.rmdir()
+                    except OSError:
+                        pass
                 failed_items += 1
             finally:
                 with self._lock:
@@ -221,7 +255,7 @@ class UmiExportManager:
             if job.cancelled:
                 job.status = "error"
                 job.stage = "error"
-                job.error = "UMI export stopped."
+                job.error = "Dataset export stopped."
             elif failed_items and successful_items:
                 job.status = "partial"
                 job.stage = "done"
@@ -237,9 +271,14 @@ class UmiExportManager:
     def _export_item(
         self, job: _UmiExportJob, item: _UmiExportItem, completed_frames: int
     ) -> Dict[str, object]:
+        script = (
+            self._LEROBOT_SCRIPT
+            if item.export_format == "lerobot"
+            else self._UMI_SCRIPT
+        )
         command = [
             "/usr/bin/python3",
-            str(self._SCRIPT),
+            str(script),
             str(item.bag_path),
             "--output",
             str(item.output_path),
@@ -252,6 +291,15 @@ class UmiExportManager:
             "--episode-mode",
             job.episode_mode,
         ]
+        if item.export_format == "lerobot":
+            command.extend(
+                (
+                    "--task",
+                    job.task,
+                    "--dataset-id",
+                    f"insight/{item.dataset_name}",
+                )
+            )
         for camera_name in job.camera_names:
             command.extend(("--camera", camera_name))
         output_tail = deque(maxlen=12)
@@ -269,17 +317,20 @@ class UmiExportManager:
         for line in process.stdout:
             output_tail.append(line.rstrip())
             fields = line.strip().split(maxsplit=6)
-            if len(fields) >= 6 and fields[0] == "UMI_PROGRESS":
+            if len(fields) >= 6 and fields[0] in {
+                "UMI_PROGRESS",
+                "DATASET_PROGRESS",
+            }:
                 with self._lock:
                     job.stage = fields[3]
                     job.current_bag = item.bag_name
                     job.total_frames = completed_frames + int(fields[5])
         if process.wait() != 0:
-            rejected_lines = [
-                line.removeprefix("UMI_REJECTED_BAG ")
-                for line in output_tail
-                if line.startswith("UMI_REJECTED_BAG ")
-            ]
+            rejected_lines = []
+            for line in output_tail:
+                for prefix in ("UMI_REJECTED_BAG ", "DATASET_REJECTED_BAG "):
+                    if line.startswith(prefix):
+                        rejected_lines.append(line.removeprefix(prefix))
             if rejected_lines:
                 raise _RejectedRosbagError(rejected_lines[-1])
             error_lines = [
@@ -290,13 +341,16 @@ class UmiExportManager:
             raise RuntimeError(
                 error_lines[-1]
                 if error_lines
-                else "\n".join(output_tail).strip() or "UMI exporter failed"
+                else "\n".join(output_tail).strip() or "Dataset exporter failed"
             )
-        manifest_path = item.output_path.with_name(
-            f"{item.dataset_name}.manifest.json"
-        )
+        manifest_path = self._manifest_path(item)
         result = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self._make_output_user_manageable(item.output_path.parent)
+        manageable_root = (
+            item.output_path
+            if item.export_format == "lerobot"
+            else item.output_path.parent
+        )
+        self._make_output_user_manageable(manageable_root)
         return result
 
     def _delete_rejected_source(self, item: _UmiExportItem) -> None:
@@ -317,9 +371,7 @@ class UmiExportManager:
         directory.chmod(0o777)
 
     def _item_payload(self, item: _UmiExportItem) -> Dict[str, object]:
-        manifest_path = item.output_path.with_name(
-            f"{item.dataset_name}.manifest.json"
-        )
+        manifest_path = self._manifest_path(item)
         config_path = item.output_path.with_name(f"{item.dataset_name}.umi.yaml")
         payload: Dict[str, object] = {
             "bag_name": item.bag_name,
@@ -327,8 +379,10 @@ class UmiExportManager:
             "status": item.status,
             "output_path": str(item.output_path.relative_to(self.project_root)),
             "manifest_path": str(manifest_path.relative_to(self.project_root)),
-            "config_path": str(config_path.relative_to(self.project_root)),
+            "export_format": item.export_format,
         }
+        if item.export_format == "umi":
+            payload["config_path"] = str(config_path.relative_to(self.project_root))
         if item.result is not None:
             payload["result"] = item.result
         if item.error:
@@ -337,6 +391,12 @@ class UmiExportManager:
         if item.source_delete_error:
             payload["source_delete_error"] = item.source_delete_error
         return payload
+
+    @staticmethod
+    def _manifest_path(item: _UmiExportItem) -> Path:
+        if item.export_format == "lerobot":
+            return item.output_path / "meta" / "manifest.json"
+        return item.output_path.with_name(f"{item.dataset_name}.manifest.json")
 
     def _bag_path(self, bag_name: str) -> Path:
         bag_name = self._validate_name(bag_name, "bag name")
