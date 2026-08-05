@@ -128,7 +128,7 @@ services:
       - --backend
       - ipc
       - --path-publish-hz
-      - "5"
+      - "2"
       - --pose-publish-hz
       - "30"
     depends_on:
@@ -158,7 +158,7 @@ services:
       - --path-points
       - "200"
       - --path-publish-hz
-      - "5"
+      - "2"
       - --pose-publish-hz
       - "30"
       - --ekf-correction-time-constant-sec

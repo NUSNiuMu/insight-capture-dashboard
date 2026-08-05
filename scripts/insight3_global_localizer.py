@@ -357,7 +357,10 @@ class Insight3GlobalLocalizer(Node):
         self._worker.start()
         self.create_timer(0.5, self._resolve_extrinsics)
         self.create_timer(
-            1.0 / max(args.path_publish_hz, 0.1), self._publish_paths_and_tf
+            1.0 / max(args.path_publish_hz, 0.1), self._publish_paths
+        )
+        self.create_timer(
+            1.0 / max(args.tf_publish_hz, 0.1), self._publish_tfs
         )
         self.create_timer(0.5, self._publish_status)
         self.get_logger().info(
@@ -906,8 +909,7 @@ class Insight3GlobalLocalizer(Node):
                 path.header.stamp = path.poses[-1].header.stamp
             state.path = path
 
-    def _publish_paths_and_tf(self) -> None:
-        now_stamp = self.get_clock().now().to_msg()
+    def _publish_paths(self) -> None:
         for name, state in self._cameras.items():
             with state.lock:
                 path_dirty = state.path_dirty
@@ -915,18 +917,37 @@ class Insight3GlobalLocalizer(Node):
                 self._rebuild_path(state)
             with state.lock:
                 path = state.path
-                latest = path.poses[-1] if path.poses else None
-            if latest is not None:
+            if path.poses:
                 self._path_publishers[name].publish(path)
-                transform = TransformStamped()
-                transform.header.frame_id = self._map_frame
-                transform.header.stamp = now_stamp
-                transform.child_frame_id = f"{name}_global_camera_center"
-                transform.transform.translation.x = latest.pose.position.x
-                transform.transform.translation.y = latest.pose.position.y
-                transform.transform.translation.z = latest.pose.position.z
-                transform.transform.rotation = latest.pose.orientation
-                self._tf_broadcaster.sendTransform(transform)
+
+    def _publish_tfs(self) -> None:
+        now_stamp = self.get_clock().now().to_msg()
+        for name, state in self._cameras.items():
+            with state.lock:
+                correction = state.pose_filter.correction
+                extrinsic = (
+                    None if state.imu_to_center is None else state.imu_to_center.copy()
+                )
+                latest_sample = state.history[-1] if state.history else None
+            if correction is None or extrinsic is None or latest_sample is None:
+                continue
+            transform_matrix = (
+                correction @ matrix_from_pose(latest_sample) @ extrinsic
+            )
+            latest = pose_message(
+                transform_matrix,
+                Time(nanoseconds=latest_sample.stamp_ns).to_msg(),
+                self._map_frame,
+            )
+            transform = TransformStamped()
+            transform.header.frame_id = self._map_frame
+            transform.header.stamp = now_stamp
+            transform.child_frame_id = f"{name}_global_camera_center"
+            transform.transform.translation.x = latest.pose.position.x
+            transform.transform.translation.y = latest.pose.position.y
+            transform.transform.translation.z = latest.pose.position.z
+            transform.transform.rotation = latest.pose.orientation
+            self._tf_broadcaster.sendTransform(transform)
 
     def _publish_status(self) -> None:
         for name, state in self._cameras.items():
@@ -999,7 +1020,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirmation-rotation-deg", type=float, default=12.0)
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
-    parser.add_argument("--path-publish-hz", type=float, default=5.0)
+    parser.add_argument("--path-publish-hz", type=float, default=2.0)
+    parser.add_argument("--tf-publish-hz", type=float, default=5.0)
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument("--ekf-process-translation-std", type=float, default=0.02)
     parser.add_argument("--ekf-process-rotation-std-deg", type=float, default=0.5)

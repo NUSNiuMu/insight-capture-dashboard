@@ -192,6 +192,11 @@ class LandmarkMap:
             dtype=np.float32,
         )
 
+    def confirmed_count(self) -> int:
+        """Return the confirmed landmark count without materializing point data."""
+
+        return len(self._confirmed)
+
     def descriptors(
         self, *, max_source_keyframe: Optional[int] = None
     ) -> Tuple[np.ndarray, np.ndarray]:

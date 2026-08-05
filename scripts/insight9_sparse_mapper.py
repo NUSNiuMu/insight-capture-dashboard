@@ -72,6 +72,10 @@ except ImportError as exc:  # pragma: no cover - exercised inside the ROS image
     raise SystemExit(f"ROS 2 Python dependencies are unavailable: {exc}") from exc
 
 
+POINTCLOUD_MIN_PUBLISH_INTERVAL_SEC = 1.0
+POINTCLOUD_REFRESH_INTERVAL_SEC = 10.0
+
+
 def stamp_to_ns(stamp: TimeMsg) -> int:
     return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
 
@@ -312,8 +316,10 @@ class Insight9SparseMapper(Node):
         self._worker = threading.Thread(
             target=self._worker_main, name="superglue-mapping", daemon=True
         )
-        self._last_processed_monotonic = 0.0
+        self._last_mapping_attempt_monotonic = 0.0
+        self._last_pointcloud_publish_monotonic = float("-inf")
         self._last_feature_publish_monotonic = 0.0
+        self._pointcloud_dirty = True
         self._feature_map_dirty = True
         self._last_keyframe_transform: Optional[np.ndarray] = None
         self._keyframe_id = 0
@@ -367,7 +373,10 @@ class Insight9SparseMapper(Node):
         )
         self.create_timer(0.5, self._publish_map)
         self.create_timer(
-            1.0 / max(args.path_publish_hz, 0.1), self._publish_path_and_tf
+            1.0 / max(args.path_publish_hz, 0.1), self._publish_path
+        )
+        self.create_timer(
+            1.0 / max(args.tf_publish_hz, 0.1), self._publish_latest_tf
         )
         self.create_timer(0.5, self._resolve_extrinsic)
         self._worker.start()
@@ -388,9 +397,13 @@ class Insight9SparseMapper(Node):
             self._reset_loop_closure()
             with self._map_lock:
                 self._landmarks.clear()
+                self._pointcloud_dirty = True
                 self._feature_map_dirty = True
+                self._last_pointcloud_publish_monotonic = float("-inf")
+                self._last_feature_publish_monotonic = 0.0
             self._last_keyframe_transform = None
             self._keyframe_id = 0
+            self._last_mapping_attempt_monotonic = 0.0
         self._latest_stats = {"state": "waiting_for_motion", "reset": True}
         self._publish_map()
         self.get_logger().info("Started a new web-requested sparse mapping session")
@@ -541,6 +554,7 @@ class Insight9SparseMapper(Node):
                 self._reset_loop_closure()
                 with self._map_lock:
                     self._landmarks.clear()
+                    self._pointcloud_dirty = True
                     self._feature_map_dirty = True
                 self._last_keyframe_transform = None
                 self._keyframe_id = 0
@@ -636,9 +650,14 @@ class Insight9SparseMapper(Node):
                 continue
             if pair is None:
                 break
-            elapsed = time.monotonic() - self._last_processed_monotonic
+            now = time.monotonic()
+            elapsed = now - self._last_mapping_attempt_monotonic
             if elapsed < period:
                 continue
+            # Limit attempts, not only successful keyframes. Missing poses and
+            # stationary cameras must not turn the 5 Hz mapper into a full-rate
+            # retry loop with a pose wait on every stereo pair.
+            self._last_mapping_attempt_monotonic = now
             calibration = self._calibration
             imu_to_left = self._imu_to_left
             imu_to_center = self._imu_to_center
@@ -767,9 +786,9 @@ class Insight9SparseMapper(Node):
                                 descriptors=matches.descriptors[source],
                                 scores=matches.scores[source],
                             )
+                            self._pointcloud_dirty = True
                             self._feature_map_dirty = True
                 self._last_keyframe_transform = odom_to_left
-                self._last_processed_monotonic = time.monotonic()
                 self._latest_stats = {
                     "state": "mapping",
                     "keyframe": self._keyframe_id,
@@ -1054,6 +1073,7 @@ class Insight9SparseMapper(Node):
             raise RuntimeError("cannot rebuild an empty keyframe map")
         with self._map_lock:
             self._landmarks = rebuilt
+            self._pointcloud_dirty = True
             self._feature_map_dirty = True
         return update
 
@@ -1071,7 +1091,18 @@ class Insight9SparseMapper(Node):
     def _publish_map(self) -> None:
         now = time.monotonic()
         with self._map_lock:
-            points = self._landmarks.points()
+            pointcloud_due = (
+                self._pointcloud_dirty
+                or now - self._last_pointcloud_publish_monotonic
+                >= POINTCLOUD_REFRESH_INTERVAL_SEC
+            ) and (
+                now - self._last_pointcloud_publish_monotonic
+                >= POINTCLOUD_MIN_PUBLISH_INTERVAL_SEC
+            )
+            points = self._landmarks.points() if pointcloud_due else None
+            point_count = self._landmarks.confirmed_count()
+            if pointcloud_due:
+                self._pointcloud_dirty = False
             feature_due = (
                 self._feature_map_dirty
                 or now - self._last_feature_publish_monotonic >= 10.0
@@ -1084,8 +1115,10 @@ class Insight9SparseMapper(Node):
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
         header.frame_id = self._map_frame
-        cloud = point_cloud2.create_cloud_xyz32(header, points.tolist())
-        self._pointcloud_publisher.publish(cloud)
+        if points is not None:
+            cloud = point_cloud2.create_cloud_xyz32(header, points.tolist())
+            self._pointcloud_publisher.publish(cloud)
+            self._last_pointcloud_publish_monotonic = now
         if feature_points is not None and descriptors is not None:
             self._feature_map_publisher.publish(
                 descriptor_cloud(header, feature_points, descriptors)
@@ -1093,13 +1126,13 @@ class Insight9SparseMapper(Node):
             self._last_feature_publish_monotonic = now
         status = String()
         status_payload = dict(self._latest_stats)
-        status_payload["map_point_count"] = int(len(points))
+        status_payload["map_point_count"] = point_count
         status_payload["center_extrinsic_ready"] = self._imu_to_center is not None
         status_payload["pose_frame"] = self._camera_frame
         status.data = json.dumps(status_payload, separators=(",", ":"))
         self._status_publisher.publish(status)
 
-    def _publish_path_and_tf(self) -> None:
+    def _publish_path(self) -> None:
         with self._path_lock:
             raw_poses = list(self._path)
         if not raw_poses:
@@ -1136,7 +1169,13 @@ class Insight9SparseMapper(Node):
         path.poses = poses
         self._path_publisher.publish(path)
 
-        latest_stamp_ns, latest_odom_to_center = raw_poses[-1]
+    def _publish_latest_tf(self) -> None:
+        with self._path_lock:
+            latest_sample = self._path[-1] if self._path else None
+        if latest_sample is None:
+            return
+        latest_stamp_ns, latest_odom_to_center = latest_sample
+        smooth_correction = self._map_to_odom()
         latest = matrix_to_pose_stamped(
             compose_transform(smooth_correction, latest_odom_to_center),
             latest_stamp_ns,
@@ -1193,7 +1232,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-landmarks", type=int, default=100_000)
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
-    parser.add_argument("--path-publish-hz", type=float, default=5.0)
+    parser.add_argument("--path-publish-hz", type=float, default=2.0)
+    parser.add_argument("--tf-publish-hz", type=float, default=5.0)
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument(
         "--loop-closure-enabled",

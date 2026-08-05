@@ -182,7 +182,8 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 - `/insight9_sparse_map/points`：经过多关键帧确认的稀疏地图。
 - `/insight9_sparse_map/features`：确认地标的三维位置和 256 维 SuperPoint 描述子。
 - `/insight9_sparse_map/pose`：30 Hz 最新全局位姿。
-- `/insight9_sparse_map/path`：5 Hz 发布、最多 200 点的调试全局轨迹。
+- `/insight9_sparse_map/path`：2 Hz 发布、最多 200 点的调试全局轨迹；最新 Pose
+  保持 30 Hz，TF 保持 5 Hz。
 - `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数、回环候选/拒绝
   诊断、图节点/边/回环边数量、pending 状态、图优化前后代价、最大位姿修正、
   地图重建耗时、观测内存和累计接受次数 JSON。

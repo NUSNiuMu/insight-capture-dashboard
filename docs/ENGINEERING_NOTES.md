@@ -126,6 +126,18 @@
   724.11 ms；原实现每次额外归一化地图的中位耗时为 13.74 ms。512×10000 场景的
   结果校验值完全相同，进程峰值 RSS 约从 164 MiB 降至 124 MiB。
 
+同日的第四轮后台 CPU 优化不改变 5 Hz 建图上限、30 Hz Pose 或 5 Hz TF：
+
+- mapper 在一次输入尝试开始时推进 5 Hz deadline；缺 Pose 或静止未形成关键帧时，
+  不再对每个双目帧重复等待和变换。
+- status 继续以 2 Hz 发布；完整稀疏点云只在地图变化时以最高 1 Hz 发布，稳定地图
+  每 10 秒刷新一次供晚加入的 volatile RViz subscriber 使用。
+- mapper 和两路 localizer 的 200 点调试 Path 降至 2 Hz，TF 使用独立的 5 Hz timer，
+  避免为保持 TF 新鲜度而重复重建和序列化整段轨迹。
+- jetson-nx 实机中，修改前 mapper 在 `pose_ready=false` 时单次采样为 60.83%；修改后
+  四次采样均值为 46.99%，期间实际完成了一个 228.1 ms 关键帧。ROS 实测稳定点云
+  0.095 Hz（约 10.5 秒间隔）、Path 2.00 Hz，独立 mapper TF 六秒窗口为 4.31 Hz。
+
 ## 训练数据导出
 
 - `/umi-dataset` 的标准归档格式是 HiFi-UMI 风格 LeRobot v3；Legacy UMI Zarr
