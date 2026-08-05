@@ -334,14 +334,18 @@ class Insight9SparseMapper(Node):
         # on its own executor lane so visualization poses never queue behind it.
         self._vio_callback_group = MutuallyExclusiveCallbackGroup()
 
-        self._pointcloud_publisher = self.create_publisher(
-            PointCloud2, "insight9_sparse_map/points", 1
+        self._pointcloud_publisher = (
+            self.create_publisher(PointCloud2, "insight9_sparse_map/points", 1)
+            if args.publish_debug_topics
+            else None
         )
         self._feature_map_publisher = self.create_publisher(
             PointCloud2, "insight9_sparse_map/features", 1
         )
-        self._path_publisher = self.create_publisher(
-            PathMsg, "insight9_sparse_map/path", 1
+        self._path_publisher = (
+            self.create_publisher(PathMsg, "insight9_sparse_map/path", 1)
+            if args.publish_debug_topics
+            else None
         )
         self._pose_publisher = self.create_publisher(
             PoseStamped, "insight9_sparse_map/pose", 1
@@ -372,9 +376,10 @@ class Insight9SparseMapper(Node):
             CameraInfo, args.right_info_topic, self._on_right_info, qos_profile_sensor_data
         )
         self.create_timer(0.5, self._publish_map)
-        self.create_timer(
-            1.0 / max(args.path_publish_hz, 0.1), self._publish_path
-        )
+        if args.publish_debug_topics:
+            self.create_timer(
+                1.0 / max(args.path_publish_hz, 0.1), self._publish_path
+            )
         self.create_timer(
             1.0 / max(args.tf_publish_hz, 0.1), self._publish_latest_tf
         )
@@ -384,6 +389,8 @@ class Insight9SparseMapper(Node):
             "official SuperPoint/SuperGlue validation mapper started; "
             "the licensed model image is internal-validation only"
         )
+        if not args.publish_debug_topics:
+            self.get_logger().info("debug PointCloud2 and Path topics disabled")
 
     def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
         with self._vio_rate_lock:
@@ -1092,12 +1099,16 @@ class Insight9SparseMapper(Node):
         now = time.monotonic()
         with self._map_lock:
             pointcloud_due = (
-                self._pointcloud_dirty
-                or now - self._last_pointcloud_publish_monotonic
-                >= POINTCLOUD_REFRESH_INTERVAL_SEC
-            ) and (
-                now - self._last_pointcloud_publish_monotonic
-                >= POINTCLOUD_MIN_PUBLISH_INTERVAL_SEC
+                self._pointcloud_publisher is not None
+                and (
+                    self._pointcloud_dirty
+                    or now - self._last_pointcloud_publish_monotonic
+                    >= POINTCLOUD_REFRESH_INTERVAL_SEC
+                )
+                and (
+                    now - self._last_pointcloud_publish_monotonic
+                    >= POINTCLOUD_MIN_PUBLISH_INTERVAL_SEC
+                )
             )
             points = self._landmarks.points() if pointcloud_due else None
             point_count = self._landmarks.confirmed_count()
@@ -1115,7 +1126,7 @@ class Insight9SparseMapper(Node):
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
         header.frame_id = self._map_frame
-        if points is not None:
+        if points is not None and self._pointcloud_publisher is not None:
             cloud = point_cloud2.create_cloud_xyz32(header, points.tolist())
             self._pointcloud_publisher.publish(cloud)
             self._last_pointcloud_publish_monotonic = now
@@ -1133,6 +1144,8 @@ class Insight9SparseMapper(Node):
         self._status_publisher.publish(status)
 
     def _publish_path(self) -> None:
+        if self._path_publisher is None:
+            return
         with self._path_lock:
             raw_poses = list(self._path)
         if not raw_poses:
@@ -1233,6 +1246,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
     parser.add_argument("--path-publish-hz", type=float, default=2.0)
+    parser.add_argument(
+        "--publish-debug-topics",
+        action="store_true",
+        help="publish RViz-only sparse points and historical Path topics",
+    )
     parser.add_argument("--tf-publish-hz", type=float, default=5.0)
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument(

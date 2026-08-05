@@ -137,6 +137,9 @@
 - jetson-nx 实机中，修改前 mapper 在 `pose_ready=false` 时单次采样为 60.83%；修改后
   四次采样均值为 46.99%，期间实际完成了一个 228.1 ms 关键帧。ROS 实测稳定点云
   0.095 Hz（约 10.5 秒间隔）、Path 2.00 Hz，独立 mapper TF 六秒窗口为 4.31 Hz。
+- RViz 使用的确认点云和三条完整 Path 后续统一由 `--publish-debug-topics` 控制，默认
+  不创建 publisher 或 Path timer；内部重定位所需 feature map、30 Hz Pose、5 Hz TF、
+  status 和网页基于 Pose 累积的轨迹不受影响。
 
 ## 训练数据导出
 

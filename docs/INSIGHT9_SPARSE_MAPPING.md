@@ -38,7 +38,8 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图；两路 Insight3 �
   -> 优化位姿下重融合历史双目观测
   -> T_map_odom * T_odom_imu * T_imu_left
   -> 世界坐标体素确认或重建
-  -> PointCloud2 + Path + TF
+  -> features PointCloud2 + Pose + TF
+  -> 可选的调试 points PointCloud2 + Path
 ```
 
 稳定地图点必须在三个不同关键帧落入同一个 4 cm 体素。候选点超过 12 个关键帧
@@ -91,10 +92,11 @@ VIO，避免模型在两套坐标源之间跳变。
 
 网页不渲染稀疏特征点云，只显示点数统计和三条全局轨迹。模型位姿使用独立的
 高频全局 Pose 话题，唯一的 dashboard WebSocket 以 30 Hz 发送最新位姿，
-前端用同一份 Pose 增量绘制轨迹。完整 ROS Path 限制为 200 点并以 5 Hz
-发布，仅供 RViz 和显式调试选择，避免反复序列化整条历史；网页和默认录制
-只使用 30 Hz Pose，也不再建立第二条 mapping WebSocket。建图状态通过
-500 ms 的轻量 REST 轮询显示。
+前端用同一份 Pose 增量绘制轨迹。完整 ROS Path 限制为 200 点，仅供 RViz 和
+显式调试选择；这些 Path 和稀疏点云默认不创建 publisher，显式传入
+`--publish-debug-topics` 后才以 2 Hz/按变化发布。网页和默认录制只使用 30 Hz
+Pose，也不再建立第二条 mapping WebSocket。建图状态通过 500 ms 的轻量 REST
+轮询显示。
 
 新录制默认保存三路全局 Pose；回放时三路全局 Pose 经 `/bagplay/...`
 remap 后继续驱动同一套模型和轨迹。旧 rosbag 如果没有这些全局话题，将不显示
@@ -177,18 +179,25 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 - ROS service `/insight9_sparse_map/reset`：清空 Insight9 会话地图。
 - ROS service `/insight_global/reset`：清空两个 Insight3 的校正和全局轨迹。
 
-主要输出：
+默认输出：
 
-- `/insight9_sparse_map/points`：经过多关键帧确认的稀疏地图。
 - `/insight9_sparse_map/features`：确认地标的三维位置和 256 维 SuperPoint 描述子。
 - `/insight9_sparse_map/pose`：30 Hz 最新全局位姿。
-- `/insight9_sparse_map/path`：2 Hz 发布、最多 200 点的调试全局轨迹；最新 Pose
-  保持 30 Hz，TF 保持 5 Hz。
 - `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数、回环候选/拒绝
   诊断、图节点/边/回环边数量、pending 状态、图优化前后代价、最大位姿修正、
   地图重建耗时、观测内存和累计接受次数 JSON。
 - TF `insight9_map -> insight9_mapping_camera_center`：位于左右目光心中点，
   姿态沿用左目；使用独立命名避免与设备 TF 多父冲突。
+
+以下 RViz 调试输出默认关闭；同时为 mapper 和 localizer 传入
+`--publish-debug-topics` 后才创建 publisher：
+
+- `/insight9_sparse_map/points`：经过多关键帧确认的稀疏地图。
+- `/insight9_sparse_map/path`：2 Hz、最多 200 点的 Insight9 调试轨迹。
+- `/insight_global/insight3_a/path`、`/insight_global/insight3_b/path`：2 Hz、
+  最多 200 点的 Insight3 调试轨迹。
+
+关闭调试输出不影响 30 Hz Pose、5 Hz TF、网页轨迹、状态或默认录制。
 
 查看状态：
 
@@ -247,8 +256,8 @@ Jetson Orin NX、544×640 双目红外输入、1024 个最大关键点、官方 
 - localizer 直接订阅两路 20 Hz 原始图时，Insight3 B 实时图像曾下降到
   13–14 Hz，六核 CPU 在录制期间达到 75–90%/核；改为复用 dashboard reader
   并以 2 Hz 中继定位图后，A/B 连续实测均恢复为 20 Hz。
-- 完整 200 点 Path 改为 5 Hz 调试输出；当前默认录制只保留 30 Hz Pose；三个
-  全局 Pose 合并进对应相机 recorder，录制 part 数由 9 降为 7。
+- 完整 200 点 Path 后续降为 2 Hz 并改成默认关闭的调试输出；当前默认录制只保留
+  30 Hz Pose；三个全局 Pose 合并进对应相机 recorder，录制 part 数由 9 降为 7。
 - 在 3D/WebRTC 同时运行的 30 秒压力录制中，三路图像 live audit 为
   602/602/904 帧，header missing 和 writer drop 均为 0；为 400 Hz IMU
   配置 1000 深度 rosbag QoS 后，三路 IMU 与所有受检话题也均为 0% 丢失。

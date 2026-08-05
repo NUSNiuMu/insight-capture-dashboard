@@ -289,12 +289,16 @@ class Insight3GlobalLocalizer(Node):
             )
             for name in CAMERAS
         }
-        self._path_publishers = {
-            name: self.create_publisher(
-                PathMsg, f"insight_global/{name}/path", 1
-            )
-            for name in CAMERAS
-        }
+        self._path_publishers = (
+            {
+                name: self.create_publisher(
+                    PathMsg, f"insight_global/{name}/path", 1
+                )
+                for name in CAMERAS
+            }
+            if args.publish_debug_topics
+            else {}
+        )
         self._pose_publishers = {
             name: self.create_publisher(
                 PoseStamped, f"insight_global/{name}/pose", 1
@@ -356,9 +360,10 @@ class Insight3GlobalLocalizer(Node):
         )
         self._worker.start()
         self.create_timer(0.5, self._resolve_extrinsics)
-        self.create_timer(
-            1.0 / max(args.path_publish_hz, 0.1), self._publish_paths
-        )
+        if args.publish_debug_topics:
+            self.create_timer(
+                1.0 / max(args.path_publish_hz, 0.1), self._publish_paths
+            )
         self.create_timer(
             1.0 / max(args.tf_publish_hz, 0.1), self._publish_tfs
         )
@@ -367,6 +372,8 @@ class Insight3GlobalLocalizer(Node):
             "SuperPoint global localizer started for insight3_a and insight3_b; "
             f"masking the bottom {self._gripper_mask_height_ratio:.1%} of both images"
         )
+        if not args.publish_debug_topics:
+            self.get_logger().info("debug Path topics disabled")
 
     def _publish_tcp_static_transforms(self) -> None:
         stamp = self.get_clock().now().to_msg()
@@ -910,6 +917,8 @@ class Insight3GlobalLocalizer(Node):
             state.path = path
 
     def _publish_paths(self) -> None:
+        if not self._path_publishers:
+            return
         for name, state in self._cameras.items():
             with state.lock:
                 path_dirty = state.path_dirty
@@ -1021,6 +1030,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
     parser.add_argument("--path-publish-hz", type=float, default=2.0)
+    parser.add_argument(
+        "--publish-debug-topics",
+        action="store_true",
+        help="publish RViz-only historical Path topics",
+    )
     parser.add_argument("--tf-publish-hz", type=float, default=5.0)
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument("--ekf-process-translation-std", type=float, default=0.02)
