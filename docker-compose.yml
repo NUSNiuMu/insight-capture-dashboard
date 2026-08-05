@@ -139,7 +139,7 @@ services:
       - --path-publish-hz
       - "5"
       - --pose-publish-hz
-      - "50"
+      - "30"
     depends_on:
       superglue-inference:
         condition: service_healthy
@@ -168,6 +168,9 @@ services:
     ipc: host
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
+      # Small descriptor matrices are faster and use far less CPU without
+      # OpenBLAS oversubscribing all six Jetson cores.
+      - OPENBLAS_NUM_THREADS=1
     volumes:
       - .:/workspaces/insight_capture
       - superglue-ipc:/run/superglue
@@ -182,7 +185,7 @@ services:
       - --path-publish-hz
       - "5"
       - --pose-publish-hz
-      - "50"
+      - "30"
       - --ekf-correction-time-constant-sec
       - "1.0"
     depends_on:

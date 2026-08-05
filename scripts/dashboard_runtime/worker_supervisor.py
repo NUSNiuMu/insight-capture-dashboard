@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     rclpy = None
 
 from dashboard_media.jpeg import HwJpegCodec
+from dashboard_media.rate import select_frame
 
 from .models import CameraFrame
 
@@ -27,9 +28,15 @@ class WorkerSupervisor:
         self.owner = owner
 
     def _queue_webrtc_frame(
-        self, camera_name: str, payload: tuple[str, int, int, bytes]
+        self,
+        camera_name: str,
+        payload: tuple[str, int, int, bytes],
+        *,
+        rate_checked: bool = False,
     ) -> None:
         """Publish the newest frame and count overwrites before IPC delivery."""
+        if not rate_checked and not self._webrtc_frame_due(camera_name):
+            return
         with self.owner._webrtc_metrics_lock:
             metrics = self.owner._webrtc_main_metrics[camera_name]
             metrics["queued"] += 1
@@ -38,12 +45,29 @@ class WorkerSupervisor:
             self.owner._pending_webrtc_frames[camera_name] = payload
         self.owner._webrtc_frame_event.set()
 
+    def _webrtc_frame_due(self, camera_name: str) -> bool:
+        """Select a stable preview cadence before copying a frame into IPC."""
+        now = time.monotonic()
+        with self.owner._webrtc_metrics_lock:
+            target_fps = int(self.owner._webrtc_session_fps.get(camera_name, 0))
+            if target_fps <= 0:
+                return False
+            next_at = self.owner._next_webrtc_frame_at.get(camera_name, 0.0)
+            selected, next_at = select_frame(now, next_at, target_fps)
+            if not selected:
+                self.owner._webrtc_main_metrics[camera_name]["throttled"] += 1
+                return False
+            self.owner._next_webrtc_frame_at[camera_name] = next_at
+            return True
+
     def _maybe_queue_webrtc_frame(self, camera_name: str, topic_type: str, msg, frame) -> None:
         """Queue a frame only when the camera has active WebRTC viewers."""
         if not self.owner._webrtc_has_sessions.get(camera_name):
             return
         # Wait for the matching composite instead of interleaving raw frames.
         if frame is not None and frame.hand_overlay_pending:
+            return
+        if not self._webrtc_frame_due(camera_name):
             return
         if topic_type == "compressed":
             if frame is None or frame.width <= 0 or frame.height <= 0:
@@ -55,7 +79,9 @@ class WorkerSupervisor:
                 return
             fmt, width, height = layout
             data = bytes(msg.data)
-        self._queue_webrtc_frame(camera_name, (fmt, width, height, data))
+        self._queue_webrtc_frame(
+            camera_name, (fmt, width, height, data), rate_checked=True
+        )
 
     def _start_webrtc_worker(self) -> "subprocess.Popen":
         script_path = Path(__file__).resolve().parents[1] / "webrtc_worker.py"
@@ -226,8 +252,11 @@ class WorkerSupervisor:
                     while conn.poll(0):
                         message = conn.recv()
                         if isinstance(message, tuple) and len(message) == 3 and message[0] == "session_state":
-                            _, camera_name, has_sessions = message
-                            self.owner._webrtc_has_sessions[camera_name] = bool(has_sessions)
+                            _, camera_name, target_fps = message
+                            target_fps = max(0, int(target_fps))
+                            self.owner._webrtc_session_fps[camera_name] = target_fps
+                            self.owner._webrtc_has_sessions[camera_name] = target_fps > 0
+                            self.owner._next_webrtc_frame_at[camera_name] = 0.0
                     if self.owner._webrtc_frame_event.wait(timeout=0.05):
                         self.owner._webrtc_frame_event.clear()
                         for camera_name in list(self.owner._pending_webrtc_frames.keys()):
@@ -277,6 +306,7 @@ class WorkerSupervisor:
                     prior = previous_main.get(camera_name, {})
                     for total_key, rate_key in (
                         ("queued", "queued_fps"),
+                        ("throttled", "throttled_fps"),
                         ("replaced", "replaced_fps"),
                         ("ipc_sent", "ipc_fps"),
                     ):
@@ -286,7 +316,7 @@ class WorkerSupervisor:
                         metrics[rate_key] = max(0, delta) / elapsed
                     previous_main[camera_name] = {
                         key: int(metrics.get(key, 0))
-                        for key in ("queued", "replaced", "ipc_sent")
+                        for key in ("queued", "throttled", "replaced", "ipc_sent")
                     }
                 enriched_worker_stats = {}
                 for camera_name, metrics in worker_stats.items():

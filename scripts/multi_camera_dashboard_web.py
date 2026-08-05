@@ -222,6 +222,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._webrtc_ipc_path = os.path.join(tempfile.gettempdir(), f"insight_webrtc_{os.getpid()}.sock")
         self._webrtc_authkey = secrets.token_bytes(32)
         self._webrtc_has_sessions: Dict[str, bool] = {}
+        self._webrtc_session_fps: Dict[str, int] = {}
+        self._next_webrtc_frame_at: Dict[str, float] = {}
         self._pending_webrtc_frames: Dict[str, Tuple[str, int, int, bytes]] = {}
         self._webrtc_frame_event = threading.Event()
         self._webrtc_available_cached = False
@@ -229,9 +231,11 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._webrtc_main_metrics: Dict[str, Dict[str, object]] = {
             camera.name: {
                 "queued": 0,
+                "throttled": 0,
                 "replaced": 0,
                 "ipc_sent": 0,
                 "queued_fps": 0.0,
+                "throttled_fps": 0.0,
                 "replaced_fps": 0.0,
                 "ipc_fps": 0.0,
             }

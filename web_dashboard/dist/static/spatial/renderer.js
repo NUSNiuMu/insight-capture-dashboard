@@ -26,6 +26,8 @@ const HAND_RIG_EDGES = [
 const HAND_RIG_SCALE = 0.09;
 const HAND_RIG_COLOR = "#ff0000";
 const HAND_RIG_RADIUS = 0.004;
+const POSE_SMOOTHING_TIME_MS = 40;
+const TRAIL_RENDER_INTERVAL_MS = 100;
 const DEFAULT_HARDWARE_SCALING_LEVEL = 1.5;
 const CAPTURE_HARDWARE_SCALING_LEVEL = 2.0;
 const DEFAULT_TRAIL_ENABLED = {
@@ -48,6 +50,7 @@ if (canvas) {
   }
 }
 const poseNodes = new Map();
+const poseTargets = new Map();
 const modelPromises = new Map();
 const modelWarnings = new Set();
 const trailStates = new Map();
@@ -63,23 +66,75 @@ let stickFigureMode = false;
 let avatarLoadStage = 0;
 let trajectoriesEnabled = false;
 let capturePerformanceMode = false;
-let configuredDisplayFps = 20;
-let sceneFrameIntervalMs = 1000 / 20;
+let configuredDisplayFps = 30;
+let sceneFrameIntervalMs = 1000 / 30;
 let traceCapacity = 300;
+let sceneRenderTimer = null;
+const sceneFrameTimes = [];
+const sceneWorkSamples = [];
+const legendPoseLabels = new Map();
+let lastTrailRenderAt = 0;
 
 if (engine && scene) {
-  let sceneRenderBudgetMs = 0;
   engine.setHardwareScalingLevel(DEFAULT_HARDWARE_SCALING_LEVEL);
-  engine.runRenderLoop(() => {
-    sceneRenderBudgetMs += engine.getDeltaTime();
-    if (sceneRenderBudgetMs < sceneFrameIntervalMs) return;
-    sceneRenderBudgetMs %= sceneFrameIntervalMs;
+  let nextSceneFrameAt = performance.now();
+  let lastSceneRenderAt = nextSceneFrameAt;
+  const renderSceneFrame = () => {
+    const now = performance.now();
+    if (now < nextSceneFrameAt) {
+      sceneRenderTimer = window.setTimeout(
+        renderSceneFrame,
+        Math.max(0, nextSceneFrameAt - now)
+      );
+      return;
+    }
+    if (now - nextSceneFrameAt >= sceneFrameIntervalMs) {
+      nextSceneFrameAt = now;
+    }
+    nextSceneFrameAt += sceneFrameIntervalMs;
+    const workStartedAt = performance.now();
     flushPendingPoseUpdate();
+    interpolatePoseNodes(now - lastSceneRenderAt);
+    lastSceneRenderAt = now;
     flushPendingTrailUpdates();
     updateTrails();
+    engine.beginFrame();
     scene.render();
-  });
+    engine.endFrame();
+    recordSceneFrame(workStartedAt);
+    sceneRenderTimer = window.setTimeout(
+      renderSceneFrame,
+      Math.max(0, nextSceneFrameAt - performance.now())
+    );
+  };
+  sceneRenderTimer = window.setTimeout(renderSceneFrame, sceneFrameIntervalMs);
   window.addEventListener("resize", () => engine.resize());
+}
+
+function recordSceneFrame(workStartedAt) {
+  const now = performance.now();
+  sceneFrameTimes.push(now);
+  sceneWorkSamples.push({ at: now, durationMs: now - workStartedAt });
+  const minTime = now - 1500;
+  while (sceneFrameTimes.length > 0 && sceneFrameTimes[0] < minTime) {
+    sceneFrameTimes.shift();
+  }
+  while (sceneWorkSamples.length > 0 && sceneWorkSamples[0].at < minTime) {
+    sceneWorkSamples.shift();
+  }
+  const durationMs = Math.max(now - sceneFrameTimes[0], 1);
+  window.__insightSceneFps = sceneFrameTimes.length > 1
+    ? ((sceneFrameTimes.length - 1) * 1000) / durationMs
+    : 0;
+  let maxGapMs = 0;
+  for (let index = 1; index < sceneFrameTimes.length; index += 1) {
+    maxGapMs = Math.max(maxGapMs, sceneFrameTimes[index] - sceneFrameTimes[index - 1]);
+  }
+  window.__insightSceneMaxGapMs = maxGapMs;
+  window.__insightSceneWorkMaxMs = Math.max(
+    0,
+    ...sceneWorkSamples.map((sample) => sample.durationMs)
+  );
 }
 
 export function setKeepTrajectory(enabled) {
@@ -132,7 +187,10 @@ export function clearRenderedTrajectories() {
 }
 
 export function stopSpatialRenderer() {
-  if (engine) engine.stopRenderLoop();
+  if (sceneRenderTimer !== null) {
+    window.clearTimeout(sceneRenderTimer);
+    sceneRenderTimer = null;
+  }
 }
 
 function createScene(engineRef, canvasRef) {
@@ -240,6 +298,7 @@ function applyPoseUpdate(payload) {
   const needsRebuild = !legend || legend.dataset.roleKey !== poseRoleKey;
 
   if (needsRebuild && legend) {
+    legendPoseLabels.clear();
     const legendRows = [];
     for (const pose of poses) {
       const style = ROLE_STYLE[pose.role] || { label: pose.role, color: "#cccccc" };
@@ -270,9 +329,20 @@ function applyPoseUpdate(payload) {
     const quaternion = Array.isArray(pose.quaternion_xyzw) ? pose.quaternion_xyzw : [0, 0, 0, 1];
     const scenePosition = mapDashboardPositionToScene(position);
     const sceneQuaternion = mapDashboardQuaternionToScene(quaternion);
-    node.setEnabled(Boolean(pose.visible));
-    node.position.copyFromFloats(scenePosition.x, scenePosition.y, scenePosition.z);
-    node.rotationQuaternion.copyFromFloats(sceneQuaternion.x, sceneQuaternion.y, sceneQuaternion.z, sceneQuaternion.w);
+    const visible = Boolean(pose.visible);
+    const existingTarget = poseTargets.get(pose.name);
+    const shouldSnap = !existingTarget || (!existingTarget.visible && visible)
+      || BABYLON.Vector3.DistanceSquared(node.position, scenePosition) > 0.25;
+    if (shouldSnap) {
+      node.position.copyFrom(scenePosition);
+      node.rotationQuaternion.copyFrom(sceneQuaternion);
+    }
+    poseTargets.set(pose.name, {
+      position: scenePosition,
+      quaternion: sceneQuaternion,
+      visible,
+    });
+    node.setEnabled(visible);
     if (trajectoriesEnabled) {
       pendingTrailPoses.set(pose.role, {
         pose,
@@ -288,9 +358,28 @@ function applyPoseUpdate(payload) {
     }
     updateHandRig(pose, node);
     if (legend) {
-      const row = legend.querySelector(`[data-legend-role="${CSS.escape(pose.role)}"] .legend-meta`);
-      if (row) row.textContent = pose.visible ? pose.name : `${pose.name} hidden`;
+      const label = pose.visible ? pose.name : `${pose.name} hidden`;
+      if (legendPoseLabels.get(pose.role) !== label) {
+        const row = legend.querySelector(`[data-legend-role="${CSS.escape(pose.role)}"] .legend-meta`);
+        if (row) row.textContent = label;
+        legendPoseLabels.set(pose.role, label);
+      }
     }
+  }
+}
+
+function interpolatePoseNodes(elapsedMs) {
+  const alpha = 1 - Math.exp(-Math.min(Math.max(elapsedMs, 0), 100) / POSE_SMOOTHING_TIME_MS);
+  for (const [name, target] of poseTargets) {
+    const node = poseNodes.get(name);
+    if (!node || !target.visible) continue;
+    BABYLON.Vector3.LerpToRef(node.position, target.position, alpha, node.position);
+    BABYLON.Quaternion.SlerpToRef(
+      node.rotationQuaternion,
+      target.quaternion,
+      alpha,
+      node.rotationQuaternion
+    );
   }
 }
 
@@ -741,6 +830,11 @@ function flushPendingTrailUpdates() {
   if (pendingTrailPoses.size === 0) {
     return;
   }
+  const now = performance.now();
+  if (now - lastTrailRenderAt < TRAIL_RENDER_INTERVAL_MS) {
+    return;
+  }
+  lastTrailRenderAt = now;
   const updates = Array.from(pendingTrailPoses.values());
   pendingTrailPoses.clear();
   updates.forEach(({ pose, tracePoints }) => updateTrailFromPose(pose, tracePoints));

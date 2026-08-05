@@ -49,6 +49,9 @@ class CameraRoutes:
             "receivedFps",
             "decodedFps",
             "presentedFps",
+            "sceneFps",
+            "sceneMaxGapMs",
+            "sceneWorkMaxMs",
             "jitterMs",
         )
         stats = {}

@@ -42,7 +42,7 @@ class IpcServer:
         self._lock = threading.Lock()
         self._conn = None
         self._streams: Optional[WebRtcStreams] = None
-        self._session_state: Dict[str, bool] = {name: False for name in camera_names}
+        self._session_state: Dict[str, int] = {name: 0 for name in camera_names}
 
     def start(self, streams: Optional[WebRtcStreams]) -> None:
         self._streams = streams
@@ -52,14 +52,14 @@ class IpcServer:
         with self._lock:
             return self._conn is not None
 
-    def on_session_state_change(self, camera_name: str, has_sessions: bool) -> None:
-        self._session_state[camera_name] = has_sessions
+    def on_session_state_change(self, camera_name: str, target_fps: int) -> None:
+        self._session_state[camera_name] = int(target_fps)
         with self._lock:
             conn = self._conn
             if conn is None:
                 return
             try:
-                conn.send(("session_state", camera_name, has_sessions))
+                conn.send(("session_state", camera_name, int(target_fps)))
             except OSError:
                 pass  # accept loop will notice on its next recv() and clean up
 
@@ -78,8 +78,8 @@ class IpcServer:
                 self._conn = conn
             try:
                 # Resend all session state after every connection.
-                for name, has_sessions in list(self._session_state.items()):
-                    conn.send(("session_state", name, has_sessions))
+                for name, target_fps in list(self._session_state.items()):
+                    conn.send(("session_state", name, target_fps))
                 while True:
                     message = conn.recv()
                     if not (isinstance(message, tuple) and len(message) == 5):

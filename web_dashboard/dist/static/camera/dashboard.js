@@ -8,7 +8,10 @@ const WEBRTC_RETRY_DELAY_MS = 5000;
 const WEBRTC_MAX_ATTEMPTS = 5;
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 8000;
 const WEBRTC_STATS_INTERVAL_MS = 1000;
-const NORMAL_PREVIEW_FPS = 30;
+// Firefox presents slightly fewer frames than it receives while compositing
+// the full-resolution camera wall with Babylon. Five frames of transport
+// headroom keep the visible cadence at 20 fps without changing resolution.
+const NORMAL_PREVIEW_FPS = 25;
 const CAPTURE_PREVIEW_FPS = 15;
 const cameraPanels = new Map();
 const cameraPollState = new Map();
@@ -522,6 +525,9 @@ async function collectWebRtcStats(cameraName, state, pc) {
       receivedFps,
       decodedFps,
       jitterMs: Number(inbound.jitter || 0) * 1000,
+      sceneFps: Number(window.__insightSceneFps || 0),
+      sceneMaxGapMs: Number(window.__insightSceneMaxGapMs || 0),
+      sceneWorkMaxMs: Number(window.__insightSceneWorkMaxMs || 0),
       presentedFps: computeDisplayedFps(
         (cameraPollState.get(cameraName) || {}).displayFrameTimes
       )
@@ -566,7 +572,6 @@ function recordDisplayedFrame(cameraName) {
   }
   pollState.displayFrameTimes = frameTimes;
   cameraPollState.set(cameraName, pollState);
-  renderCameraFps(cameraName);
 }
 
 function computeDisplayedFps(frameTimes) {

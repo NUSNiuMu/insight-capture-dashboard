@@ -4,6 +4,8 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
+from .rate import select_frame
+
 try:
     import gi
 
@@ -149,7 +151,7 @@ class WebRtcSession:
         self._caps_key: Optional[Tuple] = None
         self._closed = False
         self._target_fps = max(5, min(30, int(target_fps)))
-        self._last_frame_at = 0.0
+        self._next_frame_at = 0.0
         self._stats_lock = threading.Lock()
         self._stats = {
             "session_received": 0,
@@ -165,18 +167,14 @@ class WebRtcSession:
     def push_frame(self, data: bytes, fmt: str, width: int, height: int) -> None:
         with self._stats_lock:
             self._stats["session_received"] += 1
-        # A source nominally running at 30 fps often arrives slightly faster
-        # (for example 30.02 fps). Applying the same 1/30 s wall-clock gate
-        # aliases that cadence down to roughly 15 fps. At the maximum preview
-        # rate, forward every latest-frame delivery and let the leaky appsrc
-        # absorb scheduling jitter; lower capture-mode targets remain capped.
-        if self._target_fps < 30:
-            now = time.monotonic()
-            if now - self._last_frame_at < 1.0 / self._target_fps:
-                with self._stats_lock:
-                    self._stats["throttled"] += 1
-                return
-            self._last_frame_at = now
+        now = time.monotonic()
+        selected, self._next_frame_at = select_frame(
+            now, self._next_frame_at, self._target_fps
+        )
+        if not selected:
+            with self._stats_lock:
+                self._stats["throttled"] += 1
+            return
         caps_key = (fmt, width, height)
         with self._lock:
             if self._closed:
@@ -227,12 +225,13 @@ class WebRtcSession:
             )
         # insert-sps-pps + config-interval=-1: parameter sets ride along with
         # every IDR so a viewer joining mid-stream can start decoding at the
-        # next keyframe. idrinterval=30 bounds that wait to ~1s.
+        # next keyframe. A one-second IDR interval bounds that wait.
         description = (
             f"{source}"
             f"nvvidconv ! video/x-raw(memory:NVMM),format=NV12,width={out_width},height={out_height} ! "
-            f"nvv4l2h264enc bitrate={bitrate} insert-sps-pps=true idrinterval=30 "
-            f"iframeinterval=30 maxperf-enable=true ! "
+            f"nvv4l2h264enc bitrate={bitrate} insert-sps-pps=true "
+            f"idrinterval={self._target_fps} iframeinterval={self._target_fps} "
+            f"maxperf-enable=true ! "
             f"h264parse name=parser config-interval=-1 ! "
             f"rtph264pay pt=96 mtu=1200 aggregate-mode=zero-latency config-interval=-1 ! "
             f"application/x-rtp,media=video,encoding-name=H264,payload=96 ! "
@@ -269,6 +268,10 @@ class WebRtcSession:
             stats = dict(self._stats)
         stats["target_fps"] = self._target_fps
         return stats
+
+    @property
+    def target_fps(self) -> int:
+        return self._target_fps
 
     def _on_negotiation_needed(self, webrtc) -> None:
         try:
@@ -379,7 +382,7 @@ class WebRtcStreams:
     def __init__(
         self,
         log: Callable[[str], None],
-        on_session_state_change: Optional[Callable[[str, bool], None]] = None,
+        on_session_state_change: Optional[Callable[[str, int], None]] = None,
     ) -> None:
         self._log = log
         self._on_session_state_change = on_session_state_change
@@ -424,10 +427,8 @@ class WebRtcStreams:
         )
         with self._lock:
             sessions = self._sessions.setdefault(camera_name, [])
-            was_empty = not sessions
             sessions.append(session)
-        if was_empty and self._on_session_state_change:
-            self._on_session_state_change(camera_name, True)
+        self._notify_session_rate(camera_name)
         return session
 
     def close_session(self, session: WebRtcSession) -> None:
@@ -435,10 +436,18 @@ class WebRtcStreams:
             sessions = self._sessions.get(session.camera_name, [])
             if session in sessions:
                 sessions.remove(session)
-            now_empty = not sessions
         session.close()
-        if now_empty and self._on_session_state_change:
-            self._on_session_state_change(session.camera_name, False)
+        self._notify_session_rate(session.camera_name)
+
+    def _notify_session_rate(self, camera_name: str) -> None:
+        if not self._on_session_state_change:
+            return
+        with self._lock:
+            target_fps = max(
+                (session.target_fps for session in self._sessions.get(camera_name, ())),
+                default=0,
+            )
+        self._on_session_state_change(camera_name, target_fps)
 
     def push_resolved_frame(self, camera_name: str, fmt: str, width: int, height: int, data: bytes) -> None:
         """Fan a resolved frame out to all sessions for its camera."""
@@ -470,7 +479,9 @@ class WebRtcStreams:
                 "worker_received": received.get(camera_name, 0),
                 "sessions": len(session_stats),
                 "target_fps": (
-                    session_stats[0]["target_fps"] if session_stats else 0
+                    max(stats["target_fps"] for stats in session_stats)
+                    if session_stats
+                    else 0
                 ),
             }
             for key in (

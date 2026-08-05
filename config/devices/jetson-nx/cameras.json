@@ -12,11 +12,11 @@
   ],
   "dashboard": {
     "trajectory": {
-      "display_fps_limit": 20,
+      "display_fps_limit": 30,
       "image_qos_reliability": "reliable",
       "pose_timeout_sec": 2.0,
       "camera_stale_timeout_sec": 2.0,
-      "pose_publish_hz": 50.0
+      "pose_publish_hz": 30.0
     }
   },
   "cameras": [

@@ -64,9 +64,31 @@
 ## 浏览器渲染
 
 - pose payload 包含完整轨迹历史，序列化、网络和浏览器更新成本都随轨迹长度增长。
-- 3D 场景限制为 20 FPS，并使用 Babylon.js hardware scaling，避免重复渲染相同 pose 时与多路视频合成争用 CPU/GPU。
+- Jetson kiosk 的 3D 场景以独立的 wall-clock timer 固定在 30 Hz。实测中
+  `requestAnimationFrame` 即使单帧场景工作不足 10 ms，仍会在 Firefox 合成繁忙时
+  出现 67–119 ms 的 callback 间隔；固定 timer 在相同负载下维持约 30 Hz。
+- 3D 每帧只插值最新 pose；轨迹 mesh 最多 10 Hz 更新，避免轨迹几何重建与模型移动
+  抢占同一帧。Babylon hardware scaling 和模型分辨率保持原值，不用降画质换帧率。
+- mapper 的大 point/descriptor cloud 发布曾在默认 ROS callback group 中阻塞 VIO
+  relay，造成最长约 355 ms 的 pose 停顿。VIO 使用独立 callback group 和双线程
+  executor 后，实测最长间隔降至约 69 ms；不得重新合并为单线程 executor。
+- 三路 WebRTC 会话请求 25 FPS，为 Firefox 全分辨率合成留出传输余量，使可见帧率
+  中位数不低于 20 Hz。主进程在图像转换和 IPC copy 之前按会话 deadline 丢弃无用
+  预览帧；录制 writer 与原始图像路径不受影响。
+- mapper、localizer 与 dashboard 的 pose 频率统一为 30 Hz。向 30 Hz 页面发送 50 Hz
+  pose 只增加 DDS/序列化和 callback 工作，不改善可见运动。
 - 模型首次加载必须并发进行；串行等待一个较大的 GLB 会阻塞其他相机的姿态和轨迹更新。
 - `app.js` 曾被所有页面共同加载，任何顶层异常都会影响全站。重构后每个页面使用独立入口，共享能力通过显式模块导入。
+
+2026-08-05 的 jetson-nx 实机验收（未改变模型/hardware scaling）：
+
+- 30 秒三路视频累计解码 24.0–25.1 FPS，新增 WebRTC 丢包和解码丢帧均为零；
+  `requestVideoFrameCallback` 可见帧率中位数为 21.38、21.49、20.00 FPS。
+- 3D 帧率中位数 30.02–30.04 FPS，区间 29.75–30.38 FPS，最大帧间隔 53 ms。
+- 整机 CPU busy 从约 85–88% 降至 73.3%；OpenBLAS 单线程使 localizer 从
+  83–102% 降至约 46%，提前限流使 WebRTC worker 从 43–50% 降至约 32%。
+- GPU 仍因 Babylon/WebRender 合成与 SuperGlue TensorRT 推理在 12–89% 间波动；
+  暂停 SuperGlue 的 A/B 测试没有改善 3D 卡顿，因此不能用停定位换显示流畅度。
 
 ## 验证基线
 

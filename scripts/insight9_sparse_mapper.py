@@ -56,7 +56,9 @@ try:
     from builtin_interfaces.msg import Time as TimeMsg
     from geometry_msgs.msg import PoseStamped, TransformStamped
     from nav_msgs.msg import Path as PathMsg
+    from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
     from rclpy.duration import Duration
+    from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
     from rclpy.qos import qos_profile_sensor_data
     from rclpy.time import Time
@@ -316,6 +318,10 @@ class Insight9SparseMapper(Node):
         self._last_path_append_ns = 0
         self._last_pose_publish_ns = 0
         self._latest_stats = {"state": "waiting_for_inputs"}
+        # Point/descriptor cloud serialization can occupy the default callback
+        # group for hundreds of milliseconds. Keep the lightweight VIO relay
+        # on its own executor lane so visualization poses never queue behind it.
+        self._vio_callback_group = MutuallyExclusiveCallbackGroup()
 
         self._pointcloud_publisher = self.create_publisher(
             PointCloud2, "insight9_sparse_map/points", 1
@@ -336,7 +342,11 @@ class Insight9SparseMapper(Node):
             Empty, "insight9_sparse_map/reset", self._on_reset
         )
         self.create_subscription(
-            PoseStamped, args.vio_topic, self._on_vio, qos_profile_sensor_data
+            PoseStamped,
+            args.vio_topic,
+            self._on_vio,
+            qos_profile_sensor_data,
+            callback_group=self._vio_callback_group,
         )
         self.create_subscription(
             Image, args.left_image_topic, self._on_left, qos_profile_sensor_data
@@ -1202,12 +1212,17 @@ def main() -> int:
     args, ros_args = build_parser().parse_known_args()
     rclpy.init(args=ros_args)
     node: Optional[Insight9SparseMapper] = None
+    executor: Optional[MultiThreadedExecutor] = None
     try:
         node = Insight9SparseMapper(args)
-        rclpy.spin(node)
+        executor = MultiThreadedExecutor(num_threads=2)
+        executor.add_node(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
+        if executor is not None:
+            executor.shutdown()
         if node is not None:
             node.destroy_node()
         rclpy.try_shutdown()
