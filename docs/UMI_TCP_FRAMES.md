@@ -42,7 +42,7 @@ insight3_b_global_camera_center -> left_tcp
 
 其他设备 profile 仍需单独实测，不复用 Jetson NX 或 UMI GoPro 的机械尺寸。
 
-## 数据约定
+## 数据集约定
 
 - 位置单位为米，四元数顺序为 `xyzw`。
 - `tcp_pose` 表示 `T_map_tcp`，而不是 `T_tcp_map`。
@@ -50,3 +50,12 @@ insight3_b_global_camera_center -> left_tcp
   不依赖设备名的字母后缀。
 - 设备 profile 在 `config/devices/<profile>/cameras.json` 中用 `tcp_frame_id`
   显式记录相机与 TCP frame 的对应关系。
+- LeRobot 状态固定为 20 维 `[right_10d, left_10d]`；每臂依次为位置 `xyz`、
+  连续旋转表示 `rot6d` 和夹爪宽度 `width`，长度单位均为米。
+- 单臂录制仍保持固定 20 维布局；缺失一臂写零，并由有效性掩码区分“缺失”与
+  真实零值。action 保存下一时刻绝对状态，而不是在归档层预先转成相对动作。
+
+## 当前标定状态
+
+Jetson NX 的两路 TCP 平移已配置；其中 `insight3_b` 的夹爪宽度标定仍待完成。
+双臂数据导出会在关键宽度标定缺失时安全失败，不应通过默认常数绕过检查。

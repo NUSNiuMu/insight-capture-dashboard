@@ -23,11 +23,10 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
   **自动重启一次全部相机**（相机比主机先启动完成会处于错误的网络状态，
   重启一次让它们在主机链路就绪后重新连接，属预期行为）——从上电到画面
   就绪约 2-3 分钟；
-- **运行中不支持热插拔**：这是开机自愈之外的另一种情况——后端/前端已经
-  启动、系统正常运行之后，如果中途把某台相机的网线拔掉再插回去，相机
-  重新连上并不会让画面自动恢复——必须等相机重新连上后，手动重启一次后端
-  （`docker restart insight-dashboard` 或重跑 `./scripts/run_dashboard.sh`）
-  画面才会回来，详见 §6.2；
+- **运行中掉线可自愈，但录制优先**：非录制状态下，某路相机连续 15 秒无帧且
+  USB 网口仍在线时，后端 watchdog 会退出并由 Docker 自动重建 DDS participant；
+  拔插后通常等待几十秒即可恢复。录制期间不会为了单路掉线重启后端，以免中断
+  其他相机；应先停止当前录制，再按 §6.2 手动恢复；
 - 所有数据（录制、配置、结果）保存在设备的 `rosbags/`、`config/`、`outputs/`
   目录，软件升级不会触碰它们。
 
@@ -73,7 +72,8 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 |---|---|
 | `/` 或 `/3d` | 三路相机实时画面 + 3D 全局建图/重定位轨迹（同一页，2026-07 起合并） |
 | `/recording` | rosbag 录制：topic 发现、勾选、开始/停止 |
-| `/bags` | 本地录制列表：大小/时长/完整性/评分/优化状态，可删除 |
+| `/bags` | 本地录制列表：大小/时长/消息与 topic 数、完整性/评分状态，可删除 |
+| `/umi-dataset` | 标准 LeRobot v3 或 Legacy UMI Zarr 训练数据导出 |
 | `/scoring` | 轨迹评分 + 录制完整性验证 |
 | `/handpose` | 从已有 rosbag 离线提取手部 3D 关键点并按时间轴查看 |
 | `/optimization` | COLMAP 轨迹优化：对录制的彩色图像做三维重建并与 VIO 轨迹对齐 |
@@ -101,6 +101,8 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 episode，填写英文任务指令，选择单臂 A、单臂 B 或双臂采集布局和训练图像分辨率后，
 点击 **Build LeRobot dataset**。默认输出是与 HiFi-UMI-2K 对齐的 LeRobot v3 目录：
 `outputs/lerobot_datasets/<rosbag 名>_lerobot/`。每个选中的 rosbag 会独立处理并保存在设备上。
+页面当前默认训练副本为固定下部 ROI 的 224×224；需要保留采集像素时显式选择
+**Original resolution**。
 
 LeRobot 输出包含：
 
@@ -227,7 +229,8 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 1. 打开 `/3d`，确认三路画面都在动（面板无 stale 灰标）；
 2. `/recording` → `Refresh Topics` → 勾选要录的 topic（支持按相机整组勾选）→ `Start`；
 3. 采集完成 → `Stop`,等待录包流程结束；
-4. `/umi-dataset` 选择一条或多条完整示教，导出 Zarr、训练配置与 manifest；
+4. `/umi-dataset` 选择一条或多条完整示教；默认导出 LeRobot v3，只有兼容旧
+   Diffusion Policy 训练栈时才选择 Legacy UMI Zarr；
 5. **校验数据完整性并打分**：打开 `/scoring` 页，选中刚录的 bag，点
    **Scoring**（一个按钮同时做两件事：先跑完整性校验，报告先出来；随后
    不论完整性结果如何都自动接着跑轨迹评分）。
@@ -254,13 +257,17 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 ```bash
 docker exec insight-dashboard python3 scripts/check_bag.py                # 最新一份就可以
 docker exec insight-dashboard python3 scripts/check_bag.py rosbags/<目录名>
-docker exec insight-dashboard python3 scripts/check_bag.py --fast rosbags/<目录名>  # 仅元数据的快速估计；不作为完整性判定
+docker exec insight-dashboard python3 scripts/check_bag.py --fast rosbags/<目录名>  # SQLite COUNT/MIN/MAX 快速聚合；不读取 CDR payload
 ```
 
+`--fast` 不再根据 `metadata.yaml` 的整包时长估算，而是直接对 SQLite 中每个 topic
+执行 `COUNT/MIN/MAX(timestamp)`；它适合快速盘点，不包含录制期间的图像 header
+连续性 live audit，不能替代停止录制时生成的最终完整性结论。
 
-### 3.3 磁盘管理
+### 3.2 磁盘管理
 
-三路全录约 **1.2GB/分钟**，录制前确认空间：
+占用取决于勾选的图像变体和录制时长；同时选择多路 raw/rectified/depth 流时可达到
+每分钟数 GB，不能再用固定的“三路默认值”估算。录制前确认空间：
 
 ```bash
 df -h /                              # 剩余空间
@@ -268,6 +275,7 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 ```
 
 删除：`/bags` 页面操作，或直接删除 `rosbags/` 下对应目录（确认已拷贝/不需要后）。
+删除是永久操作；`rosbags/_staging/` 是中断录制恢复区，不要在恢复/合包期间清理。
 
 ---
 
@@ -334,7 +342,9 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
    `docker restart insight-dashboard`，30 秒内应恢复。
    说明：服务比相机网口先启动时会绑不上相机链路且不自愈；启动脚本和后端
    看门狗已自动处理绝大多数情况，手动重启是兜底；
-3. **单路无数据、其余正常**：该相机自身问题，断电重启该相机；
+3. **运行中拔插或单路停流**：未在录制时先等待约 30 秒；watchdog 会在链路在线且
+   连续 15 秒无帧后重启后端。录制中 watchdog 不会动作，应停止录制，再执行
+   `docker restart insight-dashboard`；仍无数据则断电重启该相机；
 4. 以上无效：收集 §7 诊断信息报障。
 
 ### 6.3 录制掉帧 / 数据不完整

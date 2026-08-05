@@ -41,17 +41,21 @@
 
 ```text
 scripts/
-  *_worker.py / *_mapper.py         稳定的进程入口；只做参数、I/O 和生命周期
+  *_worker.py / *_mapper.py         稳定进程入口；只做参数、I/O 和生命周期
   multi_camera_dashboard_web.py     Dashboard ROS 组合入口兼容面
   post_processing.py                离线处理公共导入兼容面
-  lerobot_dataset_export.py         HiFi-UMI 风格 LeRobot v3 数据集导出
+  inprocess_bag_writer.py           图像消息进程内 SQLite rosbag 写入
+  lerobot_dataset_export.py         LeRobot v3（HiFi-UMI profile）导出
+  umi_dataset_export.py             旧 UMI Zarr 训练栈兼容导出
+  webrtc_worker.py                  独立 WebRTC 信令与硬件 H.264 worker
+  hand_overlay_worker.py            按需启动的手部叠加 worker
   dashboard_web/                    HTTP app、context、middleware、routes、WebSocket
   dashboard_runtime/                Dashboard 图像、录制桥接、worker 监管与状态
   dashboard_media/                  硬件 JPEG 和 WebRTC 流实现
   hand_tracking/                    实时手部关键点、手势识别与夹爪跟踪
   handpose/                         离线 WiLoR Hand pose 提取与任务管理
   post_processing_core/             bag 完整性、评分、录制、恢复、回放、同步、优化
-  insight9_mapping_core/            稀疏/稠密建图和全局定位算法
+  insight9_mapping_core/            稀疏/稠密建图、位姿图和全局定位算法
 web_dashboard/
   src/                              前端源码，按领域和页面分包
   dist/                             后端直接服务的构建产物，必须由 build.js 生成
@@ -79,6 +83,7 @@ rosbags/ outputs/ runs/ data/        运行数据；不提交、不烘焙
 | 实时手部 landmark、手势、夹爪 | `hand_tracking/` |
 | 离线 Hand pose | `handpose/` |
 | 录制、bag 完整性、评分、回放、优化 | `post_processing_core/` |
+| LeRobot / UMI 数据集导出 | 顶层稳定命令 + `dashboard_web/umi_export.py` 任务协调 |
 | Insight9 建图/定位算法 | `insight9_mapping_core/` |
 | 浏览器页面级逻辑 | `web_dashboard/src/pages/` |
 | 可跨页面复用的前端逻辑 | `web_dashboard/src/shared/` 或明确领域目录 |
@@ -104,15 +109,20 @@ small infrastructure adapter
 - 两个领域需要交互时，通过已有 context、明确的数据对象或回调连接，不互相
   读取私有状态。
 
-## 迁移顺序
+## 当前整理基线
 
-1. **手部感知**：归并 overlay、手势和夹爪逻辑，保留原 import facade。
-2. **媒体实现**：归并 WebRTC 和 JPEG 实现，顶层保留兼容 facade，worker
-   进程入口保持稳定。
-3. **Mapping**：把三个 mapper/localizer 入口缩成组合层，算法继续收进
-   `insight9_mapping_core/`。
-4. **命令与运维**：区分产品进程入口、管理员命令和开发工具。
-5. **可安装包**：关键路径具备自动测试后，再引入 `pyproject.toml` 和
-   `src/insight_capture/`；不能为了目录形式提前破坏设备上的直接执行方式。
+- Web 后端已拆为 `dashboard_web/`，运行时协调已拆为 `dashboard_runtime/`，
+  JPEG/WebRTC 实现已拆为 `dashboard_media/`。
+- 浏览器前端已按 `pages/`、`shared/`、`camera/`、`spatial/` 分包；不存在需要
+  继续维护的全站单体 `app.js`。
+- 手部实时逻辑位于 `hand_tracking/`，离线 WiLoR 任务位于 `handpose/`；旧
+  MediaPipe hand pose 路径已删除。
+- `multi_camera_dashboard_web.py` 和 `post_processing.py` 是外部调用仍依赖的
+  稳定 facade，不应重新承载业务实现。
+- Insight9 稀疏建图、位姿图和 Insight3 全局重定位共享
+  `insight9_mapping_core/`；稠密建图仍是内部验证能力。
 
-每一步必须单独提交，并验证旧 import、旧命令、真实 API/ROS 路径和前端页面。
+后续整理应按功能小步提交，并验证兼容 import、稳定命令、真实 API/ROS 路径
+和相关页面。只有关键路径具备足够自动化覆盖后，才评估引入
+`pyproject.toml` 和 `src/insight_capture/`；不能为了目录形式破坏设备上的
+直接执行方式。

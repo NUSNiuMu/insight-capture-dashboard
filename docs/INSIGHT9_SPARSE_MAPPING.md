@@ -1,7 +1,9 @@
-# Insight9 在线稀疏建图验证
+# Insight9 在线稀疏建图与 Insight3 全局重定位
 
-该验证节点使用 Insight9 校正后的左右红外图、100 Hz VIO 和 Magic Leap 官方
-SuperPoint/SuperGlue，在当前会话内建立稀疏地图，并发布 RViz 点云与相机轨迹。
+在线栈使用 Insight9 校正后的左右红外图、100 Hz VIO 和 Magic Leap 官方
+SuperPoint/SuperGlue，在当前会话内建立稀疏地图；两路 Insight3 随后定位到同一
+地图并持续发布统一世界系 Pose。v2.0.0 起该栈进入客户发布，RViz/稠密地图仍只作
+内部验证。
 
 ## 当前边界
 
@@ -99,6 +101,24 @@ remap 后继续驱动同一套模型和轨迹。旧 rosbag 如果没有这些全
 轨迹或模型位置，不会回退到旧 VIO。原 AprilTag 在线对齐的订阅、定时器、
 Web API、前端控制和 WebSocket payload 已停用，建图重定位是唯一在线校准源。
 
+## Insight3 全局重定位
+
+Dashboard 复用两路 Insight3 现有图像 reader，以 2 Hz 中继到
+`/insight_mapping/<name>/infra1/image_rect_raw`；localizer 不再增加全速图像 DDS
+reader。查询特征与 Insight9 的 3D 描述子地图匹配，通过 PnP-RANSAC 与连续三帧
+共识后得到 `T_map_odom`，再以 50 Hz 原始 VIO 外推全局 Pose。
+
+- 首次定位直接初始化；小于 `0.15 m / 10°` 的修正由误差状态 EKF 平滑吸收；达到
+  任一阈值的可靠重定位立即跳回并从当前位置重建 Path。
+- 暂时看不到已建图区域时保留最后校正并进入 `vio_only`，不会隐藏模型；再次匹配
+  地图后继续校准累积漂移。
+- Insight3 图像底部夹爪 mask 默认为 `0`（关闭），可在 Settings 按现场遮挡比例热
+  更新；不能假设固定 20%。
+- Jetson NX profile 发布 `insight3_a_global_camera_center -> right_tcp` 与
+  `insight3_b_global_camera_center -> left_tcp` 静态 TF；未标定 profile 不发布占位变换。
+- `/insight_global/<name>/status` 提供 `tracking_mode`、`correction_mode`、PnP/共识、
+  hard relocalization 和当前 mask 等诊断字段。
+
 验证镜像包含：
 
 - NVIDIA Jetson TensorRT `25.04-py3-igpu` 运行时；
@@ -110,7 +130,8 @@ Web API、前端控制和 WebSocket payload 已停用，建图重定位是唯一
 
 构建阶段会校验三份权重的 SHA-256；任一内容不一致即失败。该镜像名为
 `insight-superglue-validation:25.04`（沿用历史命名，未随发布状态改名），
-由 `scripts/build_release.sh` 一并构建并打进客户镜像 tar。
+由 `scripts/build_release.sh` 一并构建并单独保存为首次安装依赖 tar；Dashboard
+日常升级包不再重复携带该固定镜像。
 
 ONNX 在镜像构建阶段一次性导出。首次启动只在当前 Jetson 上编译
 `superpoint_fp16.plan` 和 `superglue_fp32.plan`，不需要也不会加载
@@ -179,9 +200,6 @@ ros2 topic echo /insight9_sparse_map/status
 ```bash
 docker compose stop insight3-global-localizer insight9-sparse-mapper superglue-inference
 ```
-
-用该特征地图定位两路 Insight3 的方法见
-[INSIGHT3_GLOBAL_LOCALIZATION.md](INSIGHT3_GLOBAL_LOCALIZATION.md)。
 
 ## 第一轮验收
 

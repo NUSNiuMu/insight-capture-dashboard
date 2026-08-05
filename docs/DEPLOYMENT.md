@@ -34,7 +34,8 @@
   三台设备现在共用同一个分支，`config/cameras.json` 等两个文件是本地生成产物，
   见"分支与部署"一节；`build_release.sh` 会自己校验这一点，选错了会直接报错退出。
 - 本地先用根目录的开发机 `docker-compose.yml`（`docker compose build && docker compose up -d`）
-  把要发布的改动完整跑一遍、`/verify` 或手动过一遍关键页面，**不要用没跑过的代码直接打包发布**。
+  把要发布的改动完整跑一遍，并用无头浏览器或人工逐页检查八个页面，
+  **不要用没跑过的代码直接打包发布**。
 
 ### 1.2 构建缓存与镜像体积
 
@@ -60,15 +61,15 @@ Dockerfile 自 `v2.0.2` 起拆成 `runtime`/`dev` 两个 target：`dev`（`runti
 ### 1.3 打包
 
 ```bash
-./scripts/build_release.sh v1.2.0
+./scripts/build_release.sh v2.0.5
 ```
 
 版本号必须形如 `vX.Y.Z`（可带 `-rc1` 之类后缀），脚本会校验格式。产出：
 
 ```
-release/insight-dashboard-v1.2.0.tar.gz          # 镜像；每次升级都发这个
+release/insight-dashboard-v2.0.5.tar.gz          # 镜像；每次升级都发这个
 release/insight-superglue-validation-25.04.tar.gz # 稳定依赖；仅首次安装发送
-release/insight-dashboard-deploy-v1.2.0.tar.gz   # 部署包；只有首次安装的设备需要
+release/insight-dashboard-deploy-v2.0.5.tar.gz   # 部署包；只有首次安装的设备需要
 ```
 
 镜像 tar 通常几 GB（含 COLMAP、CUDA 运行时、Firefox），传输/拷 U 盘预留时间。
@@ -79,22 +80,23 @@ Magic Leap 官方 SuperPoint/SuperGlue TensorRT 推理，商用分发已确认�
 Dashboard 日常升级包都重复携带同一份 TensorRT/CUDA 内容。
 部署包里打包了 `deploy/docker-compose.yml`、`update.sh`、`README.md`、
 `scripts/run_dashboard.sh`，以及宿主机一次性调优用的 `scripts/host_setup.sh`
-+ `scripts/reboot_cameras.sh` + `scripts/systemd/insight-camera-reboot.service`
-+ `looper_cli/`（2026-07-12 补的——在此之前使用者路径完全没有办法应用这几项
-host 层设置，见 §3.2）——这几个文件本身不大，但**它们的内容来自当前
++ `scripts/configure_camera_network.sh` + `scripts/reboot_cameras.sh`
++ `scripts/systemd/{insight-camera-network,insight-camera-reboot}.service`
++ `looper_cli/`。这些文件本身不大，但**它们的内容来自当前
 分支的 `deploy/`、`scripts/`、`looper_cli/` 目录**，改过 `deploy/docker-compose.yml`
 （比如调 shm_size）或 `scripts/host_setup.sh` 一定要在改动落地之后的这个分支上
 重新跑一次 `build_release.sh`，不能沿用旧的部署包。
 
 ### 1.4 版本号约定
 
-这个仓库目前还没有为发布流程打过 git tag（`git tag` 里唯一的旧标签跟这套
-发布脚本无关）。建议：镜像版本号对应到一个 git tag（`git tag v1.2.0 && git push --tags`），
-方便日后从版本号反查代码状态；`build_release.sh` 本身不会自动打 tag，需要手动做。
+正式版本已从 `v2.0.0` 起使用与镜像版本一致的 git tag（当前最新发布 tag 为
+`v2.0.4`）。后续仍须让镜像版本号对应同名 tag，例如
+`git tag v2.0.5 && git push origin v2.0.5`，方便从设备版本反查代码状态；
+`build_release.sh` 本身不会自动打 tag。
 
 ### 1.5 发布前检查清单
 
-- [ ] 本地开发机 compose 跑过一遍，关键页面（3d / recording / bags / scoring / handpose / settings）无 console 报错
+- [ ] 本地开发机 compose 跑过一遍，八个页面（3d / recording / bags / umi-dataset / scoring / handpose / optimization / settings）无 console 报错
 - [ ] `superglue-inference` 健康检查能通过（本地至少验证一次冷启动 TensorRT 引擎编译），
   `insight9-sparse-mapper`/`insight3-global-localizer` 正常起来，3d 页面能看到全局轨迹
 - [ ] 涉及数据库结构/配置字段变化的改动，确认旧版本升级上来后不会因为缺字段崩溃
@@ -141,10 +143,10 @@ cd <部署目录>   # 首次安装时 update.sh 所在的那个目录
 ### 2.3 回滚
 
 ```bash
-./update.sh --rollback v1.1.0
+./update.sh --rollback v2.0.3
 ```
 
-要求 `v1.1.0` 这个镜像之前 `docker load` 过（还在本机）。等价于把 `.env` 指回旧版本号
+要求 `v2.0.3` 这个镜像之前 `docker load` 过（还在本机）。等价于把 `.env` 指回旧版本号
 再 `docker compose up -d`，同样过一遍 healthz 检查。
 
 ### 2.4 升级失败排查
@@ -261,7 +263,8 @@ CycloneDDS；FastDDS 的约 65 KB UDP 报文会在多路大图订阅时触发分
 缺少这些调优时，多路录制会在写盘之前丢包，
 开机恢复 unit 则处理相机与 Jetson 的 DDS 启动时序
 （相机比 Jetson 先启动完，DDS participant 会卡在错误的网络状态，见其脚本注释）。
-这些宿主机配置不在 `update.sh` 的职责范围内（它只管容器生命周期），必须单独跑一次：
+这些宿主机配置不在 `update.sh` 的职责范围内（它只管容器生命周期），必须在宿主机
+单独跑一次（脚本按需调用 `sudo`）：
 
 ```bash
 ./scripts/host_setup.sh

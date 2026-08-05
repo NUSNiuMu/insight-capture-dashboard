@@ -42,6 +42,9 @@
 ## WebRTC 与预览
 
 - WebRTC 信令和 H.264 编码运行在独立的 `webrtc_worker.py` 进程，主进程只负责投递经过选择的帧和轮询 health。
+- WebRTC 保留相机发布分辨率（只为 NV12 偶数尺寸向下取整），不再根据面板尺寸
+  动态降采样。30 FPS 目标直接转发 latest frame，避免墙钟限频与 30.02 FPS 源节拍
+  混叠成约 15 FPS；录制期间的 10 FPS 预览限频仍保留。
 - 手部 JPEG 解码、关键点绘制和重编码运行在独立的 `hand_overlay_worker.py`
   进程；首次启用 JPEG 叠加时按需启动，最后一路关闭后退出。
 - Dashboard 只为 `dashboard_hand_tracking: true` 的相机订阅手部数据。rosbag
@@ -63,10 +66,26 @@
 
 ## 浏览器渲染
 
-- pose payload 包含完整轨迹历史，序列化、网络和浏览器更新成本都随轨迹长度增长。
+- 新 WebSocket 客户端先收到完整轨迹快照，正常广播只发送新增轨迹点；服务端每
+  2 秒补发快照用于自愈。前端按 sequence 累积，发现 generation 或序列缺口会主动
+  重连重新取快照。不得恢复为每个 50 Hz 消息重发三路完整轨迹。
 - 3D 场景限制为 20 FPS，并使用 Babylon.js hardware scaling，避免重复渲染相同 pose 时与多路视频合成争用 CPU/GPU。
-- 模型首次加载必须并发进行；串行等待一个较大的 GLB 会阻塞其他相机的姿态和轨迹更新。
+- 页面先接通 pose、相机和轨迹，再分阶段加载 Avatar；同阶段模型允许并发，较大的
+  GLB 不得阻塞 pose/轨迹处理。
 - `app.js` 曾被所有页面共同加载，任何顶层异常都会影响全站。重构后每个页面使用独立入口，共享能力通过显式模块导入。
+
+## 训练数据导出
+
+- `/umi-dataset` 的标准归档格式是 HiFi-UMI 风格 LeRobot v3；Legacy UMI Zarr
+  只为旧 Diffusion Policy 训练栈保留。两种导出都在 recorder timeline 上按
+  20 Hz 对齐图像、TCP pose 和米制夹爪宽度。
+- LeRobot 固定使用 `[right_10d, left_10d]` 20 维 state/action；单臂缺失侧填零
+  并由 validity mask 标记。`action` 是下一帧绝对 state，模型特定相对动作只能在
+  training adapter 中转换。
+- 只有明确的数据质量拒绝（连续性、有效帧、解码或夹爪检测导致零有效 episode）
+  才能自动删除源 rosbag。配置、标定、权限、磁盘或程序错误必须保留源数据。
+- 双臂导出要求两侧 `width_calibration` 和两路全局 pose；单臂使用本机原始
+  `vio_100hz`。每个 profile 的默认录制选择必须同时保留原始 VIO 与 dashboard pose。
 
 ## 验证基线
 
@@ -76,5 +95,6 @@
 - `insight3_b`：约 20 FPS，544×640。
 - `insight9_a`：约 30 FPS，1088×1920。
 - 三路相机均报告 WebRTC 可用。
-- `/3d`、`/recording`、`/bags`、`/scoring`、`/optimization`、`/settings` 均能加载，WebSocket 首帧包含三路 pose。
+- `/3d`、`/recording`、`/bags`、`/umi-dataset`、`/scoring`、`/handpose`、
+  `/optimization`、`/settings` 均能加载，WebSocket 首帧包含三路 pose 和轨迹快照。
 - 可重复运行的基线工具位于本机 `~/workspaces/insight_capture_tests/run_refactor_checks_20260723.sh`，不属于主仓库。

@@ -1,11 +1,32 @@
-给 Insight3 global localizer 增加左右夹爪静态 mask。
-左右 TCP 坐标系已定义，见 [UMI TCP 坐标系](UMI_TCP_FRAMES.md)。
-Jetson NX 的 camera_center → TCP 实测外参已录入并发布 TF。
-修复校准工具的 mono8/8UC1 解码。
-实现 rosbag 离线 gripper extractor。
-生成开合可视化曲线和 marker overlay 视频做人工验证。
-已实现从 rosbag 将 TCP pose、opening 与三路图像对齐到 20 Hz。
-已实现双臂 20 维 action 对应的 UMI Zarr 与训练配置导出。
-UMI 导出默认保留三路相机各自的原始分辨率；224/384 方形兼容选项固定裁剪水平居中、
-底部对齐的最大方形操作区后再等比缩放，避免 portrait 图像形变。
-标准归档现已使用 HiFi-UMI 风格的 LeRobot v3 导出；UMI Zarr 保留为旧训练栈兼容格式。
+# 叠衣数据集导出状态
+
+当前标准归档格式是 **LeRobot v3（HiFi-UMI profile）**；UMI Zarr 仅用于
+兼容既有训练栈。网页从 `/umi-dataset` 启动导出，每个选中的 rosbag 生成
+一个独立数据集，源 bag 不会被多个录制静默拼接。
+
+## 已实现
+
+- 左右 TCP 坐标系与手别由 `tcp_frame_id`、`teleop_role` 明确定义，见
+  [UMI TCP 坐标系](UMI_TCP_FRAMES.md)。
+- Jetson NX 的 `camera_center → TCP` 外参已录入，Insight3 localizer 发布对应
+  静态 TF；其他设备 profile 仍需独立标定。
+- 支持 `mono8` / `8UC1` 标定图像，提供 rosbag 离线夹爪宽度提取、开合曲线
+  和 marker overlay 视频供人工核验。
+- TCP pose、夹爪开度和三路图像统一对齐到 20 Hz。
+- 状态固定为双臂 20 维：`[right_10d, left_10d]`，每臂为
+  `xyz + rot6d + width`；缺失单臂以零值和有效性掩码表达。
+- LeRobot 的 action 是下一时刻绝对状态。π0.5 等训练所需的相对动作和输入
+  命名属于训练 adapter，不在归档阶段固化。
+- 可按约 1 秒停顿自动切 episode，也可保留“一条 rosbag = 一个 episode”。
+- 网页当前默认导出 224×224 的下方操作区；`Original` 可显式保留原始分辨率，
+  384×384 为另一兼容选项。方形模式先取水平居中、底部对齐的最大正方形，
+  再等比缩放，避免 portrait 图像形变。
+- 只有导出器明确判定为质量不合格的 bag 才会自动删除；配置、标定、系统
+  或导出错误会保留源 bag，避免把环境问题误当成坏数据。
+
+## 当前限制与现场检查
+
+- `insight3_b` 尚缺可靠的夹爪宽度标定，因此双臂 LeRobot 导出会安全失败，
+  不会用伪造宽度生成可训练数据。完成该路标定并复核 overlay 后再启用双臂归档。
+- 采集前确认两路 `teleop_role`、TCP 静态 TF、全局 pose 和 gripper width 均
+  有效；导出后抽查视频、episode 边界、有效性掩码和 Parquet 元数据。

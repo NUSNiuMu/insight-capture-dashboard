@@ -10,12 +10,30 @@
 | 目录 | 职责 |
 |---|---|
 | `dashboard_web/` | aiohttp 应用和 Web API |
-| `dashboard_runtime/` | Dashboard 运行时协调 |
+| `dashboard_runtime/` | 图像管线、进程内录制桥接、worker 监管、watchdog 和 WS payload |
 | `dashboard_media/` | 硬件 JPEG 和 WebRTC 流 |
 | `hand_tracking/` | 实时手部感知、手势、夹爪及 rosbag 离线夹爪提取 |
 | `handpose/` | 离线 Hand pose |
-| `post_processing_core/` | rosbag 完整性、评分与离线处理 |
-| `insight9_mapping_core/` | 建图和定位算法 |
+| `post_processing_core/` | rosbag 完整性、录制恢复、同步、回放、评分与优化 |
+| `insight9_mapping_core/` | 稀疏/稠密建图、位姿图和全局定位算法 |
+
+## 关键稳定入口
+
+| 文件 | 职责 |
+|---|---|
+| `multi_camera_dashboard_web.py` | ROS 生命周期与领域服务组合 facade |
+| `inprocess_bag_writer.py` | 复用 Dashboard 图像 reader 写入 SQLite rosbag |
+| `webrtc_worker.py` | 独立 WebRTC 信令与硬件 H.264 编码进程 |
+| `hand_overlay_worker.py` | 按需启动的手部叠加进程 |
+| `insight9_sparse_mapper.py` | 在线稀疏建图入口 |
+| `insight3_global_localizer.py` | 双路全局重定位入口 |
+| `lerobot_dataset_export.py` | 标准 LeRobot v3 数据集导出 |
+| `umi_dataset_export.py` | 旧 UMI Zarr 兼容导出 |
+| `post_processing.py` | 离线处理公共导入 facade |
+
+图像录制不能改回额外的 `ros2 bag record` 图像订阅；IMU、VIO 等小消息仍由
+录制管理器的子进程负责。新增 Web route 必须在 `dashboard_web/app.py` 注册，
+业务处理放入对应 `dashboard_web/routes/`。
 
 ## 顶层文件判断
 
