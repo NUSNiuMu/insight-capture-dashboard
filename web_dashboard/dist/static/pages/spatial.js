@@ -1,7 +1,7 @@
 import {
   setCameraCapturePerformanceMode,
   startCameraDashboard,
-} from "../camera/dashboard.js?v=20260805-cpu-budget-v12";
+} from "../camera/dashboard.js?v=20260805-cpu-budget-v13";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 import {
@@ -13,7 +13,7 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260805-cpu-budget-v12";
+} from "../spatial/renderer.js?v=20260805-cpu-budget-v13";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");

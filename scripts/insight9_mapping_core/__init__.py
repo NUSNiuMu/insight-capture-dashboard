@@ -38,7 +38,12 @@ from .global_localization import (
     localize_features,
     match_descriptors,
 )
-from .synchronization import PoseBuffer, StereoPair, StereoPairSynchronizer
+from .synchronization import (
+    PoseBuffer,
+    StereoPair,
+    StereoPairSynchronizer,
+    select_timestamp,
+)
 from .relocalization_ekf import RelocalizationEkf, RelocalizationEkfConfig
 from .tcp_frames import TcpFrameCalibration, load_tcp_frame_calibrations
 
@@ -77,6 +82,7 @@ __all__ = [
     "localize_features",
     "match_descriptors",
     "rotation_distance_deg",
+    "select_timestamp",
     "transform_points",
     "triangulate_rectified",
 ]

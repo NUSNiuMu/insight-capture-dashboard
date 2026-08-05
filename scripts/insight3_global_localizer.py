@@ -35,6 +35,7 @@ from insight9_mapping_core import (  # noqa: E402
     localize_features,
     matrix_from_pose,
     matrix_from_transform,
+    select_timestamp,
 )
 from insight3_localization_settings import (  # noqa: E402
     DEFAULT_GRIPPER_MASK_HEIGHT_RATIO,
@@ -220,6 +221,9 @@ class CameraState:
         self.last_relocalization_measurement: Optional[np.ndarray] = None
         self.hard_relocalizations = 0
         self.last_vio_stamp_ns = -1
+        self.last_input_vio_stamp_ns = -1
+        self.next_vio_buffer_stamp_ns = 0
+        self.next_vio_publish_stamp_ns = 0
         self.last_image_stamp_ns = -1
         self.last_history_stamp_ns = -1
         self.next_process_monotonic = 0.0
@@ -393,6 +397,9 @@ class Insight3GlobalLocalizer(Node):
                 state.last_relocalization_measurement = None
                 state.hard_relocalizations = 0
                 state.last_vio_stamp_ns = -1
+                state.last_input_vio_stamp_ns = -1
+                state.next_vio_buffer_stamp_ns = 0
+                state.next_vio_publish_stamp_ns = 0
                 state.last_image_stamp_ns = -1
                 state.last_history_stamp_ns = -1
                 state.transformed_history.clear()
@@ -451,9 +458,38 @@ class Insight3GlobalLocalizer(Node):
 
     def _vio_callback(self, name: str):
         def callback(message: PoseStamped) -> None:
+            stamp_ns = stamp_to_ns(message.header.stamp)
+            state = self._cameras[name]
+            with self._lock:
+                input_reset = (
+                    state.last_input_vio_stamp_ns >= 0
+                    and stamp_ns < state.last_input_vio_stamp_ns
+                )
+                state.last_input_vio_stamp_ns = stamp_ns
+                if input_reset:
+                    state.next_vio_buffer_stamp_ns = 0
+                    state.next_vio_publish_stamp_ns = 0
+                buffer_due, state.next_vio_buffer_stamp_ns = select_timestamp(
+                    stamp_ns,
+                    state.next_vio_buffer_stamp_ns,
+                    max(50.0, self._args.pose_publish_hz * 2.0),
+                )
+                if not buffer_due:
+                    return
+                publish_due, state.next_vio_publish_stamp_ns = select_timestamp(
+                    stamp_ns,
+                    state.next_vio_publish_stamp_ns,
+                    self._args.pose_publish_hz,
+                )
+                history_due = (
+                    input_reset
+                    or state.last_history_stamp_ns < 0
+                    or stamp_ns - state.last_history_stamp_ns
+                    >= self._args.path_interval_ms * 1_000_000
+                )
             pose = message.pose
             sample = PoseSample(
-                stamp_ns=stamp_to_ns(message.header.stamp),
+                stamp_ns=stamp_ns,
                 translation=np.array(
                     [pose.position.x, pose.position.y, pose.position.z],
                     dtype=np.float64,
@@ -468,14 +504,13 @@ class Insight3GlobalLocalizer(Node):
                     dtype=np.float64,
                 ),
             )
-            state = self._cameras[name]
             global_pose = None
+            try:
+                odom_to_imu = matrix_from_pose(sample)
+            except ValueError:
+                return
             with self._lock:
-                try:
-                    matrix_from_pose(sample)
-                    reset = state.pose_buffer.append(sample)
-                except ValueError:
-                    return
+                reset = state.pose_buffer.append(sample)
                 if reset:
                     state.history.clear()
                     state.consensus = LocalizationConsensus(state.consensus.config)
@@ -483,6 +518,7 @@ class Insight3GlobalLocalizer(Node):
                     state.last_relocalization_measurement = None
                     state.hard_relocalizations = 0
                     state.last_vio_stamp_ns = -1
+                    state.last_input_vio_stamp_ns = sample.stamp_ns
                     state.last_image_stamp_ns = -1
                     state.last_history_stamp_ns = -1
                     state.transformed_history.clear()
@@ -497,35 +533,28 @@ class Insight3GlobalLocalizer(Node):
                         "localized": False,
                         "tracking_mode": "unlocalized",
                     }
-                if (
-                    sample.stamp_ns - state.last_history_stamp_ns
-                    >= self._args.path_interval_ms * 1_000_000
-                ):
+                if history_due:
                     state.history.append(sample)
                     state.last_history_stamp_ns = sample.stamp_ns
                     state.path_dirty = True
-                if state.last_vio_stamp_ns >= 0:
-                    state.pose_filter.predict(
-                        (sample.stamp_ns - state.last_vio_stamp_ns) / 1e9
+                if publish_due:
+                    if state.last_vio_stamp_ns >= 0:
+                        state.pose_filter.predict(
+                            (sample.stamp_ns - state.last_vio_stamp_ns) / 1e9
+                        )
+                    state.last_vio_stamp_ns = sample.stamp_ns
+                    correction = state.pose_filter.correction
+                    extrinsic = (
+                        None
+                        if state.imu_to_center is None
+                        else state.imu_to_center.copy()
                     )
-                state.last_vio_stamp_ns = sample.stamp_ns
-                correction = state.pose_filter.correction
-                extrinsic = (
-                    None
-                    if state.imu_to_center is None
-                    else state.imu_to_center.copy()
-                )
-                publish_interval_ns = int(
-                    1_000_000_000 / max(self._args.pose_publish_hz, 0.1)
-                )
-                should_publish = (
-                    sample.stamp_ns - state.last_global_pose_publish_ns
-                    >= publish_interval_ns
-                )
-                if should_publish:
                     state.last_global_pose_publish_ns = sample.stamp_ns
-            if should_publish and correction is not None and extrinsic is not None:
-                transform = correction @ matrix_from_pose(sample) @ extrinsic
+                else:
+                    correction = None
+                    extrinsic = None
+            if publish_due and correction is not None and extrinsic is not None:
+                transform = correction @ odom_to_imu @ extrinsic
                 global_pose = pose_message(
                     transform, message.header.stamp, self._map_frame
                 )
@@ -608,8 +637,11 @@ class Insight3GlobalLocalizer(Node):
                         if state.imu_to_center is None
                         else state.imu_to_center.copy()
                     )
-                    map_points = self._map_points.copy()
-                    map_descriptors = self._map_descriptors.copy()
+                    # Feature-map callbacks replace these arrays instead of
+                    # mutating them, so local references stay immutable and
+                    # avoid copying a potentially 20k x 256 map twice a second.
+                    map_points = self._map_points
+                    map_descriptors = self._map_descriptors
                 if (
                     message is None
                     or camera_matrix is None

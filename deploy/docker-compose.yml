@@ -13,6 +13,9 @@
 # so replacing the image never touches customer data.
 services:
   insight-dashboard:
+    # Reap kiosk/browser descendants after restarts instead of leaving them
+    # adopted by the Python process that otherwise runs as container PID 1.
+    init: true
     image: insight-dashboard:${INSIGHT_VERSION:?Run ./update.sh <image-tarball> first to load an image and set the version}
     container_name: insight-dashboard
 

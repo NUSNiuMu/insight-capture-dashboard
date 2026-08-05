@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import bisect
+import math
 import threading
 from collections import deque
 from dataclasses import dataclass
@@ -12,6 +13,24 @@ from .geometry import PoseSample, interpolate_pose
 
 
 T = TypeVar("T")
+
+
+def select_timestamp(
+    stamp_ns: int, next_sample_ns: int, target_hz: float
+) -> tuple[bool, int]:
+    """Select timestamped samples against a stable deadline."""
+
+    frequency = float(target_hz)
+    if not math.isfinite(frequency) or frequency <= 0.0:
+        raise ValueError("target_hz must be positive and finite")
+    stamp_ns = int(stamp_ns)
+    next_sample_ns = int(next_sample_ns)
+    period_ns = max(1, int(round(1_000_000_000 / frequency)))
+    if next_sample_ns > 0 and stamp_ns < next_sample_ns:
+        return False, next_sample_ns
+    if next_sample_ns <= 0 or stamp_ns - next_sample_ns >= period_ns:
+        next_sample_ns = stamp_ns
+    return True, next_sample_ns + period_ns
 
 
 class PoseBuffer:

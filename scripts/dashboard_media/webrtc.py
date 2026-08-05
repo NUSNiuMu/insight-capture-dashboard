@@ -164,17 +164,26 @@ class WebRtcSession:
 
     # ── frame ingest (camera worker thread) ─────────────────────────────────
 
-    def push_frame(self, data: bytes, fmt: str, width: int, height: int) -> None:
+    def push_frame(
+        self,
+        data: bytes,
+        fmt: str,
+        width: int,
+        height: int,
+        *,
+        rate_checked: bool = False,
+    ) -> None:
         with self._stats_lock:
             self._stats["session_received"] += 1
-        now = time.monotonic()
-        selected, self._next_frame_at = select_frame(
-            now, self._next_frame_at, self._target_fps
-        )
-        if not selected:
-            with self._stats_lock:
-                self._stats["throttled"] += 1
-            return
+        if not rate_checked:
+            now = time.monotonic()
+            selected, self._next_frame_at = select_frame(
+                now, self._next_frame_at, self._target_fps
+            )
+            if not selected:
+                with self._stats_lock:
+                    self._stats["throttled"] += 1
+                return
         caps_key = (fmt, width, height)
         with self._lock:
             if self._closed:
@@ -458,8 +467,18 @@ class WebRtcStreams:
             sessions = list(self._sessions.get(camera_name, ()))
         if not sessions:
             return
+        max_target_fps = max(session.target_fps for session in sessions)
         for session in sessions:
-            session.push_frame(data, fmt, width, height)
+            session.push_frame(
+                data,
+                fmt,
+                width,
+                height,
+                rate_checked=(
+                    self._on_session_state_change is not None
+                    and session.target_fps == max_target_fps
+                ),
+            )
 
     def snapshot_stats(self) -> Dict[str, Dict[str, int]]:
         """Return cumulative per-camera counters for the worker lifetime."""

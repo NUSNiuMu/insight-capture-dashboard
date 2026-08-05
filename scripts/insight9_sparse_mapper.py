@@ -42,6 +42,7 @@ from insight9_mapping_core import (  # noqa: E402
     matrix_from_pose,
     matrix_from_transform,
     rotation_distance_deg,
+    select_timestamp,
     transform_points,
     triangulate_rectified,
 )
@@ -282,6 +283,10 @@ class Insight9SparseMapper(Node):
         self._last_loop_measurement: Optional[np.ndarray] = None
         self._loop_closure_count = 0
         self._last_vio_stamp_ns = 0
+        self._last_input_vio_stamp_ns = -1
+        self._next_vio_buffer_stamp_ns = 0
+        self._next_vio_publish_stamp_ns = 0
+        self._vio_rate_lock = threading.Lock()
         if args.backend == "ipc":
             self._matcher = IpcSuperGlueBackend(Path(args.inference_socket))
         else:
@@ -372,6 +377,10 @@ class Insight9SparseMapper(Node):
         )
 
     def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
+        with self._vio_rate_lock:
+            self._last_input_vio_stamp_ns = -1
+            self._next_vio_buffer_stamp_ns = 0
+            self._next_vio_publish_stamp_ns = 0
         with self._path_lock:
             self._path.clear()
             self._last_path_append_ns = 0
@@ -475,9 +484,36 @@ class Insight9SparseMapper(Node):
         )
 
     def _on_vio(self, message: PoseStamped) -> None:
+        stamp_ns = stamp_to_ns(message.header.stamp)
+        with self._vio_rate_lock:
+            input_reset = (
+                self._last_input_vio_stamp_ns >= 0
+                and stamp_ns < self._last_input_vio_stamp_ns
+            )
+            self._last_input_vio_stamp_ns = stamp_ns
+            if input_reset:
+                self._next_vio_buffer_stamp_ns = 0
+                self._next_vio_publish_stamp_ns = 0
+            buffer_due, self._next_vio_buffer_stamp_ns = select_timestamp(
+                stamp_ns,
+                self._next_vio_buffer_stamp_ns,
+                max(50.0, self._args.pose_publish_hz * 2.0),
+            )
+            if not buffer_due:
+                return
+            publish_due, self._next_vio_publish_stamp_ns = select_timestamp(
+                stamp_ns,
+                self._next_vio_publish_stamp_ns,
+                self._args.pose_publish_hz,
+            )
+        path_due = (
+            input_reset
+            or stamp_ns - self._last_path_append_ns
+            >= self._args.path_interval_ms * 1_000_000
+        )
         pose = message.pose
         sample = PoseSample(
-            stamp_ns=stamp_to_ns(message.header.stamp),
+            stamp_ns=stamp_ns,
             translation=np.array(
                 [pose.position.x, pose.position.y, pose.position.z], dtype=np.float64
             ),
@@ -492,7 +528,7 @@ class Insight9SparseMapper(Node):
             ),
         )
         try:
-            matrix_from_pose(sample)
+            odom_to_imu = matrix_from_pose(sample)
             reset = self._pose_buffer.append(sample)
         except ValueError as exc:
             self.get_logger().warning(f"rejected invalid VIO pose: {exc}")
@@ -512,30 +548,28 @@ class Insight9SparseMapper(Node):
             self.get_logger().warning("VIO timestamp reset; cleared session map")
         if self._imu_to_center is None:
             return
-        with self._loop_lock:
-            if self._last_vio_stamp_ns > 0:
-                self._loop_pose_filter.predict(
-                    (sample.stamp_ns - self._last_vio_stamp_ns) / 1_000_000_000.0
-                )
-            self._last_vio_stamp_ns = sample.stamp_ns
-            correction = self._loop_pose_filter.correction
         odom_to_center = compose_transform(
-            matrix_from_pose(sample), self._imu_to_center
+            odom_to_imu, self._imu_to_center
         )
-        map_to_center = compose_transform(
-            np.eye(4, dtype=np.float64) if correction is None else correction,
-            odom_to_center,
-        )
-        stamped = matrix_to_pose_stamped(
-            map_to_center, sample.stamp_ns, self._map_frame
-        )
-        if (
-            sample.stamp_ns - self._last_pose_publish_ns
-            >= int(1_000_000_000 / max(self._args.pose_publish_hz, 0.1))
-        ):
+        if publish_due:
+            with self._loop_lock:
+                if self._last_vio_stamp_ns > 0:
+                    self._loop_pose_filter.predict(
+                        (sample.stamp_ns - self._last_vio_stamp_ns)
+                        / 1_000_000_000.0
+                    )
+                self._last_vio_stamp_ns = sample.stamp_ns
+                correction = self._loop_pose_filter.correction
+            map_to_center = compose_transform(
+                np.eye(4, dtype=np.float64) if correction is None else correction,
+                odom_to_center,
+            )
+            stamped = matrix_to_pose_stamped(
+                map_to_center, sample.stamp_ns, self._map_frame
+            )
             self._pose_publisher.publish(stamped)
             self._last_pose_publish_ns = sample.stamp_ns
-        if sample.stamp_ns - self._last_path_append_ns >= self._args.path_interval_ms * 1_000_000:
+        if path_due:
             with self._path_lock:
                 self._path.append((sample.stamp_ns, odom_to_center))
             self._last_path_append_ns = sample.stamp_ns

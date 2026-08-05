@@ -44,8 +44,9 @@
 - WebRTC 信令和 H.264 编码运行在独立的 `webrtc_worker.py` 进程，主进程只负责投递经过选择的帧和轮询 health。
 - WebRTC 保留相机发布分辨率（只为 NV12 偶数尺寸向下取整），不再根据面板尺寸
   动态降采样。浏览器正常预览请求 25 FPS；主进程在图像转换和 IPC copy 前按
-  会话 deadline 选择 latest frame，worker 会话使用同一 deadline 逻辑，避免无用
-  转换和重复投递。录制期间的 10 FPS 预览限频仍保留。
+  会话 deadline 选择 latest frame。最高帧率会话直接接受这批已限频帧，只有较低
+  帧率会话在 worker 再做一次选择，避免相同 deadline 重复限流。录制期间的
+  10 FPS 预览限频仍保留。
 - 手部 JPEG 解码、关键点绘制和重编码运行在独立的 `hand_overlay_worker.py`
   进程；首次启用 JPEG 叠加时按需启动，最后一路关闭后退出。
 - Dashboard 只为 `dashboard_hand_tracking: true` 的相机订阅手部数据。rosbag
@@ -84,6 +85,9 @@
   预览帧；录制 writer 与原始图像路径不受影响。
 - mapper、localizer 与 dashboard 的 pose 频率统一为 30 Hz。向 30 Hz 页面发送 50 Hz
   pose 只增加 DDS/序列化和 callback 工作，不改善可见运动。
+- mapper 与 localizer 仍订阅原始高频 VIO，但只以 60 Hz 构造并保存插值样本、以
+  30 Hz 推进滤波和发布 pose；稳定 deadline 避免 100 Hz 输入按简单间隔判断时混叠
+  成 25 Hz。60 Hz buffer 的相邻样本最大间隔保持在 20 ms，满足图像插值等待窗口。
 - 页面先接通 pose、相机和轨迹，再分阶段加载 Avatar；同阶段模型允许并发，较大的
   GLB 不得阻塞 pose/轨迹处理。
 - `app.js` 曾被所有页面共同加载，任何顶层异常都会影响全站。重构后每个页面使用独立入口，共享能力通过显式模块导入。
@@ -97,6 +101,18 @@
   83–102% 降至约 46%，提前限流使 WebRTC worker 从 43–50% 降至约 32%。
 - GPU 仍因 Babylon/WebRender 合成与 SuperGlue TensorRT 推理在 12–89% 间波动；
   暂停 SuperGlue 的 A/B 测试没有改善 3D 卡顿，因此不能用停定位换显示流畅度。
+
+同日的第二轮进程级优化保持三路 25 FPS、原分辨率、30 Hz 3D 和全部建图服务：
+
+- mapper 进程的 15 秒 CPU 均值约从 64.0% 降至 55.5%，localizer 从 44.4% 降至
+  40.3%；全部相关进程合计约从 332.0% 降至 323.4%。Firefox/WebRTC 的短窗口结果
+  会受合成和编码相位影响，没有以降低画质或帧率换取数字。
+- 稳态三路编码 24.7–24.9 FPS、可见帧率 21.6–23.2 FPS，3D 约 30 FPS；累计新增
+  解码丢帧和 WebRTC 丢包均为零，ROS pose 实测 29.96–30.00 Hz。
+- GR3D 的长窗口均值约 61%，范围 18–97%，与优化前约 58% 的脉冲负载相比没有
+  可证实下降；它仍由 Firefox/Babylon 合成与 SuperGlue 推理共同占用。
+- Compose 为 dashboard 启用 init 子进程回收；重启旧 kiosk 后，容器内 zombie
+  从 24 个降为 0。前端轮询只在内容变化时写 DOM，避免重复触发布局和样式失效。
 
 ## 训练数据导出
 

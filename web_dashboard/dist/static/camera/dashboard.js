@@ -105,10 +105,10 @@ function renderCameraPanels(cameras, isPlayback = false) {
     updateCameraPanelAspect(panel, camera);
     updateCameraPanelLayout(panel, index);
     const status = panel.querySelector("[data-camera-status]");
-    status.textContent = !streamReady ? "starting" : camera.stale ? "stale" : camera.visible ? (isPlayback ? "playback" : "live") : "waiting";
+    setTextIfChanged(status, !streamReady ? "starting" : camera.stale ? "stale" : camera.visible ? (isPlayback ? "playback" : "live") : "waiting");
     const topic = panel.querySelector("[data-camera-topic]");
     if (topic && camera.topic) {
-      topic.textContent = camera.topic;
+      setTextIfChanged(topic, camera.topic);
     }
     if (streamReady) {
       if (panel.classList.contains("minimized")) {
@@ -204,25 +204,28 @@ function updateCameraPanelAspect(panel, camera) {
   const rotatedFrame = rotation !== 0;
   body.classList.toggle("camera-rotated", rotatedFrame);
   if (rotatedFrame) {
-    body.style.setProperty("--camera-rotation", `${rotation}deg`);
-  } else {
+    setStylePropertyIfChanged(body, "--camera-rotation", `${rotation}deg`);
+  } else if (body.style.getPropertyValue("--camera-rotation")) {
     body.style.removeProperty("--camera-rotation");
   }
   if (camera.width && camera.height) {
     const rotated = rotation === 90 || rotation === 270;
     const aspectWidth = rotated ? camera.height : camera.width;
     const aspectHeight = rotated ? camera.width : camera.height;
-    body.style.setProperty("--camera-aspect", `${aspectWidth} / ${aspectHeight}`);
-    body.dataset.hasFrame = "true";
+    setStylePropertyIfChanged(body, "--camera-aspect", `${aspectWidth} / ${aspectHeight}`);
+    if (body.dataset.hasFrame !== "true") body.dataset.hasFrame = "true";
   } else {
-    body.style.setProperty("--camera-aspect", "16 / 9");
-    body.dataset.hasFrame = "false";
+    setStylePropertyIfChanged(body, "--camera-aspect", "16 / 9");
+    if (body.dataset.hasFrame !== "false") body.dataset.hasFrame = "false";
   }
 }
 
 function updateCameraPanelLayout(panel, index) {
-  panel.style.gridColumn = "1 / span 1";
-  panel.style.gridRow = `${index + 1} / span 1`;
+  if (panel.style.gridColumn !== "1 / span 1") {
+    panel.style.gridColumn = "1 / span 1";
+  }
+  const gridRow = `${index + 1} / span 1`;
+  if (panel.style.gridRow !== gridRow) panel.style.gridRow = gridRow;
 }
 
 function updateCameraStream(panel, camera) {
@@ -597,7 +600,7 @@ function renderCameraFps(cameraName) {
   }
   const displayFps = computeDisplayedFps(pollState.displayFrameTimes);
   const backendFps = Number(pollState.backendFps || 0);
-  label.textContent = displayFps > 0 ? `${displayFps.toFixed(1)} fps` : "-- fps";
+  setTextIfChanged(label, displayFps > 0 ? `${displayFps.toFixed(1)} fps` : "-- fps");
   const pipeline = pollState.backendPipeline || {};
   const main = pipeline.main || {};
   const worker = pipeline.worker || {};
@@ -627,7 +630,18 @@ function renderCameraFps(cameraName) {
       `browser totals received ${Number(rtc.framesReceived || 0)} · decoded ${Number(rtc.framesDecoded || 0)} · dropped ${Number(rtc.framesDropped || 0)} · packets lost ${Number(rtc.packetsLost || 0)} · jitter ${Number(rtc.jitterMs || 0).toFixed(1)} ms`
     );
   }
-  label.title = lines.join("\n");
+  const title = lines.join("\n");
+  if (label.title !== title) label.title = title;
+}
+
+function setTextIfChanged(element, value) {
+  if (element && element.textContent !== value) element.textContent = value;
+}
+
+function setStylePropertyIfChanged(element, name, value) {
+  if (element.style.getPropertyValue(name) !== value) {
+    element.style.setProperty(name, value);
+  }
 }
 
 function normalizeRotation(value) {
