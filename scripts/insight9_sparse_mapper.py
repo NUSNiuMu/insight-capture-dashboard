@@ -886,6 +886,8 @@ class Insight9SparseMapper(Node):
             odom_to_left,
             image_shape,
             self._loop_config,
+            # LandmarkMap normalizes every descriptor on insert and merge.
+            map_descriptors_normalized=True,
         )
         measurement: Optional[np.ndarray] = None
         with self._loop_lock:

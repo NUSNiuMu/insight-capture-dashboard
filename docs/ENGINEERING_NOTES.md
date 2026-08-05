@@ -114,6 +114,18 @@
 - Compose 为 dashboard 启用 init 子进程回收；重启旧 kiosk 后，容器内 zombie
   从 24 个降为 0。前端轮询只在内容变化时写 DOM，避免重复触发布局和样式失效。
 
+同日的第三轮 CPU 优化保持原有 ratio test、mutual-best 和 PnP 接受规则：
+
+- Insight3 收到新特征地图时只归一化一次描述子，定位时直接复用不可变缓存；mapper
+  回环使用的 `LandmarkMap` 描述子本身已在插入、融合时归一化，也不再重复计算。
+- 描述子相似度按 256 个 query 分块，逐块保留 query top-2 和 map mutual-best；跨块
+  并列值仍选择首个 query。随机尺寸、空输入、并列值和完整 PnP 的结果均与原算法一致。
+- 两路 Insight3 各自使用独立状态锁，特征地图另用 map lock；TensorRT IPC、描述子匹配
+  和 PnP 均在锁外运行，避免一台相机的 VIO/图像 callback 阻塞另一台。
+- 1024×20000 合成匹配中，完整矩阵核心耗时 821.88 ms，缓存归一化后的分块实现
+  724.11 ms；原实现每次额外归一化地图的中位耗时为 13.74 ms。512×10000 场景的
+  结果校验值完全相同，进程峰值 RSS 约从 164 MiB 降至 124 MiB。
+
 ## 训练数据导出
 
 - `/umi-dataset` 的标准归档格式是 HiFi-UMI 风格 LeRobot v3；Legacy UMI Zarr

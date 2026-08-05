@@ -37,6 +37,7 @@ from .global_localization import (
     LocalizationConsensus,
     localize_features,
     match_descriptors,
+    normalize_descriptors,
 )
 from .synchronization import (
     PoseBuffer,
@@ -81,6 +82,7 @@ __all__ = [
     "matrix_from_transform",
     "localize_features",
     "match_descriptors",
+    "normalize_descriptors",
     "rotation_distance_deg",
     "select_timestamp",
     "transform_points",

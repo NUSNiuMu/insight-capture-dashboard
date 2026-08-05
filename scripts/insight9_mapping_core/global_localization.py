@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -40,7 +41,12 @@ class LocalizationCandidate:
     grid_cells: int
 
 
-def _normalize_rows(values: np.ndarray) -> np.ndarray:
+DESCRIPTOR_QUERY_BLOCK_SIZE = 256
+
+
+def normalize_descriptors(values: np.ndarray) -> np.ndarray:
+    """Return float32 descriptors with unit-length rows."""
+
     rows = np.asarray(values, dtype=np.float32)
     norms = np.linalg.norm(rows, axis=1, keepdims=True)
     return rows / np.maximum(norms, 1e-12)
@@ -52,26 +58,54 @@ def match_descriptors(
     *,
     ratio_test: float,
     min_similarity: float,
+    map_descriptors_normalized: bool = False,
+    query_block_size: int = DESCRIPTOR_QUERY_BLOCK_SIZE,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return mutual query/map indices passing cosine similarity and ratio tests."""
 
-    query = _normalize_rows(query_descriptors)
-    mapped = _normalize_rows(map_descriptors)
+    query = normalize_descriptors(query_descriptors)
+    mapped = (
+        np.asarray(map_descriptors, dtype=np.float32)
+        if map_descriptors_normalized
+        else normalize_descriptors(map_descriptors)
+    )
     if len(query) == 0 or len(mapped) < 2:
         empty = np.empty((0,), dtype=np.int64)
         return empty, empty, np.empty((0,), dtype=np.float32)
-    similarity = query @ mapped.T
-    nearest_two = np.argpartition(-similarity, kth=1, axis=1)[:, :2]
-    nearest_values = np.take_along_axis(similarity, nearest_two, axis=1)
-    order = np.argsort(-nearest_values, axis=1)
-    nearest_two = np.take_along_axis(nearest_two, order, axis=1)
-    nearest_values = np.take_along_axis(nearest_values, order, axis=1)
-    best_map = nearest_two[:, 0]
-    best_similarity = nearest_values[:, 0]
+    block_size = int(query_block_size)
+    if block_size <= 0:
+        raise ValueError("query_block_size must be positive")
+
+    best_map = np.empty((len(query),), dtype=np.int64)
+    best_similarity = np.empty((len(query),), dtype=np.float32)
+    second_similarity = np.empty((len(query),), dtype=np.float32)
+    mutual_best_query = np.zeros((len(mapped),), dtype=np.int64)
+    mutual_best_similarity = np.full((len(mapped),), -np.inf, dtype=np.float32)
+    map_indices = np.arange(len(mapped), dtype=np.int64)
+
+    # Query blocking bounds the temporary similarity matrix while preserving
+    # the exact ratio test and first-query tie behavior of a full matrix.
+    for start in range(0, len(query), block_size):
+        end = min(start + block_size, len(query))
+        similarity = query[start:end] @ mapped.T
+        nearest_two = np.argpartition(-similarity, kth=1, axis=1)[:, :2]
+        nearest_values = np.take_along_axis(similarity, nearest_two, axis=1)
+        order = np.argsort(-nearest_values, axis=1)
+        nearest_two = np.take_along_axis(nearest_two, order, axis=1)
+        nearest_values = np.take_along_axis(nearest_values, order, axis=1)
+        best_map[start:end] = nearest_two[:, 0]
+        best_similarity[start:end] = nearest_values[:, 0]
+        second_similarity[start:end] = nearest_values[:, 1]
+
+        block_best_local = np.argmax(similarity, axis=0)
+        block_best_similarity = similarity[block_best_local, map_indices]
+        update = block_best_similarity > mutual_best_similarity
+        mutual_best_similarity[update] = block_best_similarity[update]
+        mutual_best_query[update] = start + block_best_local[update]
+
     best_distance_sq = np.maximum(0.0, 2.0 - 2.0 * best_similarity)
-    second_distance_sq = np.maximum(1e-12, 2.0 - 2.0 * nearest_values[:, 1])
+    second_distance_sq = np.maximum(1e-12, 2.0 - 2.0 * second_similarity)
     ratio_ok = best_distance_sq < float(ratio_test) ** 2 * second_distance_sq
-    mutual_best_query = np.argmax(similarity, axis=0)
     query_indices = np.arange(len(query), dtype=np.int64)
     keep = (
         ratio_ok
@@ -90,19 +124,25 @@ def localize_features(
     odom_to_camera: np.ndarray,
     image_shape: tuple[int, int],
     config: GlobalLocalizationConfig,
+    *,
+    map_descriptors_normalized: bool = False,
 ) -> tuple[Optional[LocalizationCandidate], dict[str, object]]:
     """Match a query image to the 3D descriptor map and solve global PnP."""
 
+    match_started = time.perf_counter()
     query_indices, map_indices, similarities = match_descriptors(
         query_descriptors,
         map_descriptors,
         ratio_test=config.ratio_test,
         min_similarity=config.min_similarity,
+        map_descriptors_normalized=map_descriptors_normalized,
     )
+    descriptor_match_ms = (time.perf_counter() - match_started) * 1000.0
     diagnostics: dict[str, object] = {
         "query_features": int(len(query_keypoints)),
         "map_features": int(len(map_points)),
         "descriptor_matches": int(len(query_indices)),
+        "descriptor_match_ms": round(descriptor_match_ms, 2),
         "median_similarity": (
             round(float(np.median(similarities)), 4) if len(similarities) else None
         ),
