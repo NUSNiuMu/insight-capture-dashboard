@@ -24,7 +24,7 @@ docker compose --profile mapping-validation up -d --force-recreate \
 - `VIO camera path`：Insight9 本轮建图轨迹。
 
 双 Insight3 全局定位的启动与诊断见
-[INSIGHT3_GLOBAL_LOCALIZATION.md](INSIGHT3_GLOBAL_LOCALIZATION.md)。
+[Insight9 在线稀疏建图与 Insight3 全局重定位](INSIGHT9_SPARSE_MAPPING.md#insight3-全局重定位)。
 
 默认 RViz 配置不包含稠密点云图层。如果临时诊断场景形状，可在 RViz 手动
 添加 `/insight9_dense_map/current_points` 或

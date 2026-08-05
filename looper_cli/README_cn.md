@@ -21,18 +21,10 @@
 - 摄像头帧率配置的查询和更新
 - 深度流（深度估计）开关的查询和切换
 - 获取系统日志，或在无日志接口时回退到诊断快照
+- 查询和修改 ROS domain ID 与相机 topic 命名
 
-
-
-## 版本commit对应信息
-
-1.2.3版本及以前的版本对应commit：`d5efdabb2088c735a3592ab7a29e274e2e039a8c`
-
-1.2.4-1.2.5版本对应commit：`5930bb25a6d7f2902c6e89fe80f62007195a16f4`
-
-
-
-
+当前 CLI 版本为 **2.0.0**。CLI 版本与设备固件版本独立；设备版本应通过
+`current` 或 `device versions` 查询，不再用历史 commit 映射判断。
 
 ## 目录结构
 
@@ -95,6 +87,8 @@ python3 looper_cli.py --device-base-url http://169.254.10.1 current
 ```bash
 # 查看版本信息
 python3 looper_cli.py current
+# 查看 Web 仪表盘同源的软件与固件版本
+python3 looper_cli.py device versions
 # 列出已有的ota升级包列表
 python3 looper_cli.py list
 # 升级到最新发布的版本
@@ -150,8 +144,14 @@ python3 looper_cli.py time sync
 
 # 启动软件
 python3 looper_cli.py insight start
+# 暂停软件
+python3 looper_cli.py insight pause
 # 关闭软件
 python3 looper_cli.py insight stop
+
+# Looper 控制页同义命令
+python3 looper_cli.py looper reboot -y
+python3 looper_cli.py looper control insight-start
 
 # 查看当前标定模式状态
 python3 looper_cli.py calibration status
@@ -261,10 +261,20 @@ python3 looper_cli.py ros topic set --node-name insight_full --camera-namespace 
 - `shallow` 表示恢复到当前版本的初始状态
 - `deep` 表示删除软件，之后需要重新 OTA
 
-`insight stop`
+`insight start`、`insight pause` 和 `insight stop`
 
-- 优先调用 stop 后端接口，并兼容旧固件上的 pause 接口
+- 分别调用启动、暂停和停止接口；stop 会兼容只有 pause 接口的旧固件
 - `looper control insight-stop` 是同一个动作的别名入口
+
+`looper reboot` 和 `looper control`
+
+- 是与 Web Looper Control 页面一致的同义入口
+- 可执行设备重启以及 Insightfull 启动、暂停和停止
+
+`ros domain-id` 和 `ros topic`
+
+- 读取或修改 `ROS_DOMAIN_ID` 和相机 ROS topic 命名
+- 修改操作需要显式确认；批处理可传 `-y`
 
 `calibration upload`
 
@@ -319,6 +329,9 @@ python3 looper_cli.py ros topic set --node-name insight_full --camera-namespace 
 - `/api/ota/upload`
 - `/api/ota/start`
 - `/api/ota/ws`
+- `/api/ota/device-versions`（Web 仪表盘同源的软件与固件版本）
+- `/api/ros-domain-id`（GET/POST ROS domain ID）
+- `/api/camera-config`（GET/POST 相机 ROS topic 命名）
 - `/api/upload` (支持备份现有文件的多部分表单文件上传)
 - `/api/restore` (恢复备份文件)
 - `/api/camera-fps` (GET/POST 摄像头帧率配置)

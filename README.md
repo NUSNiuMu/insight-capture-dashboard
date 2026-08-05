@@ -1,6 +1,9 @@
-# Insight Live Dashboard
+# Insight Capture Dashboard
 
-实时查看多路相机图像、显示多路 VIO 轨迹，并在 dashboard 内做在线相对位姿标定（AprilTag board）。
+面向机器人学习数据采集的多相机工作站：实时查看多路相机图像和统一世界系轨迹，
+录制并校验 rosbag，离线提取 Hand pose、夹爪状态，并导出 LeRobot/UMI 训练数据。
+在线空间基准由 Insight9 稀疏建图与 Insight3 全局重定位提供；旧 AprilTag 在线对齐
+链路已经移除。
 
 > **交付给客户的使用手册在 [docs/USAGE.md](docs/USAGE.md)**（日常操作、采集
 > 流程、故障排查诊断树；不含安装——环境由我们出厂配置好）。
@@ -12,7 +15,8 @@
 
 当前 dashboard 使用 **Web 版**（`multi_camera_dashboard_web.py`）：ROS2/VIO 处理在后端，前端是 Babylon.js 浏览器 GPU 渲染，可以本机接显示器看，也可以远程浏览器连。
 
-默认 `ROS_DOMAIN_ID=20`（在 [config/cameras.json](config/cameras.json) 里配置）。
+`ROS_DOMAIN_ID` 从当前未跟踪的 `config/cameras.json` 读取；jetson-nx profile
+默认值为 20。
 
 ## 快速开始
 
@@ -69,7 +73,7 @@ python3 scripts/multi_camera_dashboard_web.py &
 > （对当前选中的设备生效），但换设备/长期改动要改回 `config/devices/<name>/` 里的源文件，
 > 否则下次 `select_device.sh` 会把改动覆盖掉。详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
-**优先只改这一个文件**：[config/cameras.json](config/cameras.json)。它控制：
+**优先只改当前机器的 `config/cameras.json`**。它控制：
 
 - dashboard 显示哪几路图像、用哪几路 VIO
 - 默认 `ROS_DOMAIN_ID`
@@ -113,14 +117,28 @@ python3 scripts/multi_camera_dashboard_web.py &
 页面入口：
 
 - `/` 或 `/3d`：实时画面与全局建图/重定位轨迹的 Babylon.js GPU 场景
-- `/recording`：独立 rosbag 录制页，topic 发现、勾选、录制、停止、同步到主机
-- `/bags`：本地 rosbag 列表页，路径/大小/时长/label/scoring/optimization 状态
-- `/scoring`：轨迹评分页骨架
-- `/optimization`：COLMAP 轨迹优化页（`jetson-nx` profile 的镜像自带 CUDA sm_87 编译的 COLMAP 3.9.1，开箱即用，见下方"部署"）
+- `/recording`：rosbag 录制页，topic 发现、勾选、录制与停止
+- `/bags`：本地 rosbag 列表页，大小/时长/消息/topic 数、完整性与评分状态
+- `/umi-dataset`：LeRobot v3 标准数据集与 Legacy UMI Zarr 导出
+- `/scoring`：录制完整性验证与轨迹评分
+- `/handpose`：从已有 rosbag 离线提取并查看 WiLoR 3D 手部关键点
+- `/optimization`：COLMAP 轨迹优化（`jetson-nx` 镜像内置 CUDA sm_87 的 COLMAP 3.9.1）
+- `/settings`：手势录制、Stick figure、夹爪/手部叠加、Insight3 mask 与 Avatar 设置
 
-Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，支持整组勾选），`Start` 只录勾选的 topic，`Stop` 优雅结束 `ros2 bag record`。手势录制默认关闭，可在 Settings 页面开启；开启后，Insight9 同时检测到双手“拇指向上、四指握拳”持续 0.8 秒时，会用服务器默认 topics 开始录制，解除 2 秒后再次保持同一手势可停止，且不会停止网页手动开始的录制。输出目录优先级：CLI `--rosbag-dir` > 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
+Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，
+支持整组勾选），`Start` 只录勾选的 topic。三路 dashboard 图像复用现有 DDS reader，
+直接交给每路 `InProcessBagWriter`；IMU、VIO 等小消息仍由独立 `ros2 bag record`
+子进程写入。`Stop` 会依次结束 writer、合包、生成 live header/network audit，并在
+profile 启用时自动同步到主机；收尾完成前不能开始下一段。默认选择同时包含原始
+`vio_100hz` 和配置的全局 pose，供单臂/双臂数据集导出使用。
 
-Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小、duration、message/topic 数量，以及 `outputs/results/{labels,scores,optimized}` 里对应的 label/scoring/optimization 状态。
+手势录制默认关闭，可在 Settings 开启；Insight9 同时检测到双手“拇指向上、四指
+握拳”持续 0.8 秒时，会用服务器默认 topics 开始录制，解除 2 秒后再次保持同一
+手势可停止，且不会停止网页手动开始的录制。输出目录优先级：CLI `--rosbag-dir` >
+环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
+
+Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、message/topic 数量，
+并从 `outputs/results/{integrity,scores}` 读取完整性与评分状态。
 
 ### Web avatar 模型配置
 
@@ -150,18 +168,20 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 | `scripts/dashboard_web/` / `dashboard_runtime/` | Web API、WebSocket 与 Dashboard 运行时领域实现 |
 | `scripts/dashboard_media/` | 硬件 JPEG 编解码与 WebRTC 流实现 |
 | `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
-| `scripts/post_processing.py` | Web 版 rosbag 录制管理、topic 发现分组、COLMAP 优化 pipeline 调度 |
+| `scripts/post_processing.py` | 录制与后处理公共导入的稳定兼容 facade |
 | `scripts/post_processing_core/` | 完整性、评分、录制、恢复、回放、同步、bag catalog 与优化实现 |
 | `scripts/hand_tracking/` | 实时手部 landmark、双手手势识别和夹爪跟踪 |
 | `scripts/handpose/` | 从已有 rosbag 离线提取并管理 Hand pose 结果 |
-| `scripts/insight9_sparse_mapper.py` | Insight9 官方 SuperPoint/SuperGlue 在线稀疏建图验证节点 |
-| `scripts/insight9_dense_mapper.py` | Insight9 StereoSGBM/VIO 在线稠密点云与体素融合节点 |
+| `scripts/webrtc_worker.py` / `hand_overlay_worker.py` | 独立进程中的 WebRTC 编码/信令与 JPEG 手部叠加 |
+| `scripts/insight9_sparse_mapper.py` | Insight9 SuperPoint/SuperGlue 在线稀疏建图与位姿图入口 |
+| `scripts/insight9_dense_mapper.py` | 仅内部验证的 StereoSGBM/VIO 稠密点云入口 |
 | `scripts/insight3_global_localizer.py` | 两路 Insight3 到 Insight9 3D 描述子地图的全局定位与轨迹重建节点 |
 | `scripts/run_mapping_validation_rviz.sh` | 清空上一会话后启动稀疏三相机重定位与 RViz |
-| `Dockerfile.superglue-validation` | 内部研究验证专用 NVIDIA Jetson TensorRT/SuperGlue GPU 镜像 |
+| `Dockerfile.superglue-validation` | 客户发布与开发共用的 NVIDIA Jetson TensorRT/SuperGlue GPU 镜像 |
 | `scripts/camera_setup.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |
 | `scripts/reboot_cameras.sh` | 扫描 `169.254.x.x` 网段并批量重启相机 |
 | `scripts/gripper_tracking.py` / `gripper_calibrate.py` / `gripper_extract.py` | 夹爪张合度识别、标定与 rosbag 离线提取 |
+| `scripts/lerobot_dataset_export.py` / `umi_dataset_export.py` | LeRobot v3 标准归档与 Legacy UMI 数据集导出 |
 | `scripts/traj_score.py` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
 | `web_dashboard/` | Babylon.js Web 前端源码，`npm run build` 生成 `dist/` 静态页面 |
 | `config/post_processing.json` | Web 版 rosbag 默认录制配置（`rosbag_dir` 等） |
@@ -176,7 +196,7 @@ Bags 列表页扫描 `metadata.yaml`，展示目录路径、递归文件大小�
 ### 设备与 config profile
 
 三台设备（`jetson-nx`/`lite`/`lite-779`）现在共用同一个 `main` 分支，不再各自维护
-一个 git 分支——设备差异收敛到 `config/devices/<name>/` 下的三个文件（见下方"单一
+一个 git 分支——设备差异收敛到 `config/devices/<name>/` 下的两个文件（见上方"单一
 配置入口"一节），用 `scripts/select_device.sh <name>` 选择。只有 `jetson-nx` 会打
 正式发布镜像，`lite`/`lite-779` 是开发机专用 profile。
 

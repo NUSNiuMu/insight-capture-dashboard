@@ -21,12 +21,11 @@ Current capability coverage:
 - Camera FPS configuration inspection and update
 - Deep flow (depth estimation) switch inspection and toggling
 - System log retrieval, with diagnostic snapshot fallback when the log API is unavailable
+- ROS domain ID and camera topic naming inspection and update
 
-## Version Commit Mapping
-
-Versions `1.2.3` and earlier correspond to commit: `d5efdabb2088c735a3592ab7a29e274e2e039a8c`
-
-Versions `1.2.4` through `1.2.5` correspond to commit:`5930bb25a6d7f2902c6e89fe80f62007195a16f4`
+The current CLI version is **2.0.0**. CLI and device firmware versions are
+independent. Use `current` or `device versions` to inspect the device instead
+of relying on historical commit mappings.
 
 ## Repository Layout
 
@@ -89,6 +88,8 @@ Top-level shortcuts:
 ```bash
 # View version information
 python3 looper_cli.py current
+# View software and firmware versions from the Web-dashboard source
+python3 looper_cli.py device versions
 # List existing OTA upgrade packages
 python3 looper_cli.py list
 # Upgrade to the latest released version
@@ -143,8 +144,14 @@ python3 looper_cli.py time sync
 
 # Start software
 python3 looper_cli.py insight start
+# Pause software
+python3 looper_cli.py insight pause
 # Stop software
 python3 looper_cli.py insight stop
+
+# Web Looper Control aliases
+python3 looper_cli.py looper reboot -y
+python3 looper_cli.py looper control insight-start
 
 # View current calibration mode status
 python3 looper_cli.py calibration status
@@ -252,10 +259,20 @@ When OTA-related commands are executed, the CLI currently works as follows:
 - `shallow` restores the initial state of the current version
 - `deep` deletes software and requires OTA again afterward
 
-`insight stop`
+`insight start`, `insight pause`, and `insight stop`
 
-- Calls the stop backend first and falls back to pause endpoints for older firmware
+- Call the start, pause, and stop APIs; stop falls back for older firmware that only exposes pause
 - `looper control insight-stop` is an alias entry for the same action
+
+`looper reboot` and `looper control`
+
+- Mirror actions exposed by the Web Looper Control page
+- Cover device reboot and Insightfull start, pause, and stop
+
+`ros domain-id` and `ros topic`
+
+- Read or update `ROS_DOMAIN_ID` and camera ROS topic naming
+- Mutating operations require confirmation; pass `-y` for non-interactive use
 
 `calibration upload`
 
@@ -311,6 +328,9 @@ The current CLI covers these confirmed device-local APIs:
 - `/api/ota/upload`
 - `/api/ota/start`
 - `/api/ota/ws`
+- `/api/ota/device-versions` (Web-dashboard-aligned software and firmware versions)
+- `/api/ros-domain-id` (GET/POST ROS domain ID)
+- `/api/camera-config` (GET/POST camera ROS topic naming)
 - `/api/upload` (multipart form file upload with backup support)
 - `/api/restore` (restore backup files)
 - `/api/camera-fps` (GET/POST camera FPS configuration)

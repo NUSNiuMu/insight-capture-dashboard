@@ -1,7 +1,9 @@
-# Insight9 在线稀疏建图验证
+# Insight9 在线稀疏建图与 Insight3 全局重定位
 
-该验证节点使用 Insight9 校正后的左右红外图、100 Hz VIO 和 Magic Leap 官方
-SuperPoint/SuperGlue，在当前会话内建立稀疏地图，并发布 RViz 点云与相机轨迹。
+在线栈使用 Insight9 校正后的左右红外图、100 Hz VIO 和 Magic Leap 官方
+SuperPoint/SuperGlue，在当前会话内建立稀疏地图；两路 Insight3 随后定位到同一
+地图并持续发布统一世界系 Pose。v2.0.0 起该栈进入客户发布，RViz/稠密地图仍只作
+内部验证。
 
 ## 当前边界
 
@@ -88,16 +90,34 @@ Insight3 A、Insight3 B 三条全局轨迹。页面会显示三路在线状态�
 VIO，避免模型在两套坐标源之间跳变。
 
 网页不渲染稀疏特征点云，只显示点数统计和三条全局轨迹。模型位姿使用独立的
-高频全局 Pose 话题，唯一的 dashboard WebSocket 以 50 Hz 发送最新位姿，
+高频全局 Pose 话题，唯一的 dashboard WebSocket 以 30 Hz 发送最新位姿，
 前端用同一份 Pose 增量绘制轨迹。完整 ROS Path 限制为 200 点并以 5 Hz
 发布，仅供 RViz 和显式调试选择，避免反复序列化整条历史；网页和默认录制
-只使用 50 Hz Pose，也不再建立第二条 mapping WebSocket。建图状态通过
+只使用 30 Hz Pose，也不再建立第二条 mapping WebSocket。建图状态通过
 500 ms 的轻量 REST 轮询显示。
 
 新录制默认保存三路全局 Pose；回放时三路全局 Pose 经 `/bagplay/...`
 remap 后继续驱动同一套模型和轨迹。旧 rosbag 如果没有这些全局话题，将不显示
 轨迹或模型位置，不会回退到旧 VIO。原 AprilTag 在线对齐的订阅、定时器、
 Web API、前端控制和 WebSocket payload 已停用，建图重定位是唯一在线校准源。
+
+## Insight3 全局重定位
+
+Dashboard 复用两路 Insight3 现有图像 reader，以 2 Hz 中继到
+`/insight_mapping/<name>/infra1/image_rect_raw`；localizer 不再增加全速图像 DDS
+reader。查询特征与 Insight9 的 3D 描述子地图匹配，通过 PnP-RANSAC 与连续三帧
+共识后得到 `T_map_odom`，再以 30 Hz 原始 VIO 外推全局 Pose。
+
+- 首次定位直接初始化；小于 `0.15 m / 10°` 的修正由误差状态 EKF 平滑吸收；达到
+  任一阈值的可靠重定位立即跳回并从当前位置重建 Path。
+- 暂时看不到已建图区域时保留最后校正并进入 `vio_only`，不会隐藏模型；再次匹配
+  地图后继续校准累积漂移。
+- Insight3 图像底部夹爪 mask 默认为 `0`（关闭），可在 Settings 按现场遮挡比例热
+  更新；不能假设固定 20%。
+- Jetson NX profile 发布 `insight3_a_global_camera_center -> right_tcp` 与
+  `insight3_b_global_camera_center -> left_tcp` 静态 TF；未标定 profile 不发布占位变换。
+- `/insight_global/<name>/status` 提供 `tracking_mode`、`correction_mode`、PnP/共识、
+  hard relocalization 和当前 mask 等诊断字段。
 
 验证镜像包含：
 
@@ -110,7 +130,8 @@ Web API、前端控制和 WebSocket payload 已停用，建图重定位是唯一
 
 构建阶段会校验三份权重的 SHA-256；任一内容不一致即失败。该镜像名为
 `insight-superglue-validation:25.04`（沿用历史命名，未随发布状态改名），
-由 `scripts/build_release.sh` 一并构建并打进客户镜像 tar。
+由 `scripts/build_release.sh` 一并构建并单独保存为首次安装依赖 tar；Dashboard
+日常升级包不再重复携带该固定镜像。
 
 ONNX 在镜像构建阶段一次性导出。首次启动只在当前 Jetson 上编译
 `superpoint_fp16.plan` 和 `superglue_fp32.plan`，不需要也不会加载
@@ -151,7 +172,7 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 网页接口：
 
 - `GET /api/mapping`：当前地图点数和三路状态快照。
-- `GET /ws`：50 Hz 三路全局位姿流，同时驱动模型和网页轨迹。
+- `GET /ws`：30 Hz 三路全局位姿流，同时驱动模型和网页轨迹。
 - `POST /api/mapping/reset`：同时重置 mapper 与 localizer。
 - ROS service `/insight9_sparse_map/reset`：清空 Insight9 会话地图。
 - ROS service `/insight_global/reset`：清空两个 Insight3 的校正和全局轨迹。
@@ -160,7 +181,7 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 
 - `/insight9_sparse_map/points`：经过多关键帧确认的稀疏地图。
 - `/insight9_sparse_map/features`：确认地标的三维位置和 256 维 SuperPoint 描述子。
-- `/insight9_sparse_map/pose`：50 Hz 最新全局位姿。
+- `/insight9_sparse_map/pose`：30 Hz 最新全局位姿。
 - `/insight9_sparse_map/path`：5 Hz 发布、最多 200 点的调试全局轨迹。
 - `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数、回环候选/拒绝
   诊断、图节点/边/回环边数量、pending 状态、图优化前后代价、最大位姿修正、
@@ -179,9 +200,6 @@ ros2 topic echo /insight9_sparse_map/status
 ```bash
 docker compose stop insight3-global-localizer insight9-sparse-mapper superglue-inference
 ```
-
-用该特征地图定位两路 Insight3 的方法见
-[INSIGHT3_GLOBAL_LOCALIZATION.md](INSIGHT3_GLOBAL_LOCALIZATION.md)。
 
 ## 第一轮验收
 
@@ -228,7 +246,7 @@ Jetson Orin NX、544×640 双目红外输入、1024 个最大关键点、官方 
 - localizer 直接订阅两路 20 Hz 原始图时，Insight3 B 实时图像曾下降到
   13–14 Hz，六核 CPU 在录制期间达到 75–90%/核；改为复用 dashboard reader
   并以 2 Hz 中继定位图后，A/B 连续实测均恢复为 20 Hz。
-- 完整 200 点 Path 改为 5 Hz 调试输出，默认录制只保留 50 Hz Pose；三个
+- 完整 200 点 Path 改为 5 Hz 调试输出；当前默认录制只保留 30 Hz Pose；三个
   全局 Pose 合并进对应相机 recorder，录制 part 数由 9 降为 7。
 - 在 3D/WebRTC 同时运行的 30 秒压力录制中，三路图像 live audit 为
   602/602/904 帧，header missing 和 writer drop 均为 0；为 400 Hz IMU

@@ -4,6 +4,9 @@
 `insight-dashboard-vX.Y.Z.tar.gz`，用 `update.sh` 加载并重启即可，
 数据（录制的 rosbag、标定、配置）全部保留。
 
+自 v2.0.0 起，客户部署同时包含 SuperGlue 推理、Insight9 稀疏建图和
+Insight3 全局重定位服务；稠密建图和 RViz 验证服务不进入客户发布包。
+
 ## 环境要求
 
 - NVIDIA Jetson（JetPack 6.x，已装 Docker 与 nvidia-container-runtime）
@@ -26,6 +29,8 @@ sudo ./scripts/host_setup.sh       # 一次性调优：CycloneDDS/UDP 分片、R
 `insight-superglue-validation-25.04.tar.gz` 加载。随后生成 `config/` 等数据目录并启动服务，
 最后等待后端健康检查通过。`host_setup.sh` 只在首次安装（或重刷系统后）需要跑一次；
 jetson-nx profile 会在下一次开机相机恢复流程中把相机 DDS 模式校正为 CycloneDDS。
+安装的 `insight-camera-network.service` 负责网卡参数，
+`insight-camera-reboot.service` 在冷启动后恢复相机并校验 DDS 配置。
 
 首次安装或大版本升级后，建图/重定位用的 TensorRT 推理服务需要现场编译一次
 设备专属引擎，最长约 15 分钟；这段时间看板本身已经能正常打开，只是 3D 页面的
@@ -41,7 +46,8 @@ docker compose logs -f                # 查看后端日志
 docker compose down                   # 停止
 ```
 
-浏览器访问：`http://<设备IP>:8765/`
+浏览器访问：`http://<设备IP>:8765/`。可用页面包括 3D、录制、Bags、
+LeRobot/UMI 数据集、轨迹评分、Hand pose、轨迹优化和设置。
 
 ## 升级
 
@@ -59,7 +65,7 @@ docker compose down                   # 停止
 旧版本镜像加载过就还在本机，一条命令切回去：
 
 ```bash
-./update.sh --rollback v1.1.0
+./update.sh --rollback v2.0.3
 ```
 
 查看本机已有的版本：`docker image ls insight-dashboard`。
@@ -75,3 +81,5 @@ docker compose down                   # 停止
 | `config/`            | 相机/标定/后处理配置（升级保留）       |
 | `rosbags/`           | 录制数据（升级保留）                   |
 | `outputs/`, `runs/`  | 处理结果（升级保留）                   |
+
+更完整的首次部署、发版与故障恢复流程见 [部署手册](../docs/DEPLOYMENT.md)。
