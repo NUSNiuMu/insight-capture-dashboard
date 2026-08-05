@@ -43,8 +43,9 @@
 
 - WebRTC 信令和 H.264 编码运行在独立的 `webrtc_worker.py` 进程，主进程只负责投递经过选择的帧和轮询 health。
 - WebRTC 保留相机发布分辨率（只为 NV12 偶数尺寸向下取整），不再根据面板尺寸
-  动态降采样。30 FPS 目标直接转发 latest frame，避免墙钟限频与 30.02 FPS 源节拍
-  混叠成约 15 FPS；录制期间的 10 FPS 预览限频仍保留。
+  动态降采样。主进程和会话共用节拍感知的 `FrameRateGate`：名义 30 FPS 输入
+  可容忍轻微提前和 callback 抖动，50/60 FPS 输入才重采样到 30 FPS，避免旧墙钟
+  限频把 30.02 FPS 源混叠成约 15 FPS；录制期间的 10 FPS 预览限频仍保留。
 - 手部 JPEG 解码、关键点绘制和重编码运行在独立的 `hand_overlay_worker.py`
   进程；首次启用 JPEG 叠加时按需启动，最后一路关闭后退出。
 - Dashboard 只为 `dashboard_hand_tracking: true` 的相机订阅手部数据。rosbag
@@ -68,7 +69,8 @@
 
 - 新 WebSocket 客户端先收到完整轨迹快照，正常广播只发送新增轨迹点；服务端每
   2 秒补发快照用于自愈。前端按 sequence 累积，发现 generation 或序列缺口会主动
-  重连重新取快照。不得恢复为每个 50 Hz 消息重发三路完整轨迹。
+  重连重新取快照。Dashboard 当前以 30 Hz 广播，不得恢复为每次广播重发三路
+  完整轨迹。
 - 3D 场景限制为 20 FPS，并使用 Babylon.js hardware scaling，避免重复渲染相同 pose 时与多路视频合成争用 CPU/GPU。
 - 页面先接通 pose、相机和轨迹，再分阶段加载 Avatar；同阶段模型允许并发，较大的
   GLB 不得阻塞 pose/轨迹处理。

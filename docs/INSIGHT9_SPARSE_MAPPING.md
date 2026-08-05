@@ -90,7 +90,7 @@ Insight3 A、Insight3 B 三条全局轨迹。页面会显示三路在线状态�
 VIO，避免模型在两套坐标源之间跳变。
 
 网页不渲染稀疏特征点云，只显示点数统计和三条全局轨迹。模型位姿使用独立的
-高频全局 Pose 话题，唯一的 dashboard WebSocket 以 50 Hz 发送最新位姿，
+高频全局 Pose 话题，唯一的 dashboard WebSocket 以 30 Hz 发送最新位姿，
 前端用同一份 Pose 增量绘制轨迹。完整 ROS Path 限制为 200 点并以 5 Hz
 发布，仅供 RViz 和显式调试选择，避免反复序列化整条历史；网页和默认录制
 只使用 50 Hz Pose，也不再建立第二条 mapping WebSocket。建图状态通过
@@ -172,7 +172,7 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 网页接口：
 
 - `GET /api/mapping`：当前地图点数和三路状态快照。
-- `GET /ws`：50 Hz 三路全局位姿流，同时驱动模型和网页轨迹。
+- `GET /ws`：30 Hz 三路全局位姿流，同时驱动模型和网页轨迹。
 - `POST /api/mapping/reset`：同时重置 mapper 与 localizer。
 - ROS service `/insight9_sparse_map/reset`：清空 Insight9 会话地图。
 - ROS service `/insight_global/reset`：清空两个 Insight3 的校正和全局轨迹。
