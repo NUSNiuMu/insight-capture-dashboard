@@ -50,6 +50,17 @@
 - JPEG HTTP 轮询仍是 WebRTC 失败或浏览器不支持 H.264 时的 fallback；`/api/images/capabilities` 中的 `active_path` 描述的是该 JPEG fallback 能力。
 - worker 异常应先检查 `outputs/webrtc_worker.log`、`outputs/hand_overlay_worker.log` 和 health，不应仅凭页面卡顿判断主进程故障。
 
+## 建图一致性
+
+- Insight9 回环接受后必须同时更新关键帧位姿和历史地标，不能退回成只修正统一
+  `T_map_odom` 的后续输出；否则旧地图形变会继续传给 Insight3 重定位。
+- 位姿图运行在 mapper 的单独推理 worker 内。图优化和地图重融合期间允许丢弃
+  过期的 latest-frame 输入，但不得把优化搬进图像 ROS callback 或录制路径。
+- 最新 Pose/TF 使用 EKF 平滑后的校正，历史 Path 使用按时间插值的图校正；两者
+  的用途不同。回环重建完成后，特征地图必须整体替换并重新发布。
+- 当前 600 关键帧是显式资源边界；描述子以 FP16 保留，重建时恢复 FP32。完整
+  BA 尚未实现，不应把位姿图合成残差当作真实空间厘米级验收结论。
+
 ## 浏览器渲染
 
 - pose payload 包含完整轨迹历史，序列化、网络和浏览器更新成本都随轨迹长度增长。
