@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Insight 时间同步复核</title><link rel="stylesheet" href="/static/styles.css?v=20260806-relative-ms"><script defer src="/static/shared/navigation.js?v=20260804-navigation"></script>
+    <title>Insight 时间同步复核</title><link rel="stylesheet" href="/static/styles.css?v=20260806-120hz"><script defer src="/static/shared/navigation.js?v=20260804-navigation"></script>
   </head>
   <body data-dashboard-view="stopwatch-review">
     <div class="app-shell">
@@ -13,7 +13,7 @@
         <div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
       </aside>
       <section class="app-main">
-        <header class="app-topbar"><span>Capture / <strong>Time sync review</strong></span><span class="topbar-clock">STOPWATCH TEST · 2026-08-06</span></header>
+        <header class="app-topbar"><span>Capture / <strong>Time sync review</strong></span><span class="topbar-clock">120 HZ STOPWATCH TEST · 2026-08-06</span></header>
         <main class="page-content stopwatch-page">
           <header class="content-heading stopwatch-heading">
             <div><p class="section-kicker">Three-camera stopwatch inspection</p><h1>三相机时间同步复核</h1><p>逐组对照三路相机画面、秒表读数与图像 header 时间戳。当前展示的是每路相机各自的第 1–10 帧，不假设同序号一定属于同一曝光批次。</p></div>
@@ -21,9 +21,9 @@
           </header>
 
           <section class="stopwatch-summary" aria-label="Test summary">
-            <article><span>数据包</span><strong>stopwatch_sync_test</strong><small>20260806_165749</small></article>
+            <article><span>数据包</span><strong>stopwatch_120hz_test</strong><small>20260806_174928</small></article>
             <article><span>同序号时间戳跨度</span><strong id="summary-span">—</strong><small id="summary-span-detail">选择一组后计算</small></article>
-            <article><span>秒表结论</span><strong>3B 约领先一帧</strong><small>3A 与 9A 的前十帧读数一致</small></article>
+            <article><span>显示器条件</span><strong>120 Hz · 1 ms 显示</strong><small>Insight9 可见滚动快门混合刷新</small></article>
           </section>
 
           <section class="stopwatch-toolbar data-surface">
@@ -44,6 +44,6 @@
     </div>
 
     <dialog id="image-dialog" class="stopwatch-dialog"><button id="close-dialog" type="button" aria-label="关闭大图">×</button><img id="dialog-image" alt="秒表复核大图"><div id="dialog-caption"></div></dialog>
-    <script type="module" src="/static/pages/stopwatch-review.js?v=20260806-relative-ms"></script>
+    <script type="module" src="/static/pages/stopwatch-review.js?v=20260806-120hz"></script>
   </body>
 </html>

@@ -1,4 +1,4 @@
-const DATASET_ROOT = "outputs/stopwatch_sync_test_20260806_165749_first10";
+const DATASET_ROOT = "outputs/stopwatch_120hz_test_20260806_174928_first10";
 const MANIFEST_PATH = `${DATASET_ROOT}/manifest.json`;
 const CAMERA_ORDER = ["insight3_a", "insight3_b", "insight9_a"];
 const CAMERA_LABELS = {
@@ -36,6 +36,10 @@ function formatRelative(timestampNs) {
   return `T+${(Number(BigInt(timestampNs) - timestampOrigin) / 1e6).toFixed(3)} ms`;
 }
 
+function stopwatchDisplay(entry) {
+  return entry.stopwatch_reading_display || entry.stopwatch_reading;
+}
+
 function groupSpan(group) {
   const stamps = group.map((entry) => BigInt(entry.header_ns));
   return { earliest: stamps.reduce((a, b) => a < b ? a : b), span: stamps.reduce((a, b) => a > b ? a : b) - stamps.reduce((a, b) => a < b ? a : b) };
@@ -61,11 +65,13 @@ function cameraCard(entry, earliest) {
   const delta = BigInt(entry.header_ns) - earliest;
   const cropUrl = assetUrl(entry.stopwatch_crop);
   const boxedUrl = assetUrl(entry.boxed_image);
+  const reading = stopwatchDisplay(entry);
+  const rangeClass = entry.stopwatch_reading_end ? " is-range" : "";
   article.innerHTML = `
     <header><div><span>Camera</span><h2>${CAMERA_LABELS[entry.camera]}</h2></div><b>${formatDelta(delta)}</b></header>
-    <button type="button" class="stopwatch-crop-button" data-image="${cropUrl}" data-caption="${CAMERA_LABELS[entry.camera]} · 第 ${entry.frame_index} 帧 · 秒表 ${entry.stopwatch_reading}">
+    <button type="button" class="stopwatch-crop-button${rangeClass}" data-image="${cropUrl}" data-caption="${CAMERA_LABELS[entry.camera]} · 第 ${entry.frame_index} 帧 · 秒表 ${reading}">
       <img src="${cropUrl}" alt="${CAMERA_LABELS[entry.camera]} 第 ${entry.frame_index} 帧秒表裁剪">
-      <span><small>秒表读数</small><strong>${entry.stopwatch_reading}</strong></span>
+      <span><small>${entry.stopwatch_reading_end ? "滚动快门可见范围" : "秒表读数"}</small><strong>${reading}</strong></span>
     </button>
     <button type="button" class="stopwatch-boxed-button" data-image="${boxedUrl}" data-caption="${CAMERA_LABELS[entry.camera]} · 第 ${entry.frame_index} 帧 · ${entry.header_utc}">
       <img src="${boxedUrl}" alt="${CAMERA_LABELS[entry.camera]} 第 ${entry.frame_index} 帧红框原图">
@@ -103,7 +109,7 @@ function renderTable() {
     const byCamera = Object.fromEntries(group.map((entry) => [entry.camera, entry]));
     const row = document.createElement("tr");
     row.tabIndex = 0;
-    row.innerHTML = `<td><strong>${String(frameIndex).padStart(2, "0")}</strong></td>${CAMERA_ORDER.map((camera) => `<td><strong>${byCamera[camera].stopwatch_reading}</strong><small class="relative-time relative-time-${camera}" title="Header ns: ${byCamera[camera].header_ns}"><i></i>${formatRelative(byCamera[camera].header_ns)}</small></td>`).join("")}<td><b>${(Number(span) / 1e6).toFixed(3)} ms</b></td>`;
+    row.innerHTML = `<td><strong>${String(frameIndex).padStart(2, "0")}</strong></td>${CAMERA_ORDER.map((camera) => `<td><strong>${stopwatchDisplay(byCamera[camera])}</strong><small class="relative-time relative-time-${camera}" title="Header ns: ${byCamera[camera].header_ns}"><i></i>${formatRelative(byCamera[camera].header_ns)}</small></td>`).join("")}<td><b>${(Number(span) / 1e6).toFixed(3)} ms</b></td>`;
     const openRow = () => { selectFrame(frameIndex); window.scrollTo({ top: 250, behavior: "smooth" }); };
     row.addEventListener("click", openRow);
     row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") openRow(); });

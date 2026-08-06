@@ -275,6 +275,8 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .stopwatch-crop-button span { display: flex; min-width: 104px; padding-left: 16px; border-left: 1px solid #3d3528; flex-direction: column; align-items: flex-start; }
 .stopwatch-crop-button small { color: #a99c82; font-family: var(--mono); font-size: 8px; }
 .stopwatch-crop-button strong { margin-top: 7px; color: var(--accent-fill); font-family: var(--mono); font-size: 23px; font-weight: 650; }
+.stopwatch-crop-button.is-range strong { font-size: 16px; letter-spacing: -.04em; }
+.stopwatch-crop-button.is-range span { min-width: 150px; }
 .stopwatch-boxed-button { aspect-ratio: 16 / 9; }
 .stopwatch-boxed-button img { display: block; width: 100%; height: 100%; object-fit: contain; transition: transform 180ms; }
 .stopwatch-boxed-button:hover img { transform: scale(1.018); }
