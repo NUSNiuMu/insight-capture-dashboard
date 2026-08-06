@@ -101,8 +101,8 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 episode，填写英文任务指令，选择单臂 A、单臂 B 或双臂采集布局和训练图像分辨率后，
 点击 **Build LeRobot dataset**。默认输出是与 HiFi-UMI-2K 对齐的 LeRobot v3 目录：
 `outputs/lerobot_datasets/<rosbag 名>_lerobot/`。每个选中的 rosbag 会独立处理并保存在设备上。
-页面当前默认训练副本为固定下部 ROI 的 224×224；需要保留采集像素时显式选择
-**Original resolution**。
+页面当前默认保留 **Original resolution**；需要 π0.5 固定输入时可显式选择 224×224
+或 384×384 的下部操作区训练副本。
 
 LeRobot 输出包含：
 
