@@ -39,6 +39,7 @@ SCHEMA_VERSION = 5
 DEFAULT_MAX_POSITION_STEP_M = 0.05
 DEFAULT_MAX_ORIENTATION_STEP_DEG = 45.0
 DEFAULT_MAX_POSE_GAP_MS = 100.0
+POSITION_JUMP_POLICY = "large_step_and_velocity_innovation"
 DEFAULT_IDLE_DURATION_S = 0.8
 DEFAULT_IDLE_LINEAR_SPEED_M_S = 0.02
 DEFAULT_IDLE_ANGULAR_SPEED_DEG_S = 10.0
@@ -474,6 +475,56 @@ def _tcp_sample_positions(
     return positions + rotations.apply(spec.tcp_translation_m)
 
 
+def _translation_jump_mask(
+    positions: np.ndarray,
+    *,
+    max_position_step_m: float,
+    stamps_ns: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Flag large translation steps that also break local velocity continuity."""
+
+    values = np.asarray(positions, dtype=np.float64)
+    deltas = np.diff(values, axis=0)
+    step_distances = np.linalg.norm(deltas, axis=1)
+    large_steps = step_distances > max_position_step_m
+    if not np.any(large_steps) or len(deltas) == 1:
+        return large_steps
+
+    if stamps_ns is None:
+        durations = np.ones(len(deltas), dtype=np.float64)
+    else:
+        durations = np.diff(np.asarray(stamps_ns, dtype=np.int64)).astype(
+            np.float64
+        ) / 1e9
+    valid_durations = np.isfinite(durations) & (durations > 0.0)
+    velocities = np.zeros_like(deltas)
+    velocities[valid_durations] = (
+        deltas[valid_durations] / durations[valid_durations, None]
+    )
+
+    # A coordinate reset produces one large velocity impulse relative to both
+    # neighboring intervals. Sustained fast motion keeps similar neighboring
+    # velocities and therefore remains below the displacement innovation gate.
+    innovations = np.full(len(deltas), np.inf, dtype=np.float64)
+    for index in np.flatnonzero(large_steps):
+        if not valid_durations[index]:
+            continue
+        neighbor_innovations = []
+        if index > 0 and valid_durations[index - 1]:
+            neighbor_innovations.append(
+                np.linalg.norm(velocities[index] - velocities[index - 1])
+                * durations[index]
+            )
+        if index + 1 < len(deltas) and valid_durations[index + 1]:
+            neighbor_innovations.append(
+                np.linalg.norm(velocities[index] - velocities[index + 1])
+                * durations[index]
+            )
+        if neighbor_innovations:
+            innovations[index] = min(neighbor_innovations)
+    return large_steps & (innovations > max_position_step_m)
+
+
 def _pose_discontinuities(
     pose_data: tuple[np.ndarray, np.ndarray, np.ndarray],
     spec: CameraSpec,
@@ -485,11 +536,14 @@ def _pose_discontinuities(
     stamps = pose_data[0]
     tcp_positions = _tcp_sample_positions(pose_data, spec)
     stamp_deltas = np.diff(stamps)
-    position_steps = np.linalg.norm(np.diff(tcp_positions, axis=0), axis=1)
     rotations = Rotation.from_quat(pose_data[2])
     orientation_steps = (rotations[:-1].inv() * rotations[1:]).magnitude()
     gap_breaks = (stamp_deltas <= 0) | (stamp_deltas > max_pose_gap_ms * 1e6)
-    jump_breaks = position_steps > max_position_step_m
+    jump_breaks = _translation_jump_mask(
+        tcp_positions,
+        max_position_step_m=max_position_step_m,
+        stamps_ns=stamps,
+    )
     orientation_breaks = orientation_steps > math.radians(max_orientation_step_deg)
     return {
         "position_jumps": stamps[1:][jump_breaks],
@@ -505,14 +559,15 @@ def _resampled_pose_events(
     max_position_step_m: float,
     max_orientation_step_deg: float,
 ) -> Dict[str, int]:
-    position_steps = np.linalg.norm(
-        np.diff(positions.astype(np.float64), axis=0), axis=1
+    position_jumps = _translation_jump_mask(
+        positions,
+        max_position_step_m=max_position_step_m,
     )
     rotations = Rotation.from_rotvec(rotvecs.astype(np.float64))
     orientation_steps = (rotations[:-1].inv() * rotations[1:]).magnitude()
     return {
         "resampled_position_jumps": int(
-            np.count_nonzero(position_steps > max_position_step_m)
+            np.count_nonzero(position_jumps)
         ),
         "resampled_orientation_jumps": int(
             np.count_nonzero(
@@ -1176,6 +1231,7 @@ def export_umi_dataset(
                 "gripper_width_semantics": "physical_jaw_width_m",
                 "pose_quality_gate": {
                     "max_position_step_m": float(max_position_step_m),
+                    "position_jump_policy": POSITION_JUMP_POLICY,
                     "max_orientation_step_deg": float(max_orientation_step_deg),
                     "max_pose_gap_ms": float(max_pose_gap_ms),
                     "behavior": (
@@ -1225,6 +1281,7 @@ def export_umi_dataset(
         "gripper_width_semantics": "physical_jaw_width_m",
         "pose_quality_gate": {
             "max_position_step_m": float(max_position_step_m),
+            "position_jump_policy": POSITION_JUMP_POLICY,
             "max_orientation_step_deg": float(max_orientation_step_deg),
             "max_pose_gap_ms": float(max_pose_gap_ms),
         },
@@ -1313,7 +1370,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-position-step-m",
         type=float,
         default=DEFAULT_MAX_POSITION_STEP_M,
-        help="reject an episode when consecutive TCP samples exceed this distance",
+        help=(
+            "candidate TCP step and local velocity-innovation threshold for "
+            "translation discontinuities"
+        ),
     )
     parser.add_argument(
         "--max-orientation-step-deg",

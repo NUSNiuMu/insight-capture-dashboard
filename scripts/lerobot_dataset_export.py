@@ -770,6 +770,12 @@ def export_lerobot_dataset(
                 },
             },
             "invalid_policy": "retain aligned frames; use validity masks and valid.frame during training",
+            "pose_quality_gate": {
+                "max_position_step_m": umi.DEFAULT_MAX_POSITION_STEP_M,
+                "position_jump_policy": umi.POSITION_JUMP_POLICY,
+                "max_orientation_step_deg": umi.DEFAULT_MAX_ORIENTATION_STEP_DEG,
+                "max_pose_gap_ms": umi.DEFAULT_MAX_POSE_GAP_MS,
+            },
             "source": {
                 "format_profile": "umi_absolute_ee_lerobot_v3",
                 "bags": [path.name for path in bag_paths],
@@ -806,6 +812,12 @@ def export_lerobot_dataset(
             "missing_value_policy": "finite_placeholder_with_per_dimension_validity_mask",
             "final_action_policy": "repeat_final_state_with_all_false_action_valid",
             "gripper_semantics": "physical_jaw_width_m",
+            "pose_quality_gate": {
+                "max_position_step_m": umi.DEFAULT_MAX_POSITION_STEP_M,
+                "position_jump_policy": umi.POSITION_JUMP_POLICY,
+                "max_orientation_step_deg": umi.DEFAULT_MAX_ORIENTATION_STEP_DEG,
+                "max_pose_gap_ms": umi.DEFAULT_MAX_POSE_GAP_MS,
+            },
             "size_bytes": _directory_size(root),
         }
         _json_write(root / "meta" / "manifest.json", summary)

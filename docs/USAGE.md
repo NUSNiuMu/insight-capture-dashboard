@@ -176,9 +176,10 @@ topic 只解码后无损保存；LeRobot 会统一转码为 H.264，因此会增
 仍使用 20 维双手 schema，并 mask 缺失侧。双臂布局使用右腕、左腕、头部三路图像，并用
 左右 `/insight_global/.../pose` 保证统一坐标系。夹爪开口宽度来自实测标定，单位为米，
 记录在 UMI Zarr 根属性或 LeRobot `modality.json` 中。默认模式下每条 rosbag 固定对应一个
-episode；20 Hz 相邻 TCP 位置变化超过 5 cm、姿态变化超过 45°或 VIO pose 间隔超过
-100 ms 时拒绝整条 rosbag，禁止跨越重定位、跟踪丢失或坐标重置插值。通过质量门的事件
-计数写入 manifest。
+episode；位置门先找出超过 5 cm 的 TCP 步长，再要求该步相对前后局部速度的位移创新量
+也超过 5 cm 才判定跳变，因此保留连续高速运动，同时拒绝坐标重置产生的速度脉冲。
+姿态变化超过 45°或 VIO pose 间隔超过 100 ms 时仍拒绝整条 rosbag，禁止跨越重定位、
+跟踪丢失或坐标重置插值。通过质量门的事件计数写入 manifest。
 录制页会默认同时勾选每路相机的原始 `vio_100hz` 和配置的 dashboard/global pose，确保
 后续 UMI 单臂导出不依赖用户手动补选原始 VIO。
 
