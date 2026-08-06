@@ -20,10 +20,10 @@ import pyarrow.parquet as pq
 from scipy.spatial.transform import Rotation
 
 import umi_dataset_export as umi
-from hand_tracking.extract_gripper import decode_image
+from hand_tracking.extract_gripper import decode_color_image
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ARM_DIM = 10
 VIDEO_KEY_BY_ROLE = {
     "right_hand": "observation.images.right_wrist_0_rgb",
@@ -287,7 +287,7 @@ def _append_episode_videos(
         if target_indices is None:
             continue
         message = deserialize_message(raw, message_classes[topic])
-        image = decode_image(message, topic_types[topic])
+        image = decode_color_image(message, topic_types[topic])
         if image is None:
             raise umi.BagQualityError(f"failed to decode {topic} frame {current_index}")
         actual_shape = (int(image.shape[0]), int(image.shape[1]))
@@ -510,6 +510,7 @@ def export_lerobot_dataset(
     started = time.perf_counter()
     planned: list[tuple[Path, umi.EpisodePlan]] = []
     source_shapes: Optional[Dict[str, tuple[int, int]]] = None
+    source_encodings: Optional[Dict[str, str]] = None
     for bag_index, bag_path in enumerate(bag_paths):
         print(
             f"DATASET_PROGRESS {bag_index + 1} {len(bag_paths)} scan {bag_path.name} 0",
@@ -518,8 +519,11 @@ def export_lerobot_dataset(
         scan = umi.scan_bag(bag_path, specs, calibration_path)
         if source_shapes is None:
             source_shapes = dict(scan.image_shapes)
+            source_encodings = dict(scan.image_encodings)
         elif scan.image_shapes != source_shapes:
             raise ValueError("camera resolutions differ between selected rosbags")
+        elif scan.image_encodings != source_encodings:
+            raise ValueError("camera encodings differ between selected rosbags")
         plans = umi.build_episode_plans(
             bag_path.name,
             scan,
@@ -531,7 +535,7 @@ def export_lerobot_dataset(
             retain_invalid_images=True,
         )
         planned.extend((bag_path, plan) for plan in plans)
-    if not planned or source_shapes is None:
+    if not planned or source_shapes is None or source_encodings is None:
         raise ValueError("no valid episodes were generated")
 
     state_dim, state_names = _state_schema(specs)
@@ -759,9 +763,8 @@ def export_lerobot_dataset(
                         "resize_hw": None
                         if image_size is None
                         else [image_size, image_size],
-                        "source_channels": "rgb"
-                        if spec.role == "head"
-                        else "grayscale_replicated_to_rgb",
+                        "source_encoding": source_encodings[spec.name],
+                        "decoded_channels": "rgb",
                     }
                     for spec in specs
                 },

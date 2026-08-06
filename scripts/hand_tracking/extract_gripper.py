@@ -25,7 +25,12 @@ IMAGE_TYPES = {"sensor_msgs/msg/Image", "sensor_msgs/msg/CompressedImage"}
 SCHEMA_VERSION = 1
 
 
-def decode_image(message: object, message_type: str) -> Optional[np.ndarray]:
+def _decode_image(
+    message: object,
+    message_type: str,
+    *,
+    nv12_luma_only: bool,
+) -> Optional[np.ndarray]:
     """Decode supported ROS image messages into contiguous BGR or mono pixels."""
 
     if message_type == "sensor_msgs/msg/CompressedImage":
@@ -68,13 +73,33 @@ def decode_image(message: object, message_type: str) -> Optional[np.ndarray]:
         )
         return cv2.cvtColor(image, conversion)
     if encoding == "nv12":
-        if step < width or raw.size < height * step:
+        expected_rows = height * 3 // 2
+        if (
+            width % 2
+            or height % 2
+            or step < width
+            or raw.size < expected_rows * step
+        ):
             return None
-        # Gripper detection only consumes luminance; ignore the interleaved UV plane.
-        return np.ascontiguousarray(
-            raw[: height * step].reshape(height, step)[:, :width]
+        yuv = np.ascontiguousarray(
+            raw[: expected_rows * step].reshape(expected_rows, step)[:, :width]
         )
+        if nv12_luma_only:
+            return yuv[:height]
+        return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
     raise ValueError(f"unsupported image encoding: {message.encoding}")
+
+
+def decode_image(message: object, message_type: str) -> Optional[np.ndarray]:
+    """Decode for gripper detection, keeping NV12 on its luminance fast path."""
+
+    return _decode_image(message, message_type, nv12_luma_only=True)
+
+
+def decode_color_image(message: object, message_type: str) -> Optional[np.ndarray]:
+    """Decode complete color pixels for dataset and media output."""
+
+    return _decode_image(message, message_type, nv12_luma_only=False)
 
 
 def header_stamp_ns(message: object) -> int:

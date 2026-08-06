@@ -21,7 +21,11 @@ import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 from camera_setup import IMAGE_STREAMS, image_topic, load_setup
-from hand_tracking.extract_gripper import decode_image, load_calibration
+from hand_tracking.extract_gripper import (
+    decode_color_image,
+    decode_image,
+    load_calibration,
+)
 from hand_tracking.gripper import GripperMarkerDetector
 
 
@@ -31,7 +35,7 @@ POSE_TYPES = {
     "geometry_msgs/msg/PoseWithCovarianceStamped",
 }
 ROLE_ORDER = ("right_hand", "left_hand", "head")
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 DEFAULT_MAX_POSITION_STEP_M = 0.05
 DEFAULT_MAX_ORIENTATION_STEP_DEG = 45.0
 DEFAULT_MAX_POSE_GAP_MS = 100.0
@@ -60,6 +64,7 @@ class CameraSpec:
 class StreamScan:
     image_stamps: Dict[str, np.ndarray]
     image_shapes: Dict[str, tuple[int, int]]
+    image_encodings: Dict[str, str]
     poses: Dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]
     openings: Dict[str, tuple[np.ndarray, np.ndarray]]
     detection_rates: Dict[str, float]
@@ -298,6 +303,7 @@ def scan_bag(
     }
     image_stamps: Dict[str, list[int]] = {spec.name: [] for spec in specs}
     image_shapes: Dict[str, tuple[int, int]] = {}
+    image_encodings: Dict[str, str] = {}
     pose_stamps: Dict[str, list[int]] = {
         spec.name: [] for spec in specs if spec.pose_topic
     }
@@ -349,6 +355,16 @@ def scan_bag(
         if topic in image_by_topic:
             spec = image_by_topic[topic]
             image_stamps[spec.name].append(int(record_stamp_ns))
+            encoding = str(
+                getattr(message, "encoding", "")
+                or getattr(message, "format", "compressed")
+            ).strip().lower()
+            previous_encoding = image_encodings.setdefault(spec.name, encoding)
+            if previous_encoding != encoding:
+                raise BagQualityError(
+                    f"{spec.name} image encoding changed from "
+                    f"{previous_encoding} to {encoding}"
+                )
             image = None
             if spec.role != "head" or spec.name not in image_shapes:
                 image = decode_image(message, topic_types[topic])
@@ -414,6 +430,7 @@ def scan_bag(
     return StreamScan(
         image_stamps=image_arrays,
         image_shapes=image_shapes,
+        image_encodings=image_encodings,
         poses=poses,
         openings=openings,
         detection_rates=detection_rates,
@@ -866,7 +883,7 @@ def append_episode_images(
         if target_index is None:
             continue
         message = deserialize_message(raw, message_classes[topic])
-        image = decode_image(message, topic_types[topic])
+        image = decode_color_image(message, topic_types[topic])
         if image is None:
             raise BagQualityError(f"failed to decode {topic} frame {current_index}")
         actual_shape = (int(image.shape[0]), int(image.shape[1]))

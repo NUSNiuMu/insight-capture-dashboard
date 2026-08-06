@@ -124,8 +124,9 @@ LeRobot 输出包含：
 训练损失和归一化统计都必须忽略无效维度。
 
 224×224 模式会对原始 640×544 画面执行固定 ROI `[x=0, y=96, width=544,
-height=544]` 后再缩放，不能在实机推理时直接拉伸完整画面。腕部红外源会转成三通道 RGB，
-其像素仍满足 `R == G == B`。Parquet 额外保存统一的 `observation.timestamp_ns`、每路
+height=544]` 后再缩放，不能在实机推理时直接拉伸完整画面。NV12 腕部画面会保留完整
+Y/UV 色度并转换成三通道 RGB，不能仅使用亮度平面。Parquet 额外保存统一的
+`observation.timestamp_ns`、每路
 `*_timestamp_ns` 真实 rosbag 时间戳及每路 `*_valid`；同步缺失或超出容差的图像必须按
 validity 忽略，不能当成有效观测。
 
