@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import threading
 import time
@@ -16,6 +15,7 @@ from typing import Dict, Optional
 
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+_FAILED_BAG_PREFIX = "fail_"
 
 
 @dataclass
@@ -28,8 +28,8 @@ class _UmiExportItem:
     status: str = "pending"
     result: Optional[Dict[str, object]] = None
     error: Optional[str] = None
-    source_deleted: bool = False
-    source_delete_error: Optional[str] = None
+    source_failed_name: Optional[str] = None
+    source_rename_error: Optional[str] = None
 
 
 class _RejectedRosbagError(RuntimeError):
@@ -246,9 +246,9 @@ class UmiExportManager:
 
         if not job.cancelled:
             with self._lock:
-                job.stage = "cleanup"
+                job.stage = "quarantine"
             for item in rejected_items:
-                self._delete_rejected_source(item)
+                self._quarantine_rejected_source(item)
 
         with self._lock:
             job.finished_at = time.time()
@@ -353,16 +353,26 @@ class UmiExportManager:
         self._make_output_user_manageable(manageable_root)
         return result
 
-    def _delete_rejected_source(self, item: _UmiExportItem) -> None:
+    def _quarantine_rejected_source(self, item: _UmiExportItem) -> None:
         try:
             bag_path = item.bag_path.resolve()
             if not bag_path.is_relative_to(self.rosbag_root):
                 raise RuntimeError("Rejected rosbag resolved outside rosbag root.")
-            if bag_path.is_dir():
-                shutil.rmtree(bag_path)
-            item.source_deleted = not bag_path.exists()
+            if not bag_path.is_dir():
+                raise FileNotFoundError(
+                    f"Rejected rosbag no longer exists: {bag_path.name}"
+                )
+            failed_name = f"{_FAILED_BAG_PREFIX}{bag_path.name}"
+            failed_path = self.rosbag_root / failed_name
+            suffix = 2
+            while failed_path.exists():
+                failed_name = f"{_FAILED_BAG_PREFIX}{suffix}_{bag_path.name}"
+                failed_path = self.rosbag_root / failed_name
+                suffix += 1
+            bag_path.rename(failed_path)
+            item.source_failed_name = failed_name
         except (OSError, RuntimeError) as exc:
-            item.source_delete_error = str(exc)
+            item.source_rename_error = str(exc)
 
     @staticmethod
     def _make_output_user_manageable(directory: Path) -> None:
@@ -387,9 +397,10 @@ class UmiExportManager:
             payload["result"] = item.result
         if item.error:
             payload["error"] = item.error
-        payload["source_deleted"] = item.source_deleted
-        if item.source_delete_error:
-            payload["source_delete_error"] = item.source_delete_error
+        if item.source_failed_name:
+            payload["source_failed_name"] = item.source_failed_name
+        if item.source_rename_error:
+            payload["source_rename_error"] = item.source_rename_error
         return payload
 
     @staticmethod
@@ -400,6 +411,8 @@ class UmiExportManager:
 
     def _bag_path(self, bag_name: str) -> Path:
         bag_name = self._validate_name(bag_name, "bag name")
+        if bag_name.startswith(_FAILED_BAG_PREFIX):
+            raise ValueError("Failed rosbags are hidden from dataset export.")
         path = (self.rosbag_root / bag_name).resolve()
         if not path.is_relative_to(self.rosbag_root) or not path.is_dir():
             raise FileNotFoundError(f"Rosbag not found: {bag_name}")

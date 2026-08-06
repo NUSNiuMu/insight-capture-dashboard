@@ -86,7 +86,9 @@ async function loadBags() {
     const response = await fetch(`/api/rosbags?ts=${Date.now()}`, { cache: "no-store" });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "Failed to load rosbags.");
-    bags = Array.isArray(payload.bags) ? payload.bags : [];
+    bags = Array.isArray(payload.bags)
+      ? payload.bags.filter((bag) => !String(bag && bag.name || "").startsWith("fail_"))
+      : [];
     renderBags();
   } catch (error) {
     bagList.innerHTML = `<div class="empty-state">${escapeHtml(error instanceof Error ? error.message : String(error))}</div>`;
@@ -115,8 +117,8 @@ function renderStatus(payload) {
       ? "Encoding synchronized images"
       : payload.stage === "package"
         ? (payload.export_format === "lerobot" ? "Writing Parquet and MP4 metadata" : "Packaging Zarr")
-        : payload.stage === "cleanup"
-          ? "Removing rejected rosbags"
+        : payload.stage === "quarantine"
+          ? "Marking rejected rosbags"
           : "Scanning rosbag streams";
     progressValue.textContent = `${progress}%`;
     progressFill.style.width = `${progress}%`;
@@ -128,22 +130,22 @@ function renderStatus(payload) {
   const items = Array.isArray(payload.items) ? payload.items : [];
   const successful = items.filter((item) => item.status === "done");
   const failed = items.filter((item) => item.status === "error");
-  const deleted = failed.filter((item) => item.source_deleted);
+  const quarantined = failed.filter((item) => item.source_failed_name);
   statusLabel.textContent = payload.status === "done"
     ? "Outputs saved"
     : payload.status === "partial" ? "Completed with errors" : "Export failed";
   progressValue.textContent = "100%";
   progressFill.classList.toggle("is-error", failed.length > 0);
   progressFill.style.width = "100%";
-  statusDetail.textContent = `${successful.length}/${items.length} rosbags saved · ${Number(payload.total_frames || 0).toLocaleString()} total frames${failed.length ? `\n${failed.length} failed; ${deleted.length} rejected source bag(s) deleted.` : ""}`;
+  statusDetail.textContent = `${successful.length}/${items.length} rosbags saved · ${Number(payload.total_frames || 0).toLocaleString()} total frames${failed.length ? `\n${failed.length} failed; ${quarantined.length} rejected source bag(s) renamed with fail_.` : ""}`;
   resultElement.innerHTML = items.map((item) => {
     const result = item.result || {};
     const isDone = item.status === "done";
-    const sourceDeleted = Boolean(item.source_deleted);
-    const failureLabel = sourceDeleted ? "Rejected rosbag deleted" : "Export failed · source retained";
-    const failureDetail = item.source_delete_error
-      ? `${item.error || "Unknown error"} · cleanup failed: ${item.source_delete_error}`
-      : item.error || "Unknown error";
+    const failedName = item.source_failed_name || "";
+    const failureLabel = failedName ? "Rejected rosbag retained" : "Export failed · source retained";
+    const failureDetail = item.source_rename_error
+      ? `${item.error || "Unknown error"} · rename failed: ${item.source_rename_error}`
+      : failedName ? `${item.error || "Unknown error"} · renamed to ${failedName}` : item.error || "Unknown error";
     return `<div class="umi-result-item${isDone ? "" : " is-error"}">
       <span><small>Source rosbag</small><strong>${escapeHtml(item.bag_name || "--")}</strong></span>
       <span><small>${isDone ? "Saved on device" : failureLabel}</small><strong>${escapeHtml(isDone ? item.output_path || "--" : failureDetail)}</strong></span>

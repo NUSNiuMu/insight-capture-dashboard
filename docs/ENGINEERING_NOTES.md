@@ -149,8 +149,9 @@
 - LeRobot 固定使用 `[right_10d, left_10d]` 20 维 state/action；单臂缺失侧填零
   并由 validity mask 标记。`action` 是下一帧绝对 state，模型特定相对动作只能在
   training adapter 中转换。
-- 只有明确的数据质量拒绝（连续性、有效帧、解码或夹爪检测导致零有效 episode）
-  才能自动删除源 rosbag。配置、标定、权限、磁盘或程序错误必须保留源数据。
+- 只有明确的数据质量拒绝（连续性、有效帧、解码或夹爪检测导致零有效 episode）才把
+  源 rosbag 重命名为 `fail_<原名>` 并从 Dataset 页面隐藏；禁止自动删除。配置、标定、
+  权限、磁盘或程序错误必须保留原名，避免误隔离可恢复数据。
 - 双臂导出要求两侧 `width_calibration` 和两路全局 pose；单臂使用本机原始
   `vio_100hz`。每个 profile 的默认录制选择必须同时保留原始 VIO 与 dashboard pose。
 - TCP 平移连续性门以 5 cm 同时作为候选步长和局部速度创新阈值；只有大步长相对前后
