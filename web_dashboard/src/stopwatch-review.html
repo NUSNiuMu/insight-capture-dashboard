@@ -2,7 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Insight 时间同步复核</title><link rel="stylesheet" href="/static/styles.css?v=20260806-stopwatch-review"><script defer src="/static/shared/navigation.js?v=20260804-navigation"></script>
+    <title>Insight 时间同步复核</title><link rel="stylesheet" href="/static/styles.css?v=20260806-relative-ms"><script defer src="/static/shared/navigation.js?v=20260804-navigation"></script>
   </head>
   <body data-dashboard-view="stopwatch-review">
     <div class="app-shell">
@@ -36,7 +36,7 @@
           <section id="camera-comparison" class="stopwatch-camera-grid" aria-live="polite" hidden></section>
 
           <section class="data-surface stopwatch-table-surface">
-            <div class="section-heading"><div><p class="section-kicker">All ten groups</p><h2>10 组读数总览</h2></div><span>点击任意一行打开该组图片</span></div>
+            <div class="section-heading"><div><p class="section-kicker">All ten groups</p><h2>10 组读数总览</h2></div><span id="timeline-origin">相对时间：整包最早图像为 T+0.000 ms</span></div>
             <div class="stopwatch-table-wrap"><table class="stopwatch-table"><thead><tr><th>序号</th><th>Insight3 A</th><th>Insight3 B</th><th>Insight9 A</th><th>同序号跨度</th></tr></thead><tbody id="stopwatch-table-body"></tbody></table></div>
           </section>
         </main>
@@ -44,6 +44,6 @@
     </div>
 
     <dialog id="image-dialog" class="stopwatch-dialog"><button id="close-dialog" type="button" aria-label="关闭大图">×</button><img id="dialog-image" alt="秒表复核大图"><div id="dialog-caption"></div></dialog>
-    <script type="module" src="/static/pages/stopwatch-review.js?v=20260806-stopwatch-review"></script>
+    <script type="module" src="/static/pages/stopwatch-review.js?v=20260806-relative-ms"></script>
   </body>
 </html>

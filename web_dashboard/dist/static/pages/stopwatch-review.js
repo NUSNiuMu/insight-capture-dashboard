@@ -21,6 +21,7 @@ const dialogCaption = document.getElementById("dialog-caption");
 
 let frames = new Map();
 let selectedFrame = 1;
+let timestampOrigin = 0n;
 
 function assetUrl(relativePath) {
   return `/asset?path=${encodeURIComponent(`${DATASET_ROOT}/${relativePath}`)}`;
@@ -29,6 +30,10 @@ function assetUrl(relativePath) {
 function formatDelta(deltaNs) {
   const milliseconds = Number(deltaNs) / 1e6;
   return `${milliseconds >= 0 ? "+" : ""}${milliseconds.toFixed(3)} ms`;
+}
+
+function formatRelative(timestampNs) {
+  return `T+${(Number(BigInt(timestampNs) - timestampOrigin) / 1e6).toFixed(3)} ms`;
 }
 
 function groupSpan(group) {
@@ -67,7 +72,7 @@ function cameraCard(entry, earliest) {
       <i>点击放大原图</i>
     </button>
     <dl>
-      <div><dt>HEADER NS</dt><dd>${entry.header_ns}</dd></div>
+      <div><dt>RELATIVE MS</dt><dd title="Header ns: ${entry.header_ns}">${formatRelative(entry.header_ns)}</dd></div>
       <div><dt>UTC</dt><dd>${entry.header_utc}</dd></div>
       <div><dt>TOPIC</dt><dd title="${entry.topic}">${entry.topic}</dd></div>
     </dl>`;
@@ -98,7 +103,7 @@ function renderTable() {
     const byCamera = Object.fromEntries(group.map((entry) => [entry.camera, entry]));
     const row = document.createElement("tr");
     row.tabIndex = 0;
-    row.innerHTML = `<td><strong>${String(frameIndex).padStart(2, "0")}</strong></td>${CAMERA_ORDER.map((camera) => `<td><strong>${byCamera[camera].stopwatch_reading}</strong><small>${byCamera[camera].header_ns}</small></td>`).join("")}<td><b>${(Number(span) / 1e6).toFixed(3)} ms</b></td>`;
+    row.innerHTML = `<td><strong>${String(frameIndex).padStart(2, "0")}</strong></td>${CAMERA_ORDER.map((camera) => `<td><strong>${byCamera[camera].stopwatch_reading}</strong><small class="relative-time relative-time-${camera}" title="Header ns: ${byCamera[camera].header_ns}"><i></i>${formatRelative(byCamera[camera].header_ns)}</small></td>`).join("")}<td><b>${(Number(span) / 1e6).toFixed(3)} ms</b></td>`;
     const openRow = () => { selectFrame(frameIndex); window.scrollTo({ top: 250, behavior: "smooth" }); };
     row.addEventListener("click", openRow);
     row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") openRow(); });
@@ -134,6 +139,11 @@ try {
   // Number.MAX_SAFE_INTEGER before the comparison view can use them.
   const manifestText = await response.text();
   const manifest = JSON.parse(manifestText.replace(/"(header_ns|receipt_ns)"\s*:\s*(\d+)/g, '"$1":"$2"'));
+  timestampOrigin = manifest.reduce((earliest, entry) => {
+    const stamp = BigInt(entry.header_ns);
+    return earliest === 0n || stamp < earliest ? stamp : earliest;
+  }, 0n);
+  document.getElementById("timeline-origin").title = `T0 header ns: ${timestampOrigin}`;
   for (const entry of manifest) {
     if (!frames.has(entry.frame_index)) frames.set(entry.frame_index, []);
     frames.get(entry.frame_index).push(entry);

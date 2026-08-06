@@ -293,6 +293,10 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .stopwatch-table td strong, .stopwatch-table td small { display: block; }
 .stopwatch-table td strong { color: var(--ink); font-size: 11px; }
 .stopwatch-table td small { margin-top: 4px; color: var(--muted-light); font-size: 7px; }
+.stopwatch-table .relative-time { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 8px; }
+.stopwatch-table .relative-time i { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: var(--teal); box-shadow: 0 0 0 3px rgba(14, 116, 144, .09); }
+.stopwatch-table .relative-time-insight3_b i { background: var(--accent); box-shadow: 0 0 0 3px rgba(184, 119, 0, .10); }
+.stopwatch-table .relative-time-insight9_a i { background: var(--green); box-shadow: 0 0 0 3px rgba(31, 138, 85, .09); }
 .stopwatch-table td b { color: var(--teal); font-size: 10px; }
 .stopwatch-dialog { width: min(94vw, 1500px); max-width: none; padding: 42px 18px 16px; border: 1px solid #514735; border-radius: 13px; color: #f5ead5; background: #0d0b07; box-shadow: 0 30px 100px rgba(0,0,0,.55); }
 .stopwatch-dialog::backdrop { background: rgba(23,19,12,.82); backdrop-filter: blur(8px); }
