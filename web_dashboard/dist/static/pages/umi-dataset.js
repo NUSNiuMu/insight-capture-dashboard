@@ -22,20 +22,20 @@ const CAMERA_LAYOUTS = {
   single_a: {
     label: "Single arm · Insight3 A",
     cameras: ["insight3_a"],
-    schema: [["camera0 / robot0", "Right hand · insight3_a · VIO"]],
+    schema: [["right_wrist_0_rgb / arm 10D", "Insight3 A · absolute EE pose + width"]],
   },
   single_b: {
     label: "Single arm · Insight3 B",
     cameras: ["insight3_b"],
-    schema: [["camera0 / robot0", "Left hand · insight3_b · VIO"]],
+    schema: [["right_wrist_0_rgb / arm 10D", "Insight3 B · absolute EE pose + width"]],
   },
   bimanual: {
     label: "Bimanual · A + B + head",
     cameras: ["insight3_a", "insight3_b", "insight9_a"],
     schema: [
-      ["camera0 / robot0", "Right hand · insight3_a"],
-      ["camera1 / robot1", "Left hand · insight3_b"],
-      ["camera2", "Global view · insight9_a"],
+      ["left 10D / left_wrist_0_rgb", "Insight3 B · absolute EE pose + width"],
+      ["right 10D / right_wrist_0_rgb", "Insight3 A · absolute EE pose + width"],
+      ["base_0_rgb", "Global view · insight9_a"],
     ],
   },
 };
@@ -53,7 +53,7 @@ function renderLayout() {
   exportButton.textContent = isLeRobot ? "Build LeRobot dataset" : "Build UMI outputs";
   schemaGrid.innerHTML = layout.schema.map(([key, value]) =>
     `<span><small>${escapeHtml(key)}</small><strong>${escapeHtml(value)}</strong></span>`
-  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `Fixed lower ROI → ${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span><span><small>Episodes</small><strong>${episodeModeInput.value === "auto_pause" ? "Auto-split at ~1 s pauses" : "One rosbag = one episode"}</strong></span><span><small>State / action</small><strong>${isLeRobot ? "20D · xyz + rot6d + width · next-state action" : "0–0.083 m · relative in training"}</strong></span><span><small>Output folder</small><strong>${isLeRobot ? "outputs/lerobot_datasets/&lt;rosbag&gt;_lerobot/" : "outputs/umi_datasets/&lt;rosbag&gt;_umi/"}</strong></span>`;
+  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `Fixed lower ROI → ${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span><span><small>Episodes</small><strong>${episodeModeInput.value === "auto_pause" ? "Auto-split at ~1 s pauses" : "One rosbag = one episode"}</strong></span><span><small>State / action</small><strong>${isLeRobot ? `${layout.cameras.length === 1 ? "10D" : "20D · left then right"} · absolute next-state target` : "0–0.083 m · relative in training"}</strong></span><span><small>Output folder</small><strong>${isLeRobot ? "outputs/lerobot_datasets/&lt;rosbag&gt;_lerobot/" : "outputs/umi_datasets/&lt;rosbag&gt;_umi/"}</strong></span>`;
 }
 
 function formatBytes(bytes) {

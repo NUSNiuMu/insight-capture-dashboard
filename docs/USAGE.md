@@ -108,18 +108,30 @@ LeRobot 输出包含：
 
 - `data/chunk-000/file-000.parquet`：逐帧 `observation.state`、`action`、validity mask、
   timestamp、episode/frame/task index；
-- `videos/observation.images.*/chunk-000/file-000.mp4`：所选相机的同步 H.264 视频；三相机
-  分别映射为 `right_hand_up`、`left_hand_up`、`head_main`；
+- `videos/observation.images.*/chunk-000/file-000.mp4`：所选相机的同步 H.264/yuv420p
+  视频；单臂键为 `right_wrist_0_rgb`，双臂三相机键为 `base_0_rgb`、
+  `left_wrist_0_rgb`、`right_wrist_0_rgb`；
 - `meta/info.json`、`stats.json`、`tasks.parquet`、`modality.json` 和 episode parquet：
   LeRobot v3 schema、归一化统计、语言任务、语义切片和视频/数据分片索引；
 - `meta/manifest.json`：设备端导出摘要和数据来源。
 
-状态和动作固定使用 HiFi-UMI 风格的 20 维布局：`[right_10d, left_10d]`，每手为
-`xyz + rotation_6d + gripper`。Insight 的夹爪量是经实测标定的物理开口宽度（米），不是
-HiFi-UMI 硬件的开口角（弧度），单位会写入 `modality.json`。单臂数据仍保留 20 维，缺失
-手对应的 10 维填零并在 `observation.state_valid` / `action_valid` 中标为 false，训练时必须
-按 mask 丢弃。`action` 是同一 episode 的下一帧绝对状态，末帧重复末状态；不要在标准
-数据里提前写死 π0.5 的机器人相对动作约定。
+单臂状态和动作均为 10 维 `xyz + rotation_6d + gripper`；双臂为 20 维并固定使用
+`[left_10d, right_10d]`。位置是米制绝对 EE 位置，rotation 6D 是旋转矩阵前两行，
+夹爪是经实测标定的物理开口宽度（米），不是开口角。所有数值均为有限 float32；缺失或
+非有限输入使用有限占位，并在逐维 `observation.state_valid` / `action_valid` 中标为 false。
+`action[t]` 是同一 episode 的下一帧绝对状态 `T[t+1]`，不是
+`inv(T[t]) @ T[t+1]`。末帧 action 重复末状态作有限占位，但其 `action_valid` 全 false，
+训练损失和归一化统计都必须忽略无效维度。
+
+224×224 模式会对原始 640×544 画面执行固定 ROI `[x=0, y=96, width=544,
+height=544]` 后再缩放，不能在实机推理时直接拉伸完整画面。腕部红外源会转成三通道 RGB，
+其像素仍满足 `R == G == B`。Parquet 额外保存统一的 `observation.timestamp_ns`、每路
+`*_timestamp_ns` 真实 rosbag 时间戳及每路 `*_valid`；同步缺失或超出容差的图像必须按
+validity 忽略，不能当成有效观测。
+
+训练侧取得未来绝对 action chunk 后，应在 normalization 之前分别用当前观测 `T0` 计算
+`A[k] = inv(T0) @ T[k+1]`；不得计算相邻未来帧之间的 sequential delta。夹爪不参与
+SE(3) 运算，保留未来时刻的绝对目标宽度。双臂应对左右臂独立执行该转换。
 
 所选的每个 Insight3 夹爪都必须在 `config/gripper_calibration.json` 中提供实测的
 `width_calibration`；因此双臂导出要求 A、B 两侧均完成米制开口宽度标定。配置缺失会使

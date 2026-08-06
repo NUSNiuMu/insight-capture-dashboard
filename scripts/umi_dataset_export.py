@@ -71,6 +71,8 @@ class EpisodePlan:
     bag_name: str
     timestamps_ns: np.ndarray
     image_indices: Dict[str, np.ndarray]
+    image_timestamps_ns: Dict[str, np.ndarray]
+    image_valid: Dict[str, np.ndarray]
     lowdim: Dict[str, np.ndarray]
     detection_rates: Dict[str, float]
     max_image_skew_ms: float
@@ -605,6 +607,7 @@ def build_episode_plans(
     idle_angular_speed_deg_s: float = DEFAULT_IDLE_ANGULAR_SPEED_DEG_S,
     idle_gripper_speed_m_s: float = DEFAULT_IDLE_GRIPPER_SPEED_M_S,
     idle_gap_tolerance_s: float = DEFAULT_IDLE_GAP_TOLERANCE_S,
+    retain_invalid_images: bool = False,
 ) -> list[EpisodePlan]:
     if episode_mode not in {"bag", "auto_pause"}:
         raise ValueError(f"unsupported episode mode: {episode_mode}")
@@ -624,13 +627,15 @@ def build_episode_plans(
         )
 
     image_indices = {}
+    image_valid = {}
     valid = np.ones(timeline.shape, dtype=bool)
     max_skew_ns = int(max_image_skew_ms * 1e6)
     observed_max_skew_ns = 0
     for spec in specs:
         indices, skew = _nearest_indices(scan.image_stamps[spec.name], timeline)
         image_indices[spec.name] = indices
-        valid &= skew <= max_skew_ns
+        image_valid[spec.name] = skew <= max_skew_ns
+        valid &= image_valid[spec.name]
         observed_max_skew_ns = max(observed_max_skew_ns, int(skew.max()))
 
     hand_specs = [spec for spec in specs if spec.role != "head"]
@@ -712,7 +717,7 @@ def build_episode_plans(
     for segment_index, segment in enumerate(candidate_segments):
         rejection_reasons = []
         invalid_image_frames = int(np.count_nonzero(~valid[segment]))
-        if invalid_image_frames:
+        if invalid_image_frames and not retain_invalid_images:
             rejection_reasons.append(f"image_skew_frames={invalid_image_frames}")
         for spec in hand_specs:
             for event_name, event_stamps in discontinuities[spec.name].items():
@@ -770,6 +775,13 @@ def build_episode_plans(
                 timestamps_ns=timeline[segment],
                 image_indices={
                     name: values[segment] for name, values in image_indices.items()
+                },
+                image_timestamps_ns={
+                    name: scan.image_stamps[name][values[segment]]
+                    for name, values in image_indices.items()
+                },
+                image_valid={
+                    name: values[segment] for name, values in image_valid.items()
                 },
                 lowdim=lowdim,
                 detection_rates=scan.detection_rates,
