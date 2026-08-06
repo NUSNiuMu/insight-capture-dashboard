@@ -105,6 +105,7 @@ def create_app(context: DashboardContext) -> web.Application:
         app.router.add_get("/scoring", static._handle_scoring_page)
         app.router.add_get("/optimization", static._handle_optimization_page)
         app.router.add_get("/handpose", static._handle_handpose_page)
+        app.router.add_get("/stopwatch-review", static._handle_stopwatch_review_page)
         app.router.add_get("/settings", static._handle_settings_page)
         static_root = context.web_root / "static"
         if static_root.exists():

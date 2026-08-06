@@ -52,6 +52,7 @@ copyFile(path.join(srcDir, "umi-dataset.html"), path.join(distDir, "umi-dataset.
 copyFile(path.join(srcDir, "recording.html"), path.join(distDir, "recording.html"));
 copyFile(path.join(srcDir, "scoring.html"), path.join(distDir, "scoring.html"));
 copyFile(path.join(srcDir, "handpose.html"), path.join(distDir, "handpose.html"));
+copyFile(path.join(srcDir, "stopwatch-review.html"), path.join(distDir, "stopwatch-review.html"));
 copyFile(path.join(srcDir, "optimization.html"), path.join(distDir, "optimization.html"));
 copyFile(path.join(srcDir, "settings.html"), path.join(distDir, "settings.html"));
 copyTree(path.join(srcDir, "shared"), path.join(staticDir, "shared"));
