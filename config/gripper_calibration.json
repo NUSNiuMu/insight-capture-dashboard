@@ -20,5 +20,19 @@
         "width_m": 0.083
       }
     ]
+  },
+  "insight3_b": {
+    "open_px": 247.28443894764618,
+    "closed_px": 54.54642518075772,
+    "width_calibration": [
+      {
+        "distance_px": 54.54642518075772,
+        "width_m": 0.0
+      },
+      {
+        "distance_px": 247.28443894764618,
+        "width_m": 0.083
+      }
+    ]
   }
 }
