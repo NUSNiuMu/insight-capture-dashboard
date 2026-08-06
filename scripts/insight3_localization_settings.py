@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 
 
-DEFAULT_GRIPPER_MASK_HEIGHT_RATIO = 0.0
+DEFAULT_GRIPPER_MASK_HEIGHT_RATIO = 0.2
 SETTINGS_SECTION = "insight3_global_localizer"
 GRIPPER_MASK_HEIGHT_RATIO_KEY = "gripper_mask_height_ratio"
 
