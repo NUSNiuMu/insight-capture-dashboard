@@ -192,6 +192,7 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 | `scripts/sync_camera_restart.py` | 三相机共同定时重启采集服务并测量图像时间戳差 |
 | `scripts/gripper_tracking.py` / `gripper_calibrate.py` / `gripper_extract.py` | 夹爪张合度识别、标定与 rosbag 离线提取 |
 | `scripts/lerobot_dataset_export.py` / `umi_dataset_export.py` | LeRobot v3 标准归档与 Legacy UMI 数据集导出 |
+| `scripts/ego_lerobot_export.py` / `ego_lerobot/` | 三视角、仅头部手姿的缓存式 Ego LeRobot 交付流水线，支持可插拔手姿模型 |
 | `scripts/traj_score.py` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
 | `web_dashboard/` | Babylon.js Web 前端源码，`npm run build` 生成 `dist/` 静态页面 |
 | `config/post_processing.json` | Web 版 rosbag 默认录制配置（`rosbag_dir` 等） |

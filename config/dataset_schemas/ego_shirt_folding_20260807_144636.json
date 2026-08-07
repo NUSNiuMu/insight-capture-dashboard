@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "dataset_id": "insight/shirt_folding_20260807_144636_ego",
+  "task": "Fold the black zip-up hoodie neatly on the table.",
+  "fps": 30.0,
+  "crop": {
+    "start_s": 6.0,
+    "end_s": 76.5
+  },
+  "segments": [
+    {
+      "subtask": "initial_stillness",
+      "atomic_action": "hold_still",
+      "task": "Keep both hands still before beginning the hoodie-folding task.",
+      "start_frame": 0,
+      "end_frame": 35
+    },
+    {
+      "subtask": "unfold_and_place",
+      "atomic_action": "reach_lift_unfold",
+      "task": "Reach with both hands, lift the hoodie, and unfold it over the table.",
+      "start_frame": 36,
+      "end_frame": 209
+    },
+    {
+      "subtask": "unfold_and_place",
+      "atomic_action": "place_spread",
+      "task": "Place the hoodie flat and spread the body with both hands.",
+      "start_frame": 210,
+      "end_frame": 449
+    },
+    {
+      "subtask": "prepare_garment",
+      "atomic_action": "straighten_hood_shoulders",
+      "task": "Straighten the hood and shoulder area while the opposite hand stabilizes the hoodie.",
+      "start_frame": 450,
+      "end_frame": 689
+    },
+    {
+      "subtask": "prepare_garment",
+      "atomic_action": "smooth_body",
+      "task": "Smooth and align the center and lower body with both hands.",
+      "start_frame": 690,
+      "end_frame": 929
+    },
+    {
+      "subtask": "align_sleeves",
+      "atomic_action": "extend_left_sleeve",
+      "task": "Extend and align the left sleeve while the right hand holds the hoodie.",
+      "start_frame": 930,
+      "end_frame": 1139
+    },
+    {
+      "subtask": "align_sleeves",
+      "atomic_action": "extend_right_sleeve",
+      "task": "Extend and align the right sleeve while the left hand holds the hoodie.",
+      "start_frame": 1140,
+      "end_frame": 1349
+    },
+    {
+      "subtask": "fold_sleeves",
+      "atomic_action": "fold_left_sleeve",
+      "task": "Fold the left sleeve inward while the right hand stabilizes the body.",
+      "start_frame": 1350,
+      "end_frame": 1529
+    },
+    {
+      "subtask": "fold_sleeves",
+      "atomic_action": "fold_right_sleeve",
+      "task": "Fold the right sleeve inward while the left hand stabilizes the body.",
+      "start_frame": 1530,
+      "end_frame": 1709
+    },
+    {
+      "subtask": "prepare_final_fold",
+      "atomic_action": "smooth_before_final_fold",
+      "task": "Align and smooth the hoodie body with both hands before the final fold.",
+      "start_frame": 1710,
+      "end_frame": 1829
+    },
+    {
+      "subtask": "fold_body",
+      "atomic_action": "fold_lower_body_upward",
+      "task": "Fold the lower body upward with both hands.",
+      "start_frame": 1830,
+      "end_frame": 1949
+    },
+    {
+      "subtask": "finish",
+      "atomic_action": "square_press",
+      "task": "Square and press the folded hoodie with both hands.",
+      "start_frame": 1950,
+      "end_frame": 2075
+    },
+    {
+      "subtask": "final_stillness",
+      "atomic_action": "release_hold_still",
+      "task": "Release the folded hoodie and keep both hands still.",
+      "start_frame": 2076,
+      "end_frame": 2115
+    }
+  ]
+}
