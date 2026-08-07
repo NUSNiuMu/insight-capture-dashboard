@@ -34,10 +34,10 @@ def nominal_for(topic: str) -> Optional[float]:
     if topic.startswith("/insight3_"):
         if "/depth/" in topic:
             # Insight3 B firmware 2.1.3 emits depth at 13 Hz (65-96 ms
-            # intervals); it is not synchronized to the 50 Hz IR streams.
+            # intervals); it is not synchronized to the 30 Hz IR streams.
             return 13.0
         if any(fragment in topic for fragment in ("/image_raw", "/image_rect_raw", "camera_info", "vio_image")):
-            return 50.0
+            return 30.0
     if topic.startswith("/insight9_"):
         if "/color/" in topic:
             return 30.0 if any(
