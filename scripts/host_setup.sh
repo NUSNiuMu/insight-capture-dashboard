@@ -14,6 +14,14 @@ if [[ -f /.dockerenv ]]; then
     exit 1
 fi
 
+# The optional post-reboot phase alignment uses Paramiko so one credential can
+# arm all camera timers concurrently without exposing a password in ps output.
+# Keep setup usable on offline customer hosts when that optional mode is unused.
+if ! python3 -c 'import paramiko' >/dev/null 2>&1; then
+    log "WARNING: python3-paramiko is missing; camera phase alignment is unavailable."
+    log "  Install it when needed: sudo apt-get install python3-paramiko"
+fi
+
 # ── kernel UDP buffers for large DDS image samples (both directions) ─────────
 if [[ -f "${SYSCTL_FILE}" ]] \
         && grep -qE '^net\.core\.rps_sock_flow_entries[[:space:]]*=[[:space:]]*32768$' "${SYSCTL_FILE}" \

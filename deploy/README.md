@@ -32,6 +32,18 @@ jetson-nx profile 会在下一次开机相机恢复流程中把相机 DDS 模式
 安装的 `insight-camera-network.service` 负责网卡参数，
 `insight-camera-reboot.service` 在冷启动后恢复相机并校验 DDS 配置。
 
+手动整机重启三台相机后，如需统一校时、共同重启采集服务并直接测量三路图像
+header timestamp 差，可在部署目录执行：
+
+```bash
+./scripts/reboot_cameras.sh --sync-phase
+```
+
+该模式交互式读取一次相机 SSH 密码，也支持 `INSIGHT_CAMERA_SSH_PASSWORD` 或
+`INSIGHT_CAMERA_SSH_IDENTITY`。开机自动流程的无人值守配置见部署包内
+`scripts/README.md`；宿主机缺少 Paramiko 时先执行
+`sudo apt-get install python3-paramiko`。
+
 首次安装或大版本升级后，建图/重定位用的 TensorRT 推理服务需要现场编译一次
 设备专属引擎，最长约 15 分钟；这段时间看板本身已经能正常打开，只是 3D 页面的
 全局轨迹要等引擎编译完才出现，是正常现象，不是卡住。之后的引擎缓存会保留在

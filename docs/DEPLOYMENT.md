@@ -81,6 +81,7 @@ Dashboard 日常升级包都重复携带同一份 TensorRT/CUDA 内容。
 部署包里打包了 `deploy/docker-compose.yml`、`update.sh`、`README.md`、
 `scripts/run_dashboard.sh`，以及宿主机一次性调优用的 `scripts/host_setup.sh`
 + `scripts/configure_camera_network.sh` + `scripts/reboot_cameras.sh`
++ `scripts/sync_camera_restart.py`
 + `scripts/systemd/{insight-camera-network,insight-camera-reboot}.service`
 + `looper_cli/`。这些文件本身不大，但**它们的内容来自当前
 分支的 `deploy/`、`scripts/`、`looper_cli/` 目录**，改过 `deploy/docker-compose.yml`

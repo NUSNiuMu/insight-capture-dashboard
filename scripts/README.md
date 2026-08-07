@@ -31,6 +31,34 @@
 | `umi_dataset_export.py` | 旧 UMI Zarr 兼容导出 |
 | `post_processing.py` | 离线处理公共导入 facade |
 
+## 相机同步巡检
+
+`sync_camera_restart.py` 用于三相机软件相位巡检。它会先确认 Dashboard 未在录制，
+通过 SSH 将三台相机校时后在共同绝对时间重启 `S99all_run.service`，最后同时采集
+Insight3 A/B 红外图像和 Insight9 中间 RGB 图像的 header timestamp，直接输出定时器
+触发差、LPWM 初始化事件和三路图像时间差。
+
+```bash
+python3 scripts/sync_camera_restart.py
+```
+
+脚本默认交互式读取一次相机 SSH 密码，不会写入磁盘。无人值守时可通过
+`INSIGHT_CAMERA_SSH_PASSWORD` 环境变量提供，或用 `--identity-file` 指定 SSH key。
+`--check-only` 只检查三机 SSH 与当前 NTP 偏差，不执行校时或重启。
+宿主机需要 `python3-paramiko`；缺失时执行 `sudo apt-get install python3-paramiko`。
+
+需要同时执行相机整机重启时，使用已有入口：
+
+```bash
+./scripts/reboot_cameras.sh --sync-phase
+```
+
+它会等三台相机整机恢复并重启 Dashboard 的 DDS participant，然后调用上述同步巡检。
+开机 systemd 流程默认保持原行为；如需开机也自动对齐，在
+`/etc/default/insight-camera-reboot` 设置 `INSIGHT_SYNC_CAMERA_PHASE=1`，并通过
+`INSIGHT_CAMERA_SSH_IDENTITY` 指定相机可用的 SSH key。也支持
+`INSIGHT_CAMERA_SSH_PASSWORD`，但更推荐权限受控的 SSH key。
+
 图像录制不能改回额外的 `ros2 bag record` 图像订阅；IMU、VIO 等小消息仍由
 录制管理器的子进程负责。新增 Web route 必须在 `dashboard_web/app.py` 注册，
 业务处理放入对应 `dashboard_web/routes/`。

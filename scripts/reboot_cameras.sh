@@ -5,6 +5,32 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI="python3 ${SCRIPT_DIR}/../looper_cli/looper_cli.py"
+SYNC_CLI="${SCRIPT_DIR}/sync_camera_restart.py"
+
+sync_phase="${INSIGHT_SYNC_CAMERA_PHASE:-0}"
+for arg in "$@"; do
+    case "${arg}" in
+        --sync-phase) sync_phase=1 ;;
+        -h|--help)
+            cat <<'EOF'
+Usage: reboot_cameras.sh [--sync-phase]
+
+Reboot all cameras and wait for recovery. With --sync-phase, restart the
+dashboard DDS participant, align camera clocks and capture services, then
+print the measured image timestamp skew.
+
+Non-interactive phase alignment requires INSIGHT_CAMERA_SSH_PASSWORD or
+INSIGHT_CAMERA_SSH_IDENTITY. INSIGHT_SYNC_CAMERA_PHASE=1 enables the same
+behavior for boot-time callers.
+EOF
+            exit 0
+            ;;
+        *)
+            echo "ERROR: unknown argument: ${arg}" >&2
+            exit 1
+            ;;
+    esac
+done
 
 # Boot-time callers can extend discovery while USB links enumerate.
 DISCOVERY_TIMEOUT="${INSIGHT_DISCOVERY_TIMEOUT:-40}"   # seconds to wait for at least one camera interface to appear
@@ -165,4 +191,45 @@ if $all_ok; then
 else
     log "WARNING: One or more cameras did not come back within timeout."
     exit 1
+fi
+
+if [[ "${sync_phase}" == "1" ]]; then
+    if [[ ! -f "${SYNC_CLI}" ]]; then
+        log "ERROR: phase synchronization CLI is missing: ${SYNC_CLI}"
+        exit 1
+    fi
+    if [[ ! -t 0 && -z "${INSIGHT_CAMERA_SSH_PASSWORD:-}" \
+            && -z "${INSIGHT_CAMERA_SSH_IDENTITY:-}" ]]; then
+        log "ERROR: non-interactive phase sync needs INSIGHT_CAMERA_SSH_PASSWORD or INSIGHT_CAMERA_SSH_IDENTITY"
+        exit 1
+    fi
+
+    # The dashboard participant may retain stale DDS locators across full
+    # camera reboots. Rebind it before the synchronized service restart and
+    # timestamp measurement.
+    if docker restart insight-dashboard >/dev/null 2>&1; then
+        log "Dashboard restarted; waiting for its API..."
+        dashboard_ready=false
+        for _ in $(seq 1 30); do
+            if curl -sf --max-time 2 http://127.0.0.1:8765/healthz >/dev/null; then
+                dashboard_ready=true
+                break
+            fi
+            sleep 1
+        done
+        if [[ "${dashboard_ready}" != "true" ]]; then
+            log "ERROR: dashboard did not become healthy before phase measurement"
+            exit 1
+        fi
+    else
+        log "ERROR: cannot restart insight-dashboard before phase measurement"
+        exit 1
+    fi
+
+    sync_args=()
+    if [[ -n "${INSIGHT_CAMERA_SSH_IDENTITY:-}" ]]; then
+        sync_args+=(--identity-file "${INSIGHT_CAMERA_SSH_IDENTITY}")
+    fi
+    log "Synchronizing capture-service phase and measuring image timestamps..."
+    python3 "${SYNC_CLI}" "${sync_args[@]}"
 fi

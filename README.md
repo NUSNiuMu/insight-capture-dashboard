@@ -104,6 +104,15 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 会自动扫描当前活跃的 `169.254.x.x` 网络接口发现相机（每台相机独占一个 USB 网口、独立 `/24` 段），不需要在脚本里写死 IP；换了 segment 或增减相机都不用改脚本。
 
+需要在整机重启后三机统一校时、共同重启采集服务并直接测量图像时间戳差时：
+
+```bash
+./scripts/reboot_cameras.sh --sync-phase
+```
+
+该模式使用 Insight3 A/B 红外图像与 Insight9 中间 30 Hz RGB 图像进行测量；SSH
+密码只交互读取一次，也可用 `INSIGHT_CAMERA_SSH_PASSWORD` 或 SSH key 提供。
+
 ## Web Dashboard 功能
 
 启动后同时提供：
@@ -180,6 +189,7 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 | `Dockerfile.superglue-validation` | 客户发布与开发共用的 NVIDIA Jetson TensorRT/SuperGlue GPU 镜像 |
 | `scripts/camera_setup.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |
 | `scripts/reboot_cameras.sh` | 扫描 `169.254.x.x` 网段并批量重启相机 |
+| `scripts/sync_camera_restart.py` | 三相机共同定时重启采集服务并测量图像时间戳差 |
 | `scripts/gripper_tracking.py` / `gripper_calibrate.py` / `gripper_extract.py` | 夹爪张合度识别、标定与 rosbag 离线提取 |
 | `scripts/lerobot_dataset_export.py` / `umi_dataset_export.py` | LeRobot v3 标准归档与 Legacy UMI 数据集导出 |
 | `scripts/traj_score.py` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |

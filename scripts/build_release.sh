@@ -53,6 +53,8 @@ chmod +x "${bundle_dir}/update.sh" "${bundle_dir}/scripts/run_dashboard.sh"
 cp scripts/host_setup.sh "${bundle_dir}/scripts/"
 cp scripts/configure_camera_network.sh "${bundle_dir}/scripts/"
 cp scripts/reboot_cameras.sh "${bundle_dir}/scripts/"
+cp scripts/sync_camera_restart.py "${bundle_dir}/scripts/"
+cp scripts/README.md "${bundle_dir}/scripts/"
 cp scripts/systemd/insight-camera-network.service "${bundle_dir}/scripts/systemd/"
 cp scripts/systemd/insight-camera-reboot.service "${bundle_dir}/scripts/systemd/"
 mkdir -p "${bundle_dir}/looper_cli"
@@ -60,7 +62,8 @@ cp -r looper_cli/looper_cli looper_cli/looper_cli.py "${bundle_dir}/looper_cli/"
 find "${bundle_dir}/looper_cli" -name '__pycache__' -type d -exec rm -rf {} +
 chmod +x "${bundle_dir}/scripts/host_setup.sh" \
     "${bundle_dir}/scripts/configure_camera_network.sh" \
-    "${bundle_dir}/scripts/reboot_cameras.sh"
+    "${bundle_dir}/scripts/reboot_cameras.sh" \
+    "${bundle_dir}/scripts/sync_camera_restart.py"
 
 bundle_tarball="release/${IMAGE_NAME}-deploy-${version}.tar.gz"
 tar -C release -czf "${bundle_tarball}" "${IMAGE_NAME}-deploy"
