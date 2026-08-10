@@ -287,8 +287,6 @@ async function buildOptTrajScene(vioPoints, colmapPoints, runName) {
 
   new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
 
-  function toVec3(p) { return new BABYLON.Vector3(p[0], p[2], p[1]); }
-
   function centroid(pts) {
     if (!pts.length) return [0, 0, 0];
     let sx = 0, sy = 0, sz = 0;

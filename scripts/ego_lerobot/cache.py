@@ -95,7 +95,3 @@ def materialize_tree(source: Path, target: Path) -> None:
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(item, destination)
         staged.replace(target)
-
-
-def directory_size(path: Path) -> int:
-    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())

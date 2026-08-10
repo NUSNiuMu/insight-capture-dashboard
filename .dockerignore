@@ -29,6 +29,12 @@ __pycache__/
 # Release artifacts (multi-GB image tarballs from scripts/build_release.sh)
 release/
 
+# Local review/report outputs must never be baked into customer images
+Ego_数据采集与交付规范.pdf
+dashboard-preview.png
+ego_compliance_report_assets/
+multiview_handpose_report_assets/
+
 # CAD source for export_gripper_split_from_stl.py (dev tool); the runtime
 # only needs the exported .glb files
 assets/models/*.stl

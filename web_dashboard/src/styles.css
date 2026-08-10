@@ -37,10 +37,7 @@
   --accent-soft: rgba(184, 119, 0, 0.09);
   --teal: #0e7490;
   --green: #1f8a55;
-  --yellow: #b87700;
   --red: #c2453e;
-  --blue: #0e7490;
-  --head: #79c47b;
   --left: #79adc2;
   --right: #cf7f6f;
   --screen: #17130c;
@@ -151,13 +148,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .field-help { margin: 8px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .button-row { display: flex; gap: 8px; margin-top: 24px; }
 .action-wide { width: 100%; margin-top: 26px; }
-
-.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-bottom: 18px; }
-.metric-grid article { position: relative; min-height: 130px; padding: 20px; overflow: hidden; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
-.metric-grid article::after { position: absolute; right: -22px; bottom: -38px; width: 90px; height: 90px; border: 1px solid var(--line); border-radius: 50%; content: ""; box-shadow: 0 0 0 14px var(--surface), 0 0 0 15px var(--line); }
-.metric-grid span { display: block; color: var(--muted); font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: .1em; }
-.metric-grid strong { display: block; margin-top: 20px; font-family: var(--mono); font-size: 24px; font-style: normal; font-weight: 600; color: var(--teal); }
-.metric-grid small { display: block; margin-top: 4px; color: var(--muted-light); font-size: 9px; }
 
 .data-surface, .form-surface, .result-surface, .console-surface, .settings-surface, .feed-section, .result-canvas-surface { border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .data-surface, .settings-surface, .feed-section, .result-canvas-surface { padding: clamp(20px, 2.3vw, 30px); }
@@ -360,15 +350,6 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .settings-inline-form input { width: 100%; min-height: 34px; padding: 6px 9px; border: 1px solid var(--line-dark); border-radius: 6px; color: var(--ink); background: var(--surface); font: inherit; }
 .settings-inline-form small { color: var(--muted-light); line-height: 1.4; }
 
-/* Optional generated capability content */
-.capability-row { padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
-.capability-row strong, .capability-row span { display: block; }
-.capability-row strong { font-size: 10px; }
-.capability-row span { margin-top: 4px; color: var(--muted); font-size: 8px; }
-.capability-row.is-ok { border-color: rgba(31, 138, 85, 0.4); }
-.capability-row.is-missing { border-color: rgba(194, 69, 62, 0.4); }
-.image-pipeline-notes { color: var(--muted); font-size: 9px; line-height: 1.6; }
-
 /* Immersive 3D studio -- paper chrome around a dark scene screen. */
 body[data-dashboard-view="3d"] { height: 100%; overflow: hidden; color-scheme: light; background: var(--paper); }
 .studio-shell { display: grid; grid-template-columns: 74px minmax(0,1fr); width: 100%; height: 100vh; }
@@ -397,15 +378,8 @@ body[data-dashboard-view="3d"] { height: 100%; overflow: hidden; color-scheme: l
 .spatial-camera-dock .camera-actions button { width: 25px; height: 25px; }
 .scene-viewport { position: relative; min-width: 0; height: 100vh; overflow: hidden; }
 #render-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
-.stage-topbar { position: absolute; top: 20px; right: 22px; left: 22px; z-index: 10; display: flex; align-items: flex-start; justify-content: space-between; pointer-events: none; }
-.stage-topbar h1 { margin: 0; color: #f0ead9; font-family: var(--mono); font-size: 22px; font-weight: 600; letter-spacing: -.03em; }
-.stage-status { display: flex; min-width: 170px; padding: 11px 13px; align-items: center; gap: 11px; border: 1px solid var(--line-dark); border-radius: 10px; color: var(--ink); background: rgba(255, 252, 245, 0.9); backdrop-filter: blur(14px); }
-.stage-status > div { display: flex; flex-direction: column; gap: 3px; }
-.stage-status strong { font-size: 9px; }
-.stage-status small { color: var(--muted); font-family: var(--mono); font-size: 7px; }
 .hud { position: absolute; top: 20px; right: 22px; left: 22px; z-index: 15; display: grid; grid-template-columns: minmax(0,1fr) 280px; align-items: start; gap: 10px; pointer-events: none; }
 .spatial-playback, .mapping-panel, .legend { border: 1px solid var(--line-dark); border-radius: 12px; color: var(--ink); background: rgba(255, 252, 245, 0.92); box-shadow: 0 18px 44px rgba(20, 16, 8, 0.28); backdrop-filter: blur(18px); pointer-events: auto; }
-body[data-dashboard-view="3d"] .stage-status,
 body[data-dashboard-view="3d"] .spatial-playback,
 body[data-dashboard-view="3d"] .mapping-panel,
 body[data-dashboard-view="3d"] .legend,
@@ -413,7 +387,6 @@ body[data-dashboard-view="3d"] .camera-overlay {
   box-shadow: none;
   backdrop-filter: none;
 }
-body[data-dashboard-view="3d"] .stage-status,
 body[data-dashboard-view="3d"] .spatial-playback,
 body[data-dashboard-view="3d"] .mapping-panel,
 body[data-dashboard-view="3d"] .legend {
@@ -503,7 +476,7 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .content-heading { min-height: 0; margin-bottom: 25px; }
   .content-heading h1 { font-size: 28px; }
   .heading-stat { display: none; }
-  .metric-grid, .analysis-layout, .pipeline-layout, .handpose-workspace { grid-template-columns: 1fr; }
+  .analysis-layout, .pipeline-layout, .handpose-workspace { grid-template-columns: 1fr; }
   .control-strip { align-items: flex-start; flex-direction: column; }
   .playback-row { justify-content: flex-start; }
   .record-topic-groups { grid-template-columns: 1fr; }
@@ -524,7 +497,6 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
 
 @media (max-width: 580px) {
   .content-heading { flex-direction: column; }
-  .metric-grid { grid-template-columns: 1fr; }
   .playback-row, .record-controls { align-items: stretch; flex-direction: column; }
   .playback-row > *, .record-controls > * { width: 100%; }
   .playback-prepare-progress { width: 100%; min-width: 0; }
@@ -539,11 +511,8 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .handpose-coordinates { align-items: flex-start; flex-direction: column; }
   .settings-form-field-wide { grid-column: auto; }
   .plot-legend { align-items: flex-end; flex-direction: column; gap: 5px; }
-  .stage-topbar { right: 12px; left: 12px; }
   .spatial-stage { grid-template-columns: 1fr; }
   .spatial-cameras { display: none; }
-  .stage-status { min-width: 0; }
-  .stage-status > div { display: none; }
   .hud { top: 12px; right: 12px; left: 12px; }
   .mapping-actions { width: 100%; }
   .mapping-actions > * { flex: 1; }
@@ -564,7 +533,7 @@ body { font-size: 15px; }
 .topbar-clock { font-size: 11px; }
 .section-kicker { font-size: 12px; }
 .content-heading > div:first-child > p:last-child { font-size: 16px; }
-.heading-stat span, .metric-grid span, .metric-grid small { font-size: 12px; }
+.heading-stat span { font-size: 12px; }
 .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .nav-button { font-size: 13px; }
 .field-control, .bag-select, .field-input, .settings-text-input, .settings-model-select, .recording-bag-name-input { font-size: 14px; }
 .field-label, .field-help { font-size: 13px; }
@@ -580,14 +549,12 @@ body { font-size: 15px; }
 .bag-row-stats strong { font-size: 13px; }
 .bag-badges, .bag-row-actions, .bag-badge { font-size: 11px; }
 .empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner { font-size: 13px; }
-.record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend, .image-pipeline-notes { font-size: 12px; }
-.record-topic-summary-meta, .record-topic-copy span, .recording-output, .opt-log, .result-placeholder small, .settings-role-pill, .capability-row span { font-size: 11px; }
-.record-topic-copy strong, .settings-camera-head h3, .capability-row strong { font-size: 13px; }
+.record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend { font-size: 12px; }
+.record-topic-summary-meta, .record-topic-copy span, .recording-output, .opt-log, .result-placeholder small, .settings-role-pill { font-size: 11px; }
+.record-topic-copy strong, .settings-camera-head h3 { font-size: 13px; }
 .rail-nav a::before { font-size: 12px; }
 .camera-wall-heading h2 { font-size: 18px; }
 .camera-wall-heading > span { font-size: 10px; }
-.stage-status strong { font-size: 12px; }
-.stage-status small { font-size: 10px; }
 .legend-row, .trail-toggle { font-size: 11px; }
 .legend-row strong { font-size: 12px; }
 .stage-footer { font-size: 10px; }
@@ -596,11 +563,11 @@ body { font-size: 15px; }
    1600px workstation layout or allowing text to overwhelm the controls. */
 @media (min-width: 1800px) {
   body, .app-brand { font-size: 16px; }
-  .app-brand small, .workspace-card > span, .workspace-card small, .side-nav p, .side-nav a b, .sidebar-foot small, .topbar-clock, .section-heading > span, .section-heading > p, .control-number, .step-label > span, .camera-title span, .camera-overlay, .bag-badges, .bag-row-actions, .bag-badge, .record-topic-summary-meta, .result-placeholder small, .settings-role-pill, .capability-row span, .legend-row, .trail-toggle { font-size: 12px; }
+  .app-brand small, .workspace-card > span, .workspace-card small, .side-nav p, .side-nav a b, .sidebar-foot small, .topbar-clock, .section-heading > span, .section-heading > p, .control-number, .step-label > span, .camera-title span, .camera-overlay, .bag-badges, .bag-row-actions, .bag-badge, .record-topic-summary-meta, .result-placeholder small, .settings-role-pill, .legend-row, .trail-toggle { font-size: 12px; }
   .workspace-card strong, .content-heading > div:first-child > p:last-child, .bag-row-main strong { font-size: 17px; }
-  .side-nav a, .sidebar-foot span, .app-topbar, .section-kicker, .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .nav-button, .field-label, .field-help, .control-strip-copy strong, .step-label strong, .camera-title strong, .bag-row-stats strong, .empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner, .record-topic-copy strong, .settings-camera-head h3, .capability-row strong { font-size: 14px; }
+  .side-nav a, .sidebar-foot span, .app-topbar, .section-kicker, .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .nav-button, .field-label, .field-help, .control-strip-copy strong, .step-label strong, .camera-title strong, .bag-row-stats strong, .empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner, .record-topic-copy strong, .settings-camera-head h3 { font-size: 14px; }
   .field-control, .bag-select, .field-input, .settings-text-input, .settings-model-select, .recording-bag-name-input { font-size: 15px; }
-  .record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend, .image-pipeline-notes, .control-strip-copy small, .step-label small, .legend-row strong { font-size: 13px; }
+  .record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend, .control-strip-copy small, .step-label small, .legend-row strong { font-size: 13px; }
   .camera-wall-heading h2 { font-size: 19px; }
 }
 

@@ -106,9 +106,9 @@ RUN sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.tuna.tsinghu
     && sed -i 's|http://packages.ros.org/ros2/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu|g; s|^Types: deb deb-src|Types: deb|' /etc/apt/sources.list.d/ros2.sources
 
 # ── System & ROS2 packages ──────────────────────────────────────────────────
-# The legacy Qt dashboard has been removed. The on-device kiosk is the vendored
-# Playwright Chromium below, whose runtime libs come from
-# `playwright install --with-deps`, not from this list.
+# The legacy Qt dashboard has been removed. The on-device kiosk uses the
+# Firefox runtime installed below; Playwright Chromium is added only by the
+# final dev stage for headless page checks.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Python build tools
     python3-pip \
@@ -378,7 +378,7 @@ RUN useradd -m -u 1000 -G video,104 -s /bin/bash kiosk \
     && chown -R kiosk:kiosk /opt/firefox-kiosk-profile
 
 # ── GStreamer core + PyGObject for the NVJPEG hardware JPEG path ────────────
-# scripts/hw_jpeg.py drives nvjpegenc/nvjpegdec through GStreamer. The NVIDIA
+# scripts/dashboard_media/jpeg.py drives nvjpegenc/nvjpegdec through GStreamer. The NVIDIA
 # plugin .so files themselves (libgstnvjpeg.so, libgstnvvidconv.so, ...) are
 # NOT baked in -- the nvidia container runtime injects them from the host per
 # /etc/nvidia-container-runtime/host-files-for-container.d/drivers.csv -- but
@@ -387,7 +387,7 @@ RUN useradd -m -u 1000 -G video,104 -s /bin/bash kiosk \
 # /api/images/capabilities probe shells out to. Kept as its own layer (not in
 # the apt layer at the top) so the cached playwright/pip layers don't rebuild.
 # plugins-bad (webrtcbin/dtls/srtp/h264parse) + nice (ICE) serve the WebRTC
-# camera streams in scripts/webrtc_stream.py; the H.264 encoder itself is the
+# camera streams in scripts/dashboard_media/webrtc.py; the H.264 encoder itself is the
 # host-injected nvv4l2h264enc. sqlite3 (the CLI) is the .recover salvage tool
 # for power-cut-corrupted recordings (post_processing.py orphan recovery).
 RUN apt-get update && apt-get install -y --no-install-recommends \
