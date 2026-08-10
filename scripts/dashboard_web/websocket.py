@@ -44,17 +44,12 @@ class PoseWebSocketService:
         loop = asyncio.get_running_loop()
         publish_interval = 1.0 / self.context.node.pose_publish_hz
         next_publish_at = loop.time() + publish_interval
-        next_trace_snapshot_at = loop.time() + 2.0
         while True:
             await asyncio.sleep(max(0.0, next_publish_at - loop.time()))
             next_publish_at += publish_interval
             if not self.clients:
                 next_publish_at = loop.time() + publish_interval
-                next_trace_snapshot_at = loop.time() + 2.0
                 continue
-            if loop.time() >= next_trace_snapshot_at:
-                self._trace_cursor = None
-                next_trace_snapshot_at = loop.time() + 2.0
             # Build the CPU-heavy trace payload off the event loop.
             payload_json = await loop.run_in_executor(None, self._build_pose_broadcast_json)
             stale = []
