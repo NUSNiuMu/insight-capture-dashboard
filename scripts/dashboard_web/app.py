@@ -71,8 +71,13 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_post("/api/scoring/run", recording._handle_scoring_run)
     app.router.add_get("/api/scoring/status", recording._handle_scoring_status)
     app.router.add_post("/api/playback/start", playback._handle_playback_start)
+    app.router.add_post("/api/playback/activate", playback._handle_playback_activate)
     app.router.add_post("/api/playback/stop", playback._handle_playback_stop)
     app.router.add_get("/api/playback/status", playback._handle_playback_status)
+    app.router.add_get(
+        "/api/playback/artifacts/{bag_name}/{filename}",
+        playback._handle_playback_artifact,
+    )
     app.router.add_post("/api/trajectory/clear", playback._handle_trajectory_clear)
     app.router.add_post("/api/optimization/start", optimization._handle_optimization_start)
     app.router.add_post("/api/optimization/stop", optimization._handle_optimization_stop)
@@ -117,5 +122,6 @@ def create_app(context: DashboardContext) -> web.Application:
     app.on_shutdown.append(gripper._on_shutdown)
     app.on_shutdown.append(umi_export._on_shutdown)
     app.on_shutdown.append(handpose._on_shutdown)
+    app.on_shutdown.append(playback._on_shutdown)
     app.on_shutdown.append(websocket._on_shutdown)
     return app

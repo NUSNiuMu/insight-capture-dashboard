@@ -1,19 +1,23 @@
 import {
   setCameraCapturePerformanceMode,
+  startPreparedCameraPlayback,
   startCameraDashboard,
-} from "../camera/dashboard.js?v=20260805-cpu-budget-v13";
+  stopPreparedCameraPlayback,
+} from "../camera/dashboard.js?v=20260810-prepared-playback-v3";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 import {
   clearKeptTrajectory,
   clearRenderedTrajectories,
+  beginPreparedPlayback,
+  endPreparedPlayback,
   queuePoseUpdate,
   setAvatarLoadStage,
   setCapturePerformanceMode,
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260805-cpu-budget-v13";
+} from "../spatial/renderer.js?v=20260810-prepared-playback-v3";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");
@@ -41,6 +45,11 @@ let activeWs = null;
 let mappingResetBusy = false;
 let lastPoseMessageAt = 0;
 let obsModeEnabled = readInitialObsMode();
+let latestLivePosePayload = null;
+let preparedManifest = null;
+let preparedPlaybackActive = false;
+let preparedPlaybackStarting = false;
+let playbackRequested = false;
 const startupTimers = new Set();
 
 applyObsMode(obsModeEnabled);
@@ -48,6 +57,10 @@ connect();
 scheduleStartup();
 window.addEventListener("pagehide", () => {
   pageUnloading = true;
+  const wasPreparedPlayback = preparedPlaybackActive || preparedPlaybackStarting;
+  stopPreparedCameraPlayback();
+  endPreparedPlayback();
+  if (wasPreparedPlayback) navigator.sendBeacon("/api/playback/stop");
   startupTimers.forEach((timer) => window.clearTimeout(timer));
   startupTimers.clear();
   if (activeWs) {
@@ -165,6 +178,8 @@ function connect() {
     if (payload.type !== "pose_update") {
       return;
     }
+    latestLivePosePayload = payload;
+    if (preparedPlaybackActive) return;
     if (!queuePoseUpdate(payload)) {
       ws.close();
     }
@@ -282,6 +297,7 @@ async function startPlayback() {
     return;
   }
   playbackBusy = true;
+  playbackRequested = true;
   if (startPlaybackButton) startPlaybackButton.disabled = true;
   if (playbackStatusEl) playbackStatusEl.textContent = "Starting playback...";
   try {
@@ -294,7 +310,9 @@ async function startPlayback() {
     if (!response.ok) throw new Error(payload.error || "Failed to start playback.");
     clearKeptTrajectory();
     renderPlaybackStatus(payload);
+    if (payload.state === "ready") void startPreparedPlayback(payload);
   } catch (error) {
+    playbackRequested = false;
     if (playbackStatusEl) playbackStatusEl.textContent = error instanceof Error ? error.message : String(error);
     if (startPlaybackButton) startPlaybackButton.disabled = false;
   } finally {
@@ -305,6 +323,12 @@ async function startPlayback() {
 async function stopPlayback() {
   if (playbackBusy) return;
   playbackBusy = true;
+  playbackRequested = false;
+  preparedPlaybackStarting = false;
+  preparedPlaybackActive = false;
+  preparedManifest = null;
+  stopPreparedCameraPlayback();
+  endPreparedPlayback();
   if (stopPlaybackButton) stopPlaybackButton.disabled = true;
   try {
     const response = await fetch("/api/playback/stop", { method: "POST" });
@@ -322,6 +346,12 @@ async function stopPlayback() {
 async function goLive() {
   if (playbackBusy) return;
   playbackBusy = true;
+  playbackRequested = false;
+  preparedPlaybackStarting = false;
+  preparedPlaybackActive = false;
+  preparedManifest = null;
+  stopPreparedCameraPlayback();
+  endPreparedPlayback();
   if (goLiveButton) goLiveButton.disabled = true;
   try {
     await fetch("/api/playback/stop", { method: "POST" });
@@ -343,6 +373,9 @@ async function refreshPlaybackStatus() {
     if (!response.ok) return;
     const payload = await response.json();
     renderPlaybackStatus(payload);
+    if (payload.state === "ready" && playbackRequested) {
+      void startPreparedPlayback(payload);
+    }
   } catch (_) {
     // ignore network errors during polling
   }
@@ -352,16 +385,120 @@ function renderPlaybackStatus(payload) {
   const state = (payload && payload.state) || "idle";
   const bagName = (payload && payload.bag_name) || "";
   const isPlaying = state === "playing";
+  const isPreparing = state === "preparing" || (state === "ready" && playbackRequested);
+  const isBusy = isPlaying || isPreparing;
   if (startPlaybackButton) {
-    startPlaybackButton.hidden = isPlaying;
-    if (!isPlaying) startPlaybackButton.disabled = false;
+    startPlaybackButton.hidden = isBusy;
+    if (!isBusy) startPlaybackButton.disabled = false;
   }
-  if (stopPlaybackButton) stopPlaybackButton.hidden = !isPlaying;
+  if (stopPlaybackButton) stopPlaybackButton.hidden = !isBusy;
   if (goLiveButton) goLiveButton.hidden = !isPlaying;
-  if (playbackBagSelect) playbackBagSelect.disabled = isPlaying;
+  if (playbackBagSelect) playbackBagSelect.disabled = isBusy;
   if (playbackStatusEl) {
-    playbackStatusEl.textContent = isPlaying ? `Playing: ${bagName}` : "Idle";
+    if (state === "preparing") {
+      const progress = Math.round(Number(payload.progress || 0) * 100);
+      playbackStatusEl.textContent = `Preparing ${progress}% · ${payload.stage || bagName}`;
+    } else if (state === "ready" && playbackRequested) {
+      playbackStatusEl.textContent = `Loading prepared media: ${bagName}`;
+    } else if (state === "ready") {
+      playbackStatusEl.textContent = `Prepared cache ready: ${bagName}`;
+    } else if (state === "error") {
+      playbackStatusEl.textContent = payload.error || "Playback preparation failed.";
+    } else {
+      playbackStatusEl.textContent = isPlaying
+        ? `Playing prepared: ${bagName}${preparedQualitySummary()}`
+        : "Idle";
+    }
   }
+}
+
+function preparedQualitySummary() {
+  if (!preparedManifest) return "";
+  const cameras = Array.isArray(preparedManifest.cameras) ? preparedManifest.cameras : [];
+  const repeats = cameras.reduce(
+    (total, camera) => total + Number(camera.duplicate_frames || 0),
+    0
+  );
+  const maxSkewMs = Math.max(0, ...cameras.map((camera) => Number(camera.max_skew_ms || 0)));
+  return ` · ${Number(preparedManifest.fps || 30)} Hz · ${repeats} repeats · max skew ${maxSkewMs.toFixed(1)} ms`;
+}
+
+async function startPreparedPlayback(status) {
+  if (preparedPlaybackStarting || preparedPlaybackActive || !playbackRequested) return;
+  preparedPlaybackStarting = true;
+  try {
+    const response = await fetch(status.manifest_url, { cache: "force-cache" });
+    if (!response.ok) throw new Error("Prepared playback manifest is unavailable.");
+    preparedManifest = await response.json();
+    beginPreparedPlayback(buildPreparedPosePayload(0, true));
+    const activate = await fetch("/api/playback/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ bag_name: preparedManifest.bag_name }),
+    });
+    if (!activate.ok) {
+      const payload = await activate.json();
+      throw new Error(payload.error || "Could not activate prepared playback.");
+    }
+    preparedPlaybackActive = true;
+    await startPreparedCameraPlayback(preparedManifest, {
+      onFrame: (frameIndex) => {
+        if (preparedPlaybackActive) queuePoseUpdate(buildPreparedPosePayload(frameIndex, false));
+      },
+      onEnded: () => { void stopPlayback(); },
+    });
+    renderPlaybackStatus({ state: "playing", bag_name: preparedManifest.bag_name });
+  } catch (error) {
+    preparedPlaybackActive = false;
+    playbackRequested = false;
+    stopPreparedCameraPlayback();
+    endPreparedPlayback();
+    await fetch("/api/playback/stop", { method: "POST" }).catch(() => {});
+    if (playbackStatusEl) {
+      playbackStatusEl.textContent = error instanceof Error ? error.message : String(error);
+    }
+  } finally {
+    preparedPlaybackStarting = false;
+  }
+}
+
+function buildPreparedPosePayload(frameIndex, snapshot) {
+  const manifest = preparedManifest;
+  const baseByName = new Map((latestLivePosePayload?.poses || []).map((pose) => [pose.name, pose]));
+  const poses = (manifest.poses || []).map((pose) => {
+    const base = baseByName.get(pose.name) || {};
+    const trace = Array.isArray(pose.trajectory) ? pose.trajectory : [];
+    const toSeq = trace.length;
+    return {
+      ...base,
+      name: pose.name,
+      role: pose.role,
+      visible: Boolean(pose.valid?.[frameIndex]),
+      position: pose.positions?.[frameIndex] || [0, 0, 0],
+      quaternion_xyzw: pose.quaternions_xyzw?.[frameIndex] || [0, 0, 0, 1],
+      avatar_model: pose.avatar_model,
+      avatar_scale: pose.avatar_scale,
+      avatar_rotation_deg_xyz: pose.avatar_rotation_deg_xyz,
+      avatar_offset_xyz: pose.avatar_offset_xyz,
+      asset_url: pose.avatar_model ? `/asset?path=${encodeURIComponent(pose.avatar_model)}` : null,
+      trace_update: {
+        mode: snapshot ? "snapshot" : "delta",
+        generation: 1,
+        from_seq: snapshot ? 1 : toSeq + 1,
+        to_seq: toSeq,
+        drop_before_seq: 1,
+        points: snapshot ? trace : [],
+      },
+    };
+  });
+  return {
+    type: "pose_update",
+    stick_figure_mode: Boolean(latestLivePosePayload?.stick_figure_mode),
+    display_fps_limit: Number(manifest.fps || 30),
+    trace_capacity: Math.max(2, ...poses.map((pose) => pose.trace_update.to_seq)),
+    trace_generation: 1,
+    poses,
+  };
 }
 
 async function clearAllTrajectories() {
