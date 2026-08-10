@@ -6,12 +6,17 @@ import json
 import os
 import re
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
+
+from dataset_routing import build_ego_spec, inspect_gripper_markers
+from umi_dataset_export import load_camera_specs
 
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -25,6 +30,8 @@ class _UmiExportItem:
     dataset_name: str
     output_path: Path
     export_format: str
+    route: str = "pending"
+    route_diagnostics: Optional[Dict[str, object]] = None
     status: str = "pending"
     result: Optional[Dict[str, object]] = None
     error: Optional[str] = None
@@ -62,6 +69,9 @@ class UmiExportManager:
     _UMI_SCRIPT = Path(__file__).resolve().parents[1] / "umi_dataset_export.py"
     _LEROBOT_SCRIPT = (
         Path(__file__).resolve().parents[1] / "lerobot_dataset_export.py"
+    )
+    _EGO_LEROBOT_SCRIPT = (
+        Path(__file__).resolve().parents[1] / "ego_lerobot_export.py"
     )
 
     def __init__(self, project_root: Path, rosbag_root: Path) -> None:
@@ -102,6 +112,7 @@ class UmiExportManager:
                 "episode_mode": job.episode_mode,
                 "export_format": job.export_format,
                 "task": job.task,
+                "routes": {item.bag_name: item.route for item in job.items},
                 "items": [self._item_payload(item) for item in job.items],
             }
             if job.finished_at:
@@ -271,11 +282,26 @@ class UmiExportManager:
     def _export_item(
         self, job: _UmiExportJob, item: _UmiExportItem, completed_frames: int
     ) -> Dict[str, object]:
-        script = (
-            self._LEROBOT_SCRIPT
-            if item.export_format == "lerobot"
-            else self._UMI_SCRIPT
-        )
+        temporary_spec: Optional[tempfile.TemporaryDirectory[str]] = None
+        script = self._UMI_SCRIPT
+        if item.export_format == "lerobot":
+            with self._lock:
+                job.stage = "detect_route"
+            specs = load_camera_specs(
+                self.project_root / "config" / "cameras.json", job.camera_names
+            )
+            hand_topics = {
+                spec.name: spec.image_topic for spec in specs if spec.role != "head"
+            }
+            diagnostics = inspect_gripper_markers(item.bag_path, hand_topics)
+            item.route = str(diagnostics["route"])
+            item.route_diagnostics = diagnostics
+            if item.route == "umi_gripper":
+                script = self._LEROBOT_SCRIPT
+            else:
+                script = self._EGO_LEROBOT_SCRIPT
+        elif item.export_format == "umi":
+            item.route = "umi_gripper"
         command = [
             "/usr/bin/python3",
             str(script),
@@ -291,7 +317,7 @@ class UmiExportManager:
             "--episode-mode",
             job.episode_mode,
         ]
-        if item.export_format == "lerobot":
+        if item.export_format == "lerobot" and item.route == "umi_gripper":
             command.extend(
                 (
                     "--task",
@@ -300,8 +326,39 @@ class UmiExportManager:
                     f"insight/{item.dataset_name}",
                 )
             )
-        for camera_name in job.camera_names:
-            command.extend(("--camera", camera_name))
+        if item.route == "ego_hand":
+            temporary_spec = tempfile.TemporaryDirectory(prefix="ego_lerobot_spec_")
+            spec_path = Path(temporary_spec.name) / "spec.json"
+            spec_path.write_text(
+                json.dumps(
+                    build_ego_spec(
+                        item.bag_path,
+                        self.project_root / "config" / "cameras.json",
+                        dataset_id=f"insight/{item.dataset_name}",
+                        task=job.task,
+                    ),
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            command = [
+                sys.executable,
+                "-u",
+                str(script),
+                str(item.bag_path),
+                str(item.output_path),
+                "--spec",
+                str(spec_path),
+                "--camera-config",
+                str(self.project_root / "config" / "cameras.json"),
+            ]
+            with self._lock:
+                job.stage = "hand_inference"
+        else:
+            for camera_name in job.camera_names:
+                command.extend(("--camera", camera_name))
         output_tail = deque(maxlen=12)
         process = subprocess.Popen(
             command,
@@ -325,7 +382,10 @@ class UmiExportManager:
                     job.stage = fields[3]
                     job.current_bag = item.bag_name
                     job.total_frames = completed_frames + int(fields[5])
-        if process.wait() != 0:
+        return_code = process.wait()
+        if temporary_spec is not None:
+            temporary_spec.cleanup()
+        if return_code != 0:
             rejected_lines = []
             for line in output_tail:
                 for prefix in ("UMI_REJECTED_BAG ", "DATASET_REJECTED_BAG "):
@@ -350,6 +410,15 @@ class UmiExportManager:
             if item.export_format == "lerobot"
             else item.output_path.parent
         )
+        result.setdefault(
+            "size_bytes",
+            sum(
+                path.stat().st_size
+                for path in manageable_root.rglob("*")
+                if path.is_file()
+            ),
+        )
+        result["route"] = item.route
         self._make_output_user_manageable(manageable_root)
         return result
 
@@ -390,7 +459,10 @@ class UmiExportManager:
             "output_path": str(item.output_path.relative_to(self.project_root)),
             "manifest_path": str(manifest_path.relative_to(self.project_root)),
             "export_format": item.export_format,
+            "route": item.route,
         }
+        if item.route_diagnostics is not None:
+            payload["route_diagnostics"] = item.route_diagnostics
         if item.export_format == "umi":
             payload["config_path"] = str(config_path.relative_to(self.project_root))
         if item.result is not None:

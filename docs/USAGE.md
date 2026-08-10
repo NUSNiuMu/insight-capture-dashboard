@@ -98,11 +98,14 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 耗时或动画估算。
 
 **训练数据集导出**：打开 `/umi-dataset`，将每次完整示教对应的 rosbag 勾选为
-episode，填写英文任务指令，选择单臂 A、单臂 B 或双臂采集布局和训练图像分辨率后，
-点击 **Build LeRobot dataset**。默认输出是与 HiFi-UMI-2K 对齐的 LeRobot v3 目录：
+episode 并填写英文任务指令。点击 **Inspect and build LeRobot dataset** 后，后端先从
+腕部图像抽样检测 UMI 夹爪的 ArUco ID 1/0：重复检测到双标记时走 UMI 夹爪路线；两路
+腕部图像均未检测到双标记时走三视角 Ego 手姿路线，并只在 Insight9 头部图像上运行
+WiLoR。单臂/双臂布局、自动停顿分段和图像缩放仅用于夹爪路线；手姿路线固定保留三路
+原图，并把整条 rosbag 作为任务文本对应的单 episode、单动作段。默认输出目录为：
 `outputs/lerobot_datasets/<rosbag 名>_lerobot/`。每个选中的 rosbag 会独立处理并保存在设备上。
 页面当前默认保留 **Original resolution**；需要 π0.5 固定输入时可显式选择 224×224
-或 384×384 的下部操作区训练副本。
+或 384×384 的下部操作区夹爪训练副本。
 
 LeRobot 输出包含：
 
@@ -115,13 +118,17 @@ LeRobot 输出包含：
   LeRobot v3 schema、归一化统计、语言任务、语义切片和视频/数据分片索引；
 - `meta/manifest.json`：设备端导出摘要和数据来源。
 
-单臂状态和动作均为 10 维 `xyz + rotation_6d + gripper`；双臂为 20 维并固定使用
+夹爪路线的单臂状态和动作均为 10 维 `xyz + rotation_6d + gripper`；双臂为 20 维并固定使用
 `[left_10d, right_10d]`。位置是米制绝对 EE 位置，rotation 6D 是旋转矩阵前两行，
 夹爪是经实测标定的物理开口宽度（米），不是开口角。所有数值均为有限 float32；缺失或
 非有限输入使用有限占位，并在逐维 `observation.state_valid` / `action_valid` 中标为 false。
 `action[t]` 是同一 episode 的下一帧绝对状态 `T[t+1]`，不是
 `inv(T[t]) @ T[t+1]`。末帧 action 重复末状态作有限占位，但其 `action_valid` 全 false，
 训练损失和归一化统计都必须忽略无效维度。
+
+无夹爪手姿路线输出左右手各 54 维（腕部 `xyz + rotation_6d` 加 45 维 MANO 姿态），
+同时写入 2D/3D 关键点、显式 validity mask 和三路原始分辨率视频；详细交付约束见
+`docs/EGO_LEROBOT_EXPORT.md`。
 
 224×224 模式会对原始 640×544 画面执行固定 ROI `[x=0, y=96, width=544,
 height=544]` 后再缩放，不能在实机推理时直接拉伸完整画面。NV12 腕部画面会保留完整

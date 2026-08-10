@@ -50,10 +50,10 @@ function renderLayout() {
   layoutSummary.textContent = layout.label;
   taskField.hidden = !isLeRobot;
   taskInput.required = isLeRobot;
-  exportButton.textContent = isLeRobot ? "Build LeRobot dataset" : "Build UMI outputs";
+  exportButton.textContent = isLeRobot ? "Inspect and build LeRobot dataset" : "Build UMI outputs";
   schemaGrid.innerHTML = layout.schema.map(([key, value]) =>
     `<span><small>${escapeHtml(key)}</small><strong>${escapeHtml(value)}</strong></span>`
-  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `Fixed lower ROI → ${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · 20 Hz</strong></span><span><small>Episodes</small><strong>${episodeModeInput.value === "auto_pause" ? "Auto-split at ~1 s pauses" : "One rosbag = one episode"}</strong></span><span><small>State / action</small><strong>${isLeRobot ? `${layout.cameras.length === 1 ? "10D" : "20D · left then right"} · absolute next-state target` : "0–0.083 m · relative in training"}</strong></span><span><small>Output folder</small><strong>${isLeRobot ? "outputs/lerobot_datasets/&lt;rosbag&gt;_lerobot/" : "outputs/umi_datasets/&lt;rosbag&gt;_umi/"}</strong></span>`;
+  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `Fixed lower ROI → ${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · ${isLeRobot ? "20 Hz gripper / 30 Hz hand" : "20 Hz"}</strong></span><span><small>Episodes</small><strong>${episodeModeInput.value === "auto_pause" ? "Auto-split gripper pauses" : "One rosbag = one episode"}</strong></span><span><small>State / action</small><strong>${isLeRobot ? "Auto: UMI EE + width, or inferred hand pose" : "0–0.083 m · relative in training"}</strong></span><span><small>Output folder</small><strong>${isLeRobot ? "outputs/lerobot_datasets/&lt;rosbag&gt;_lerobot/" : "outputs/umi_datasets/&lt;rosbag&gt;_umi/"}</strong></span>`;
 }
 
 function formatBytes(bytes) {
@@ -113,7 +113,11 @@ function renderStatus(payload) {
     const count = Number(payload.bag_count || 0);
     const completed = Number(payload.completed_bags || 0);
     const progress = count ? Math.min(95, Math.round((completed / count) * 100)) : 0;
-    statusLabel.textContent = payload.stage === "images"
+    statusLabel.textContent = payload.stage === "detect_route"
+      ? "Inspecting gripper QR markers"
+      : payload.stage === "hand_inference"
+        ? "Inferring human hand pose"
+        : payload.stage === "images"
       ? "Encoding synchronized images"
       : payload.stage === "package"
         ? (payload.export_format === "lerobot" ? "Writing Parquet and MP4 metadata" : "Packaging Zarr")
@@ -122,7 +126,9 @@ function renderStatus(payload) {
           : "Scanning rosbag streams";
     progressValue.textContent = `${progress}%`;
     progressFill.style.width = `${progress}%`;
-    statusDetail.textContent = `${payload.current_bag || "Preparing"}\n${Number(payload.total_frames || 0).toLocaleString()} frames written · ${completed}/${count} bags completed`;
+    const route = payload.routes && payload.current_bag ? payload.routes[payload.current_bag] : "";
+    const routeText = route === "umi_gripper" ? "UMI gripper route" : route === "ego_hand" ? "Human-hand inference route" : "Detecting route";
+    statusDetail.textContent = `${payload.current_bag || "Preparing"} · ${routeText}\n${Number(payload.total_frames || 0).toLocaleString()} frames written · ${completed}/${count} bags completed`;
     resultElement.hidden = true;
     return;
   }
@@ -146,9 +152,10 @@ function renderStatus(payload) {
     const failureDetail = item.source_rename_error
       ? `${item.error || "Unknown error"} · rename failed: ${item.source_rename_error}`
       : failedName ? `${item.error || "Unknown error"} · renamed to ${failedName}` : item.error || "Unknown error";
+    const routeLabel = item.route === "umi_gripper" ? "UMI gripper" : item.route === "ego_hand" ? "Human hand pose" : "Unknown";
     return `<div class="umi-result-item${isDone ? "" : " is-error"}">
       <span><small>Source rosbag</small><strong>${escapeHtml(item.bag_name || "--")}</strong></span>
-      <span><small>${isDone ? "Saved on device" : failureLabel}</small><strong>${escapeHtml(isDone ? item.output_path || "--" : failureDetail)}</strong></span>
+      <span><small>${isDone ? `Saved on device · ${routeLabel}` : `${failureLabel} · ${routeLabel}`}</small><strong>${escapeHtml(isDone ? item.output_path || "--" : failureDetail)}</strong></span>
       <span><small>Summary</small><strong>${isDone ? `${Number(result.episode_count || 0)} episode(s) · ${Number(result.total_frames || 0).toLocaleString()} frames · ${formatBytes(result.size_bytes)}` : "No output written"}</strong></span>
     </div>`;
   }).join("");
