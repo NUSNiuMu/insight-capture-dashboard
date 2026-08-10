@@ -15,10 +15,62 @@ from post_processing_core.prepared_playback import (  # noqa: E402
     _cache_key,
     _nearest_indices,
     _playback_frame,
+    _select_recorded_streams,
 )
 
 
 class PreparedPlaybackTest(unittest.TestCase):
+    def test_recorded_stream_selection_allows_one_camera_and_pose(self) -> None:
+        cameras = [
+            {"name": "left", "topic": "/left/image"},
+            {"name": "head", "topic": "/head/image"},
+            {"name": "right", "topic": "/right/image"},
+        ]
+        poses = [
+            {"name": "left", "topic": "/left/pose"},
+            {"name": "head", "topic": "/head/pose"},
+            {"name": "right", "topic": "/right/pose"},
+        ]
+        selected_cameras, selected_poses = _select_recorded_streams(
+            {"/head/image", "/head/pose"}, cameras, poses
+        )
+        self.assertEqual([item["name"] for item in selected_cameras], ["head"])
+        self.assertEqual([item["name"] for item in selected_poses], ["head"])
+
+    def test_recorded_stream_selection_allows_image_without_pose(self) -> None:
+        selected_cameras, selected_poses = _select_recorded_streams(
+            {"/left/image"},
+            [{"name": "left", "topic": "/left/image"}],
+            [{"name": "left", "topic": "/left/pose"}],
+        )
+        self.assertEqual([item["name"] for item in selected_cameras], ["left"])
+        self.assertEqual(selected_poses, [])
+
+    def test_recorded_stream_selection_preserves_full_configuration_order(self) -> None:
+        cameras = [
+            {"name": "left", "topic": "/left/image"},
+            {"name": "head", "topic": "/head/image"},
+            {"name": "right", "topic": "/right/image"},
+        ]
+        poses = [
+            {"name": "left", "topic": "/left/pose"},
+            {"name": "head", "topic": "/head/pose"},
+            {"name": "right", "topic": "/right/pose"},
+        ]
+        selected_cameras, selected_poses = _select_recorded_streams(
+            {item["topic"] for item in [*cameras, *poses]}, cameras, poses
+        )
+        self.assertEqual(selected_cameras, cameras)
+        self.assertEqual(selected_poses, poses)
+
+    def test_recorded_stream_selection_requires_a_camera(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no configured camera image topic"):
+            _select_recorded_streams(
+                {"/left/pose"},
+                [{"name": "left", "topic": "/left/image"}],
+                [{"name": "left", "topic": "/left/pose"}],
+            )
+
     def test_cache_key_includes_playback_schema(self) -> None:
         signature = [{"name": "bag.db3", "size": 10, "mtime_ns": 20}]
         configuration = {"cameras": [{"name": "camera"}], "poses": []}

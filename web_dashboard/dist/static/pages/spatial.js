@@ -3,7 +3,7 @@ import {
   startPreparedCameraPlayback,
   startCameraDashboard,
   stopPreparedCameraPlayback,
-} from "../camera/dashboard.js?v=20260810-prepared-playback-v4";
+} from "../camera/dashboard.js?v=20260810-single-camera-playback-v1";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 import {
@@ -17,7 +17,7 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260810-prepared-playback-v4";
+} from "../spatial/renderer.js?v=20260810-single-camera-playback-v1";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");

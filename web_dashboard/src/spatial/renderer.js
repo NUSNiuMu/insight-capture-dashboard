@@ -280,11 +280,14 @@ export function queuePoseUpdate(payload) {
     traceCapacity = configuredCapacity;
   }
   if (!dashboardOrigin) {
-    const initialHead = (payload.poses || []).find(
-      (pose) => pose.role === "head" && pose.visible && Array.isArray(pose.position)
+    const visiblePoses = (payload.poses || []).filter(
+      (pose) => pose.visible && Array.isArray(pose.position)
     );
-    if (initialHead) {
-      dashboardOrigin = initialHead.position.map((value) => Number(value) || 0);
+    const initialPose = visiblePoses.find(
+      (pose) => pose.role === "head" && pose.visible && Array.isArray(pose.position)
+    ) || (preparedPlaybackMode ? visiblePoses[0] : null);
+    if (initialPose) {
+      dashboardOrigin = initialPose.position.map((value) => Number(value) || 0);
     }
   }
   let traceStateValid = true;
@@ -319,6 +322,14 @@ function applyPoseUpdate(payload) {
     return;
   }
   const poses = payload.poses || [];
+  if (preparedPlaybackMode) {
+    const activePoseNames = new Set(poses.map((pose) => pose.name));
+    for (const [name, node] of poseNodes) {
+      if (activePoseNames.has(name)) continue;
+      node.setEnabled(false);
+      poseTargets.delete(name);
+    }
+  }
   const poseRoleKey = poses.map((p) => p.role).join(",");
   const needsRebuild = !legend || legend.dataset.roleKey !== poseRoleKey;
 

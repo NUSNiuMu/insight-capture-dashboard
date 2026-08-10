@@ -17,6 +17,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 from hand_tracking.extract_gripper import decode_color_image
+from .playback import _read_bag_topics
 
 
 SCHEMA_VERSION = 2
@@ -192,6 +193,24 @@ def _cache_key(
     ).hexdigest()[:16]
 
 
+def _select_recorded_streams(
+    recorded_topics: Iterable[str],
+    cameras: list[dict[str, object]],
+    poses: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Keep configured playback streams that are actually present in the bag."""
+    topics = {str(topic) for topic in recorded_topics}
+    selected_cameras = [
+        dict(camera) for camera in cameras if str(camera.get("topic", "")) in topics
+    ]
+    if not selected_cameras:
+        raise ValueError("bag contains no configured camera image topic for playback")
+    selected_poses = [
+        dict(pose) for pose in poses if str(pose.get("topic", "")) in topics
+    ]
+    return selected_cameras, selected_poses
+
+
 def _open_reader(bag_path: Path, topics: Iterable[str]):
     import rosbag2_py
 
@@ -262,6 +281,9 @@ class PreparedPlaybackManager:
             recording_manager._cleanup_if_exited_unlocked()
             if recording_manager.processes:
                 raise RuntimeError("Cannot prepare playback while recording is active.")
+        cameras, poses = _select_recorded_streams(
+            _read_bag_topics(bag_path), cameras, poses
+        )
         signature = _source_signature(bag_path)
         configuration = {"cameras": cameras, "poses": poses}
         if self._cache_valid(bag_name, signature, configuration):

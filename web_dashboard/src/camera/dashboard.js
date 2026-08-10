@@ -1,6 +1,7 @@
 import { escapeHtml } from "../shared/format.js";
 
 const cameraDock = document.getElementById("camera-dock");
+const cameraWallStatus = document.querySelector("[data-camera-wall-status]");
 const enableCameras = Boolean(cameraDock);
 const CAMERA_FPS_WINDOW_MS = 1500;
 const CAMERA_POLL_INTERVAL_MS = 250;
@@ -31,11 +32,23 @@ export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
   if (!entries.length || frameCount < 2) {
     throw new Error("Prepared playback manifest has no camera frames.");
   }
-  const session = { manifest, videos: new Map(), stopped: false };
+  const session = {
+    manifest,
+    cameraNames: new Set(entries.map((camera) => camera.name)),
+    videos: new Map(),
+    stopped: false,
+  };
   preparedPlaybackSession = session;
+  for (const cameraName of Array.from(cameraWebRtc.keys())) stopCameraWebRtc(cameraName);
   const ready = [];
   for (const camera of entries) {
     const panel = ensureCameraPanel(camera);
+    panel.classList.remove("minimized");
+    const toggle = panel.querySelector("[data-camera-toggle]");
+    if (toggle) {
+      toggle.textContent = "−";
+      toggle.title = "Minimize";
+    }
     stopCameraWebRtc(camera.name);
     updateCameraPanelAspect(panel, camera);
     const status = panel.querySelector("[data-camera-status]");
@@ -56,6 +69,10 @@ export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
     if (pollState) pollState.displayFrameTimes = [];
     ready.push(waitForPreparedVideo(video));
   }
+  for (const [name, panel] of cameraPanels.entries()) {
+    if (!session.cameraNames.has(name)) removeCameraPanel(name, panel);
+  }
+  renderCameraPanels(entries, true);
   await Promise.all(ready);
   if (preparedPlaybackSession !== session || session.stopped) {
     throw new Error("Prepared playback was stopped.");
@@ -133,6 +150,8 @@ export function stopPreparedCameraPlayback() {
     const pollState = cameraPollState.get(name);
     if (pollState) pollState.version = -1;
   }
+  cameraDock?.style.removeProperty("grid-template-rows");
+  setTextIfChanged(cameraWallStatus, "LIVE");
   if (!pageUnloading) void pollCameraMetadata();
 }
 
@@ -223,8 +242,17 @@ function renderCameraPanels(cameras, isPlayback = false) {
   if (!cameraDock) {
     return;
   }
+  const preparedCameras = preparedPlaybackSession?.manifest?.cameras;
+  const displayedCameras = Array.isArray(preparedCameras) ? preparedCameras : cameras;
+  if (preparedPlaybackSession) {
+    cameraDock.style.gridTemplateRows = `repeat(${Math.max(1, displayedCameras.length)}, minmax(0, 1fr))`;
+    setTextIfChanged(cameraWallStatus, `PLAYBACK · ${displayedCameras.length}`);
+  } else {
+    cameraDock.style.removeProperty("grid-template-rows");
+    setTextIfChanged(cameraWallStatus, "LIVE");
+  }
   const seen = new Set();
-  cameras
+  displayedCameras
     .slice()
     .sort((a, b) => {
       const orderA = Number(a.column || 0) * 100 + Number(a.row || 0);
@@ -263,12 +291,17 @@ function renderCameraPanels(cameras, isPlayback = false) {
     });
   for (const [name, panel] of cameraPanels.entries()) {
     if (!seen.has(name)) {
-      stopCameraWebRtc(name);
-      panel.remove();
-      cameraPanels.delete(name);
-      cameraPollState.delete(name);
+      removeCameraPanel(name, panel);
     }
   }
+}
+
+function removeCameraPanel(name, panel) {
+  stopCameraWebRtc(name);
+  panel.remove();
+  cameraPanels.delete(name);
+  cameraPollState.delete(name);
+  if (maximizedCameraName === name) maximizedCameraName = null;
 }
 
 function ensureCameraPanel(camera) {
