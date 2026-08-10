@@ -3,7 +3,7 @@ import {
   startPreparedCameraPlayback,
   startCameraDashboard,
   stopPreparedCameraPlayback,
-} from "../camera/dashboard.js?v=20260810-prepared-playback-v3";
+} from "../camera/dashboard.js?v=20260810-prepared-playback-v4";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js";
 import {
@@ -17,7 +17,7 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260810-prepared-playback-v3";
+} from "../spatial/renderer.js?v=20260810-prepared-playback-v4";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");
@@ -26,6 +26,10 @@ const startPlaybackButton = document.getElementById("start-playback-button");
 const stopPlaybackButton = document.getElementById("stop-playback-button");
 const goLiveButton = document.getElementById("go-live-button");
 const playbackStatusEl = document.getElementById("playback-status");
+const playbackProgressEl = document.getElementById("playback-prepare-progress");
+const playbackProgressStageEl = document.getElementById("playback-progress-stage");
+const playbackProgressPercentEl = document.getElementById("playback-progress-percent");
+const playbackProgressBar = document.getElementById("playback-progress-bar");
 const clearTrajectoryButton = document.getElementById("clear-trajectory-button");
 const keepTrajectoryToggle = document.getElementById("keep-trajectory-toggle");
 const mappingStatus = document.getElementById("mapping-status");
@@ -298,6 +302,7 @@ async function startPlayback() {
   }
   playbackBusy = true;
   playbackRequested = true;
+  renderPlaybackProgress(true, 0, "Starting encoder");
   if (startPlaybackButton) startPlaybackButton.disabled = true;
   if (playbackStatusEl) playbackStatusEl.textContent = "Starting playback...";
   try {
@@ -313,6 +318,7 @@ async function startPlayback() {
     if (payload.state === "ready") void startPreparedPlayback(payload);
   } catch (error) {
     playbackRequested = false;
+    renderPlaybackProgress(false, 0, "Encoding");
     if (playbackStatusEl) playbackStatusEl.textContent = error instanceof Error ? error.message : String(error);
     if (startPlaybackButton) startPlaybackButton.disabled = false;
   } finally {
@@ -394,6 +400,13 @@ function renderPlaybackStatus(payload) {
   if (stopPlaybackButton) stopPlaybackButton.hidden = !isBusy;
   if (goLiveButton) goLiveButton.hidden = !isPlaying;
   if (playbackBagSelect) playbackBagSelect.disabled = isBusy;
+  if (state === "preparing") {
+    renderPlaybackProgress(true, Number(payload.progress || 0), payload.stage || "Encoding");
+  } else if (state === "ready" && playbackRequested) {
+    renderPlaybackProgress(true, 1, "Loading prepared media");
+  } else {
+    renderPlaybackProgress(false, 0, "Encoding");
+  }
   if (playbackStatusEl) {
     if (state === "preparing") {
       const progress = Math.round(Number(payload.progress || 0) * 100);
@@ -409,6 +422,20 @@ function renderPlaybackStatus(payload) {
         ? `Playing prepared: ${bagName}${preparedQualitySummary()}`
         : "Idle";
     }
+  }
+}
+
+function renderPlaybackProgress(visible, progress, stage) {
+  if (!playbackProgressEl || !playbackProgressBar) return;
+  const percentage = Math.max(0, Math.min(100, Math.round(Number(progress || 0) * 100)));
+  playbackProgressEl.hidden = !visible;
+  playbackProgressEl.setAttribute("aria-valuenow", String(percentage));
+  playbackProgressBar.value = percentage;
+  playbackProgressBar.textContent = `${percentage}%`;
+  if (playbackProgressPercentEl) playbackProgressPercentEl.textContent = `${percentage}%`;
+  if (playbackProgressStageEl) {
+    playbackProgressStageEl.textContent = stage || "Encoding";
+    playbackProgressStageEl.title = stage || "Encoding";
   }
 }
 
