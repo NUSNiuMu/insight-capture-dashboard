@@ -21,140 +21,6 @@ let pageUnloading = false;
 let cameraStartupAt = 0;
 let cameraStaggerMs = 0;
 let capturePerformanceMode = false;
-let preparedPlaybackSession = null;
-
-export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
-  stopPreparedCameraPlayback();
-  const fps = Number(manifest.fps || 30);
-  const frameCount = Number(manifest.frame_count || 0);
-  const entries = Array.isArray(manifest.cameras) ? manifest.cameras : [];
-  if (!entries.length || frameCount < 2) {
-    throw new Error("Prepared playback manifest has no camera frames.");
-  }
-  const session = { manifest, videos: new Map(), stopped: false };
-  preparedPlaybackSession = session;
-  const ready = [];
-  for (const camera of entries) {
-    const panel = ensureCameraPanel(camera);
-    stopCameraWebRtc(camera.name);
-    updateCameraPanelAspect(panel, camera);
-    const status = panel.querySelector("[data-camera-status]");
-    setTextIfChanged(status, "prepared playback");
-    const img = panel.querySelector("img.camera-frame");
-    const video = panel.querySelector("video.camera-video");
-    img.style.display = "none";
-    img.removeAttribute("src");
-    video.srcObject = null;
-    video.preload = "auto";
-    video.muted = true;
-    video.loop = false;
-    video.playbackRate = 1;
-    video.src = camera.video_url;
-    video.style.display = "";
-    session.videos.set(camera.name, video);
-    const pollState = cameraPollState.get(camera.name);
-    if (pollState) pollState.displayFrameTimes = [];
-    ready.push(waitForPreparedVideo(video));
-  }
-  await Promise.all(ready);
-  if (preparedPlaybackSession !== session || session.stopped) {
-    throw new Error("Prepared playback was stopped.");
-  }
-  for (const video of session.videos.values()) video.currentTime = 0;
-  const masterName = manifest.master_camera || entries[0].name;
-  const master = session.videos.get(masterName) || session.videos.values().next().value;
-  let lastFrame = -1;
-  const handleMasterFrame = (_now, metadata) => {
-    if (preparedPlaybackSession !== session || session.stopped) return;
-    const mediaTime = Number(metadata.mediaTime || master.currentTime || 0);
-    const frameIndex = Math.min(frameCount - 1, Math.max(0, Math.round(mediaTime * fps)));
-    if (frameIndex !== lastFrame) {
-      lastFrame = frameIndex;
-      if (typeof callbacks.onFrame === "function") callbacks.onFrame(frameIndex, mediaTime);
-      for (const video of session.videos.values()) {
-        if (video === master) continue;
-        const delta = mediaTime - video.currentTime;
-        if (Math.abs(delta) > 0.25) {
-          video.currentTime = mediaTime;
-          video.playbackRate = 1;
-        } else if (Math.abs(delta) <= 0.015) {
-          video.playbackRate = 1;
-        } else {
-          // Small rate corrections preserve decoded frames. Repeated seeks
-          // briefly stall Firefox and turn a synchronized 30 fps file into
-          // visible 29 fps playback.
-          video.playbackRate = delta > 0 ? 1.08 : 0.92;
-        }
-      }
-    }
-    if (master.requestVideoFrameCallback) master.requestVideoFrameCallback(handleMasterFrame);
-  };
-  if (master.requestVideoFrameCallback) {
-    master.requestVideoFrameCallback(handleMasterFrame);
-  } else {
-    const timer = window.setInterval(() => {
-      if (preparedPlaybackSession !== session || session.stopped) {
-        window.clearInterval(timer);
-        return;
-      }
-      handleMasterFrame(performance.now(), { mediaTime: master.currentTime });
-    }, 1000 / fps);
-  }
-  for (const [name, video] of session.videos) {
-    const recordFrame = () => {
-      if (preparedPlaybackSession !== session || session.stopped) return;
-      recordDisplayedFrame(name);
-      if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(recordFrame);
-    };
-    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(recordFrame);
-  }
-  master.addEventListener("ended", () => {
-    if (preparedPlaybackSession === session && typeof callbacks.onEnded === "function") {
-      callbacks.onEnded();
-    }
-  }, { once: true });
-  await Promise.all(Array.from(session.videos.values(), (video) => video.play()));
-}
-
-export function stopPreparedCameraPlayback() {
-  const session = preparedPlaybackSession;
-  preparedPlaybackSession = null;
-  if (!session) return;
-  session.stopped = true;
-  for (const [name, video] of session.videos) {
-    video.pause();
-    video.playbackRate = 1;
-    video.removeAttribute("src");
-    video.load();
-    video.style.display = "none";
-    const panel = cameraPanels.get(name);
-    const img = panel && panel.querySelector("img.camera-frame");
-    if (img) img.style.display = "";
-    const pollState = cameraPollState.get(name);
-    if (pollState) pollState.version = -1;
-  }
-  if (!pageUnloading) void pollCameraMetadata();
-}
-
-function waitForPreparedVideo(video) {
-  if (video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      window.clearTimeout(timeout);
-      video.removeEventListener("canplay", onReady);
-      video.removeEventListener("error", onError);
-    };
-    const onReady = () => { cleanup(); resolve(); };
-    const onError = () => { cleanup(); reject(new Error("Prepared video could not be decoded.")); };
-    const timeout = window.setTimeout(() => {
-      cleanup();
-      reject(new Error("Prepared video timed out while loading."));
-    }, 15000);
-    video.addEventListener("canplay", onReady, { once: true });
-    video.addEventListener("error", onError, { once: true });
-    video.load();
-  });
-}
 
 export function startCameraDashboard(options = {}) {
   cameraStartupAt = performance.now();
@@ -243,11 +109,6 @@ function renderCameraPanels(cameras, isPlayback = false) {
     const topic = panel.querySelector("[data-camera-topic]");
     if (topic && camera.topic) {
       setTextIfChanged(topic, camera.topic);
-    }
-    if (preparedPlaybackSession) {
-      setTextIfChanged(status, "prepared playback");
-      renderCameraFps(camera.name);
-      return;
     }
     if (streamReady) {
       if (panel.classList.contains("minimized")) {
@@ -397,9 +258,6 @@ function updateCameraStream(panel, camera) {
 }
 
 function maybeStartCameraWebRtc(camera, panel) {
-  if (preparedPlaybackSession) {
-    return;
-  }
   if (!window.RTCPeerConnection || !camera.webrtc_available || !camera.webrtc_port) {
     return;
   }
@@ -609,7 +467,6 @@ function stopCameraWebRtc(cameraName) {
 // sessions started by the destination page during navigation.
 window.addEventListener("pagehide", () => {
   pageUnloading = true;
-  stopPreparedCameraPlayback();
   for (const cameraName of Array.from(cameraWebRtc.keys())) {
     stopCameraWebRtc(cameraName);
   }

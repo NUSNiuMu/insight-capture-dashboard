@@ -4,7 +4,6 @@ from .bag_catalog import list_rosbags
 from .config import DEFAULT_POST_PROCESSING_CONFIG, load_post_processing_config
 from .optimization import OptimizationManager
 from .playback import PlaybackManager
-from .prepared_playback import PreparedPlaybackManager
 from .recording import RecordingManager, STORAGE_CONFIG_PATH
 from .topic_catalog import (
     build_default_topics,
@@ -17,7 +16,6 @@ __all__ = [
     "DEFAULT_POST_PROCESSING_CONFIG",
     "OptimizationManager",
     "PlaybackManager",
-    "PreparedPlaybackManager",
     "RecordingManager",
     "STORAGE_CONFIG_PATH",
     "build_default_topics",

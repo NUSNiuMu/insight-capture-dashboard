@@ -5,11 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from handpose import HandPoseManager
-from post_processing import (
-    OptimizationManager,
-    PreparedPlaybackManager,
-    RecordingManager,
-)
+from post_processing import OptimizationManager, PlaybackManager, RecordingManager
 
 from .gripper_extraction import GripperExtractionManager
 from .scoring import ScoringManager
@@ -24,7 +20,7 @@ class DashboardContext:
     recording_manager: RecordingManager
     results_root: Path
     scoring_manager: ScoringManager = field(init=False)
-    prepared_playback_manager: PreparedPlaybackManager = field(init=False)
+    playback_manager: PlaybackManager = field(init=False)
     optimization_manager: OptimizationManager = field(init=False)
     handpose_manager: HandPoseManager = field(init=False)
     gripper_extraction_manager: GripperExtractionManager = field(init=False)
@@ -39,9 +35,10 @@ class DashboardContext:
             rosbag_root=self.recording_manager.rosbag_root,
             results_root=self.results_root,
         )
-        self.prepared_playback_manager = PreparedPlaybackManager(
+        self.playback_manager = PlaybackManager(
             rosbag_root=self.recording_manager.rosbag_root,
-            cache_root=self.results_root / "playback_cache",
+            ros_domain_id=self.recording_manager.ros_domain_id,
+            on_stopped=self.on_playback_finished,
         )
         pipeline_script = (
             self.project_root.parent
@@ -65,3 +62,7 @@ class DashboardContext:
             project_root=self.project_root,
             rosbag_root=self.recording_manager.rosbag_root,
         )
+
+    def on_playback_finished(self) -> None:
+        self.node.set_playback_mode(False)
+        self.node.clear_traces()

@@ -30,7 +30,6 @@ const POSE_SMOOTHING_TIME_MS = 40;
 const TRAIL_RENDER_INTERVAL_MS = 100;
 const DEFAULT_HARDWARE_SCALING_LEVEL = 1.5;
 const CAPTURE_HARDWARE_SCALING_LEVEL = 2.0;
-const PREPARED_HARDWARE_SCALING_LEVEL = 2.5;
 const DEFAULT_TRAIL_ENABLED = {
   head: true,
   left_hand: true,
@@ -75,8 +74,6 @@ const sceneFrameTimes = [];
 const sceneWorkSamples = [];
 const legendPoseLabels = new Map();
 let lastTrailRenderAt = 0;
-let preparedPlaybackMode = false;
-let preparedTrailsRendered = false;
 
 if (engine && scene) {
   engine.setHardwareScalingLevel(DEFAULT_HARDWARE_SCALING_LEVEL);
@@ -154,20 +151,15 @@ export function setAvatarLoadStage(stage) {
 
 export function setCapturePerformanceMode(enabled) {
   capturePerformanceMode = Boolean(enabled);
-  refreshHardwareScalingLevel();
+  if (engine) {
+    engine.setHardwareScalingLevel(
+      capturePerformanceMode
+        ? CAPTURE_HARDWARE_SCALING_LEVEL
+        : DEFAULT_HARDWARE_SCALING_LEVEL
+    );
+    engine.resize();
+  }
   refreshSceneFrameInterval();
-}
-
-function refreshHardwareScalingLevel() {
-  if (!engine) return;
-  engine.setHardwareScalingLevel(
-    capturePerformanceMode
-      ? CAPTURE_HARDWARE_SCALING_LEVEL
-      : (preparedPlaybackMode
-        ? PREPARED_HARDWARE_SCALING_LEVEL
-        : DEFAULT_HARDWARE_SCALING_LEVEL)
-  );
-  engine.resize();
 }
 
 export function setTrajectoriesEnabled(enabled) {
@@ -192,23 +184,6 @@ export function clearRenderedTrajectories() {
   pendingPosePayload = null;
   pendingTrailPoses.clear();
   for (const trail of trailStates.values()) clearTrail(trail);
-}
-
-export function beginPreparedPlayback(payload) {
-  preparedPlaybackMode = true;
-  preparedTrailsRendered = false;
-  dashboardOrigin = null;
-  refreshHardwareScalingLevel();
-  clearRenderedTrajectories();
-  return queuePoseUpdate(payload);
-}
-
-export function endPreparedPlayback() {
-  preparedPlaybackMode = false;
-  preparedTrailsRendered = false;
-  dashboardOrigin = null;
-  refreshHardwareScalingLevel();
-  clearRenderedTrajectories();
 }
 
 export function stopSpatialRenderer() {
@@ -368,7 +343,7 @@ function applyPoseUpdate(payload) {
       visible,
     });
     node.setEnabled(visible);
-    if (trajectoriesEnabled && (!preparedPlaybackMode || !preparedTrailsRendered)) {
+    if (trajectoriesEnabled) {
       pendingTrailPoses.set(pose.role, {
         pose,
         tracePoints: traceCaches.get(pose.role)?.points || [],
@@ -391,7 +366,6 @@ function applyPoseUpdate(payload) {
       }
     }
   }
-  if (preparedPlaybackMode && trajectoriesEnabled) preparedTrailsRendered = true;
 }
 
 function interpolatePoseNodes(elapsedMs) {

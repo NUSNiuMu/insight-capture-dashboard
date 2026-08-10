@@ -418,15 +418,6 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
 .spatial-playback .playback-row { width: min(700px, 100%); }
 .spatial-playback .field-control { min-height: 36px; }
 .spatial-playback .primary-button, .spatial-playback .quiet-button, .spatial-playback .danger-button { min-height: 36px; }
-.playback-prepare-progress { display: grid; width: 170px; min-width: 170px; gap: 5px; }
-.playback-prepare-progress[hidden] { display: none; }
-.playback-progress-meta { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; font-family: var(--mono); }
-.playback-progress-meta span { overflow: hidden; color: var(--muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-.playback-progress-meta strong { color: var(--accent); font-size: 10px; font-variant-numeric: tabular-nums; }
-.playback-prepare-progress progress { display: block; width: 100%; height: 8px; overflow: hidden; appearance: none; border: 0; border-radius: 999px; background: var(--line); }
-.playback-prepare-progress progress::-webkit-progress-bar { border-radius: 999px; background: var(--line); }
-.playback-prepare-progress progress::-webkit-progress-value { border-radius: 999px; background: var(--accent-fill); transition: width 180ms ease-out; }
-.playback-prepare-progress progress::-moz-progress-bar { border-radius: 999px; background: var(--accent-fill); transition: width 180ms ease-out; }
 .mapping-panel { display: flex; min-width: 0; padding: 14px 16px; grid-column: 1; align-items: center; justify-content: space-between; gap: 14px; }
 .mapping-copy { min-width: 0; }
 .mapping-meta { max-width: 440px; margin: 4px 0 7px; overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
@@ -489,7 +480,6 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .hud { grid-template-columns: 1fr; }
   .spatial-playback { align-items: stretch; flex-direction: column; }
   .spatial-playback .playback-row { width: 100%; }
-  .playback-prepare-progress { width: 150px; min-width: 150px; }
   .mapping-panel { grid-column: 1; align-items: flex-start; flex-direction: column; }
   .legend { grid-column: 1; grid-row: auto; }
   .legend { width: 100%; min-width: 0; }
@@ -499,7 +489,6 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .content-heading { flex-direction: column; }
   .playback-row, .record-controls { align-items: stretch; flex-direction: column; }
   .playback-row > *, .record-controls > * { width: 100%; }
-  .playback-prepare-progress { width: 100%; min-width: 0; }
   .record-hero { padding: 20px; }
   .bag-row { grid-template-columns: 1fr; }
   .umi-schema-grid, .umi-result { grid-template-columns: 1fr; }

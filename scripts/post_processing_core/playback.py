@@ -69,16 +69,6 @@ class PlaybackManager:
             env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
             cmd = ["ros2", "bag", "play", str(bag_path)]
             if remap_topics:
-                recorded_topics = set(_read_bag_topics(bag_path))
-                playback_topics = [
-                    topic for topic in remap_topics if topic in recorded_topics
-                ]
-                if playback_topics:
-                    # A merged bag also contains high-rate IMU and auxiliary
-                    # streams that the dashboard never subscribes to. Avoid
-                    # publishing them during preview playback so DDS and the
-                    # browser keep enough CPU for video and 3D rendering.
-                    cmd += ["--topics", *playback_topics]
                 # Remap playback topics so live publishers cannot collide.
                 cmd += ["--remap"] + [f"{old}:={new}" for old, new in remap_topics.items()]
             process = subprocess.Popen(

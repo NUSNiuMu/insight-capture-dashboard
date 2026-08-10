@@ -19,9 +19,7 @@ class CameraRoutes:
 
     async def _handle_camera_snapshot(self, _request: web.Request) -> web.Response:
         payload = self.context.node.build_camera_payload()
-        payload["playback_mode"] = (
-            self.context.prepared_playback_manager.status()["state"] == "playing"
-        )
+        payload["playback_mode"] = self.context.playback_manager.status()["state"] == "playing"
         return web.json_response(payload)
 
     async def _handle_camera_frame(self, request: web.Request) -> web.Response:
