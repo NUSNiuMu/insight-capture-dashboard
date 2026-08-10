@@ -75,6 +75,12 @@ class ParticipantWatchdog:
             time.sleep(poll_sec)
             now = time.monotonic()
 
+            if getattr(self.owner, "_playback_mode", False):
+                # Prepared playback intentionally gates live camera callbacks.
+                # Their stale timestamps must not be treated as a USB/DDS drop.
+                link_up_since = None
+                continue
+
             if not self.owner._any_ros_data_received():
                 if not self.owner._camera_link_up():
                     link_up_since = None
