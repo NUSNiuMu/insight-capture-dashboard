@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import tempfile
+import types
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -20,6 +22,104 @@ from post_processing_core.prepared_playback import (  # noqa: E402
 
 
 class PreparedPlaybackTest(unittest.TestCase):
+    def test_scan_uses_record_timestamps_across_different_header_clocks(self) -> None:
+        class HeaderStamp:
+            def __init__(self, nanoseconds: int) -> None:
+                self.sec, self.nanosec = divmod(nanoseconds, 1_000_000_000)
+
+        class ImageMessage:
+            def __init__(self, header_nanoseconds: int) -> None:
+                self.header = type("Header", (), {"stamp": HeaderStamp(header_nanoseconds)})()
+
+        class PoseMessage(ImageMessage):
+            def __init__(self, header_nanoseconds: int, x: float) -> None:
+                super().__init__(header_nanoseconds)
+                position = type("Position", (), {"x": x, "y": 0.0, "z": 0.0})()
+                orientation = type(
+                    "Orientation",
+                    (),
+                    {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                )()
+                self.pose = type(
+                    "Pose", (), {"position": position, "orientation": orientation}
+                )()
+
+        class Reader:
+            def __init__(self, entries: list[tuple[str, object, int]]) -> None:
+                self.entries = entries
+                self.index = 0
+
+            def has_next(self) -> bool:
+                return self.index < len(self.entries)
+
+            def read_next(self) -> tuple[str, object, int]:
+                entry = self.entries[self.index]
+                self.index += 1
+                return entry
+
+        entries = [
+            ("/epoch/image", ImageMessage(1_786_000_000_000_000_000), 10_000_000_000),
+            ("/boot/image", ImageMessage(200_000_000_000), 10_001_000_000),
+            ("/epoch/pose", PoseMessage(1_786_000_000_000_000_000, 0.0), 10_002_000_000),
+            ("/epoch/image", ImageMessage(1_786_000_000_033_000_000), 10_033_000_000),
+            ("/boot/image", ImageMessage(200_033_000_000), 10_034_000_000),
+            ("/epoch/pose", PoseMessage(1_786_000_000_033_000_000, 1.0), 10_035_000_000),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manager = PreparedPlaybackManager(root, root / "cache")
+            serialization = types.ModuleType("rclpy.serialization")
+            serialization.deserialize_message = lambda raw, _message_class: raw
+            rclpy = types.ModuleType("rclpy")
+            rclpy.serialization = serialization
+            utilities = types.ModuleType("rosidl_runtime_py.utilities")
+            utilities.get_message = lambda value: value
+            rosidl_runtime_py = types.ModuleType("rosidl_runtime_py")
+            rosidl_runtime_py.utilities = utilities
+            with (
+                patch.dict(
+                    sys.modules,
+                    {
+                        "rclpy": rclpy,
+                        "rclpy.serialization": serialization,
+                        "rosidl_runtime_py": rosidl_runtime_py,
+                        "rosidl_runtime_py.utilities": utilities,
+                    },
+                ),
+                patch(
+                    "post_processing_core.prepared_playback._open_reader",
+                    return_value=(
+                        Reader(entries),
+                        {
+                            "/epoch/image": "Image",
+                            "/boot/image": "Image",
+                            "/epoch/pose": "Pose",
+                        },
+                    ),
+                ),
+            ):
+                result = manager._scan(
+                    root,
+                    [
+                        {"name": "epoch", "topic": "/epoch/image"},
+                        {"name": "boot", "topic": "/boot/image"},
+                    ],
+                    [{"name": "epoch", "topic": "/epoch/pose"}],
+                )
+
+        self.assertEqual(
+            result["image_stamps"]["epoch"].tolist(),
+            [10_000_000_000, 10_033_000_000],
+        )
+        self.assertEqual(
+            result["image_stamps"]["boot"].tolist(),
+            [10_001_000_000, 10_034_000_000],
+        )
+        self.assertEqual(
+            result["poses"]["epoch"][0].tolist(),
+            [10_002_000_000, 10_035_000_000],
+        )
+
     def test_recorded_stream_selection_allows_one_camera_and_pose(self) -> None:
         cameras = [
             {"name": "left", "topic": "/left/image"},

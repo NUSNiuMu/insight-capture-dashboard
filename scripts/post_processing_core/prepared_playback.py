@@ -20,7 +20,7 @@ from hand_tracking.extract_gripper import decode_color_image
 from .playback import _read_bag_topics
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 PLAYBACK_FPS = 30.0
 PLAYBACK_MAX_DIMENSION = 720
 MAX_TRAJECTORY_POINTS = 600
@@ -113,11 +113,6 @@ class _FfmpegWriter:
         if self._process.stderr is None:
             return ""
         return self._process.stderr.read().decode("utf-8", errors="replace").strip()
-
-
-def _stamp_ns(message: object) -> int:
-    stamp = message.header.stamp
-    return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
 
 
 def _message_pose(message: object) -> tuple[np.ndarray, np.ndarray]:
@@ -535,14 +530,14 @@ class PreparedPlaybackManager:
         }
         while reader.has_next():
             self._check_cancelled()
-            topic, raw, _record_stamp = reader.read_next()
+            topic, raw, record_stamp = reader.read_next()
             message = deserialize_message(raw, classes[topic])
             if topic in image_by_topic:
-                image_stamps[image_by_topic[topic]].append(_stamp_ns(message))
+                image_stamps[image_by_topic[topic]].append(int(record_stamp))
             else:
                 position, quaternion = _message_pose(message)
                 target = pose_data[pose_by_topic[topic]]
-                target["stamps"].append(_stamp_ns(message))
+                target["stamps"].append(int(record_stamp))
                 target["positions"].append(position)
                 target["quaternions"].append(quaternion)
         normalized_images = {}

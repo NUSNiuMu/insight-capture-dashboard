@@ -29,6 +29,9 @@
 
 - SQLite 存储配置使用 WAL 和 `synchronous=OFF`。这是吞吐、断电恢复和数据完整性之间经过实机验证的折中，不能改回 `NORMAL` 或 `FULL`。
 - 图像 header timestamp 通过录制开始时的固定偏移映射到 recorder timeline，并在录制期间持续审计帧间隔。
+- Prepared playback 必须使用 rosbag record timestamp 对齐图像与 Pose。不同相机的
+  `header.stamp` 可能分别来自 Unix/NTP 和设备启动时钟，只能用于各 topic 内的节拍审计，
+  不能直接求跨相机共同时间段；修改该规则时必须保留跨 header 时钟域回归测试。
 - `/tf_static` 是 latched 单次流，只要求至少存在一条消息，不按 FPS 判断完整性。
 - 400 Hz IMU 使用 `config/rosbag_qos_overrides.yaml` 的 best-effort、
   keep-last 1000 深度 reader；默认深度不足时，短时 CPU 调度停顿会先表现为
@@ -38,6 +41,10 @@
 - staging 恢复中的 reindex、salvage、convert 和输出验证是一个完整流程；`ros2 bag convert` 成功返回不代表输出一定可信。
 - 自动 host sync 与合包同属录制收尾；同步完成前禁止开始下一段，避免大 bag 的
   rsync 读盘/CPU 负载与新一段采集重叠。
+- 数据集连续性门发现坐标跳变时不得直接低通平滑。孤立、持久的刚体坐标重置只有在
+  跳变前后各自稳定、切段后满足最短 episode 且双臂公共坐标关系可重新确认时，才能丢弃
+  边界保护帧并按段重锚；短时振荡、多次米级跳变或仅单臂全局 Pose 失配应保留原 bag，
+  改用本地 VIO 加稳健的 map-to-VIO 对齐离线重建，无法验证时必须重录。
 
 ## WebRTC 与预览
 

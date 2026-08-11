@@ -287,6 +287,10 @@ docker exec insight-dashboard python3 scripts/check_bag.py --fast rosbags/<目�
 执行 `COUNT/MIN/MAX(timestamp)`；它适合快速盘点，不包含录制期间的图像 header
 连续性 live audit，不能替代停止录制时生成的最终完整性结论。
 
+`/bags` 的回放会先按 rosbag record timestamp 把已有图像与 Pose 预编码到统一 30 Hz
+时间轴，再从缓存播放。不能用原始 `header.stamp` 做跨相机同步：Insight3 可能发布
+Unix/NTP 时间，而 Insight9 可能发布设备启动时间；两者数值不在同一时钟域。
+
 ### 3.2 磁盘管理
 
 占用取决于勾选的图像变体和录制时长；同时选择多路 raw/rectified/depth 流时可达到
