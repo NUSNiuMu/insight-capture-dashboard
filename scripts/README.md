@@ -28,6 +28,7 @@
 | `insight9_sparse_mapper.py` | 在线稀疏建图入口 |
 | `insight3_global_localizer.py` | 双路全局重定位入口 |
 | `lerobot_dataset_export.py` | 标准 LeRobot v3 数据集导出 |
+| `cup_lerobot_pipeline.py` | 原始分辨率纸杯双夹爪 episode 筛选、原子动作标注与完整验收 |
 | `umi_dataset_export.py` | 旧 UMI Zarr 兼容导出 |
 | `post_processing.py` | 离线处理公共导入 facade |
 

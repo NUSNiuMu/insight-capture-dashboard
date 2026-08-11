@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 import numpy as np
 import pyarrow as pa
@@ -499,6 +499,9 @@ def export_lerobot_dataset(
     minimum_frames: int = 24,
     episode_mode: str = "bag",
     camera_names: Optional[list[str]] = None,
+    plan_transform: Optional[
+        Callable[[Path, list[umi.EpisodePlan]], list[umi.EpisodePlan]]
+    ] = None,
 ) -> dict[str, object]:
     task = " ".join(task.split())
     if not task:
@@ -534,6 +537,12 @@ def export_lerobot_dataset(
             episode_mode=episode_mode,
             retain_invalid_images=True,
         )
+        if plan_transform is not None:
+            plans = plan_transform(bag_path, plans)
+        if not plans:
+            raise umi.BagQualityError(
+                "no valid episodes remain after dataset-specific filtering"
+            )
         planned.extend((bag_path, plan) for plan in plans)
     if not planned or source_shapes is None or source_encodings is None:
         raise ValueError("no valid episodes were generated")
@@ -623,6 +632,9 @@ def export_lerobot_dataset(
                     "length": length,
                     "source_bag": bag_path.name,
                     "source_segment_index": int(plan.segmentation["source_segment_index"]),
+                    "source_start_s": float(plan.segmentation["source_start_s"]),
+                    "source_end_s": float(plan.segmentation["source_end_s"]),
+                    "segmentation_mode": str(plan.segmentation["mode"]),
                     "stats/observation.state/min": state_stats["min"],
                     "stats/observation.state/max": state_stats["max"],
                     "stats/observation.state/mean": state_stats["mean"],
