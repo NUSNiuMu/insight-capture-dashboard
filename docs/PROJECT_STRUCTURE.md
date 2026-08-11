@@ -46,6 +46,8 @@ scripts/
   post_processing.py                离线处理公共导入兼容面
   inprocess_bag_writer.py           图像消息进程内 SQLite rosbag 写入
   lerobot_dataset_export.py         LeRobot v3（HiFi-UMI profile）导出
+  cup_lerobot_pipeline.py           纸杯双夹爪切段、标注、质检与原分辨率导出
+  upgrade_cup_lerobot_v3.py         已有纸杯分片的 OpenPI/validity 无损升级
   umi_dataset_export.py             旧 UMI Zarr 训练栈兼容导出
   webrtc_worker.py                  独立 WebRTC 信令与硬件 H.264 worker
   hand_overlay_worker.py            按需启动的手部叠加 worker

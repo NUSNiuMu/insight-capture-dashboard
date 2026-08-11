@@ -25,6 +25,8 @@ from hand_tracking.extract_gripper import decode_color_image
 
 SCHEMA_VERSION = 3
 ARM_DIM = 10
+DEFAULT_MAX_GRIPPER_STEP_M = 0.03
+DEFAULT_GRIPPER_SPIKE_RECOVERY_M = 0.01
 VIDEO_KEY_BY_ROLE = {
     "right_hand": "observation.images.right_wrist_0_rgb",
     "left_hand": "observation.images.left_wrist_0_rgb",
@@ -47,6 +49,59 @@ ARM_STATE_NAMES = (
 ROTATION_6D_PLACEHOLDER = np.asarray(
     [1.0, 0.0, 0.0, 0.0, 1.0, 0.0], dtype=np.float32
 )
+
+
+def gripper_width_valid_mask(
+    widths_m: np.ndarray,
+    *,
+    maximum_step_m: float = DEFAULT_MAX_GRIPPER_STEP_M,
+    spike_recovery_m: float = DEFAULT_GRIPPER_SPIKE_RECOVERY_M,
+) -> np.ndarray:
+    """Mark non-finite and physically discontinuous gripper-width samples invalid.
+
+    A sustained large step invalidates its landing sample; the next stable sample
+    becomes valid again. For an isolated one-frame spike, only the spike center is
+    invalidated instead of also invalidating the recovered sample.
+    """
+
+    values = np.asarray(widths_m, dtype=np.float64).reshape(-1)
+    valid = np.isfinite(values)
+    if len(values) < 2:
+        return valid
+    finite_pairs = np.isfinite(values[:-1]) & np.isfinite(values[1:])
+    large_edges = finite_pairs & (np.abs(np.diff(values)) > maximum_step_m)
+    valid[np.flatnonzero(large_edges) + 1] = False
+    for center in range(1, len(values) - 1):
+        if not (large_edges[center - 1] and large_edges[center]):
+            continue
+        recovered = abs(values[center + 1] - values[center - 1]) <= spike_recovery_m
+        reversed_direction = (
+            (values[center] - values[center - 1])
+            * (values[center + 1] - values[center])
+            < 0.0
+        )
+        if recovered and reversed_direction:
+            valid[center] = False
+            valid[center + 1] = bool(np.isfinite(values[center + 1]))
+    return valid
+
+
+def gripper_width_quality(
+    widths_m: np.ndarray,
+    *,
+    maximum_step_m: float = DEFAULT_MAX_GRIPPER_STEP_M,
+) -> dict[str, float | int]:
+    """Summarize raw jump events and invalid samples for one episode trace."""
+
+    values = np.asarray(widths_m, dtype=np.float64).reshape(-1)
+    steps = np.abs(np.diff(values))
+    finite_steps = steps[np.isfinite(steps)]
+    valid = gripper_width_valid_mask(values, maximum_step_m=maximum_step_m)
+    return {
+        "jump_events": int(np.count_nonzero(finite_steps > maximum_step_m)),
+        "maximum_step_mm": float(finite_steps.max(initial=0.0) * 1000.0),
+        "invalid_frames": int(np.count_nonzero(~valid)),
+    }
 
 
 class FfmpegVideoWriter:
@@ -230,13 +285,13 @@ def _episode_state(
             rotation_6d[valid_indices[converted_valid]] = converted[converted_valid]
             rotation_valid_rows[valid_indices[~converted_valid]] = False
         rotation_valid = np.repeat(rotation_valid_rows[:, None], 6, axis=1)
-        width_valid = np.isfinite(widths)
+        width_valid = gripper_width_valid_mask(widths[:, 0])[:, None]
 
         arm_state = np.concatenate(
             (
                 np.where(position_valid, positions, 0.0),
                 rotation_6d,
-                np.where(width_valid, widths, 0.0),
+                np.where(np.isfinite(widths), widths, 0.0),
             ),
             axis=1,
         ).astype(np.float32)
@@ -333,6 +388,8 @@ def _write_data_table(
         _fixed_list(state_valid, pa.bool_()),
         _fixed_list(actions, pa.float32()),
         _fixed_list(action_valid, pa.bool_()),
+        _fixed_list(actions, pa.float32()),
+        _fixed_list(action_valid, pa.bool_()),
         pa.array(timestamps, type=pa.float32()),
         pa.array(state_timestamps_ns, type=pa.int64()),
         pa.array(frame_indices, type=pa.int64()),
@@ -346,6 +403,8 @@ def _write_data_table(
         "observation.state_valid",
         "action",
         "action_valid",
+        "actions",
+        "actions_valid",
         "timestamp",
         "observation.timestamp_ns",
         "frame_index",
@@ -376,13 +435,16 @@ def _write_data_table(
         writer.close()
 
 
-def _write_tasks(path: Path, task: str) -> None:
+def _write_tasks(path: Path, task: str | list[str] | tuple[str, ...]) -> None:
     """Write the task string as the named pandas index expected by LeRobot."""
 
+    tasks = [task] if isinstance(task, str) else list(task)
+    if not tasks or any(not isinstance(value, str) or not value for value in tasks):
+        raise ValueError("tasks must contain non-empty strings")
     table = pa.table(
         {
-            "task_index": pa.array([0], type=pa.int64()),
-            "task": pa.array([task], type=pa.string()),
+            "task_index": pa.array(np.arange(len(tasks)), type=pa.int64()),
+            "task": pa.array(tasks, type=pa.string()),
         }
     )
     pandas_metadata = {
@@ -461,7 +523,7 @@ def _modality(specs: list[umi.CameraSpec]) -> dict[str, object]:
         for name, (start, end, unit) in blocks.items():
             value = {"original_key": "observation.state", "indices": list(range(start, end)), "unit": unit}
             state[name] = value
-            action[name] = {**value, "original_key": "action"}
+            action[name] = {**value, "original_key": "actions"}
     return {
         "state": state,
         "action": action,
@@ -645,6 +707,11 @@ def export_lerobot_dataset(
                     "stats/action/mean": action_stats["mean"],
                     "stats/action/std": action_stats["std"],
                     "stats/action/count": [length],
+                    "stats/actions/min": action_stats["min"],
+                    "stats/actions/max": action_stats["max"],
+                    "stats/actions/mean": action_stats["mean"],
+                    "stats/actions/std": action_stats["std"],
+                    "stats/actions/count": [length],
                 }
                 for key in writers:
                     row[f"videos/{key}/chunk_index"] = 0
@@ -712,6 +779,8 @@ def export_lerobot_dataset(
             "observation.state_valid": {"dtype": "bool", "shape": [state_dim], "names": state_names},
             "action": {"dtype": "float32", "shape": [state_dim], "names": state_names},
             "action_valid": {"dtype": "bool", "shape": [state_dim], "names": state_names},
+            "actions": {"dtype": "float32", "shape": [state_dim], "names": state_names},
+            "actions_valid": {"dtype": "bool", "shape": [state_dim], "names": state_names},
             "timestamp": {"dtype": "float32", "shape": [1], "names": None},
             "observation.timestamp_ns": {"dtype": "int64", "shape": [1], "names": None},
             "frame_index": {"dtype": "int64", "shape": [1], "names": None},
@@ -754,7 +823,15 @@ def export_lerobot_dataset(
                 if state_dim == ARM_DIM
                 else "[left_10d, right_10d], each xyz + rotation_6d(first two matrix rows) + gripper_width_m"
             ),
-            "action_layout": "absolute next-state target; final frame repeats final state with all-false action_valid",
+            "action_layout": (
+                "actions is the OpenPI sequence key; action is an identical LeRobot "
+                "compatibility alias; final frame repeats final state with all-false validity"
+            ),
+            "gripper_width_validity": {
+                "maximum_step_m": DEFAULT_MAX_GRIPPER_STEP_M,
+                "spike_recovery_m": DEFAULT_GRIPPER_SPIKE_RECOVERY_M,
+                "policy": "mark discontinuous landing samples invalid without replacing measured widths",
+            },
             "video_processing": {
                 "image_mode": "original" if image_size is None else "fixed_roi_square",
                 "crop_policy": None if image_size is None else "bottom_center_max_square",
@@ -802,6 +879,7 @@ def export_lerobot_dataset(
             {
                 "observation.state": _feature_stats(states),
                 "action": _feature_stats(actions),
+                "actions": _feature_stats(actions),
                 "timestamp": _feature_stats(
                     np.concatenate([np.arange(length) / fps for length in episode_lengths]).astype(np.float32)
                 ),
@@ -821,8 +899,10 @@ def export_lerobot_dataset(
             "video_keys": list(writers),
             "state_dimension": state_dim,
             "action_semantics": "absolute_next_state",
+            "openpi_action_key": "actions",
+            "lerobot_action_compatibility_key": "action",
             "missing_value_policy": "finite_placeholder_with_per_dimension_validity_mask",
-            "final_action_policy": "repeat_final_state_with_all_false_action_valid",
+            "final_action_policy": "repeat_final_state_with_all_false_action_valid_and_actions_valid",
             "gripper_semantics": "physical_jaw_width_m",
             "pose_quality_gate": {
                 "max_position_step_m": umi.DEFAULT_MAX_POSITION_STEP_M,

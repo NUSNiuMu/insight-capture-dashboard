@@ -109,7 +109,7 @@ WiLoR。单臂/双臂布局、自动停顿分段和图像缩放仅用于夹爪�
 
 LeRobot 输出包含：
 
-- `data/chunk-000/file-000.parquet`：逐帧 `observation.state`、`action`、validity mask、
+- `data/chunk-000/file-000.parquet`：逐帧 `observation.state`、`action` / `actions`、validity mask、
   timestamp、episode/frame/task index；
 - `videos/observation.images.*/chunk-000/file-000.mp4`：所选相机的同步 H.264/yuv420p
   视频；单臂键为 `right_wrist_0_rgb`，双臂三相机键为 `base_0_rgb`、
@@ -125,6 +125,10 @@ LeRobot 输出包含：
 `action[t]` 是同一 episode 的下一帧绝对状态 `T[t+1]`，不是
 `inv(T[t]) @ T[t+1]`。末帧 action 重复末状态作有限占位，但其 `action_valid` 全 false，
 训练损失和归一化统计都必须忽略无效维度。
+
+`action` 是官方 LeRobot v3 loader 的标准键；`actions` 是完全相同的 OpenPI 默认序列键，
+对应 validity 为 `actions_valid`。夹爪宽度若出现超过 30 mm/frame 的不连续跳变，导出会
+保留原始有限测量值并把该侧宽度维度标为无效；孤立尖峰恢复后的下一帧仍可有效。
 
 无夹爪手姿路线输出左右手各 54 维（腕部 `xyz + rotation_6d` 加 45 维 MANO 姿态），
 同时写入 2D/3D 关键点、显式 validity mask 和三路原始分辨率视频；详细交付约束见
@@ -208,8 +212,9 @@ at pauses**。每一小节结束后保持 TCP 和夹爪静止约 1 秒；检测�
 
 连续采集“一次性纸杯双夹爪夹起并放入纸箱”时，选择 **Production cup grasps · filter,
 label, verify**。该模式强制双臂三相机和原始分辨率，只保留完整张开—闭合—张开循环，
-剔除人工复位、纯空闲及位姿不连续小节，并写入接近、夹持、搬运、释放、撤离五类逐帧
-原子动作标签。每包独立输出并更新累计 500 条进度的 `cup_catalog.json`。完整采集、导出、
+剔除人工复位、纯空闲及位姿不连续小节，并写入接近、夹持并搬运、释放、撤离四类逐帧
+原子动作标签；每段至少 10 帧。每包独立输出并更新累计 500 条进度的
+`cup_catalog.json`。完整采集、导出、
 质量门和目录说明见 [CUP_LEROBOT_PIPELINE.md](CUP_LEROBOT_PIPELINE.md)。
 
 **单路离线夹爪诊断**：底层 `gripper_extract.py` 仍可单独运行，用于检查某一路

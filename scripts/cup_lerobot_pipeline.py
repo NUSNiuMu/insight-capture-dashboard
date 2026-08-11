@@ -11,7 +11,7 @@ import math
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Optional, Sequence
 
 import cv2
 import numpy as np
@@ -24,8 +24,11 @@ import umi_dataset_export as umi
 
 ATOMIC_LABELS = (
     ("reach", "approach_cup", "Move both grippers toward the disposable cup."),
-    ("grasp", "close_grippers", "Close both grippers around the disposable cup."),
-    ("transport", "transport_cup_to_box", "Lift and carry the disposable cup to the box."),
+    (
+        "grasp_transport",
+        "grasp_and_transport_cup_to_box",
+        "Close both grippers around the disposable cup, then lift and carry it to the box.",
+    ),
     (
         "release",
         "open_grippers",
@@ -38,14 +41,53 @@ DEFAULT_PRE_ROLL_S = 2.0
 DEFAULT_POST_ROLL_S = 2.5
 DEFAULT_MAX_TRANSIENT_OPEN_S = 0.6
 DEFAULT_MAX_CLOSE_ACTION_S = 0.6
+DEFAULT_MINIMUM_SEGMENT_FRAMES = 10
 
 
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
+    temporary = path.with_name(f".{path.name}.writing")
+    temporary.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    temporary.replace(path)
+
+
+def rebalance_short_segments(
+    boundaries: Sequence[int], minimum_frames: int = DEFAULT_MINIMUM_SEGMENT_FRAMES
+) -> list[int]:
+    """Move nearby boundaries so every complete segment has enough model frames."""
+
+    values = [int(value) for value in boundaries]
+    if len(values) < 2 or values[0] != 0:
+        raise ValueError(f"invalid segment boundaries: {values}")
+    if minimum_frames < 1:
+        raise ValueError("minimum segment length must be positive")
+    lengths = np.diff(values).astype(np.int64)
+    if np.any(lengths <= 0):
+        raise ValueError(f"segment boundaries must increase: {values}")
+    if int(lengths.sum()) < len(lengths) * minimum_frames:
+        raise ValueError(
+            f"episode has {int(lengths.sum())} frames but needs at least "
+            f"{len(lengths) * minimum_frames} for {len(lengths)} segments"
+        )
+    while np.any(lengths < minimum_frames):
+        short_index = int(np.flatnonzero(lengths < minimum_frames)[0])
+        donors = np.flatnonzero(lengths > minimum_frames)
+        if not len(donors):
+            raise ValueError("cannot rebalance short segments")
+        donor_index = min(
+            (int(value) for value in donors),
+            key=lambda value: (abs(value - short_index), value > short_index),
+        )
+        amount = min(
+            minimum_frames - int(lengths[short_index]),
+            int(lengths[donor_index]) - minimum_frames,
+        )
+        lengths[short_index] += amount
+        lengths[donor_index] -= amount
+    return [0, *np.cumsum(lengths).astype(int).tolist()]
 
 
 def _smooth_width(values: np.ndarray) -> np.ndarray:
@@ -82,11 +124,12 @@ def infer_atomic_boundaries(
     minimum_range_m: float = DEFAULT_MINIMUM_GRIPPER_RANGE_M,
     maximum_transient_open_s: float = DEFAULT_MAX_TRANSIENT_OPEN_S,
     maximum_close_action_s: float = DEFAULT_MAX_CLOSE_ACTION_S,
+    minimum_segment_frames: int = DEFAULT_MINIMUM_SEGMENT_FRAMES,
 ) -> tuple[list[int], Dict[str, float]]:
-    """Return five complete action ranges from one open-close-open width trace."""
+    """Return four complete, model-ready ranges from an open-close-open trace."""
 
     values = _smooth_width(width_m)
-    if len(values) < 10:
+    if len(values) < len(ATOMIC_LABELS) * minimum_segment_frames:
         raise ValueError("episode is too short for atomic cup-action labels")
     opened = float(np.percentile(values, 90))
     closed = float(np.percentile(values, 5))
@@ -151,16 +194,20 @@ def infer_atomic_boundaries(
         release_start + max(1, int(round(0.5 * fps))),
     )
 
-    boundaries = [0, close_start, close_end, release_start, release_end, len(values)]
+    # Closing is intentionally part of transport: OpenPI predicts ten-frame
+    # chunks, and a standalone close action is usually shorter than one chunk.
+    boundaries = [0, close_start, release_start, release_end, len(values)]
     for index in range(1, len(boundaries)):
         boundaries[index] = max(boundaries[index], boundaries[index - 1] + 1)
     boundaries[-1] = len(values)
     if any(right <= left for left, right in zip(boundaries, boundaries[1:])):
         raise ValueError(f"atomic action boundaries are invalid: {boundaries}")
+    boundaries = rebalance_short_segments(boundaries, minimum_segment_frames)
     return boundaries, {
         "opened_m": opened,
         "closed_m": closed,
         "range_m": width_range,
+        "minimum_segment_frames": float(minimum_segment_frames),
     }
 
 
@@ -284,7 +331,7 @@ class CupEpisodeSelector:
             )
             stop = min(
                 len(primary_width),
-                boundaries[4] + int(round(self.post_roll_s * self.fps)),
+                boundaries[-2] + int(round(self.post_roll_s * self.fps)),
             )
             if stop - start < self.minimum_frames:
                 self.rejected.append(
@@ -340,6 +387,7 @@ class CupEpisodeSelector:
                 "minimum_gripper_range_m": self.minimum_gripper_range_m,
                 "pre_roll_s": self.pre_roll_s,
                 "post_roll_s": self.post_roll_s,
+                "minimum_segment_frames": DEFAULT_MINIMUM_SEGMENT_FRAMES,
                 "max_position_step_m": umi.DEFAULT_MAX_POSITION_STEP_M,
                 "position_jump_policy": umi.POSITION_JUMP_POLICY,
                 "max_orientation_step_deg": umi.DEFAULT_MAX_ORIENTATION_STEP_DEG,
@@ -391,7 +439,9 @@ def apply_atomic_annotations(
                     "source_start_s": source_start_s + start / fps,
                     "source_end_s_exclusive": source_start_s + stop / fps,
                     "frame_count": stop - start,
-                    "boundary_method": "pause_split_plus_gripper_width_transition",
+                    "boundary_method": (
+                        "pause_split_plus_gripper_width_transition_min_10_frames"
+                    ),
                 }
             )
             global_segment_index += 1
@@ -407,16 +457,7 @@ def apply_atomic_annotations(
     temporary_data.replace(data_path)
 
     tasks = [item[2] for item in ATOMIC_LABELS]
-    pq.write_table(
-        pa.table(
-            {
-                "task_index": np.arange(len(tasks), dtype=np.int64),
-                "task": tasks,
-            }
-        ),
-        dataset / "meta/tasks.parquet",
-        compression="zstd",
-    )
+    lerobot._write_tasks(dataset / "meta/tasks.parquet", tasks)
     pq.write_table(
         pa.Table.from_pylist(segment_rows),
         dataset / "meta/segments.parquet",
@@ -442,6 +483,7 @@ def apply_atomic_annotations(
     info["annotation_processing"] = {
         "levels": ["subtask", "atomic_action"],
         "segments_path": "meta/segments.parquet",
+        "minimum_segment_frames": DEFAULT_MINIMUM_SEGMENT_FRAMES,
         "boundary_convention": (
             "episode-local inclusive frame ranges; complete coverage without gaps or overlaps"
         ),
@@ -467,6 +509,7 @@ def apply_atomic_annotations(
             "episode-local inclusive frame ranges; complete coverage without gaps or overlaps"
         ),
         "levels": ["subtask", "atomic_action"],
+        "minimum_segment_frames": DEFAULT_MINIMUM_SEGMENT_FRAMES,
         "segments_path": "meta/segments.parquet",
         "segments": segment_rows,
     }
@@ -563,6 +606,284 @@ def write_review_contact_sheet(
     return output
 
 
+def _replace_parquet(path: Path, table: pa.Table, suffix: str) -> None:
+    temporary = path.with_name(f".{path.name}.{suffix}")
+    pq.write_table(table, temporary, compression="zstd")
+    temporary.replace(path)
+
+
+def _set_or_append_column(
+    table: pa.Table, name: str, values: pa.Array
+) -> pa.Table:
+    column = table.schema.get_field_index(name)
+    if column < 0:
+        return table.append_column(name, values)
+    return table.set_column(column, name, values)
+
+
+def _upgrade_boundaries(
+    episode_segments: list[Dict[str, object]], length: int
+) -> list[int]:
+    by_action = {
+        str(segment["atomic_action"]): segment for segment in episode_segments
+    }
+    grasp = by_action.get("grasp_and_transport_cup_to_box")
+    if grasp is None:
+        grasp = by_action.get("close_grippers")
+    release = by_action.get("open_grippers")
+    if grasp is None or release is None:
+        raise ValueError("existing annotations lack grasp or release boundaries")
+    boundaries = [
+        0,
+        int(grasp["start_frame"]),
+        int(release["start_frame"]),
+        int(release["end_frame"]) + 1,
+        length,
+    ]
+    return rebalance_short_segments(boundaries)
+
+
+def _build_segment_rows(
+    episode_boundaries: Dict[int, list[int]],
+    *,
+    fps: float,
+    source_starts_s: Dict[int, float],
+) -> tuple[list[Dict[str, object]], Dict[int, np.ndarray]]:
+    rows: list[Dict[str, object]] = []
+    task_indices: Dict[int, np.ndarray] = {}
+    global_segment_index = 0
+    for episode_index in sorted(episode_boundaries):
+        boundaries = episode_boundaries[episode_index]
+        episode_tasks = np.empty(boundaries[-1], dtype=np.int64)
+        source_start_s = source_starts_s[episode_index]
+        for label_index, ((subtask, atomic_action, task), start, stop) in enumerate(
+            zip(ATOMIC_LABELS, boundaries[:-1], boundaries[1:])
+        ):
+            episode_tasks[start:stop] = label_index
+            rows.append(
+                {
+                    "episode_index": episode_index,
+                    "segment_index": global_segment_index,
+                    "task_index": label_index,
+                    "subtask": subtask,
+                    "atomic_action": atomic_action,
+                    "task": task,
+                    "start_frame": start,
+                    "end_frame": stop - 1,
+                    "start_time_s": start / fps,
+                    "end_time_s_exclusive": stop / fps,
+                    "source_start_s": source_start_s + start / fps,
+                    "source_end_s_exclusive": source_start_s + stop / fps,
+                    "frame_count": stop - start,
+                    "boundary_method": (
+                        "merged_grasp_transport_rebalanced_min_10_frames"
+                    ),
+                }
+            )
+            global_segment_index += 1
+        task_indices[episode_index] = episode_tasks
+    return rows, task_indices
+
+
+def upgrade_existing_dataset(
+    dataset: Path,
+    *,
+    decode_videos: bool = True,
+    write_review: bool = True,
+) -> Dict[str, object]:
+    """Upgrade an existing cup export without resizing or re-encoding videos."""
+
+    dataset = dataset.resolve()
+    info_path = dataset / "meta/info.json"
+    manifest_path = dataset / "meta/manifest.json"
+    data_path = dataset / "data/chunk-000/file-000.parquet"
+    episodes_path = dataset / "meta/episodes/chunk-000/file-000.parquet"
+    segments_path = dataset / "meta/segments.parquet"
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    video_processing = info.get("video_processing", {})
+    if video_processing.get("image_mode") != "original" or video_processing.get(
+        "resize"
+    ) is not None:
+        raise ValueError("cup upgrade only accepts original-resolution datasets")
+
+    data = pq.read_table(data_path)
+    episodes_table = pq.read_table(episodes_path)
+    episode_rows = episodes_table.to_pylist()
+    old_segments = pq.read_table(segments_path).to_pylist()
+    states = np.asarray(data["observation.state"].to_pylist(), dtype=np.float32)
+    state_valid = np.asarray(
+        data["observation.state_valid"].to_pylist(), dtype=bool
+    )
+    actions = np.asarray(data["action"].to_pylist(), dtype=np.float32)
+    episode_ids = np.asarray(data["episode_index"].to_pylist(), dtype=np.int64)
+    if states.shape[1] != 20:
+        raise ValueError(f"cup dataset must have 20-D dual-arm state, got {states.shape}")
+
+    boundaries: Dict[int, list[int]] = {}
+    source_starts_s: Dict[int, float] = {}
+    action_valid = np.zeros_like(state_valid)
+    for episode in episode_rows:
+        episode_index = int(episode["episode_index"])
+        selected = np.flatnonzero(episode_ids == episode_index)
+        length = int(episode["length"])
+        if len(selected) != length:
+            raise ValueError(f"episode {episode_index} length mismatch")
+        for width_index in (9, 19):
+            state_valid[selected, width_index] &= lerobot.gripper_width_valid_mask(
+                states[selected, width_index]
+            )
+        action_valid[selected[:-1]] = state_valid[selected[1:]]
+        episode_segments = [
+            segment
+            for segment in old_segments
+            if int(segment["episode_index"]) == episode_index
+        ]
+        boundaries[episode_index] = _upgrade_boundaries(episode_segments, length)
+        source_starts_s[episode_index] = float(
+            episode_segments[0].get(
+                "source_start_s", episode.get("source_start_s", 0.0)
+            )
+        )
+
+    segment_rows, episode_task_indices = _build_segment_rows(
+        boundaries, fps=float(info["fps"]), source_starts_s=source_starts_s
+    )
+    task_index = np.empty(data.num_rows, dtype=np.int64)
+    for episode_index, values in episode_task_indices.items():
+        selected = np.flatnonzero(episode_ids == episode_index)
+        task_index[selected] = values
+
+    data = _set_or_append_column(
+        data,
+        "observation.state_valid",
+        lerobot._fixed_list(state_valid, pa.bool_()),
+    )
+    data = _set_or_append_column(
+        data, "action_valid", lerobot._fixed_list(action_valid, pa.bool_())
+    )
+    data = _set_or_append_column(
+        data, "actions", lerobot._fixed_list(actions, pa.float32())
+    )
+    data = _set_or_append_column(
+        data, "actions_valid", lerobot._fixed_list(action_valid, pa.bool_())
+    )
+    data = _set_or_append_column(
+        data, "task_index", pa.array(task_index, type=pa.int64())
+    )
+    _replace_parquet(data_path, data, "upgrading")
+
+    tasks = [item[2] for item in ATOMIC_LABELS]
+    tasks_column = episodes_table.schema.get_field_index("tasks")
+    episodes_table = episodes_table.set_column(
+        tasks_column,
+        "tasks",
+        pa.array(
+            [tasks for _ in range(episodes_table.num_rows)],
+            type=episodes_table.schema.field(tasks_column).type,
+        ),
+    )
+    for suffix in ("min", "max", "mean", "std", "count"):
+        source = f"stats/action/{suffix}"
+        target = f"stats/actions/{suffix}"
+        if source in episodes_table.column_names:
+            episodes_table = _set_or_append_column(
+                episodes_table, target, episodes_table[source]
+            )
+    _replace_parquet(episodes_path, episodes_table, "upgrading")
+    lerobot._write_tasks(dataset / "meta/tasks.parquet", tasks)
+    _replace_parquet(
+        segments_path, pa.Table.from_pylist(segment_rows), "upgrading"
+    )
+
+    features = info["features"]
+    features["actions"] = copy.deepcopy(features["action"])
+    features["actions_valid"] = copy.deepcopy(features["action_valid"])
+    info["total_tasks"] = len(tasks)
+    info["action_layout"] = (
+        "actions is the OpenPI sequence key; action is an identical LeRobot "
+        "compatibility alias; final frame repeats final state with all-false validity"
+    )
+    info["gripper_width_validity"] = {
+        "maximum_step_m": lerobot.DEFAULT_MAX_GRIPPER_STEP_M,
+        "spike_recovery_m": lerobot.DEFAULT_GRIPPER_SPIKE_RECOVERY_M,
+        "policy": "retain measured widths and mark discontinuous samples invalid",
+    }
+    info["annotation_processing"] = {
+        "levels": ["subtask", "atomic_action"],
+        "segments_path": "meta/segments.parquet",
+        "minimum_segment_frames": DEFAULT_MINIMUM_SEGMENT_FRAMES,
+        "boundary_convention": (
+            "episode-local inclusive frame ranges; complete coverage without gaps or overlaps"
+        ),
+    }
+    _write_json(info_path, info)
+
+    modality_path = dataset / "meta/modality.json"
+    modality = json.loads(modality_path.read_text(encoding="utf-8"))
+    for value in modality.get("action", {}).values():
+        value["original_key"] = "actions"
+    modality.setdefault("annotation", {})["segments"] = {
+        "metadata": "meta/segments.parquet",
+        "levels": ["subtask", "atomic_action"],
+        "minimum_segment_frames": DEFAULT_MINIMUM_SEGMENT_FRAMES,
+    }
+    _write_json(modality_path, modality)
+
+    stats_path = dataset / "meta/stats.json"
+    stats = json.loads(stats_path.read_text(encoding="utf-8"))
+    stats["actions"] = copy.deepcopy(stats["action"])
+    _write_json(stats_path, stats)
+
+    quality_path = dataset / "meta/quality_report.json"
+    quality = json.loads(quality_path.read_text(encoding="utf-8"))
+    quality.setdefault("thresholds", {})["maximum_gripper_step_m"] = (
+        lerobot.DEFAULT_MAX_GRIPPER_STEP_M
+    )
+    quality["atomic_annotation"] = {
+        "label_count": len(tasks),
+        "minimum_segment_frames": DEFAULT_MINIMUM_SEGMENT_FRAMES,
+        "grasp_and_transport_merged": True,
+    }
+
+    manifest["tasks"] = tasks
+    manifest["openpi_action_key"] = "actions"
+    manifest["lerobot_action_compatibility_key"] = "action"
+    manifest["final_action_policy"] = (
+        "repeat_final_state_with_all_false_action_valid_and_actions_valid"
+    )
+    manifest["annotation"] = {
+        "boundary_convention": (
+            "episode-local inclusive frame ranges; complete coverage without gaps or overlaps"
+        ),
+        "levels": ["subtask", "atomic_action"],
+        "minimum_segment_frames": DEFAULT_MINIMUM_SEGMENT_FRAMES,
+        "segments_path": "meta/segments.parquet",
+        "segments": segment_rows,
+    }
+
+    review_path = (
+        write_review_contact_sheet(dataset, segment_rows) if write_review else None
+    )
+    verification = verify_dataset(dataset, decode_videos=decode_videos)
+    quality["gripper_width_quality"] = verification["gripper_width_quality"]
+    _write_json(quality_path, quality)
+    manifest["quality_filtering"] = {**quality, "path": "meta/quality_report.json"}
+    manifest["verification"] = {
+        **verification,
+        "path": "meta/verification.json",
+    }
+    if review_path is not None:
+        manifest["review_contact_sheet"] = str(review_path.relative_to(dataset))
+    _write_json(dataset / "meta/verification.json", verification)
+    manifest["size_bytes"] = sum(
+        path.stat().st_size for path in dataset.rglob("*") if path.is_file()
+    )
+    _write_json(manifest_path, manifest)
+    update_cup_catalog(dataset.parent)
+    return verification
+
+
 def verify_dataset(dataset: Path, *, decode_videos: bool = True) -> Dict[str, object]:
     """Validate episode, annotation, numeric, timestamp, and video integrity."""
 
@@ -579,8 +900,26 @@ def verify_dataset(dataset: Path, *, decode_videos: bool = True) -> Dict[str, ob
         raise ValueError("episode row count does not match info total_episodes")
     if tasks.num_rows != int(info["total_tasks"]):
         raise ValueError("task row count does not match info total_tasks")
+    try:
+        pandas_metadata = json.loads((tasks.schema.metadata or {})[b"pandas"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("tasks.parquet lacks LeRobot pandas index metadata") from exc
+    if "task" not in pandas_metadata.get("index_columns", []):
+        raise ValueError("tasks.parquet must use task as its named pandas index")
     states = np.asarray(data["observation.state"].to_pylist(), dtype=np.float32)
+    state_valid = np.asarray(
+        data["observation.state_valid"].to_pylist(), dtype=bool
+    )
     actions = np.asarray(data["action"].to_pylist(), dtype=np.float32)
+    action_valid = np.asarray(data["action_valid"].to_pylist(), dtype=bool)
+    if "actions" not in data.column_names or "actions_valid" not in data.column_names:
+        raise ValueError("OpenPI actions/actions_valid aliases are missing")
+    openpi_actions = np.asarray(data["actions"].to_pylist(), dtype=np.float32)
+    openpi_action_valid = np.asarray(data["actions_valid"].to_pylist(), dtype=bool)
+    if not np.array_equal(actions, openpi_actions) or not np.array_equal(
+        action_valid, openpi_action_valid
+    ):
+        raise ValueError("action and actions aliases differ")
     if not np.all(np.isfinite(states)) or not np.all(np.isfinite(actions)):
         raise ValueError("state or action contains NaN/Inf")
     episode_ids = np.asarray(data["episode_index"].to_pylist(), dtype=np.int64)
@@ -590,6 +929,15 @@ def verify_dataset(dataset: Path, *, decode_videos: bool = True) -> Dict[str, ob
         data["observation.timestamp_ns"].to_pylist(), dtype=np.int64
     )
     maximum_pose_step_mm: Dict[str, Dict[str, float]] = {}
+    width_indices = (
+        {"left": 9, "right": 19}
+        if states.shape[1] >= 20
+        else {"right": 9}
+    )
+    gripper_quality: Dict[str, Dict[str, float | int]] = {
+        side: {"jump_events": 0, "maximum_step_mm": 0.0, "invalid_frames": 0}
+        for side in width_indices
+    }
     for episode in episodes:
         episode_index = int(episode["episode_index"])
         length = int(episode["length"])
@@ -600,9 +948,34 @@ def verify_dataset(dataset: Path, *, decode_videos: bool = True) -> Dict[str, ob
             raise ValueError(f"episode {episode_index} frame index mismatch")
         if not np.all(np.diff(timestamps[selected]) > 0):
             raise ValueError(f"episode {episode_index} timestamps are not increasing")
+        expected_action_valid = np.zeros_like(state_valid[selected])
+        expected_action_valid[:-1] = state_valid[selected][1:]
+        if not np.array_equal(action_valid[selected], expected_action_valid):
+            raise ValueError(f"episode {episode_index} action validity is misaligned")
+        for side, width_index in width_indices.items():
+            widths = states[selected, width_index]
+            expected_width_valid = lerobot.gripper_width_valid_mask(widths)
+            if np.any(state_valid[selected, width_index] & ~expected_width_valid):
+                raise ValueError(
+                    f"episode {episode_index} {side} gripper jump is marked valid"
+                )
+            quality = lerobot.gripper_width_quality(widths)
+            gripper_quality[side]["jump_events"] += int(quality["jump_events"])
+            gripper_quality[side]["invalid_frames"] += int(
+                np.count_nonzero(~state_valid[selected, width_index])
+            )
+            gripper_quality[side]["maximum_step_mm"] = max(
+                float(gripper_quality[side]["maximum_step_mm"]),
+                float(quality["maximum_step_mm"]),
+            )
         episode_segments = [
             row for row in segments if int(row["episode_index"]) == episode_index
         ]
+        if len(episode_segments) != len(ATOMIC_LABELS):
+            raise ValueError(
+                f"episode {episode_index} has {len(episode_segments)} segments, "
+                f"expected {len(ATOMIC_LABELS)}"
+            )
         expected_start = 0
         for segment in episode_segments:
             start = int(segment["start_frame"])
@@ -610,6 +983,11 @@ def verify_dataset(dataset: Path, *, decode_videos: bool = True) -> Dict[str, ob
             if start != expected_start or end < start:
                 raise ValueError(
                     f"episode {episode_index} segment coverage breaks at {expected_start}"
+                )
+            if int(segment["frame_count"]) < DEFAULT_MINIMUM_SEGMENT_FRAMES:
+                raise ValueError(
+                    f"episode {episode_index} segment has fewer than "
+                    f"{DEFAULT_MINIMUM_SEGMENT_FRAMES} frames"
                 )
             actual = task_ids[selected[start : end + 1]]
             if not np.all(actual == int(segment["task_index"])):
@@ -664,6 +1042,19 @@ def verify_dataset(dataset: Path, *, decode_videos: bool = True) -> Dict[str, ob
         "frames": data.num_rows,
         "tasks": tasks.num_rows,
         "segments": len(segments),
+        "minimum_segment_frames": min(
+            int(segment["frame_count"]) for segment in segments
+        ),
+        "gripper_width_quality": {
+            "threshold_mm_per_frame": lerobot.DEFAULT_MAX_GRIPPER_STEP_M * 1000.0,
+            "sides": gripper_quality,
+            "total_jump_events": sum(
+                int(item["jump_events"]) for item in gripper_quality.values()
+            ),
+            "total_invalid_width_frames": sum(
+                int(item["invalid_frames"]) for item in gripper_quality.values()
+            ),
+        },
         "maximum_pose_step_mm": maximum_pose_step_mm,
         "invalid_video_frames": invalid_video_frames,
         "videos": videos,
@@ -777,12 +1168,18 @@ def export_cup_dataset(
         write_review_contact_sheet(output_path, segments) if write_review else None
     )
     verification = verify_dataset(output_path, decode_videos=True)
+    quality["gripper_width_quality"] = verification["gripper_width_quality"]
+    _write_json(output_path / "meta/quality_report.json", quality)
     _write_json(output_path / "meta/verification.json", verification)
     manifest_path = output_path / "meta/manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["verification"] = {
         **verification,
         "path": "meta/verification.json",
+    }
+    manifest["quality_filtering"] = {
+        **quality,
+        "path": "meta/quality_report.json",
     }
     if review_path is not None:
         manifest["review_contact_sheet"] = str(

@@ -50,10 +50,10 @@ insight3_b_global_camera_center -> left_tcp
   不依赖设备名的字母后缀。
 - 设备 profile 在 `config/devices/<profile>/cameras.json` 中用 `tcp_frame_id`
   显式记录相机与 TCP frame 的对应关系。
-- LeRobot 状态固定为 20 维 `[right_10d, left_10d]`；每臂依次为位置 `xyz`、
+- LeRobot 双臂状态固定为 20 维 `[left_10d, right_10d]`；每臂依次为位置 `xyz`、
   连续旋转表示 `rot6d` 和夹爪宽度 `width`，长度单位均为米。
-- 单臂录制仍保持固定 20 维布局；缺失一臂写零，并由有效性掩码区分“缺失”与
-  真实零值。action 保存下一时刻绝对状态，而不是在归档层预先转成相对动作。
+- 单臂录制使用对应一臂的 10 维布局。action 保存下一时刻绝对状态，而不是在归档层
+  预先转成相对动作。
 
 ## 当前标定状态
 

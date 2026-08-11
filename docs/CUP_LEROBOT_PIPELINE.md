@@ -56,21 +56,37 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 5. 按主闭合动作前 2 秒、释放后 2.5 秒裁剪上下文，排除停顿期间的人工纸杯复位和冗余空闲。
 6. 以 20 Hz 对齐三路原始分辨率图像、双臂 TCP、旋转和夹爪宽度。
 7. 写入 LeRobot v3 Parquet、三路 H.264/yuv420p 视频、同步时间戳与 validity mask。
-8. 写入五类逐帧 `task_index` 和 `meta/segments.parquet`。
-9. 完整解码三路视频，并检查 episode、时间戳、状态/action、动作段覆盖和任务索引。
-10. 生成质量报告、验证报告、代表帧联系表并更新累计 catalog。
+8. 检测相邻帧超过 30 mm 的夹爪宽度跳变；保留原始测量值，并在对应的
+   `observation.state_valid` / `action_valid` 维度标为 `false`。
+9. 写入四类逐帧 `task_index` 和 `meta/segments.parquet`；“闭合夹持”和“搬运”合并，
+   每段通过边界重分配保证至少 10 帧，以匹配 OpenPI 的 10 帧推理块。
+10. 同时写入官方 LeRobot 的 `action` 和 OpenPI 默认的 `actions`；两者数值相同，
+    validity 字段分别为 `action_valid` 和 `actions_valid`。
+11. 完整解码三路视频，并检查 episode、时间戳、状态/action、动作段覆盖和任务索引。
+12. 生成质量报告、验证报告、代表帧联系表并更新累计 catalog。
 
 ## 动作标签
 
 | task_index | subtask | atomic_action | 英文训练指令 |
 |---:|---|---|---|
 | 0 | reach | approach_cup | Move both grippers toward the disposable cup. |
-| 1 | grasp | close_grippers | Close both grippers around the disposable cup. |
-| 2 | transport | transport_cup_to_box | Lift and carry the disposable cup to the box. |
-| 3 | release | open_grippers | Open both grippers to release the disposable cup into the box. |
-| 4 | retreat | retreat_from_cup | Move both grippers away from the released cup. |
+| 1 | grasp_transport | grasp_and_transport_cup_to_box | Close both grippers around the disposable cup, then lift and carry it to the box. |
+| 2 | release | open_grippers | Open both grippers to release the disposable cup into the box. |
+| 3 | retreat | retreat_from_cup | Move both grippers away from the released cup. |
 
-每个 episode 的五段标签连续覆盖全部帧，无空洞或重叠。完整任务保存在 `meta/manifest.json` 的 `full_task`；训练可以使用逐帧 `task_index` 做原子动作语言条件，也可以使用完整任务做整条 episode 条件。
+每个 episode 的四段标签连续覆盖全部帧，无空洞或重叠，且每段不少于 10 帧。完整任务保存在 `meta/manifest.json` 的 `full_task`；训练可以使用逐帧 `task_index` 做原子动作语言条件，也可以使用完整任务做整条 episode 条件。
+
+已有分片可在不改动 MP4 的情况下升级：
+
+```bash
+docker exec -w /workspaces/insight_capture insight-dashboard \
+  python3 scripts/upgrade_cup_lerobot_v3.py \
+  outputs/lerobot_datasets/<dataset_a> \
+  outputs/lerobot_datasets/<dataset_b>
+```
+
+程序只重写 Parquet、JSON、任务标签和联系表，不裁剪、缩放或重新编码视频；默认会完整解码
+三路视频验证帧数、帧率和原始尺寸。
 
 ## 每个输出分片
 
@@ -90,12 +106,14 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
   review/atomic_action_contact_sheet.jpg
 ```
 
-`meta/quality_report.json` 记录被保留、因不完整夹取排除、以及因位姿不连续拒绝的源段。`meta/verification.json` 必须为 `PASS` 才能计入 catalog。
+`meta/quality_report.json` 记录被保留、因不完整夹取排除、因位姿不连续拒绝的源段，以及
+左右夹爪的跳变事件数、最大跳变和无效宽度帧数。`meta/verification.json` 必须为 `PASS`
+才能计入 catalog。
 
 ## 500 条数据的管理建议
 
 - 以 rosbag 为可恢复分片，每包 10–20 条，预计需要约 25–50 个包。
 - 不要在一次导出中手工拼接或移动源包；让网页按包生成独立数据集并更新 catalog。
-- 每批结束后抽查 `review/atomic_action_contact_sheet.jpg`，确认接近、夹持、搬运、释放、撤离五列语义正确。
+- 每批结束后抽查 `review/atomic_action_contact_sheet.jpg`，确认接近、夹持并搬运、释放、撤离四列语义正确。
 - 达到 500 条时以 `cup_catalog.json` 中 `verification=PASS` 的分片作为训练输入清单。
 - 原始分辨率视频占用显著高于 224×224；采集前后都应检查磁盘余量，并保留 rosbag 的独立备份。

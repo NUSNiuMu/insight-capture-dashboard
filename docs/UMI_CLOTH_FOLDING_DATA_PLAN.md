@@ -13,8 +13,8 @@
 - 支持 `mono8` / `8UC1` 标定图像，提供 rosbag 离线夹爪宽度提取、开合曲线
   和 marker overlay 视频供人工核验。
 - TCP pose、夹爪开度和三路图像统一对齐到 20 Hz。
-- 状态固定为双臂 20 维：`[right_10d, left_10d]`，每臂为
-  `xyz + rot6d + width`；缺失单臂以零值和有效性掩码表达。
+- 状态固定为双臂 20 维：`[left_10d, right_10d]`，每臂为
+  `xyz + rot6d + width`；单臂数据使用对应一臂的 10 维布局。
 - LeRobot 的 action 是下一时刻绝对状态。π0.5 等训练所需的相对动作和输入
   命名属于训练 adapter，不在归档阶段固化。
 - 可按约 1 秒停顿自动切 episode，也可保留“一条 rosbag = 一个 episode”。

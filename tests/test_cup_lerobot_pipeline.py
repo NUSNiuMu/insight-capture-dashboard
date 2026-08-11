@@ -16,7 +16,12 @@ from cup_lerobot_pipeline import (  # noqa: E402
     ATOMIC_LABELS,
     CupEpisodeSelector,
     infer_atomic_boundaries,
+    rebalance_short_segments,
     update_cup_catalog,
+)
+from lerobot_dataset_export import (  # noqa: E402
+    gripper_width_quality,
+    gripper_width_valid_mask,
 )
 from umi_dataset_export import EpisodePlan  # noqa: E402
 
@@ -63,10 +68,10 @@ def test_atomic_boundaries_cover_complete_open_close_open_cycle() -> None:
     assert boundaries[0] == 0
     assert boundaries[-1] == 240
     assert all(right > left for left, right in zip(boundaries, boundaries[1:]))
+    assert min(np.diff(boundaries)) >= 10
     assert boundaries[1] >= 59
-    assert boundaries[2] <= 73
-    assert boundaries[3] >= 149
-    assert boundaries[4] <= 165
+    assert boundaries[2] >= 149
+    assert boundaries[3] <= 165
     assert metrics["range_m"] > 0.07
 
 
@@ -74,7 +79,28 @@ def test_short_false_opening_is_not_mistaken_for_release() -> None:
     width = _complete_width_trace()
     width[100:108] = 0.083
     boundaries, _metrics = infer_atomic_boundaries(width, fps=FPS)
-    assert boundaries[3] >= 149
+    assert boundaries[2] >= 149
+
+
+def test_short_segments_are_rebalanced_to_openpi_chunk_length() -> None:
+    boundaries = rebalance_short_segments([0, 30, 32, 58, 64])
+    assert boundaries[0] == 0
+    assert boundaries[-1] == 64
+    assert min(np.diff(boundaries)) == 10
+
+
+def test_gripper_spike_is_marked_without_invalidating_recovery() -> None:
+    widths = np.asarray([0.08, 0.079, 0.0, 0.079, 0.078], dtype=np.float32)
+    valid = gripper_width_valid_mask(widths)
+    quality = gripper_width_quality(widths)
+    assert valid.tolist() == [True, True, False, True, True]
+    assert quality["jump_events"] == 2
+    assert quality["invalid_frames"] == 1
+
+
+def test_gripper_large_step_marks_landing_sample_invalid() -> None:
+    widths = np.asarray([0.08, 0.079, 0.01, 0.011], dtype=np.float32)
+    assert gripper_width_valid_mask(widths).tolist() == [True, True, False, True]
 
 
 @pytest.mark.parametrize(
@@ -108,7 +134,8 @@ def test_selector_trims_context_and_rejects_idle_segments() -> None:
     assert episode.segmentation["mode"] == "cup_grasp"
     assert episode.segmentation["source_start_s"] > 10.0
     assert episode.segmentation["source_end_s"] < 22.0
-    assert len(episode.segmentation["atomic_boundaries"]) == 6
+    assert len(episode.segmentation["atomic_boundaries"]) == 5
+    assert min(np.diff(episode.segmentation["atomic_boundaries"])) >= 10
     assert selector.report()["accepted_episode_count"] == 1
     assert len(selector.rejected) == 1
 
