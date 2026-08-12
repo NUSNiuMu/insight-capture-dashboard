@@ -43,6 +43,13 @@ class DashboardContext:
             rosbag_root=self.recording_manager.rosbag_root,
             cache_root=self.results_root / "playback_cache",
         )
+        self.prepared_playback_manager.configure_background(
+            self.recording_manager,
+            self.playback_configuration,
+        )
+        self.recording_manager.add_recording_completed_callback(
+            lambda path: self.prepared_playback_manager.enqueue(path.name)
+        )
         pipeline_script = (
             self.project_root.parent
             / "looper-vio-colmap-handoff"
@@ -65,3 +72,36 @@ class DashboardContext:
             project_root=self.project_root,
             rosbag_root=self.recording_manager.rosbag_root,
         )
+
+    def playback_configuration(
+        self,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        """Return the stable camera and pose identity used by review bundles."""
+        pose_by_name = {pose.name: pose for pose in self.node.poses}
+        cameras = []
+        for camera in self.node.cameras:
+            pose = pose_by_name[camera.name]
+            cameras.append(
+                {
+                    "name": camera.name,
+                    "label": camera.label,
+                    "topic": camera.topic,
+                    "role": pose.teleop_role,
+                    "rotation_deg": camera.rotation_deg,
+                    "row": camera.row,
+                    "column": camera.column,
+                }
+            )
+        poses = [
+            {
+                "name": pose.name,
+                "topic": pose.topic,
+                "role": pose.teleop_role,
+                "avatar_model": pose.avatar_model,
+                "avatar_scale": pose.avatar_scale,
+                "avatar_rotation_deg_xyz": list(pose.avatar_rotation_deg_xyz),
+                "avatar_offset_xyz": list(pose.avatar_offset_xyz),
+            }
+            for pose in self.node.poses
+        ]
+        return cameras, poses

@@ -1,5 +1,5 @@
 import { escapeHtml } from "../shared/format.js";
-import { initializeRosbags, refreshRosbags } from "../shared/rosbags.js";
+import { initializeRosbags, refreshRosbags } from "../shared/rosbags.js?v=20260812-review-bundle-v1";
 
 const optimizationCameraSelect = document.getElementById("optimization-camera-group");
 const optimizationRunNameInput = document.getElementById("optimization-run-name");

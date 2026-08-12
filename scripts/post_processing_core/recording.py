@@ -168,6 +168,7 @@ class RecordingManager:
         self._stdout_threads: List[threading.Thread] = []
         self._lock = threading.Lock()
         self._merge_thread: Optional[threading.Thread] = None
+        self._recording_completed_callbacks: List[Callable[[Path], None]] = []
         self.merge_state: str = "idle"  # idle | merging | syncing | done | error
         self.merge_error: Optional[str] = None
         self._last_topic_refresh_monotonic: float = 0.0
@@ -180,6 +181,20 @@ class RecordingManager:
         }
         self._recovery_service = RecordingRecovery(self)
         self._sync_service = RecordingSync(self)
+
+    def add_recording_completed_callback(self, callback: Callable[[Path], None]) -> None:
+        """Register lightweight work to enqueue after a merged bag is durable."""
+        with self._lock:
+            self._recording_completed_callbacks.append(callback)
+
+    def _notify_recording_completed(self, output_path: Path) -> None:
+        with self._lock:
+            callbacks = list(self._recording_completed_callbacks)
+        for callback in callbacks:
+            try:
+                callback(output_path)
+            except Exception as exc:  # noqa: BLE001 - completion must remain successful
+                self._output_lines.append(f"[post] WARNING: completion callback failed: {exc}")
 
 
     def _cleanup_if_exited_unlocked(self) -> None:
@@ -483,6 +498,7 @@ class RecordingManager:
                 self._output_lines.append(f"[sync] {sync_status.get('message', 'Host sync finished')}")
             with self._lock:
                 self.merge_state = "done"
+            self._notify_recording_completed(output_path)
         except Exception as exc:  # noqa: BLE001 - surfaced via merge_error, not crashing the thread
             with self._lock:
                 self.merge_state = "error"

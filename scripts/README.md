@@ -31,6 +31,7 @@
 | `cup_lerobot_pipeline.py` | 原始分辨率纸杯双夹爪 episode 筛选、原子动作标注与完整验收 |
 | `umi_dataset_export.py` | 旧 UMI Zarr 兼容导出 |
 | `post_processing.py` | 离线处理公共导入 facade |
+| `build_review_bundles.py` | 空闲时批量预生成单视频 30 Hz rosbag 审阅包 |
 
 ## 相机同步巡检
 

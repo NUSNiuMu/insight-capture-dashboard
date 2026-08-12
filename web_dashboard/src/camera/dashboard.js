@@ -36,6 +36,7 @@ export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
     manifest,
     cameraNames: new Set(entries.map((camera) => camera.name)),
     videos: new Map(),
+    statsTimer: null,
     stopped: false,
   };
   preparedPlaybackSession = session;
@@ -66,7 +67,11 @@ export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
     video.style.display = "";
     session.videos.set(camera.name, video);
     const pollState = cameraPollState.get(camera.name);
-    if (pollState) pollState.displayFrameTimes = [];
+    if (pollState) {
+      pollState.displayFrameTimes = [];
+      pollState.preparedQualityTotals = null;
+      pollState.preparedPresentedFps = 0;
+    }
     ready.push(waitForPreparedVideo(video));
   }
   for (const [name, panel] of cameraPanels.entries()) {
@@ -131,6 +136,22 @@ export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
     }
   }, { once: true });
   await Promise.all(Array.from(session.videos.values(), (video) => video.play()));
+  session.statsTimer = window.setInterval(() => {
+    if (preparedPlaybackSession !== session || session.stopped) return;
+    const playbackQuality = samplePreparedPlaybackQuality(masterName, master);
+    void fetch("/api/playback/browser-stats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        presented_fps: playbackQuality.presentedFps,
+        current_time_s: Number(master.currentTime || 0),
+        decoded_width: Number(master.videoWidth || 0),
+        decoded_height: Number(master.videoHeight || 0),
+        total_video_frames: playbackQuality.totalFrames,
+        dropped_video_frames: playbackQuality.droppedFrames,
+      }),
+    }).catch(() => {});
+  }, 1000);
 }
 
 export function stopPreparedCameraPlayback() {
@@ -138,6 +159,7 @@ export function stopPreparedCameraPlayback() {
   preparedPlaybackSession = null;
   if (!session) return;
   session.stopped = true;
+  if (session.statsTimer) window.clearInterval(session.statsTimer);
   for (const [name, video] of session.videos) {
     video.pause();
     video.playbackRate = 1;
@@ -365,7 +387,9 @@ function ensureCameraPanel(camera) {
     backendFps: 0,
     backendPipeline: {},
     rtcStats: {},
-    displayFrameTimes: []
+    displayFrameTimes: [],
+    preparedQualityTotals: null,
+    preparedPresentedFps: 0,
   });
   return panel;
 }
@@ -761,6 +785,31 @@ function computeDisplayedFps(frameTimes) {
   return ((frameTimes.length - 1) * 1000) / durationMs;
 }
 
+function samplePreparedPlaybackQuality(cameraName, video) {
+  const pollState = cameraPollState.get(cameraName);
+  const quality = video.getVideoPlaybackQuality?.();
+  const totalFrames = Number(quality?.totalVideoFrames || 0);
+  const droppedFrames = Number(quality?.droppedVideoFrames || 0);
+  const mediaTime = Number(video.currentTime || 0);
+  let presentedFps = computeDisplayedFps(pollState?.displayFrameTimes);
+  if (pollState && totalFrames > 0 && mediaTime > 0) {
+    const previous = pollState.preparedQualityTotals;
+    const elapsed = previous && mediaTime > previous.mediaTime
+      ? mediaTime - previous.mediaTime
+      : mediaTime;
+    const processed = previous ? totalFrames - previous.totalFrames : totalFrames;
+    const dropped = previous ? droppedFrames - previous.droppedFrames : droppedFrames;
+    if (elapsed > 0 && processed >= 0 && dropped >= 0) {
+      presentedFps = Math.max(0, processed - dropped) / elapsed;
+    }
+    pollState.preparedQualityTotals = { mediaTime, totalFrames, droppedFrames };
+    pollState.preparedPresentedFps = presentedFps;
+    cameraPollState.set(cameraName, pollState);
+    renderCameraFps(cameraName);
+  }
+  return { presentedFps, totalFrames, droppedFrames };
+}
+
 function renderCameraFps(cameraName) {
   const panel = cameraPanels.get(cameraName);
   if (!panel) {
@@ -774,7 +823,10 @@ function renderCameraFps(cameraName) {
   if (!label) {
     return;
   }
-  const displayFps = computeDisplayedFps(pollState.displayFrameTimes);
+  const callbackFps = computeDisplayedFps(pollState.displayFrameTimes);
+  const displayFps = preparedPlaybackSession && pollState.preparedPresentedFps > 0
+    ? Number(pollState.preparedPresentedFps)
+    : callbackFps;
   const backendFps = Number(pollState.backendFps || 0);
   setTextIfChanged(label, displayFps > 0 ? `${displayFps.toFixed(1)} fps` : "-- fps");
   const pipeline = pollState.backendPipeline || {};
@@ -785,6 +837,11 @@ function renderCameraFps(cameraName) {
   const lines = [
     `source ${sourceFps.toFixed(1)} · processed ${backendFps.toFixed(1)} · presented ${displayFps.toFixed(1)} fps`
   ];
+  if (preparedPlaybackSession && pollState.preparedQualityTotals) {
+    lines.push(
+      `browser media frames ${Number(pollState.preparedQualityTotals.totalFrames || 0)} · dropped ${Number(pollState.preparedQualityTotals.droppedFrames || 0)} · callback ${callbackFps.toFixed(1)} fps`
+    );
+  }
   if (Object.keys(main).length > 0) {
     lines.push(
       `main queued ${Number(main.queued_fps || 0).toFixed(1)} · IPC ${Number(main.ipc_fps || 0).toFixed(1)} fps · replaced ${Number(main.replaced || 0)} total`

@@ -15,8 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from post_processing_core.prepared_playback import (  # noqa: E402
     PreparedPlaybackManager,
     _cache_key,
+    _compose_review_frame,
     _nearest_indices,
     _playback_frame,
+    _review_cells,
     _select_recorded_streams,
 )
 
@@ -68,8 +70,9 @@ class PreparedPlaybackTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manager = PreparedPlaybackManager(root, root / "cache")
+            deserialized = []
             serialization = types.ModuleType("rclpy.serialization")
-            serialization.deserialize_message = lambda raw, _message_class: raw
+            serialization.deserialize_message = lambda raw, _message_class: deserialized.append(raw) or raw
             rclpy = types.ModuleType("rclpy")
             rclpy.serialization = serialization
             utilities = types.ModuleType("rosidl_runtime_py.utilities")
@@ -119,6 +122,7 @@ class PreparedPlaybackTest(unittest.TestCase):
             result["poses"]["epoch"][0].tolist(),
             [10_002_000_000, 10_035_000_000],
         )
+        self.assertEqual(len(deserialized), 2, "timeline scan should deserialize poses, not images")
 
     def test_recorded_stream_selection_allows_one_camera_and_pose(self) -> None:
         cameras = [
@@ -183,6 +187,28 @@ class PreparedPlaybackTest(unittest.TestCase):
             _cache_key(signature, {"cameras": [], "poses": []}),
         )
 
+    def test_review_artifacts_are_stored_beside_the_rosbag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bag = root / "bag"
+            review = bag / "review"
+            review.mkdir(parents=True)
+            video = review / "review.mp4"
+            video.write_bytes(b"video")
+            manager = PreparedPlaybackManager(root, root / "legacy-cache")
+            self.assertEqual(manager.artifact_path("bag", "review.mp4"), video)
+            with self.assertRaises(ValueError):
+                manager.artifact_path("bag", "../review.mp4")
+
+    def test_browser_stats_are_exposed_in_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manager = PreparedPlaybackManager(root, root / "legacy-cache")
+            manager.record_browser_stats({"presented_fps": 29.9})
+            status = manager.status()
+            self.assertEqual(status["browser_stats"]["presented_fps"], 29.9)
+            self.assertIn("updated_monotonic", status["browser_stats"])
+
     def test_playback_frame_bounds_large_images_with_even_dimensions(self) -> None:
         source = np.zeros((1920, 1088, 3), dtype=np.uint8)
         output = _playback_frame(source)
@@ -190,6 +216,32 @@ class PreparedPlaybackTest(unittest.TestCase):
 
         small = np.zeros((640, 544, 3), dtype=np.uint8)
         self.assertIs(_playback_frame(small), small)
+
+    def test_review_frame_tiles_three_cameras_into_one_surface(self) -> None:
+        cells = _review_cells(3, 1200, 600)
+        self.assertEqual(cells, [
+            {"x": 0, "y": 0, "width": 400, "height": 600},
+            {"x": 400, "y": 0, "width": 400, "height": 600},
+            {"x": 800, "y": 0, "width": 400, "height": 600},
+        ])
+        frames = [
+            np.full((80, 60, 3), (20, 30, 40), dtype=np.uint8),
+            np.full((80, 60), 90, dtype=np.uint8),
+            np.full((80, 60, 4), (120, 130, 140, 255), dtype=np.uint8),
+        ]
+        output = _compose_review_frame(
+            frames,
+            [{"name": f"camera_{index}"} for index in range(3)],
+            [False, True, False],
+            30,
+            width=1200,
+            height=600,
+        )
+        self.assertEqual(output.shape, (600, 1200, 3))
+        self.assertEqual(output.dtype, np.uint8)
+        self.assertGreater(float(output[:, :400].mean()), 18.0)
+        self.assertGreater(float(output[:, 400:800].mean()), 18.0)
+        self.assertGreater(float(output[:, 800:].mean()), 18.0)
 
     def test_nearest_indices_preserve_missing_frame_as_duplicate(self) -> None:
         source = np.asarray([0, 33_000_000, 100_000_000], dtype=np.int64)

@@ -85,6 +85,21 @@ def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object
                 integrity = bool(json.loads(integrity_path.read_text()).get("ok"))
             except (OSError, ValueError, AttributeError):
                 integrity = None
+        review_state = "missing"
+        review_quality = None
+        review_manifest_path = bag_dir / "review" / "manifest.json"
+        if review_manifest_path.is_file() and (bag_dir / "review" / "review.mp4").is_file():
+            try:
+                review_manifest = json.loads(review_manifest_path.read_text())
+                if review_manifest.get("schema_version") == 4:
+                    review_state = "ready"
+                    review_quality = (review_manifest.get("quality") or {}).get("state")
+                else:
+                    review_state = "invalid"
+            except (OSError, ValueError, AttributeError):
+                review_state = "invalid"
+        elif (bag_dir / ".review.preparing").is_dir():
+            review_state = "building"
         entries.append(
             {
                 "name": bag_dir.name,
@@ -94,6 +109,8 @@ def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object
                 "topic_count": len(topics) if isinstance(topics, list) else 0,
                 "scored": scored,
                 "integrity": integrity,
+                "review_state": review_state,
+                "review_quality": review_quality,
                 "label": "scored" if scored else "unscored",
             }
         )

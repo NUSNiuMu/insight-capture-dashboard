@@ -1,6 +1,6 @@
 import { createHandPoseViewer } from "../handpose/viewer.js?v=20260729-wilor-only";
 import { escapeHtml } from "../shared/format.js";
-import { initializeRosbags } from "../shared/rosbags.js";
+import { initializeRosbags } from "../shared/rosbags.js?v=20260812-review-bundle-v1";
 
 const elements = {
   bag: document.getElementById("handpose-bag-select"),

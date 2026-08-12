@@ -55,6 +55,7 @@ function renderBagList(bags) {
           bag.integrity === true ? "complete" : bag.integrity === false ? "incomplete" : "unverified"
         }</span>
         <span class="bag-badge ${bag.scored ? "is-ok" : ""}">${bag.scored ? "scored" : "unscored"}</span>
+        <span class="bag-badge ${bag.review_state === "ready" ? "is-ok" : bag.review_state === "invalid" ? "is-bad" : ""}">${escapeHtml(reviewStatusLabel(bag))}</span>
       </div>
       <div class="bag-row-actions">
         <button type="button" class="bag-delete-button" data-bag-name="${escapeHtml(bag.name || "")}">Delete</button>
@@ -78,13 +79,20 @@ function renderBagSelects(bags) {
       updateSelectedBagMeta(select);
       return;
     }
-    select.innerHTML = bags.map((bag) => `<option value="${escapeHtml(bag.name || "")}">${escapeHtml(bag.name || "")}</option>`).join("");
+    select.innerHTML = bags.map((bag) => `<option value="${escapeHtml(bag.name || "")}">${escapeHtml(bag.name || "")} · ${bag.review_state === "ready" ? "ready" : "pending"}</option>`).join("");
     if (previous && bags.some((bag) => bag.name === previous)) {
       select.value = previous;
     }
     select.onchange = () => updateSelectedBagMeta(select);
     updateSelectedBagMeta(select);
   });
+}
+
+function reviewStatusLabel(bag) {
+  if (bag.review_state === "ready") return `review ${bag.review_quality || "ready"}`;
+  if (bag.review_state === "building") return "review building";
+  if (bag.review_state === "invalid") return "review invalid";
+  return "review pending";
 }
 
 function updateSelectedBagMeta(select) {

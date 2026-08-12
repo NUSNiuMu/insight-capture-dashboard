@@ -3,9 +3,9 @@ import {
   startPreparedCameraPlayback,
   startCameraDashboard,
   stopPreparedCameraPlayback,
-} from "../camera/dashboard.js?v=20260810-single-camera-playback-v1";
+} from "../camera/dashboard.js?v=20260812-review-bundle-v1";
 import { escapeHtml } from "../shared/format.js";
-import { initializeRosbags } from "../shared/rosbags.js";
+import { initializeRosbags } from "../shared/rosbags.js?v=20260812-review-bundle-v1";
 import {
   clearKeptTrajectory,
   clearRenderedTrajectories,
@@ -17,11 +17,12 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260810-single-camera-playback-v1";
+} from "../spatial/renderer.js?v=20260812-review-bundle-v1";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");
 const playbackBagSelect = document.getElementById("playback-bag-select");
+const prebuildReviewsButton = document.getElementById("prebuild-reviews-button");
 const startPlaybackButton = document.getElementById("start-playback-button");
 const stopPlaybackButton = document.getElementById("stop-playback-button");
 const goLiveButton = document.getElementById("go-live-button");
@@ -99,6 +100,9 @@ function scheduleStartupTask(callback, delayMs) {
 
 if (startPlaybackButton) {
   startPlaybackButton.addEventListener("click", () => { void startPlayback(); });
+}
+if (prebuildReviewsButton) {
+  prebuildReviewsButton.addEventListener("click", () => { void prebuildAllReviews(); });
 }
 if (stopPlaybackButton) {
   stopPlaybackButton.addEventListener("click", () => { void stopPlayback(); });
@@ -302,7 +306,7 @@ async function startPlayback() {
   }
   playbackBusy = true;
   playbackRequested = true;
-  renderPlaybackProgress(true, 0, "Starting encoder");
+  renderPlaybackProgress(true, 0, "Checking review bundle");
   if (startPlaybackButton) startPlaybackButton.disabled = true;
   if (playbackStatusEl) playbackStatusEl.textContent = "Starting playback...";
   try {
@@ -323,6 +327,25 @@ async function startPlayback() {
     if (startPlaybackButton) startPlaybackButton.disabled = false;
   } finally {
     playbackBusy = false;
+  }
+}
+
+async function prebuildAllReviews() {
+  if (!prebuildReviewsButton || prebuildReviewsButton.disabled) return;
+  prebuildReviewsButton.disabled = true;
+  try {
+    const response = await fetch("/api/playback/prebuild", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ all: true }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Could not queue review bundles.");
+    renderPlaybackStatus(payload);
+  } catch (error) {
+    if (playbackStatusEl) playbackStatusEl.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    prebuildReviewsButton.disabled = false;
   }
 }
 
@@ -390,8 +413,10 @@ async function refreshPlaybackStatus() {
 function renderPlaybackStatus(payload) {
   const state = (payload && payload.state) || "idle";
   const bagName = (payload && payload.bag_name) || "";
+  const queued = Array.isArray(payload?.queued) ? payload.queued.length : 0;
+  const isBackground = Boolean(payload?.background) && !playbackRequested;
   const isPlaying = state === "playing";
-  const isPreparing = state === "preparing" || (state === "ready" && playbackRequested);
+  const isPreparing = (state === "preparing" && !isBackground) || (state === "ready" && playbackRequested);
   const isBusy = isPlaying || isPreparing;
   if (startPlaybackButton) {
     startPlaybackButton.hidden = isBusy;
@@ -399,6 +424,7 @@ function renderPlaybackStatus(payload) {
   }
   if (stopPlaybackButton) stopPlaybackButton.hidden = !isBusy;
   if (goLiveButton) goLiveButton.hidden = !isPlaying;
+  if (prebuildReviewsButton) prebuildReviewsButton.hidden = isPlaying;
   if (playbackBagSelect) playbackBagSelect.disabled = isBusy;
   if (state === "preparing") {
     renderPlaybackProgress(true, Number(payload.progress || 0), payload.stage || "Encoding");
@@ -410,7 +436,7 @@ function renderPlaybackStatus(payload) {
   if (playbackStatusEl) {
     if (state === "preparing") {
       const progress = Math.round(Number(payload.progress || 0) * 100);
-      playbackStatusEl.textContent = `Preparing ${progress}% · ${payload.stage || bagName}`;
+      playbackStatusEl.textContent = `${isBackground ? "Background review" : "Preparing"} ${progress}% · ${payload.stage || bagName}${queued ? ` · ${queued} queued` : ""}`;
     } else if (state === "ready" && playbackRequested) {
       playbackStatusEl.textContent = `Loading prepared media: ${bagName}`;
     } else if (state === "ready") {
@@ -420,7 +446,7 @@ function renderPlaybackStatus(payload) {
     } else {
       playbackStatusEl.textContent = isPlaying
         ? `Playing prepared: ${bagName}${preparedQualitySummary()}`
-        : "Idle";
+        : queued ? `Idle · ${queued} reviews queued` : "Idle";
     }
   }
 }
@@ -441,13 +467,16 @@ function renderPlaybackProgress(visible, progress, stage) {
 
 function preparedQualitySummary() {
   if (!preparedManifest) return "";
-  const cameras = Array.isArray(preparedManifest.cameras) ? preparedManifest.cameras : [];
+  const cameras = Array.isArray(preparedManifest.source_cameras)
+    ? preparedManifest.source_cameras
+    : Array.isArray(preparedManifest.cameras) ? preparedManifest.cameras : [];
   const repeats = cameras.reduce(
     (total, camera) => total + Number(camera.duplicate_frames || 0),
     0
   );
   const maxSkewMs = Math.max(0, ...cameras.map((camera) => Number(camera.max_skew_ms || 0)));
-  return ` · ${Number(preparedManifest.fps || 30)} Hz · ${repeats} repeats · max skew ${maxSkewMs.toFixed(1)} ms`;
+  const quality = String(preparedManifest.quality?.state || "").toUpperCase();
+  return ` · ${Number(preparedManifest.fps || 30)} Hz${quality ? ` · ${quality}` : ""} · ${repeats} repeats · max skew ${maxSkewMs.toFixed(1)} ms`;
 }
 
 async function startPreparedPlayback(status) {

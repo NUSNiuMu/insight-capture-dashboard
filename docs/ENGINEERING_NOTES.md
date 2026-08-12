@@ -32,6 +32,17 @@
 - Prepared playback 必须使用 rosbag record timestamp 对齐图像与 Pose。不同相机的
   `header.stamp` 可能分别来自 Unix/NTP 和设备启动时钟，只能用于各 topic 内的节拍审计，
   不能直接求跨相机共同时间段；修改该规则时必须保留跨 header 时钟域回归测试。
+- 人工质检使用每个 rosbag 自带的 `review/` 派生包：三路图像只扫描一次并拼成一个
+  1280×720、30 Hz H.264 视频，Pose 保持固定 30 Hz 清单。浏览器只解码一个视频并以
+  `video.currentTime` 驱动 3D，禁止重新引入三路 `<video>` 的独立时钟和变速追赶。
+- 审阅包在录制合包完成后排队预生成，录制或合包开始时必须暂停；不能从图像 callback
+  生成，也不能让质检缓存继续占用 `outputs/` 所在的系统盘。历史包通过 3D 页的
+  `Prepare all` 或 `scripts/build_review_bundles.py --all` 补建。
+- 2026-08-12 实机验收使用 15.03 秒三相机 bag：NVENC 生成 451 帧 30/1 fps 的
+  1280×720 单视频，三路重复帧均为零，成品 11.3 MB；旧三视频缓存合计约 25.3 MB。
+  Firefox 原生媒体计数为 451 总帧、1 丢帧（约 29.93 fps）。Firefox 会节流
+  `requestVideoFrameCallback`，因此审阅 FPS 必须按 `totalVideoFrames/droppedVideoFrames`
+  的媒体时间增量计算，不能把回调频率约 24 fps 误判为视频掉帧。
 - `/tf_static` 是 latched 单次流，只要求至少存在一条消息，不按 FPS 判断完整性。
 - 400 Hz IMU 使用 `config/rosbag_qos_overrides.yaml` 的 best-effort、
   keep-last 1000 深度 reader；默认深度不足时，短时 CPU 调度停顿会先表现为

@@ -71,9 +71,14 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_post("/api/scoring/run", recording._handle_scoring_run)
     app.router.add_get("/api/scoring/status", recording._handle_scoring_status)
     app.router.add_post("/api/playback/start", playback._handle_playback_start)
+    app.router.add_post("/api/playback/prebuild", playback._handle_playback_prebuild)
     app.router.add_post("/api/playback/activate", playback._handle_playback_activate)
     app.router.add_post("/api/playback/stop", playback._handle_playback_stop)
     app.router.add_get("/api/playback/status", playback._handle_playback_status)
+    app.router.add_post(
+        "/api/playback/browser-stats",
+        playback._handle_playback_browser_stats,
+    )
     app.router.add_get(
         "/api/playback/artifacts/{bag_name}/{filename}",
         playback._handle_playback_artifact,

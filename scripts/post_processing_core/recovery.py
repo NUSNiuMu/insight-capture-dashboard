@@ -81,6 +81,7 @@ class RecordingRecovery:
         self.owner._recovery_log(
             f"{staging_dir.name}: recovered {len(good_parts)}/{len(part_dirs)} part bags -> {output_path.name}"
         )
+        self.owner._notify_recording_completed(output_path)
 
     def _part_converts_cleanly(self, part: Path) -> bool:
         probe_dir = part.parent / f".{part.name}.convert_probe"
