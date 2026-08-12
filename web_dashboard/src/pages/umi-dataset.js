@@ -45,12 +45,6 @@ function selectedLayout() {
 }
 
 function renderLayout() {
-  const isCupGrasp = episodeModeInput.value === "cup_grasp";
-  if (isCupGrasp) {
-    exportFormatInput.value = "lerobot";
-    cameraLayoutInput.value = "bimanual";
-    imageModeInput.value = "original";
-  }
   const layout = selectedLayout();
   const isLeRobot = exportFormatInput.value === "lerobot";
   layoutSummary.textContent = layout.label;
@@ -59,10 +53,7 @@ function renderLayout() {
   exportButton.textContent = isLeRobot ? "Inspect and build LeRobot dataset" : "Build UMI outputs";
   schemaGrid.innerHTML = layout.schema.map(([key, value]) =>
     `<span><small>${escapeHtml(key)}</small><strong>${escapeHtml(value)}</strong></span>`
-  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `Fixed lower ROI → ${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · ${isLeRobot ? "20 Hz gripper / 30 Hz hand" : "20 Hz"}</strong></span><span><small>Episodes</small><strong>${isCupGrasp ? "Complete cup grasps · atomic labels" : episodeModeInput.value === "auto_pause" ? "Auto-split gripper pauses" : "One rosbag = one episode"}</strong></span><span><small>State / action</small><strong>${isLeRobot ? "Auto: UMI EE + width, or inferred hand pose" : "0–0.083 m · relative in training"}</strong></span><span><small>Output folder</small><strong>${isCupGrasp ? "outputs/lerobot_datasets/&lt;rosbag&gt;_cup_lerobot/" : isLeRobot ? "outputs/lerobot_datasets/&lt;rosbag&gt;_lerobot/" : "outputs/umi_datasets/&lt;rosbag&gt;_umi/"}</strong></span>`;
-  exportFormatInput.disabled = isCupGrasp;
-  cameraLayoutInput.disabled = isCupGrasp;
-  imageModeInput.disabled = isCupGrasp;
+  ).join("") + `<span><small>Images</small><strong id="umi-image-summary">${imageModeInput.value === "original" ? "Original" : `Fixed lower ROI → ${escapeHtml(imageModeInput.value)}×${escapeHtml(imageModeInput.value)}`} RGB · ${isLeRobot ? "20 Hz gripper / 30 Hz hand" : "20 Hz"}</strong></span><span><small>Episodes</small><strong>${episodeModeInput.value === "auto_pause" ? "Auto-split gripper pauses" : "One rosbag = one episode"}</strong></span><span><small>State / action</small><strong>${isLeRobot ? "Auto: UMI EE + width, or inferred hand pose" : "0–0.083 m · relative in training"}</strong></span><span><small>Output folder</small><strong>${isLeRobot ? "outputs/lerobot_datasets/&lt;rosbag&gt;_lerobot/" : "outputs/umi_datasets/&lt;rosbag&gt;_umi/"}</strong></span>`;
 }
 
 function formatBytes(bytes) {
@@ -105,12 +96,11 @@ async function loadBags() {
 }
 
 function setLocked(locked) {
-  const isCupGrasp = episodeModeInput.value === "cup_grasp";
   exportButton.disabled = locked;
-  exportFormatInput.disabled = locked || isCupGrasp;
+  exportFormatInput.disabled = locked;
   taskInput.disabled = locked;
-  cameraLayoutInput.disabled = locked || isCupGrasp;
-  imageModeInput.disabled = locked || isCupGrasp;
+  cameraLayoutInput.disabled = locked;
+  imageModeInput.disabled = locked;
   episodeModeInput.disabled = locked;
   selectAllButton.disabled = locked;
   bagList.querySelectorAll("input").forEach((input) => { input.disabled = locked; });

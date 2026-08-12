@@ -70,9 +70,6 @@ class UmiExportManager:
     _LEROBOT_SCRIPT = (
         Path(__file__).resolve().parents[1] / "lerobot_dataset_export.py"
     )
-    _CUP_LEROBOT_SCRIPT = (
-        Path(__file__).resolve().parents[1] / "cup_lerobot_pipeline.py"
-    )
     _EGO_LEROBOT_SCRIPT = (
         Path(__file__).resolve().parents[1] / "ego_lerobot_export.py"
     )
@@ -141,19 +138,14 @@ class UmiExportManager:
         else:
             raise ValueError("Image resolution must be original, 224, or 384.")
         episode_mode = str(episode_mode).strip().lower()
-        if episode_mode not in {"bag", "auto_pause", "cup_grasp"}:
-            raise ValueError("Episode mode must be bag, auto_pause, or cup_grasp.")
+        if episode_mode not in {"bag", "auto_pause"}:
+            raise ValueError("Episode mode must be bag or auto_pause.")
         export_format = str(export_format).strip().lower()
         if export_format not in {"lerobot", "umi"}:
             raise ValueError("Dataset format must be lerobot or umi.")
         task = " ".join(str(task).split())
         if export_format == "lerobot" and not task:
             raise ValueError("Task instruction is required for LeRobot export.")
-        if episode_mode == "cup_grasp":
-            if export_format != "lerobot":
-                raise ValueError("Cup grasp mode requires LeRobot export.")
-            if image_size is not None:
-                raise ValueError("Cup grasp mode requires original image resolution.")
         if len(task) > 500:
             raise ValueError("Task instruction is too long.")
         if not bag_names:
@@ -174,17 +166,10 @@ class UmiExportManager:
             raise ValueError("Too many cameras selected.")
         if len(set(camera_names)) != len(camera_names):
             raise ValueError("Duplicate camera names are not allowed.")
-        if episode_mode == "cup_grasp" and set(camera_names) != {
-            "insight3_a",
-            "insight3_b",
-            "insight9_a",
-        }:
-            raise ValueError("Cup grasp mode requires the bimanual three-camera layout.")
         items = []
         for bag_name, bag_path in zip(bag_names, resolved_bags):
             if export_format == "lerobot":
-                suffix = "cup_lerobot" if episode_mode == "cup_grasp" else "lerobot"
-                dataset_name = f"{bag_name}_{suffix}"
+                dataset_name = f"{bag_name}_lerobot"
                 output_path = self.lerobot_output_root / dataset_name
             else:
                 dataset_name = f"{bag_name}_umi"
@@ -312,16 +297,8 @@ class UmiExportManager:
             item.route = str(diagnostics["route"])
             item.route_diagnostics = diagnostics
             if item.route == "umi_gripper":
-                script = (
-                    self._CUP_LEROBOT_SCRIPT
-                    if job.episode_mode == "cup_grasp"
-                    else self._LEROBOT_SCRIPT
-                )
+                script = self._LEROBOT_SCRIPT
             else:
-                if job.episode_mode == "cup_grasp":
-                    raise ValueError(
-                        "Cup grasp mode requires repeatedly detected gripper markers."
-                    )
                 script = self._EGO_LEROBOT_SCRIPT
         elif item.export_format == "umi":
             item.route = "umi_gripper"

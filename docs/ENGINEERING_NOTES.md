@@ -168,8 +168,7 @@
   LeRobot 键，`actions` 是数值相同的 OpenPI 默认键；二者都是下一帧绝对 state，
   模型特定相对动作只能在 training adapter 中转换。
 - 夹爪宽度相邻帧跳变超过 30 mm 时不修改有限原始值，只把对应 state/action 维度的
-  validity 标为 false。纸杯标签把短暂的闭合动作合入搬运段，并保证四个动作段均至少
-  10 帧，避免 OpenPI 的 10 帧 chunk 跨语义吸收相邻任务。
+  validity 标为 false。
 - 只有明确的数据质量拒绝（连续性、有效帧、解码或夹爪检测导致零有效 episode）才把
   源 rosbag 重命名为 `fail_<原名>` 并从 Dataset 页面隐藏；禁止自动删除。配置、标定、
   权限、磁盘或程序错误必须保留原名，避免误隔离可恢复数据。
