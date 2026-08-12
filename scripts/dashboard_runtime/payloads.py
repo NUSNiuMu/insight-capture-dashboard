@@ -245,6 +245,9 @@ class PayloadBuilder:
             "gesture_recording_enabled": bool(
                 self.owner.gesture_recording_status().get("enabled", False)
             ),
+            "voice_recording_enabled": bool(
+                self.owner.voice_recording_status().get("enabled", False)
+            ),
             "insight3_gripper_mask_height_ratio": load_gripper_mask_height_ratio(
                 self.owner.post_processing_config_path
             ),

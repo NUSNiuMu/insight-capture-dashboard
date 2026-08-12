@@ -245,13 +245,16 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .record-controls { display: flex; width: min(760px, 62%); align-items: center; justify-content: flex-end; gap: 8px; }
 .record-controls .field-control { min-width: 240px; flex: 1; }
 .record-controls .field-control::placeholder { color: var(--muted-light); }
-.load-chip, .storage-space-pill, .gesture-recording-pill { display: inline-flex; min-height: 31px; padding: 0 11px; align-items: center; border: 1px solid var(--line-dark); border-radius: 6px; color: var(--muted); background: var(--surface); font-family: var(--mono); font-size: 9px; }
+.load-chip, .storage-space-pill, .gesture-recording-pill, .voice-recording-pill { display: inline-flex; min-height: 31px; padding: 0 11px; align-items: center; border: 1px solid var(--line-dark); border-radius: 6px; color: var(--muted); background: var(--surface); font-family: var(--mono); font-size: 9px; }
 .storage-space-ok { border-color: rgba(31, 138, 85, 0.4); color: var(--green); }
 .storage-space-warning { border-color: rgba(184, 119, 0, 0.45); color: var(--accent); }
 .storage-space-critical { border-color: rgba(194, 69, 62, 0.5); color: var(--red); background: rgba(194, 69, 62, 0.07); }
 .gesture-recording-ok { border-color: rgba(31, 138, 85, 0.4); color: var(--green); }
 .gesture-recording-warning { border-color: rgba(184, 119, 0, 0.45); color: var(--accent); }
 .gesture-recording-critical { border-color: rgba(194, 69, 62, 0.5); color: var(--red); background: rgba(194, 69, 62, 0.07); }
+.voice-recording-ok { border-color: rgba(31, 138, 85, 0.4); color: var(--green); }
+.voice-recording-warning { border-color: rgba(184, 119, 0, 0.45); color: var(--accent); }
+.voice-recording-critical { border-color: rgba(194, 69, 62, 0.5); color: var(--red); background: rgba(194, 69, 62, 0.07); }
 .recording-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, .65fr); align-items: start; gap: 18px; }
 .topic-surface { min-width: 0; }
 .console-surface { min-width: 0; align-self: start; }
@@ -548,7 +551,7 @@ body { font-size: 15px; }
 .bag-row-stats small { font-size: 10px; }
 .bag-row-stats strong { font-size: 13px; }
 .bag-badges, .bag-row-actions, .bag-badge { font-size: 11px; }
-.empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner { font-size: 13px; }
+.empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .voice-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner { font-size: 13px; }
 .record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend { font-size: 12px; }
 .record-topic-summary-meta, .record-topic-copy span, .recording-output, .opt-log, .result-placeholder small, .settings-role-pill { font-size: 11px; }
 .record-topic-copy strong, .settings-camera-head h3 { font-size: 13px; }
@@ -565,7 +568,7 @@ body { font-size: 15px; }
   body, .app-brand { font-size: 16px; }
   .app-brand small, .workspace-card > span, .workspace-card small, .side-nav p, .side-nav a b, .sidebar-foot small, .topbar-clock, .section-heading > span, .section-heading > p, .control-number, .step-label > span, .camera-title span, .camera-overlay, .bag-badges, .bag-row-actions, .bag-badge, .record-topic-summary-meta, .result-placeholder small, .settings-role-pill, .legend-row, .trail-toggle { font-size: 12px; }
   .workspace-card strong, .content-heading > div:first-child > p:last-child, .bag-row-main strong { font-size: 17px; }
-  .side-nav a, .sidebar-foot span, .app-topbar, .section-kicker, .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .nav-button, .field-label, .field-help, .control-strip-copy strong, .step-label strong, .camera-title strong, .bag-row-stats strong, .empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner, .record-topic-copy strong, .settings-camera-head h3 { font-size: 14px; }
+  .side-nav a, .sidebar-foot span, .app-topbar, .section-kicker, .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .nav-button, .field-label, .field-help, .control-strip-copy strong, .step-label strong, .camera-title strong, .bag-row-stats strong, .empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .voice-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner, .record-topic-copy strong, .settings-camera-head h3 { font-size: 14px; }
   .field-control, .bag-select, .field-input, .settings-text-input, .settings-model-select, .recording-bag-name-input { font-size: 15px; }
   .record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend, .control-strip-copy small, .step-label small, .legend-row strong { font-size: 13px; }
   .camera-wall-heading h2 { font-size: 19px; }

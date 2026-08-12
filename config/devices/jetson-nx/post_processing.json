@@ -18,5 +18,15 @@
     "snapshot_timeout_sec": 0.35,
     "min_keypoint_score": 0.35,
     "min_free_ratio": 0.1
+  },
+  "voice_recording": {
+    "enabled": true,
+    "device": "plughw:YDPI4MIC,0",
+    "model_path": "/opt/insight/models/vosk-cn-small",
+    "sample_rate": 16000,
+    "cooldown_sec": 2.0,
+    "min_free_ratio": 0.1,
+    "start_phrases": ["开始录制"],
+    "stop_phrases": ["结束录制", "停止录制"]
   }
 }

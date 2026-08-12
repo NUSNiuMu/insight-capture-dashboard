@@ -6,6 +6,10 @@
 
 - ROS 图像 callback 只负责轻量状态更新、录制 writer 投递和 latest-frame 交接，不执行编码或磁盘 I/O。
 - 图像由主进程现有 DDS reader 直接交给 `InProcessBagWriter`，不能恢复为额外的 `ros2 bag record` 图像订阅，否则会与预览、WebRTC 竞争。
+- 常驻麦克风采集和 Vosk 中文识别运行在 `voice_control_worker.py` 独立进程；主进程
+  只接收限定的 start/stop 事件并通过后台线程调用 `RecordingManager`。音频不能进入
+  ROS callback，也不能由前端上传。自动停止只允许结束同一控制器创建的录制，避免
+  误停网页手动录制。
 - Insight3 在线重定位同样不能再直接增加两个全速原图 DDS reader。dashboard
   复用既有 reader，以 2 Hz 发布 `/insight_mapping/...` 定位图；localizer
   只订阅该中继。实机 A/B 测试中，这使 Insight3 B 从 13–14 FPS 恢复到 20 FPS。

@@ -132,7 +132,7 @@ python3 scripts/multi_camera_dashboard_web.py &
 - `/scoring`：录制完整性验证与轨迹评分
 - `/handpose`：从已有 rosbag 离线提取并查看 WiLoR 3D 手部关键点
 - `/optimization`：COLMAP 轨迹优化（`jetson-nx` 镜像内置 CUDA sm_87 的 COLMAP 3.9.1）
-- `/settings`：手势录制、Stick figure、夹爪/手部叠加、Insight3 mask 与 Avatar 设置
+- `/settings`：声控/手势录制、Stick figure、夹爪/手部叠加、Insight3 mask 与 Avatar 设置
 
 Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，
 支持整组勾选），`Start` 只录勾选的 topic。三路 dashboard 图像复用现有 DDS reader，
@@ -145,6 +145,11 @@ profile 启用时自动同步到主机；收尾完成前不能开始下一段。
 握拳”持续 0.8 秒时，会用服务器默认 topics 开始录制，解除 2 秒后再次保持同一
 手势可停止，且不会停止网页手动开始的录制。输出目录优先级：CLI `--rosbag-dir` >
 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
+
+`jetson-nx` profile 默认启用离线中文声控。USB 麦克风接入后说“开始录制”会使用
+服务器默认 topics 创建 `voice_record_*`，说“结束录制”或“停止录制”会停止该段；
+声控不会停止网页手动开始的录制。识别由独立 Vosk worker 完成，不上传音频、不在
+ROS 图像 callback 中运行；设备、命令词和磁盘阈值在 `voice_recording` 配置段调整。
 
 Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、message/topic 数量，
 并从 `outputs/results/{integrity,scores}` 读取完整性与评分状态。

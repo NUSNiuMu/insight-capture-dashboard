@@ -3,6 +3,7 @@ import { escapeHtml } from "../shared/format.js";
 const recordingPanel = document.getElementById("recording-panel");
 const recordingStatus = document.getElementById("recording-status");
 const gestureRecordingPill = document.getElementById("gesture-recording-pill");
+const voiceRecordingPill = document.getElementById("voice-recording-pill");
 const storageSpacePill = document.getElementById("storage-space-pill");
 const startRecordingButton = document.getElementById("start-recording-button");
 const stopRecordingButton = document.getElementById("stop-recording-button");
@@ -320,8 +321,40 @@ function renderRecordingStatus(status) {
     renderTopicCatalog(status.topic_catalog, { resetSelection: true });
   }
   renderGestureRecording(status && status.gesture_recording);
+  renderVoiceRecording(status && status.voice_recording);
   renderDiskSpace(status && status.disk_space);
   setRecordingBusy(recordingBusy, { active });
+}
+
+function renderVoiceRecording(voice) {
+  if (!voiceRecordingPill) {
+    return;
+  }
+  if (!voice || !voice.enabled) {
+    voiceRecordingPill.textContent = "voice off";
+    voiceRecordingPill.className = "voice-recording-pill";
+    voiceRecordingPill.title = (voice && voice.message) || "Voice recording is disabled.";
+    return;
+  }
+  const state = voice.state || "starting";
+  let text = "voice starting";
+  let level = "warning";
+  if (state === "listening") {
+    text = "voice listening";
+    level = "ok";
+  } else if (state === "recording") {
+    text = "voice recording";
+    level = "critical";
+  } else if (state === "manual_recording") {
+    text = "voice · manual active";
+    level = "ok";
+  } else if (state === "error") {
+    text = "voice unavailable";
+    level = "critical";
+  }
+  voiceRecordingPill.textContent = text;
+  voiceRecordingPill.className = `voice-recording-pill voice-recording-${level}`;
+  voiceRecordingPill.title = voice.message || "Say 开始录制 or 结束录制";
 }
 
 function renderGestureRecording(gesture) {

@@ -24,6 +24,7 @@ class RecordingRoutes:
         payload["system_load"] = read_system_load()
         payload["disk_space"] = read_disk_space(self.context.recording_manager.rosbag_root)
         payload["gesture_recording"] = self.context.node.gesture_recording_status(payload)
+        payload["voice_recording"] = self.context.node.voice_recording_status(payload)
         return web.json_response(payload)
 
     async def _handle_recording_topics(self, _request: web.Request) -> web.Response:

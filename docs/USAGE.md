@@ -77,7 +77,7 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 | `/scoring` | 轨迹评分 + 录制完整性验证 |
 | `/handpose` | 从已有 rosbag 离线提取手部 3D 关键点并按时间轴查看 |
 | `/optimization` | COLMAP 轨迹优化：对录制的彩色图像做三维重建并与 VIO 轨迹对齐 |
-| `/settings` | 手势录制（默认关闭）、Stick-figure 模式全局开关；逐相机开关手部叠加和有效校准的夹爪追踪；Avatar 模型选择 |
+| `/settings` | 声控/手势录制、Stick-figure 模式全局开关；逐相机开关手部叠加和有效校准的夹爪追踪；Avatar 模型选择 |
 
 > 旧地址 `/images` 现在会自动跳转到 `/3d`（画面已合并进 Spatial 视图，收藏的旧链接不用改）。
 
@@ -86,6 +86,13 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 **Stick-figure 模式**（`/settings` 页开关）：开启后 3D 场景不再加载相机模型，改用三个角色配色的大圆点表示头/双手位置，同时叠加手臂骨骼与手部关键点骨架线（手部形状来自手部检测，手臂由固定臂长的 IK 解算合成，是合理近似而非真实追踪）。适合需要直观看操作者身体姿态（手臂弯曲、手指开合）的场景；开关状态影响所有观看者，翻转后下个刷新周期自动生效，无需刷新页面。
 
 **手势录制**（`/settings` 页开关）：默认关闭。开启后双手点赞保持动作可以开始或停止由手势创建的录制；关闭会立即停止识别新的手势，但不会停止已经进行中的网页手动录制或录制任务。该开关与其他 Settings 开关一样在当前后端进程内即时生效，后端重启后恢复设备 profile 的默认关闭状态。
+
+**声控录制**（`/settings` 页开关）：`jetson-nx` profile 默认开启。对 USB 麦克风说
+“开始录制”会按服务器默认 topics 创建一段 `voice_record_*`；说“结束录制”或
+“停止录制”会停止这段声控创建的录制。为避免误操作，声控不会停止网页或其他方式
+开始的录制，磁盘剩余低于 10%或上一段仍在合并时也不会自动开始。识别完全在设备
+本地进行，不上传或保存麦克风音频；Recording 页顶部 `voice` 标签显示监听、录制或
+错误状态。Settings 开关即时生效，后端重启后恢复当前设备 profile 的默认值。
 
 **Hand pose**（`/handpose` 页）：在页面内选择 `rosbags/` 中已有的录制，点击
 **Extract hand pose**。任务使用 WiLoR 直接读取原录制，不会把 bag 复制到功能
@@ -279,6 +286,16 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 开始的录制；磁盘剩余低于 10% 或上一段仍在合并时也不会自动开始。Recording
 页顶部的 `gesture` 标签显示 armed、保持、释放和录制状态。
 
+使用声控时，确认 Recording 页顶部显示 `voice listening`，再清晰说“开始录制”。
+看到 `voice recording` 后开始操作，完成后说“结束录制”或“停止录制”。若显示
+`voice unavailable`，检查麦克风和 worker 日志：
+
+```bash
+arecord -l
+docker exec insight-dashboard arecord -l
+tail -n 100 outputs/voice_control_worker.log
+```
+
 命令行等价方式（脚本化/无浏览器时）：
 
 ```bash
@@ -445,6 +462,10 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 
 - 先看状态：`curl -s localhost:8765/api/recording/status`；
 - `Start` 无反应：点一次 `Refresh Topics` 再试（相机刚重启过时 topic 列表会过期）；
+- 声控无反应：先确认 Recording 页为 `voice listening`，再检查 `arecord -l` 是否含
+  `YDPI4MIC`、容器是否能看到 `/dev/snd`，以及 `outputs/voice_control_worker.log`；
+- 声控识别成功但不开始：状态消息会说明是否因磁盘低于 10%、上一段合包未完成或
+  已有其他录制而忽略；声控只会停止自己创建的 `voice_record_*`；
 - 注意：录制进行中**不要**执行 `docker restart`，会中断录制。
   `run_dashboard.sh` 已内置保护（检测到录制中不重启），手动 docker 命令没有。
 

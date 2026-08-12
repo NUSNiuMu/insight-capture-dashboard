@@ -13,6 +13,7 @@ DEFAULT_POST_PROCESSING_CONFIG = {
     "max_cache_size": 2147483648,
     "record_topics": [],
     "gesture_recording": {"enabled": False},
+    "voice_recording": {"enabled": False},
 }
 
 

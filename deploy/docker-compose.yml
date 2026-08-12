@@ -27,6 +27,10 @@ services:
     # ── NVIDIA Container Runtime for CUDA acceleration ───────────────────────
     runtime: nvidia
 
+    # USB microphone used by the isolated offline voice-control worker.
+    devices:
+      - /dev/snd:/dev/snd
+
     # Docker's 64MB default /dev/shm is too small for the kiosk browser's
     # media and compositor processes — see the dev compose for the full story.
     shm_size: '2gb'

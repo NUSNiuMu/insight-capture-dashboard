@@ -11,5 +11,8 @@
   },
   "gesture_recording": {
     "enabled": false
+  },
+  "voice_recording": {
+    "enabled": false
   }
 }

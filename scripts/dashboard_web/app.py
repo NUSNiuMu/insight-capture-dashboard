@@ -103,6 +103,10 @@ def create_app(context: DashboardContext) -> web.Application:
         "/api/settings/gesture-recording",
         settings._handle_settings_gesture_recording,
     )
+    app.router.add_post(
+        "/api/settings/voice-recording",
+        settings._handle_settings_voice_recording,
+    )
     app.router.add_get("/asset", static._handle_asset)
 
     if context.web_root and context.web_root.exists():
