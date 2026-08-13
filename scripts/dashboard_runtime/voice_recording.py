@@ -18,6 +18,19 @@ DEFAULT_START_PHRASES = ["开始录制"]
 DEFAULT_STOP_PHRASES = ["结束录制", "停止录制"]
 
 
+def next_restart_backoff(
+    current_sec: float,
+    runtime_sec: float,
+    initial_sec: float,
+    maximum_sec: float,
+    reset_after_sec: float,
+) -> float:
+    """Increase crash-loop delay, resetting it after a stable worker run."""
+    if runtime_sec >= reset_after_sec:
+        return initial_sec
+    return min(maximum_sec, max(initial_sec, current_sec * 2.0))
+
+
 class VoiceRecordingController:
     def __init__(
         self,
@@ -33,6 +46,16 @@ class VoiceRecordingController:
         self.model_path = Path(str(config.get("model_path", "/opt/insight/models/vosk-cn-small")))
         self.sample_rate = max(8000, int(config.get("sample_rate", 16000)))
         self.cooldown_sec = max(0.0, float(config.get("cooldown_sec", 2.0)))
+        self.restart_backoff_initial_sec = max(
+            0.5, float(config.get("restart_backoff_initial_sec", 2.0))
+        )
+        self.restart_backoff_max_sec = max(
+            self.restart_backoff_initial_sec,
+            float(config.get("restart_backoff_max_sec", 60.0)),
+        )
+        self.restart_backoff_reset_sec = max(
+            1.0, float(config.get("restart_backoff_reset_sec", 30.0))
+        )
         self.min_free_ratio = max(0.0, min(1.0, float(config.get("min_free_ratio", 0.10))))
         self.start_phrases = self._phrases(config.get("start_phrases"), DEFAULT_START_PHRASES)
         self.stop_phrases = self._phrases(config.get("stop_phrases"), DEFAULT_STOP_PHRASES)
@@ -124,6 +147,7 @@ class VoiceRecordingController:
     def _supervise_worker(self) -> None:
         log_path = self.project_root / "outputs" / "voice_control_worker.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        restart_delay = self.restart_backoff_initial_sec
         while True:
             with self._lock:
                 if self._closed or not self.enabled:
@@ -131,6 +155,7 @@ class VoiceRecordingController:
                 self._worker_state = "starting"
                 self._message = "Voice recognition starting"
             with log_path.open("a", buffering=1, encoding="utf-8") as log_file:
+                spawned_at = time.monotonic()
                 proc = subprocess.Popen(
                     self._worker_command(),
                     stdout=subprocess.PIPE,
@@ -148,6 +173,9 @@ class VoiceRecordingController:
                     for line in proc.stdout:
                         self._handle_worker_line(line)
                 return_code = proc.wait()
+            runtime_sec = time.monotonic() - spawned_at
+            if runtime_sec >= self.restart_backoff_reset_sec:
+                restart_delay = self.restart_backoff_initial_sec
             with self._lock:
                 if self._proc is proc:
                     self._proc = None
@@ -156,9 +184,31 @@ class VoiceRecordingController:
                 self._worker_state = "restarting"
                 if not self._last_error:
                     self._last_error = f"worker exited with code {return_code}"
-                self._message = f"Voice recognition unavailable: {self._last_error}"
-            self._log(f"voice control: worker exited ({return_code}); restarting")
-            time.sleep(2.0)
+                self._message = (
+                    f"Voice recognition unavailable: {self._last_error}; "
+                    f"retrying in {restart_delay:.0f}s"
+                )
+            self._log(
+                f"voice control: worker exited ({return_code}); retrying in {restart_delay:.0f}s"
+            )
+            if not self._wait_for_restart(restart_delay):
+                return
+            restart_delay = next_restart_backoff(
+                restart_delay,
+                runtime_sec,
+                self.restart_backoff_initial_sec,
+                self.restart_backoff_max_sec,
+                self.restart_backoff_reset_sec,
+            )
+
+    def _wait_for_restart(self, delay_sec: float) -> bool:
+        deadline = time.monotonic() + delay_sec
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._closed or not self.enabled:
+                    return False
+            time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
+        return True
 
     def _handle_worker_line(self, line: str) -> None:
         try:

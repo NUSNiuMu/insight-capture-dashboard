@@ -8,7 +8,10 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from dashboard_runtime.voice_recording import VoiceRecordingController  # noqa: E402
+from dashboard_runtime.voice_recording import (  # noqa: E402
+    VoiceRecordingController,
+    next_restart_backoff,
+)
 from voice_control_worker import (  # noqa: E402
     build_arecord_command,
     build_phrase_map,
@@ -42,6 +45,11 @@ class _RecordingManager:
 
 
 class VoiceControlWorkerTest(unittest.TestCase):
+    def test_restart_backoff_grows_to_cap_and_resets_after_stable_run(self) -> None:
+        self.assertEqual(next_restart_backoff(2.0, 1.0, 2.0, 60.0, 30.0), 4.0)
+        self.assertEqual(next_restart_backoff(32.0, 1.0, 2.0, 60.0, 30.0), 60.0)
+        self.assertEqual(next_restart_backoff(60.0, 30.0, 2.0, 60.0, 30.0), 2.0)
+
     def test_transcript_matching_is_exact_after_spacing_and_punctuation(self) -> None:
         phrase_map = build_phrase_map(["开始录制"], ["结束录制", "停止录制"])
 

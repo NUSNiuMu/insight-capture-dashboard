@@ -309,10 +309,24 @@ function collectSelectedRecordTopics() {
 
 function renderRecordingStatus(status) {
   const active = Boolean(status && status.recording);
+  const mergeState = (status && status.merge_state) || "idle";
+  const finalizing = mergeState === "merging";
+  const mergeTimings = (status && status.merge_timings) || {};
   recordingActive = active;
   const outputPath = (status && status.output_path) || "";
   if (recordingStatus) {
-    recordingStatus.textContent = active ? `Recording to ${outputPath}` : "Recording idle";
+    if (active) {
+      recordingStatus.textContent = `Recording to ${outputPath}`;
+    } else if (finalizing) {
+      recordingStatus.textContent = "Finalizing recording · merging rosbag";
+    } else if (mergeState === "error") {
+      recordingStatus.textContent = "Recording finalization failed";
+    } else if (mergeState === "done" && Number.isFinite(Number(mergeTimings.total_sec))) {
+      const method = mergeTimings.method === "sqlite_bulk" ? "fast merge" : "safe fallback";
+      recordingStatus.textContent = `Recording idle · ${method} ${Number(mergeTimings.total_sec).toFixed(1)}s`;
+    } else {
+      recordingStatus.textContent = "Recording idle";
+    }
   }
   if (!active && outputPath && recordingOutput && recordingLogLines.length === 0) {
     setRecordingOutput(`Last output: ${outputPath}`);
@@ -323,7 +337,7 @@ function renderRecordingStatus(status) {
   renderGestureRecording(status && status.gesture_recording);
   renderVoiceRecording(status && status.voice_recording);
   renderDiskSpace(status && status.disk_space);
-  setRecordingBusy(recordingBusy, { active });
+  setRecordingBusy(recordingBusy, { active, finalizing });
 }
 
 function renderVoiceRecording(voice) {
@@ -439,12 +453,12 @@ function formatByteSize(bytes) {
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
 }
 
-function setRecordingBusy(isBusy, { active } = {}) {
+function setRecordingBusy(isBusy, { active, finalizing = false } = {}) {
   recordingBusy = Boolean(isBusy);
   const isActive = typeof active === "boolean" ? active : Boolean(recordingStatus && recordingStatus.textContent.startsWith("Recording to "));
   if (startRecordingButton) {
-    startRecordingButton.disabled = recordingBusy || isActive;
-    startRecordingButton.classList.toggle("is-busy", recordingBusy && !isActive);
+    startRecordingButton.disabled = recordingBusy || isActive || finalizing;
+    startRecordingButton.classList.toggle("is-busy", (recordingBusy && !isActive) || finalizing);
   }
   if (stopRecordingButton) {
     stopRecordingButton.disabled = recordingBusy || !isActive;

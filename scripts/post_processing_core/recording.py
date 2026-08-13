@@ -163,6 +163,7 @@ class RecordingManager:
         self._recording_completed_callbacks: List[Callable[[Path], None]] = []
         self.merge_state: str = "idle"  # idle | merging | done | error
         self.merge_error: Optional[str] = None
+        self.merge_timings: Dict[str, object] = {}
         self._last_topic_refresh_monotonic: float = 0.0
         self._recovery_service = RecordingRecovery(self)
 
@@ -331,9 +332,11 @@ class RecordingManager:
             self._output_lines.clear()
             self.merge_state = "idle"
             self.merge_error = None
+            self.merge_timings = {}
         return self.status()
 
     def stop(self, timeout_sec: float = 8.0) -> Dict[str, object]:
+        stop_started = time.perf_counter()
         with self._lock:
             self._cleanup_if_exited_unlocked()
             processes = dict(self.processes)
@@ -409,6 +412,12 @@ class RecordingManager:
             self.processes = {}
             self.merge_state = "merging"
             self.merge_error = None
+            self.merge_timings = {
+                "recorder_stop_sec": round(time.perf_counter() - stop_started, 3)
+            }
+        self._output_lines.append(
+            f"[stop] Recorder shutdown completed in {self.merge_timings['recorder_stop_sec']:.2f}s"
+        )
 
         self._merge_thread = threading.Thread(
             target=self._merge_worker,
@@ -437,9 +446,27 @@ class RecordingManager:
                 raise RuntimeError("No per-camera bags contained any data; nothing to merge.")
 
             with track("rosbag_merge"):
-                self._convert_merge(part_bags, output_path)
+                merge_result = self._convert_merge(part_bags, output_path)
 
-            trim = _trim_startup_skew(output_path)
+            if merge_result.get("trim_applied"):
+                trim = dict(merge_result.get("trim") or {"trimmed_ns": 0})
+            else:
+                trim_started = time.perf_counter()
+                trim = _trim_startup_skew(output_path)
+                merge_result.setdefault("timings", {})["trim_sec"] = round(
+                    time.perf_counter() - trim_started, 3
+                )
+            with self._lock:
+                self.merge_timings.update(
+                    {
+                        "method": merge_result.get("method", "unknown"),
+                        **dict(merge_result.get("timings") or {}),
+                    }
+                )
+            self._output_lines.append(
+                f"[merge] {self.merge_timings['method']} completed in "
+                f"{float(self.merge_timings.get('total_sec', 0.0)):.2f}s"
+            )
             if self._image_header_audit is not None:
                 (output_path / "image_header_audit.json").write_text(
                     json.dumps(self._image_header_audit, indent=2, sort_keys=True)
@@ -508,8 +535,10 @@ class RecordingManager:
         self._recovery_service._recovery_log(message)
 
 
-    def _convert_merge(self, part_bags: Sequence[Path], output_path: Path) -> None:
-        self._recovery_service._convert_merge(part_bags, output_path)
+    def _convert_merge(
+        self, part_bags: Sequence[Path], output_path: Path
+    ) -> Dict[str, object]:
+        return self._recovery_service.merge_recording_parts(part_bags, output_path)
 
 
     def status(self) -> Dict[str, object]:
@@ -526,4 +555,5 @@ class RecordingManager:
                 "network_audit": self._network_audit,
                 "merge_state": self.merge_state,
                 "merge_error": self.merge_error,
+                "merge_timings": dict(self.merge_timings),
             }

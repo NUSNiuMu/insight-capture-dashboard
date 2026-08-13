@@ -5,7 +5,9 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import List, Sequence
+from typing import Dict, List, Sequence
+
+from .sqlite_merge import merge_sqlite_parts
 
 try:
     import yaml
@@ -58,7 +60,7 @@ class RecordingRecovery:
         if output_path.exists():
             output_path = self.owner.rosbag_root / f"{staging_dir.name}_recovered_{time.strftime('%Y%m%d_%H%M%S')}"
         try:
-            self.owner._convert_merge(good_parts, output_path)
+            self._convert_merge(good_parts, output_path)
         except Exception:
             # Probe parts individually because one corrupt part can crash conversion.
             self.owner._recovery_log(f"{staging_dir.name}: merged convert failed; probing parts individually")
@@ -70,7 +72,7 @@ class RecordingRecovery:
                 self.owner._recovery_log(f"{staging_dir.name}: no part survives conversion; staging dir kept")
                 return
             good_parts = probed
-            self.owner._convert_merge(good_parts, output_path)
+            self._convert_merge(good_parts, output_path)
         if len(good_parts) == len(part_dirs):
             shutil.rmtree(staging_dir, ignore_errors=True)
         else:
@@ -87,7 +89,7 @@ class RecordingRecovery:
         probe_dir = part.parent / f".{part.name}.convert_probe"
         shutil.rmtree(probe_dir, ignore_errors=True)
         try:
-            self.owner._convert_merge([part], probe_dir)
+            self._convert_merge([part], probe_dir)
             return True
         except Exception:
             return False
@@ -140,6 +142,24 @@ class RecordingRecovery:
         line = f"[recovery] {message}"
         self.owner._output_lines.append(line)
         print(line, flush=True)
+
+    def merge_recording_parts(
+        self, part_bags: Sequence[Path], output_path: Path
+    ) -> Dict[str, object]:
+        """Use bulk SQLite copying, with the official converter as a safe fallback."""
+        try:
+            return merge_sqlite_parts(part_bags, output_path)
+        except Exception as exc:  # noqa: BLE001 - fallback preserves recording completion
+            self.owner._output_lines.append(
+                f"[merge] Fast SQLite merge unavailable ({exc}); falling back to ros2 bag convert"
+            )
+            started = time.perf_counter()
+            self._convert_merge(part_bags, output_path)
+            return {
+                "method": "ros2_convert",
+                "trim_applied": False,
+                "timings": {"total_sec": round(time.perf_counter() - started, 3)},
+            }
 
     def _convert_merge(self, part_bags: Sequence[Path], output_path: Path) -> None:
         if output_path.exists():
