@@ -1,26 +1,36 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 import types
 import unittest
 from unittest.mock import patch
 
+import cv2
 import numpy as np
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from post_processing_core.prepared_playback import (  # noqa: E402
+    SCHEMA_VERSION,
     PreparedPlaybackManager,
     _cache_key,
     _compose_review_frame,
+    _decode_review_image,
     _nearest_indices,
     _playback_frame,
     _review_cells,
+    _review_content_size,
     _select_recorded_streams,
+    _sqlite_topic_messages,
+    _sqlite_topic_stamps,
+    _sqlite_topic_types,
 )
+from post_processing_core.bag_catalog import list_rosbags  # noqa: E402
 
 
 class PreparedPlaybackTest(unittest.TestCase):
@@ -45,19 +55,6 @@ class PreparedPlaybackTest(unittest.TestCase):
                 self.pose = type(
                     "Pose", (), {"position": position, "orientation": orientation}
                 )()
-
-        class Reader:
-            def __init__(self, entries: list[tuple[str, object, int]]) -> None:
-                self.entries = entries
-                self.index = 0
-
-            def has_next(self) -> bool:
-                return self.index < len(self.entries)
-
-            def read_next(self) -> tuple[str, object, int]:
-                entry = self.entries[self.index]
-                self.index += 1
-                return entry
 
         entries = [
             ("/epoch/image", ImageMessage(1_786_000_000_000_000_000), 10_000_000_000),
@@ -90,15 +87,27 @@ class PreparedPlaybackTest(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "post_processing_core.prepared_playback._open_reader",
-                    return_value=(
-                        Reader(entries),
-                        {
-                            "/epoch/image": "Image",
-                            "/boot/image": "Image",
-                            "/epoch/pose": "Pose",
-                        },
-                    ),
+                    "post_processing_core.prepared_playback._sqlite_topic_types",
+                    return_value={
+                        "/epoch/image": "Image",
+                        "/boot/image": "Image",
+                        "/epoch/pose": "Pose",
+                    },
+                ),
+                patch(
+                    "post_processing_core.prepared_playback._sqlite_topic_messages",
+                    return_value=[entry for entry in entries if entry[0] == "/epoch/pose"],
+                ),
+                patch(
+                    "post_processing_core.prepared_playback._sqlite_topic_stamps",
+                    return_value={
+                        "/epoch/image": np.asarray(
+                            [10_000_000_000, 10_033_000_000], dtype=np.int64
+                        ),
+                        "/boot/image": np.asarray(
+                            [10_001_000_000, 10_034_000_000], dtype=np.int64
+                        ),
+                    },
                 ),
             ):
                 result = manager._scan(
@@ -200,6 +209,25 @@ class PreparedPlaybackTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 manager.artifact_path("bag", "../review.mp4")
 
+    def test_bag_catalog_accepts_current_review_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bag = root / "bag"
+            review = bag / "review"
+            review.mkdir(parents=True)
+            (bag / "metadata.yaml").write_text(
+                "rosbag2_bagfile_information:\n  duration:\n    nanoseconds: 1\n"
+            )
+            (review / "review.mp4").write_bytes(b"video")
+            (review / "manifest.json").write_text(
+                json.dumps({"schema_version": SCHEMA_VERSION, "quality": {"state": "good"}})
+            )
+
+            entries = list_rosbags(root, root / "results")
+
+        self.assertEqual(entries[0]["review_state"], "ready")
+        self.assertEqual(entries[0]["review_quality"], "good")
+
     def test_browser_stats_are_exposed_in_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -216,6 +244,58 @@ class PreparedPlaybackTest(unittest.TestCase):
 
         small = np.zeros((640, 544, 3), dtype=np.uint8)
         self.assertIs(_playback_frame(small), small)
+
+    def test_review_content_size_identifies_safe_half_decode(self) -> None:
+        cell = _review_cells(1)[0]
+        portrait_size = _review_content_size((1920, 1088), cell)
+        landscape_size = _review_content_size((1080, 1920), cell)
+
+        self.assertLessEqual(portrait_size[0], 1088 // 2)
+        self.assertLessEqual(portrait_size[1], 1920 // 2)
+        self.assertGreater(landscape_size[0], 1920 // 2)
+        self.assertGreater(landscape_size[1], 1080 // 2)
+
+    def test_sqlite_topic_stamps_do_not_read_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bag = Path(directory)
+            conn = sqlite3.connect(bag / "bag_0.db3")
+            try:
+                conn.executescript(
+                    "CREATE TABLE topics(id INTEGER PRIMARY KEY, name TEXT, type TEXT);"
+                    "CREATE TABLE messages(id INTEGER PRIMARY KEY, topic_id INTEGER, "
+                    "timestamp INTEGER, data BLOB);"
+                    "INSERT INTO topics VALUES "
+                    "(1, '/camera/image', 'sensor_msgs/msg/CompressedImage'), "
+                    "(2, '/pose', 'geometry_msgs/msg/PoseStamped');"
+                    "INSERT INTO messages VALUES "
+                    "(1, 1, 30, X'00'), (2, 1, 10, X'01'), (3, 2, 20, X'02');"
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            stamps = _sqlite_topic_stamps(bag, ["/camera/image", "/missing"])
+            topic_types = _sqlite_topic_types(bag)
+            messages = list(_sqlite_topic_messages(bag, ["/camera/image"]))
+
+        self.assertEqual(stamps["/camera/image"].tolist(), [10, 30])
+        self.assertEqual(stamps["/missing"].tolist(), [])
+        self.assertEqual(topic_types["/camera/image"], "sensor_msgs/msg/CompressedImage")
+        self.assertEqual(messages, [("/camera/image", b"\x01", 10), ("/camera/image", b"\x00", 30)])
+
+    def test_reduced_jpeg_decode_preserves_color_and_halves_dimensions(self) -> None:
+        source = np.zeros((720, 1280, 3), dtype=np.uint8)
+        source[:, :] = (20, 80, 160)
+        ok, encoded = cv2.imencode(".jpg", source)
+        self.assertTrue(ok)
+        message = type("Compressed", (), {"data": encoded.tobytes()})()
+
+        full = _decode_review_image(message, "sensor_msgs/msg/CompressedImage", False)
+        reduced = _decode_review_image(message, "sensor_msgs/msg/CompressedImage", True)
+
+        self.assertEqual(full.shape, (720, 1280, 3))
+        self.assertEqual(reduced.shape, (360, 640, 3))
+        self.assertLess(float(np.abs(full[0, 0].astype(int) - reduced[0, 0]).max()), 3.0)
 
     def test_review_frame_tiles_three_cameras_into_one_surface(self) -> None:
         cells = _review_cells(3, 1200, 600)
@@ -242,6 +322,18 @@ class PreparedPlaybackTest(unittest.TestCase):
         self.assertGreater(float(output[:, :400].mean()), 18.0)
         self.assertGreater(float(output[:, 400:800].mean()), 18.0)
         self.assertGreater(float(output[:, 800:].mean()), 18.0)
+
+        bgrx = _compose_review_frame(
+            [frames[0]],
+            [{"name": "camera"}],
+            [False],
+            0,
+            width=320,
+            height=180,
+            bgrx=True,
+        )
+        self.assertEqual(bgrx.shape, (180, 320, 4))
+        self.assertEqual(bgrx.dtype, np.uint8)
 
     def test_nearest_indices_preserve_missing_frame_as_duplicate(self) -> None:
         source = np.asarray([0, 33_000_000, 100_000_000], dtype=np.int64)

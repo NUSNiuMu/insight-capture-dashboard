@@ -7,6 +7,7 @@ import json
 import math
 import os
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
@@ -23,7 +24,7 @@ from hand_tracking.extract_gripper import decode_color_image
 from .playback import _read_bag_topics
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 PLAYBACK_FPS = 30.0
 PLAYBACK_MAX_DIMENSION = 720
 REVIEW_WIDTH = 1280
@@ -48,6 +49,7 @@ class _FfmpegWriter:
             raise RuntimeError("ffmpeg is required for prepared playback")
         self.frames = 0
         self.encoder_name = "libx264"
+        self.uses_bgrx = False
         self._process = subprocess.Popen(
             [
                 ffmpeg,
@@ -139,7 +141,7 @@ class _GstH264Writer:
             raise RuntimeError("GStreamer Python bindings are unavailable") from exc
         if not Gst.is_initialized():
             Gst.init(None)
-        required = ("appsrc", "videoconvert", "nvvidconv", "nvv4l2h264enc", "h264parse", "qtmux")
+        required = ("appsrc", "nvvidconv", "nvv4l2h264enc", "h264parse", "qtmux")
         missing = [name for name in required if Gst.ElementFactory.find(name) is None]
         if missing:
             raise RuntimeError(f"missing GStreamer review elements: {', '.join(missing)}")
@@ -147,8 +149,7 @@ class _GstH264Writer:
         location = str(path).replace("\\", "\\\\").replace('"', '\\"')
         description = (
             f"appsrc name=src is-live=false format=time block=true "
-            f"caps=video/x-raw,format=BGR,width={width},height={height},framerate={round(fps)}/1 ! "
-            "videoconvert ! video/x-raw,format=I420 ! "
+            f"caps=video/x-raw,format=BGRx,width={width},height={height},framerate={round(fps)}/1 ! "
             "nvvidconv ! video/x-raw(memory:NVMM),format=NV12 ! "
             f"nvv4l2h264enc bitrate={REVIEW_BITRATE} insert-sps-pps=true "
             f"idrinterval={round(fps)} iframeinterval={round(fps)} maxperf-enable=true ! "
@@ -162,14 +163,17 @@ class _GstH264Writer:
         self._closed = False
         self.frames = 0
         self.encoder_name = "nvv4l2h264enc"
+        self.uses_bgrx = True
         if self._pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
             self._pipeline.set_state(Gst.State.NULL)
             raise RuntimeError("Jetson review encoder refused to start")
 
     def write(self, frame: np.ndarray) -> None:
-        if frame.ndim != 3 or frame.shape[2] != 3 or frame.dtype != np.uint8:
+        if frame.ndim != 3 or frame.shape[2] not in {3, 4} or frame.dtype != np.uint8:
             raise ValueError(f"unsupported video frame shape: {frame.shape}")
         self._raise_bus_error()
+        if frame.shape[2] == 3:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
         payload = np.ascontiguousarray(frame).tobytes()
         buffer = self._Gst.Buffer.new_allocate(None, len(payload), None)
         buffer.fill(0, payload)
@@ -301,6 +305,19 @@ def _ensure_bgr(frame: np.ndarray) -> np.ndarray:
     return frame
 
 
+def _review_content_size(
+    source_shape: tuple[int, int], cell: dict[str, int]
+) -> tuple[int, int]:
+    source_height, source_width = source_shape
+    available_width = max(2, cell["width"] - 8)
+    available_height = max(2, cell["height"] - 42)
+    scale = min(available_width / source_width, available_height / source_height)
+    return (
+        max(2, int(source_width * scale) & ~1),
+        max(2, int(source_height * scale) & ~1),
+    )
+
+
 def _compose_review_frame(
     frames: list[np.ndarray],
     cameras: list[dict[str, object]],
@@ -309,27 +326,29 @@ def _compose_review_frame(
     fps: float = PLAYBACK_FPS,
     width: int = REVIEW_WIDTH,
     height: int = REVIEW_HEIGHT,
+    bgrx: bool = False,
 ) -> np.ndarray:
     """Letterbox labeled camera frames into one browser-friendly review surface."""
     if len(frames) != len(cameras) or len(frames) != len(duplicate_flags):
         raise ValueError("review frame, camera, and duplicate counts must match")
-    canvas = np.full((height, width, 3), (18, 18, 18), dtype=np.uint8)
+    shape = (height, width, 4 if bgrx else 3)
+    canvas = np.full(shape, 18, dtype=np.uint8)
     for frame, camera, duplicate, cell in zip(
         frames, cameras, duplicate_flags, _review_cells(len(frames), width, height)
     ):
         frame = _ensure_bgr(frame)
         inset = 4
         header = 34
-        available_width = max(2, cell["width"] - inset * 2)
         available_height = max(2, cell["height"] - header - inset * 2)
-        scale = min(available_width / frame.shape[1], available_height / frame.shape[0])
-        output_width = max(2, int(frame.shape[1] * scale) & ~1)
-        output_height = max(2, int(frame.shape[0] * scale) & ~1)
+        output_width, output_height = _review_content_size(frame.shape[:2], cell)
+        scale = min(output_width / frame.shape[1], output_height / frame.shape[0])
         resized = cv2.resize(
             frame,
             (output_width, output_height),
             interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR,
         )
+        if bgrx:
+            resized = cv2.cvtColor(resized, cv2.COLOR_BGR2BGRA)
         x = cell["x"] + (cell["width"] - output_width) // 2
         y = cell["y"] + header + (available_height - output_height) // 2
         canvas[y : y + output_height, x : x + output_width] = resized
@@ -428,19 +447,93 @@ def _select_recorded_streams(
     return selected_cameras, selected_poses
 
 
-def _open_reader(bag_path: Path, topics: Iterable[str]):
-    import rosbag2_py
+def _sqlite_topic_stamps(
+    bag_path: Path, topics: Iterable[str]
+) -> dict[str, np.ndarray]:
+    """Read recorder timestamps without loading image payload BLOBs."""
+    requested = [str(topic) for topic in topics]
+    result: dict[str, list[int]] = {topic: [] for topic in requested}
+    for db_path in sorted(bag_path.glob("*.db3")):
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            topic_ids = {
+                str(name): int(topic_id)
+                for topic_id, name in conn.execute("SELECT id, name FROM topics")
+                if str(name) in result
+            }
+            for topic, topic_id in topic_ids.items():
+                result[topic].extend(
+                    int(row[0])
+                    for row in conn.execute(
+                        "SELECT timestamp FROM messages WHERE topic_id = ?",
+                        (topic_id,),
+                    )
+                )
+        finally:
+            conn.close()
+    return {
+        topic: np.asarray(sorted(stamps), dtype=np.int64)
+        for topic, stamps in result.items()
+    }
 
-    reader = rosbag2_py.SequentialReader()
-    reader.open(
-        rosbag2_py.StorageOptions(uri=str(bag_path), storage_id=""),
-        rosbag2_py.ConverterOptions(
-            input_serialization_format="cdr", output_serialization_format="cdr"
-        ),
-    )
-    topic_types = {item.name: item.type for item in reader.get_all_topics_and_types()}
-    reader.set_filter(rosbag2_py.StorageFilter(topics=list(topics)))
-    return reader, topic_types
+
+def _sqlite_topic_types(bag_path: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for db_path in sorted(bag_path.glob("*.db3")):
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            for name, message_type in conn.execute("SELECT name, type FROM topics"):
+                name = str(name)
+                message_type = str(message_type)
+                previous = result.setdefault(name, message_type)
+                if previous != message_type:
+                    raise ValueError(f"topic {name} changes type across bag files")
+        finally:
+            conn.close()
+    return result
+
+
+def _sqlite_topic_messages(
+    bag_path: Path, topics: Iterable[str]
+) -> Iterable[tuple[str, bytes, int]]:
+    """Yield selected serialized messages without rosbag2 reader overhead."""
+    requested = {str(topic) for topic in topics}
+    for db_path in sorted(bag_path.glob("*.db3")):
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            topic_ids = [
+                int(topic_id)
+                for topic_id, name in conn.execute("SELECT id, name FROM topics")
+                if str(name) in requested
+            ]
+            if not topic_ids:
+                continue
+            placeholders = ",".join("?" for _ in topic_ids)
+            for name, data, timestamp in conn.execute(
+                "SELECT t.name, m.data, m.timestamp FROM messages m "
+                "JOIN topics t ON t.id = m.topic_id "
+                f"WHERE m.topic_id IN ({placeholders}) ORDER BY m.timestamp, m.id",
+                topic_ids,
+            ):
+                yield str(name), bytes(data), int(timestamp)
+        finally:
+            conn.close()
+
+
+def _decode_review_image(
+    message: object,
+    message_type: str,
+    reduced_jpeg: bool,
+) -> np.ndarray:
+    """Decode JPEG at half size when the source safely exceeds review needs."""
+    if message_type == "sensor_msgs/msg/CompressedImage":
+        flag = cv2.IMREAD_REDUCED_COLOR_2 if reduced_jpeg else cv2.IMREAD_COLOR
+        frame = cv2.imdecode(np.frombuffer(message.data, dtype=np.uint8), flag)
+    else:
+        frame = decode_color_image(message, message_type)
+    if frame is None:
+        raise RuntimeError("image decode returned no frame")
+    return _ensure_bgr(frame)
 
 
 class PreparedPlaybackManager:
@@ -460,6 +553,7 @@ class PreparedPlaybackManager:
         self._stage = ""
         self._error = ""
         self._cache_key = ""
+        self._timings: dict[str, float] = {}
         self._browser_stats: dict[str, object] = {}
         self._background_active = False
         self._recording_manager = None
@@ -487,6 +581,7 @@ class PreparedPlaybackManager:
             "background": self._background_active,
             "queued": list(self._queue),
             "queue_errors": dict(self._queue_errors),
+            "timings": dict(self._timings),
         }
         if self._browser_stats:
             payload["browser_stats"] = dict(self._browser_stats)
@@ -542,6 +637,7 @@ class PreparedPlaybackManager:
                 self._stage = "Prepared playback cache ready"
                 self._error = ""
                 self._cache_key = str(cached.get("cache_key", ""))
+                self._timings = dict(cached.get("preparation_timings") or {})
                 self._browser_stats = {}
             return self.status()
         with self._lock:
@@ -556,6 +652,7 @@ class PreparedPlaybackManager:
             self._stage = "Scanning bag timelines"
             self._error = ""
             self._cache_key = ""
+            self._timings = {}
             self._browser_stats = {}
             self._background_active = background
             self._recording_manager = recording_manager
@@ -701,6 +798,7 @@ class PreparedPlaybackManager:
             self._stage = ""
             self._error = ""
             self._cache_key = ""
+            self._timings = {}
             self._browser_stats = {}
         if writer is not None:
             writer.abort()
@@ -786,7 +884,10 @@ class PreparedPlaybackManager:
             if temporary.exists():
                 shutil.rmtree(temporary)
             temporary.mkdir(parents=True)
+            preparation_started = time.perf_counter()
+            scan_started = time.perf_counter()
             scan = self._scan(bag_path, cameras, poses)
+            scan_sec = time.perf_counter() - scan_started
             self._check_cancelled()
             image_stamps = scan["image_stamps"]
             start_ns = max(values[0] for values in image_stamps.values())
@@ -815,6 +916,7 @@ class PreparedPlaybackManager:
                     }
                 )
             self._set_progress(0.1, "Encoding synchronized review at 30 fps")
+            encode_started = time.perf_counter()
             shape, count, encoder, source_dimensions = self._encode_review_video(
                 bag_path,
                 cameras,
@@ -825,6 +927,7 @@ class PreparedPlaybackManager:
                     "Encoding synchronized review at 30 fps",
                 ),
             )
+            encode_sec = time.perf_counter() - encode_started
             if count != frame_count:
                 raise RuntimeError(f"review encoded {count}/{frame_count} frames")
             for entry in source_camera_manifest:
@@ -833,7 +936,9 @@ class PreparedPlaybackManager:
                     entry["source_width"] = int(dimensions[1])
                     entry["source_height"] = int(dimensions[0])
             self._set_progress(0.88, "Interpolating complete 3D trajectories")
+            pose_started = time.perf_counter()
             pose_manifest = self._pose_manifest(scan["poses"], poses, targets)
+            pose_sec = time.perf_counter() - pose_started
             total_duplicates = sum(
                 int(item["duplicate_frames"]) for item in source_camera_manifest
             )
@@ -896,6 +1001,12 @@ class PreparedPlaybackManager:
                     "max_skew_ms": round(max_skew_ms, 3),
                     "pose_coverage": pose_coverage,
                 },
+                "preparation_timings": {
+                    "scan_sec": round(scan_sec, 3),
+                    "encode_sec": round(encode_sec, 3),
+                    "pose_sec": round(pose_sec, 3),
+                    "total_sec": round(time.perf_counter() - preparation_started, 3),
+                },
             }
             (temporary / "manifest.json").write_text(
                 json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
@@ -918,6 +1029,7 @@ class PreparedPlaybackManager:
                     self._progress = 1.0
                     self._stage = "Prepared playback cache ready"
                     self._cache_key = cache_key
+                    self._timings = dict(manifest["preparation_timings"])
         except _RecordingStarted:
             with self._lock:
                 if self._bag_name == bag_name:
@@ -958,31 +1070,27 @@ class PreparedPlaybackManager:
         image_by_topic = {str(item["topic"]): str(item["name"]) for item in cameras}
         pose_by_topic = {str(item["topic"]): str(item["name"]) for item in poses}
         topics = [*image_by_topic, *pose_by_topic]
-        reader, topic_types = _open_reader(bag_path, topics)
+        image_topic_stamps = _sqlite_topic_stamps(bag_path, image_by_topic)
+        topic_types = _sqlite_topic_types(bag_path)
         missing = [topic for topic in topics if topic not in topic_types]
         if missing:
             raise ValueError(f"bag is missing playback topics: {', '.join(missing)}")
-        classes = {topic: get_message(topic_types[topic]) for topic in topics}
-        image_stamps: dict[str, list[int]] = {name: [] for name in image_by_topic.values()}
+        classes = {topic: get_message(topic_types[topic]) for topic in pose_by_topic}
         pose_data = {
             name: {"stamps": [], "positions": [], "quaternions": []}
             for name in pose_by_topic.values()
         }
-        while reader.has_next():
+        for topic, raw, record_stamp in _sqlite_topic_messages(bag_path, pose_by_topic):
             self._check_cancelled()
-            topic, raw, record_stamp = reader.read_next()
-            if topic in image_by_topic:
-                image_stamps[image_by_topic[topic]].append(int(record_stamp))
-            else:
-                message = deserialize_message(raw, classes[topic])
-                position, quaternion = _message_pose(message)
-                target = pose_data[pose_by_topic[topic]]
-                target["stamps"].append(int(record_stamp))
-                target["positions"].append(position)
-                target["quaternions"].append(quaternion)
+            message = deserialize_message(raw, classes[topic])
+            position, quaternion = _message_pose(message)
+            target = pose_data[pose_by_topic[topic]]
+            target["stamps"].append(int(record_stamp))
+            target["positions"].append(position)
+            target["quaternions"].append(quaternion)
         normalized_images = {}
-        for name, values in image_stamps.items():
-            array = np.asarray(values, dtype=np.int64)
+        for topic, name in image_by_topic.items():
+            array = image_topic_stamps[topic]
             if len(array) < 2 or np.any(np.diff(array) <= 0):
                 raise ValueError(f"{name} image timestamps are not strictly increasing")
             normalized_images[name] = array
@@ -1015,7 +1123,11 @@ class PreparedPlaybackManager:
 
         camera_by_topic = {str(item["topic"]): item for item in cameras}
         topics = list(camera_by_topic)
-        reader, topic_types = _open_reader(bag_path, topics)
+        cells_by_topic = dict(zip(topics, _review_cells(len(cameras))))
+        topic_types = _sqlite_topic_types(bag_path)
+        missing = [topic for topic in topics if topic not in topic_types]
+        if missing:
+            raise ValueError(f"bag is missing playback topics: {', '.join(missing)}")
         message_classes = {topic: get_message(topic_types[topic]) for topic in topics}
         wanted: dict[str, dict[int, list[int]]] = {}
         for camera in cameras:
@@ -1026,7 +1138,11 @@ class PreparedPlaybackManager:
             wanted[name] = selected
         source_indices = {str(item["name"]): 0 for item in cameras}
         source_dimensions: dict[str, tuple[int, int]] = {}
-        pending: list[dict[str, np.ndarray]] = [dict() for _ in range(len(next(iter(selections.values()))))]
+        decoded_dimensions: dict[str, tuple[int, int]] = {}
+        reduced_jpeg: dict[str, bool] = {}
+        pending: list[dict[str, np.ndarray]] = [
+            dict() for _ in range(len(next(iter(selections.values()))))
+        ]
         writer = None
         shape = (REVIEW_HEIGHT, REVIEW_WIDTH)
         next_target = 0
@@ -1034,9 +1150,8 @@ class PreparedPlaybackManager:
             writer = _video_writer(output, shape, PLAYBACK_FPS)
             with self._lock:
                 self._writer = writer
-            while reader.has_next():
+            for current_topic, raw, _stamp in _sqlite_topic_messages(bag_path, topics):
                 self._check_cancelled()
-                current_topic, raw, _stamp = reader.read_next()
                 camera = camera_by_topic.get(current_topic)
                 if camera is None:
                     continue
@@ -1047,14 +1162,35 @@ class PreparedPlaybackManager:
                 if not target_indices:
                     continue
                 message = deserialize_message(raw, message_classes[current_topic])
-                frame = decode_color_image(message, topic_types[current_topic])
-                if frame is None:
-                    raise RuntimeError(f"failed to decode {current_topic} frame {source_index}")
-                frame = _ensure_bgr(frame)
-                current_shape = (int(frame.shape[0]), int(frame.shape[1]))
-                previous_shape = source_dimensions.setdefault(name, current_shape)
-                if current_shape != previous_shape:
-                    raise RuntimeError(f"{current_topic} resolution changed during the bag")
+                if name not in reduced_jpeg:
+                    full_frame = _decode_review_image(
+                        message, topic_types[current_topic], reduced_jpeg=False
+                    )
+                    original_shape = (int(full_frame.shape[0]), int(full_frame.shape[1]))
+                    source_dimensions[name] = original_shape
+                    output_width, output_height = _review_content_size(
+                        original_shape, cells_by_topic[current_topic]
+                    )
+                    reduced_jpeg[name] = (
+                        topic_types[current_topic] == "sensor_msgs/msg/CompressedImage"
+                        and original_shape[1] // 2 >= output_width
+                        and original_shape[0] // 2 >= output_height
+                    )
+                    frame = (
+                        _decode_review_image(
+                            message, topic_types[current_topic], reduced_jpeg=True
+                        )
+                        if reduced_jpeg[name]
+                        else full_frame
+                    )
+                    decoded_dimensions[name] = (int(frame.shape[0]), int(frame.shape[1]))
+                else:
+                    frame = _decode_review_image(
+                        message, topic_types[current_topic], reduced_jpeg[name]
+                    )
+                    current_shape = (int(frame.shape[0]), int(frame.shape[1]))
+                    if current_shape != decoded_dimensions[name]:
+                        raise RuntimeError(f"{current_topic} resolution changed during the bag")
                 for target_index in target_indices:
                     pending[target_index][name] = frame
                 while next_target < len(pending) and len(pending[next_target]) == len(cameras):
@@ -1071,6 +1207,7 @@ class PreparedPlaybackManager:
                         cameras,
                         duplicate_flags,
                         next_target,
+                        bgrx=bool(getattr(writer, "uses_bgrx", False)),
                     )
                     writer.write(review)
                     pending[next_target].clear()

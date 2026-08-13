@@ -39,6 +39,9 @@
 - 人工质检使用每个 rosbag 自带的 `review/` 派生包：三路图像只扫描一次并拼成一个
   1280×720、30 Hz H.264 视频，Pose 保持固定 30 Hz 清单。浏览器只解码一个视频并以
   `video.currentTime` 驱动 3D，禁止重新引入三路 `<video>` 的独立时钟和变速追赶。
+- 回放准备直接从 SQLite 读取时间戳和所需 topic，不能在时间轴扫描阶段加载图像 BLOB；
+  大于输出需求的 JPEG 使用解码器原生半尺寸解码。Jetson 编码路径向 `nvvidconv` 提交
+  BGRx，避免整帧 CPU 色彩转换。`manifest.json` 保留各阶段耗时，便于发现性能回退。
 - 审阅包在录制合包完成后排队预生成，录制或合包开始时必须暂停；不能从图像 callback
   生成，也不能让质检缓存继续占用 `outputs/` 所在的系统盘。历史包通过 3D 页的
   `Prepare all` 或 `scripts/build_review_bundles.py --all` 补建。

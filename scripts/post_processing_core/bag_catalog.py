@@ -91,7 +91,7 @@ def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object
         if review_manifest_path.is_file() and (bag_dir / "review" / "review.mp4").is_file():
             try:
                 review_manifest = json.loads(review_manifest_path.read_text())
-                if review_manifest.get("schema_version") == 4:
+                if review_manifest.get("schema_version") == 5:
                     review_state = "ready"
                     review_quality = (review_manifest.get("quality") or {}).get("state")
                 else:
