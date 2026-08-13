@@ -17,7 +17,7 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260812-review-bundle-v1";
+} from "../spatial/renderer.js?v=20260813-viewport-resize";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");

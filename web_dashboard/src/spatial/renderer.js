@@ -71,6 +71,7 @@ let configuredDisplayFps = 30;
 let sceneFrameIntervalMs = 1000 / 30;
 let traceCapacity = 300;
 let sceneRenderTimer = null;
+let viewportResizeObserver = null;
 const sceneFrameTimes = [];
 const sceneWorkSamples = [];
 const legendPoseLabels = new Map();
@@ -112,6 +113,10 @@ if (engine && scene) {
   };
   sceneRenderTimer = window.setTimeout(renderSceneFrame, sceneFrameIntervalMs);
   window.addEventListener("resize", () => engine.resize());
+  if (window.ResizeObserver) {
+    viewportResizeObserver = new ResizeObserver(() => engine.resize());
+    viewportResizeObserver.observe(canvas);
+  }
 }
 
 function recordSceneFrame(workStartedAt) {
@@ -215,6 +220,10 @@ export function stopSpatialRenderer() {
   if (sceneRenderTimer !== null) {
     window.clearTimeout(sceneRenderTimer);
     sceneRenderTimer = null;
+  }
+  if (viewportResizeObserver) {
+    viewportResizeObserver.disconnect();
+    viewportResizeObserver = null;
   }
 }
 
