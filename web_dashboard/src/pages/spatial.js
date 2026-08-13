@@ -3,7 +3,7 @@ import {
   startPreparedCameraPlayback,
   startCameraDashboard,
   stopPreparedCameraPlayback,
-} from "../camera/dashboard.js?v=20260812-review-bundle-v1";
+} from "../camera/dashboard.js?v=20260813-playback-wall";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js?v=20260812-review-bundle-v1";
 import {

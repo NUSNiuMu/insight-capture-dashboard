@@ -379,6 +379,37 @@ body[data-dashboard-view="3d"] { height: 100%; overflow: hidden; color-scheme: l
 .spatial-camera-dock .camera-header { min-height: 54px; padding: 9px 10px; }
 .spatial-camera-dock .camera-body { min-height: 0; flex: 1; aspect-ratio: auto; }
 .spatial-camera-dock .camera-actions button { width: 25px; height: 25px; }
+body[data-dashboard-view="3d"].playback-camera-wall .spatial-stage {
+  grid-template-columns: minmax(0,1fr);
+  grid-template-rows: minmax(0,56fr) minmax(0,44fr);
+}
+body[data-dashboard-view="3d"].playback-camera-wall .scene-viewport {
+  height: auto;
+  grid-column: 1;
+  grid-row: 1;
+}
+body[data-dashboard-view="3d"].playback-camera-wall .spatial-cameras {
+  width: auto;
+  height: auto;
+  padding: 10px 12px 12px;
+  grid-column: 1;
+  grid-row: 2;
+  border-top: 1px solid var(--line-dark);
+  border-right: 0;
+}
+body[data-dashboard-view="3d"].playback-camera-wall .camera-wall-heading {
+  min-height: 40px;
+  margin-bottom: 8px;
+  padding: 0 4px 8px;
+}
+body[data-dashboard-view="3d"].playback-camera-wall .spatial-camera-dock {
+  gap: 12px;
+  overflow: hidden;
+}
+body[data-dashboard-view="3d"].playback-camera-wall .spatial-camera-dock .camera-header {
+  min-height: 44px;
+  padding: 7px 10px;
+}
 .scene-viewport { position: relative; min-width: 0; height: 100vh; overflow: hidden; }
 #render-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 .hud { position: absolute; top: 20px; right: 22px; left: 22px; z-index: 15; display: grid; grid-template-columns: minmax(0,1fr) 280px; align-items: start; gap: 10px; pointer-events: none; }

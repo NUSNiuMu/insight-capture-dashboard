@@ -2,6 +2,8 @@ import { escapeHtml } from "../shared/format.js";
 
 const cameraDock = document.getElementById("camera-dock");
 const cameraWallStatus = document.querySelector("[data-camera-wall-status]");
+const cameraWallKicker = document.querySelector("[data-camera-wall-kicker]");
+const cameraWallTitle = document.querySelector("[data-camera-wall-title]");
 const enableCameras = Boolean(cameraDock);
 const CAMERA_FPS_WINDOW_MS = 1500;
 const CAMERA_POLL_INTERVAL_MS = 250;
@@ -40,6 +42,7 @@ export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
     stopped: false,
   };
   preparedPlaybackSession = session;
+  document.body.classList.add("playback-camera-wall");
   for (const cameraName of Array.from(cameraWebRtc.keys())) stopCameraWebRtc(cameraName);
   const ready = [];
   for (const camera of entries) {
@@ -157,6 +160,7 @@ export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
 export function stopPreparedCameraPlayback() {
   const session = preparedPlaybackSession;
   preparedPlaybackSession = null;
+  document.body.classList.remove("playback-camera-wall");
   if (!session) return;
   session.stopped = true;
   if (session.statsTimer) window.clearInterval(session.statsTimer);
@@ -173,7 +177,10 @@ export function stopPreparedCameraPlayback() {
     if (pollState) pollState.version = -1;
   }
   cameraDock?.style.removeProperty("grid-template-rows");
+  cameraDock?.style.removeProperty("grid-template-columns");
   setTextIfChanged(cameraWallStatus, "LIVE");
+  setTextIfChanged(cameraWallKicker, "Live monitor");
+  setTextIfChanged(cameraWallTitle, "Camera wall");
   if (!pageUnloading) void pollCameraMetadata();
 }
 
@@ -267,11 +274,17 @@ function renderCameraPanels(cameras, isPlayback = false) {
   const preparedCameras = preparedPlaybackSession?.manifest?.cameras;
   const displayedCameras = Array.isArray(preparedCameras) ? preparedCameras : cameras;
   if (preparedPlaybackSession) {
-    cameraDock.style.gridTemplateRows = `repeat(${Math.max(1, displayedCameras.length)}, minmax(0, 1fr))`;
+    cameraDock.style.gridTemplateColumns = `repeat(${Math.max(1, displayedCameras.length)}, minmax(0, 1fr))`;
+    cameraDock.style.gridTemplateRows = "minmax(0, 1fr)";
     setTextIfChanged(cameraWallStatus, `PLAYBACK · ${displayedCameras.length}`);
+    setTextIfChanged(cameraWallKicker, "Playback monitor");
+    setTextIfChanged(cameraWallTitle, "Synchronized views");
   } else {
+    cameraDock.style.removeProperty("grid-template-columns");
     cameraDock.style.removeProperty("grid-template-rows");
     setTextIfChanged(cameraWallStatus, "LIVE");
+    setTextIfChanged(cameraWallKicker, "Live monitor");
+    setTextIfChanged(cameraWallTitle, "Camera wall");
   }
   const seen = new Set();
   displayedCameras
@@ -417,10 +430,9 @@ function updateCameraPanelAspect(panel, camera) {
 }
 
 function updateCameraPanelLayout(panel, index) {
-  if (panel.style.gridColumn !== "1 / span 1") {
-    panel.style.gridColumn = "1 / span 1";
-  }
-  const gridRow = `${index + 1} / span 1`;
+  const gridColumn = preparedPlaybackSession ? `${index + 1} / span 1` : "1 / span 1";
+  if (panel.style.gridColumn !== gridColumn) panel.style.gridColumn = gridColumn;
+  const gridRow = preparedPlaybackSession ? "1 / span 1" : `${index + 1} / span 1`;
   if (panel.style.gridRow !== gridRow) panel.style.gridRow = gridRow;
 }
 

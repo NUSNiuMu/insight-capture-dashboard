@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Insight 3D Workspace</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260804-navigation">
+    <link rel="stylesheet" href="/static/styles.css?v=20260813-playback-wall">
     <script defer src="/static/shared/navigation.js?v=20260804-navigation"></script>
     <script defer src="/static/babylon.js?v=69119e74"></script>
     <script defer src="/static/babylonjs.loaders.min.js?v=9314a544"></script>
@@ -29,7 +29,7 @@
       <main class="spatial-stage">
         <aside class="spatial-cameras">
           <header class="camera-wall-heading">
-            <div><p class="section-kicker">Live monitor</p><h2>Camera wall</h2></div>
+            <div><p class="section-kicker" data-camera-wall-kicker>Live monitor</p><h2 data-camera-wall-title>Camera wall</h2></div>
             <span><i></i><span data-camera-wall-status>LIVE</span></span>
           </header>
           <div class="camera-dock spatial-camera-dock" id="camera-dock"></div>
@@ -83,6 +83,6 @@
         </section>
       </main>
     </div>
-    <script type="module" src="/static/pages/spatial.js?v=20260812-review-bundle-v1"></script>
+    <script type="module" src="/static/pages/spatial.js?v=20260813-playback-wall"></script>
   </body>
 </html>
