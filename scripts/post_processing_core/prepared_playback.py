@@ -677,10 +677,7 @@ class PreparedPlaybackManager:
 
     @staticmethod
     def _recording_busy(recording_manager) -> bool:
-        return recording_manager.is_recording() or recording_manager.merge_state in {
-            "merging",
-            "syncing",
-        }
+        return recording_manager.is_recording() or recording_manager.merge_state == "merging"
 
     def activate(self, bag_name: str) -> Dict[str, object]:
         with self._lock:
