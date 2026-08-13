@@ -90,10 +90,12 @@
 
 ## 浏览器渲染
 
-- 新 WebSocket 客户端先收到完整轨迹快照，正常广播只发送新增轨迹点；服务端每
-  2 秒补发快照用于自愈。前端按 sequence 累积，发现 generation 或序列缺口会主动
-  重连重新取快照。Dashboard 当前以 30 Hz 广播，不得恢复为每次广播重发三路
+- 新 WebSocket 客户端首包收到完整轨迹快照，正常广播只发送新增轨迹点。前端按
+  sequence 累积，发现 generation 或序列缺口会主动重连重新取快照。Dashboard 当前
+  以 30 Hz 广播，不得恢复为每次广播重发三路
   完整轨迹。
+- 轨迹渲染必须在建立 WebSocket 前启用；连接首包是完整快照，如果为了首屏分阶段
+  启动而丢弃首包，后续增量包没有本地基线，页面将一直无轨迹。
 - Jetson kiosk 的 3D 场景以独立的 wall-clock timer 固定在 30 Hz。实测中
   `requestAnimationFrame` 即使单帧场景工作不足 10 ms，仍会在 Firefox 合成繁忙时
   出现 67–119 ms 的 callback 间隔；固定 timer 在相同负载下维持约 30 Hz。

@@ -58,6 +58,9 @@ let playbackRequested = false;
 const startupTimers = new Set();
 
 applyObsMode(obsModeEnabled);
+// The first WebSocket message is the only unconditional trace snapshot.
+// Enable trajectories before connecting so startup staging cannot discard it.
+setTrajectoriesEnabled(true);
 connect();
 scheduleStartup();
 window.addEventListener("pagehide", () => {
@@ -84,7 +87,6 @@ function scheduleStartup() {
     void refreshMappingStatus();
     mappingPollTimer = window.setInterval(() => { void refreshMappingStatus(); }, 500);
   }, 250);
-  scheduleStartupTask(() => setTrajectoriesEnabled(true), 1200);
   scheduleStartupTask(() => initializeRosbags(), 1500);
   scheduleStartupTask(() => setAvatarLoadStage(1), 1900);
   scheduleStartupTask(() => setAvatarLoadStage(2), 3600);
