@@ -152,43 +152,30 @@ def _sample_from_matrix(stamp_ns: int, transform: np.ndarray) -> PoseSample:
 
 @dataclass(frozen=True)
 class VioContinuityConfig:
-    """Conservative gates for recognizing one isolated VIO frame reset."""
+    """Innovation gates for a reset while an external source confirms static."""
 
     translation_threshold_m: float = 0.03
     rotation_threshold_deg: float = 5.0
-    confirmation_frames: int = 4
     max_gap_ms: float = 50.0
-    max_confirmation_linear_speed_m_s: float = 3.0
-    max_confirmation_angular_speed_deg_s: float = 540.0
 
     def __post_init__(self) -> None:
         positive = (
             self.translation_threshold_m,
             self.rotation_threshold_deg,
             self.max_gap_ms,
-            self.max_confirmation_linear_speed_m_s,
-            self.max_confirmation_angular_speed_deg_s,
         )
         if any(not np.isfinite(value) or value <= 0.0 for value in positive):
             raise ValueError("VIO continuity thresholds must be positive and finite")
-        if self.confirmation_frames < 2:
-            raise ValueError("VIO continuity confirmation_frames must be at least 2")
-
-
-@dataclass
-class _PendingReset:
-    raw_samples: list[PoseSample]
-    correction: np.ndarray
-    innovation_translation_m: float
-    innovation_rotation_deg: float
 
 
 class VioContinuityStitcher:
-    """Map successive raw VIO frames into one continuous local coordinate frame.
+    """Map raw VIO into a continuous frame without withholding realtime poses.
 
-    A candidate is held briefly and accepted only if the following raw poses form
-    a physically plausible new segment. Timestamp gaps deliberately disable
-    stitching because the motion across an unobserved interval is ambiguous.
+    Pose innovation alone cannot distinguish a coordinate reset from real abrupt
+    motion. The caller must therefore allow correction only when an independent
+    source, such as the device's ``TRACKING_STATIC`` state, makes it observable.
+    Timestamp gaps deliberately disable stitching because motion across an
+    unobserved interval is ambiguous.
     """
 
     def __init__(self, config: VioContinuityConfig) -> None:
@@ -196,7 +183,8 @@ class VioContinuityStitcher:
         self._correction = np.eye(4, dtype=np.float64)
         self._history: list[PoseSample] = []
         self._last_raw: Optional[PoseSample] = None
-        self._pending: Optional[_PendingReset] = None
+        self.input_samples = 0
+        self.output_samples = 0
         self.stitch_events = 0
         self.rejected_candidates = 0
         self.timestamp_resets = 0
@@ -207,7 +195,7 @@ class VioContinuityStitcher:
 
     @property
     def confirming(self) -> bool:
-        return self._pending is not None
+        return False
 
     @property
     def correction(self) -> np.ndarray:
@@ -217,7 +205,8 @@ class VioContinuityStitcher:
         self._correction = np.eye(4, dtype=np.float64)
         self._history.clear()
         self._last_raw = None
-        self._pending = None
+        self.input_samples = 0
+        self.output_samples = 0
         self.stitch_events = 0
         self.rejected_candidates = 0
         self.timestamp_resets = 0
@@ -232,14 +221,14 @@ class VioContinuityStitcher:
             np.eye(4, dtype=np.float64), self._correction
         )
         return {
-            "state": "confirming" if self.confirming else "tracking",
+            "state": "tracking",
+            "input_samples": self.input_samples,
+            "output_samples": self.output_samples,
             "events": self.stitch_events,
             "rejected_candidates": self.rejected_candidates,
             "timestamp_resets": self.timestamp_resets,
             "tracking_gaps": self.tracking_gaps,
-            "pending_frames": (
-                0 if self._pending is None else len(self._pending.raw_samples)
-            ),
+            "pending_frames": 0,
             "correction_translation_m": round(correction_translation, 4),
             "correction_rotation_deg": round(correction_rotation, 3),
             "last_event_stamp_ns": self.last_event_stamp_ns,
@@ -247,22 +236,22 @@ class VioContinuityStitcher:
             "last_event_rotation_deg": round(self.last_event_rotation_deg, 3),
         }
 
-    def push(self, sample: PoseSample) -> list[PoseSample]:
-        """Consume one raw pose and return zero or more ordered corrected poses."""
+    def push(
+        self, sample: PoseSample, *, allow_stitch: bool
+    ) -> list[PoseSample]:
+        """Consume one raw pose and always return its realtime corrected pose."""
 
+        self.input_samples += 1
         raw_transform = matrix_from_pose(sample)
         if self._last_raw is not None and sample.stamp_ns <= self._last_raw.stamp_ns:
             self.timestamp_resets += 1
             self._correction = np.eye(4, dtype=np.float64)
             self._history.clear()
-            self._pending = None
             self._last_raw = sample
             corrected = _sample_from_matrix(sample.stamp_ns, raw_transform)
             self._remember((corrected,))
+            self.output_samples += 1
             return [corrected]
-
-        if self._pending is not None:
-            return self._continue_pending(sample, raw_transform)
 
         if self._last_raw is not None:
             gap_ms = (sample.stamp_ns - self._last_raw.stamp_ns) / 1e6
@@ -272,6 +261,7 @@ class VioContinuityStitcher:
                 self._last_raw = sample
                 corrected = self._correct(sample, raw_transform)
                 self._remember((corrected,))
+                self.output_samples += 1
                 return [corrected]
 
         provisional = self._correction @ raw_transform
@@ -289,93 +279,20 @@ class VioContinuityStitcher:
             innovation_translation >= self.config.translation_threshold_m
             or innovation_rotation >= self.config.rotation_threshold_deg
         ):
-            self._pending = _PendingReset(
-                raw_samples=[sample],
-                correction=expected @ _rigid_inverse(raw_transform),
-                innovation_translation_m=innovation_translation,
-                innovation_rotation_deg=innovation_rotation,
-            )
-            return []
+            if allow_stitch:
+                self._correction = expected @ _rigid_inverse(raw_transform)
+                provisional = self._correction @ raw_transform
+                self.stitch_events += 1
+                self.last_event_stamp_ns = sample.stamp_ns
+                self.last_event_translation_m = innovation_translation
+                self.last_event_rotation_deg = innovation_rotation
+            else:
+                self.rejected_candidates += 1
 
         corrected = _sample_from_matrix(sample.stamp_ns, provisional)
         self._remember((corrected,))
+        self.output_samples += 1
         return [corrected]
-
-    def _continue_pending(
-        self, sample: PoseSample, raw_transform: np.ndarray
-    ) -> list[PoseSample]:
-        pending = self._pending
-        assert pending is not None
-        previous = pending.raw_samples[-1]
-        dt_sec = (sample.stamp_ns - previous.stamp_ns) / 1e9
-        if dt_sec <= 0.0:
-            self.timestamp_resets += 1
-            self.rejected_candidates += 1
-            self._correction = np.eye(4, dtype=np.float64)
-            self._history.clear()
-            self._pending = None
-            self._last_raw = sample
-            corrected = _sample_from_matrix(sample.stamp_ns, raw_transform)
-            self._remember((corrected,))
-            return [corrected]
-        if dt_sec * 1000.0 > self.config.max_gap_ms:
-            self.tracking_gaps += 1
-            return self._reject_pending(sample, raw_transform, reset_history=True)
-
-        previous_transform = matrix_from_pose(previous)
-        relative = _rigid_inverse(previous_transform) @ raw_transform
-        linear_speed = float(np.linalg.norm(relative[:3, 3])) / dt_sec
-        angular_speed = rotation_distance_deg(
-            np.eye(4, dtype=np.float64), relative
-        ) / dt_sec
-        if (
-            linear_speed > self.config.max_confirmation_linear_speed_m_s
-            or angular_speed > self.config.max_confirmation_angular_speed_deg_s
-        ):
-            return self._reject_pending(sample, raw_transform, reset_history=False)
-
-        pending.raw_samples.append(sample)
-        self._last_raw = sample
-        if len(pending.raw_samples) < self.config.confirmation_frames:
-            return []
-
-        self._correction = pending.correction
-        corrected = tuple(
-            self._correct(raw, matrix_from_pose(raw))
-            for raw in pending.raw_samples
-        )
-        self.stitch_events += 1
-        self.last_event_stamp_ns = pending.raw_samples[0].stamp_ns
-        self.last_event_translation_m = pending.innovation_translation_m
-        self.last_event_rotation_deg = pending.innovation_rotation_deg
-        self._pending = None
-        self._remember(corrected)
-        return list(corrected)
-
-    def _reject_pending(
-        self,
-        sample: PoseSample,
-        raw_transform: np.ndarray,
-        *,
-        reset_history: bool,
-    ) -> list[PoseSample]:
-        pending = self._pending
-        assert pending is not None
-        raw_samples = [*pending.raw_samples, sample]
-        self._pending = None
-        self._last_raw = sample
-        self.rejected_candidates += 1
-        if reset_history:
-            self._history.clear()
-        corrected = tuple(
-            self._correct(
-                raw,
-                raw_transform if raw is sample else matrix_from_pose(raw),
-            )
-            for raw in raw_samples
-        )
-        self._remember(corrected)
-        return list(corrected)
 
     def _correct(
         self, sample: PoseSample, raw_transform: Optional[np.ndarray] = None

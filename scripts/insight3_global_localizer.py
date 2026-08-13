@@ -224,6 +224,8 @@ class CameraState:
         self.pose_filter = RelocalizationEkf(ekf_config)
         self.relocalization_policy = AdaptiveRelocalizationPolicy(adaptive_config)
         self.vio_stitcher = VioContinuityStitcher(vio_continuity_config)
+        self.vio_tracking_status = "UNKNOWN"
+        self.vio_tracking_status_monotonic = 0.0
         self.last_relocalization_measurement: Optional[np.ndarray] = None
         self.hard_relocalizations = 0
         self.last_vio_stamp_ns = -1
@@ -282,14 +284,7 @@ class Insight3GlobalLocalizer(Node):
         vio_continuity_config = VioContinuityConfig(
             translation_threshold_m=args.vio_stitch_translation_m,
             rotation_threshold_deg=args.vio_stitch_rotation_deg,
-            confirmation_frames=args.vio_stitch_confirmation_frames,
             max_gap_ms=args.vio_stitch_max_gap_ms,
-            max_confirmation_linear_speed_m_s=(
-                args.vio_stitch_max_linear_speed_m_s
-            ),
-            max_confirmation_angular_speed_deg_s=(
-                args.vio_stitch_max_angular_speed_deg_s
-            ),
         )
         self._matcher = IpcSuperGlueBackend(Path(args.inference_socket))
         self._map_lock = threading.Lock()
@@ -366,6 +361,12 @@ class Insight3GlobalLocalizer(Node):
                         PoseStamped,
                         f"/{name}/camera/vio_100hz",
                         self._vio_callback(name),
+                        qos_profile_sensor_data,
+                    ),
+                    self.create_subscription(
+                        String,
+                        f"/{name}/camera/vio_status",
+                        self._vio_status_callback(name),
                         qos_profile_sensor_data,
                     ),
                 ]
@@ -497,6 +498,16 @@ class Insight3GlobalLocalizer(Node):
 
         return callback
 
+    def _vio_status_callback(self, name: str):
+        def callback(message: String) -> None:
+            value = str(message.data).strip().upper() or "UNKNOWN"
+            state = self._cameras[name]
+            with state.lock:
+                state.vio_tracking_status = value
+                state.vio_tracking_status_monotonic = time.monotonic()
+
+        return callback
+
     def _vio_callback(self, name: str):
         def callback(message: PoseStamped) -> None:
             stamp_ns = stamp_to_ns(message.header.stamp)
@@ -542,7 +553,16 @@ class Insight3GlobalLocalizer(Node):
             stitch_event = None
             with state.lock:
                 previous_stitch_events = state.vio_stitcher.stitch_events
-                corrected_samples = state.vio_stitcher.push(raw_sample)
+                status_age_sec = (
+                    time.monotonic() - state.vio_tracking_status_monotonic
+                )
+                stitch_allowed = (
+                    state.vio_tracking_status == "TRACKING_STATIC"
+                    and status_age_sec <= 1.0
+                )
+                corrected_samples = state.vio_stitcher.push(
+                    raw_sample, allow_stitch=stitch_allowed
+                )
                 if state.vio_stitcher.stitch_events > previous_stitch_events:
                     stitch_event = state.vio_stitcher.status()
                 for sample in corrected_samples:
@@ -1014,7 +1034,18 @@ class Insight3GlobalLocalizer(Node):
                 status["jump_rotation_deg"] = (
                     state.relocalization_policy.config.jump_rotation_deg
                 )
-                status["vio_continuity"] = state.vio_stitcher.status()
+                vio_continuity = state.vio_stitcher.status()
+                vio_status_age_sec = (
+                    time.monotonic() - state.vio_tracking_status_monotonic
+                )
+                vio_continuity["device_tracking_status"] = (
+                    state.vio_tracking_status
+                )
+                vio_continuity["auto_stitch_allowed"] = (
+                    state.vio_tracking_status == "TRACKING_STATIC"
+                    and vio_status_age_sec <= 1.0
+                )
+                status["vio_continuity"] = vio_continuity
             status["gripper_mask_height_ratio"] = self._gripper_mask_height_ratio
             status["pose_frame"] = f"{name}_global_camera_center"
             calibration = self._tcp_calibrations.get(name)
@@ -1086,14 +1117,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jump-rotation-deg", type=float, default=10.0)
     parser.add_argument("--vio-stitch-translation-m", type=float, default=0.03)
     parser.add_argument("--vio-stitch-rotation-deg", type=float, default=5.0)
-    parser.add_argument("--vio-stitch-confirmation-frames", type=int, default=4)
     parser.add_argument("--vio-stitch-max-gap-ms", type=float, default=50.0)
-    parser.add_argument(
-        "--vio-stitch-max-linear-speed-m-s", type=float, default=3.0
-    )
-    parser.add_argument(
-        "--vio-stitch-max-angular-speed-deg-s", type=float, default=540.0
-    )
     return parser
 
 

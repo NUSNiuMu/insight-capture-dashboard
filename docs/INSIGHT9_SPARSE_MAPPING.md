@@ -114,18 +114,20 @@ reader。查询特征与 Insight9 的 3D 描述子地图匹配，通过 PnP-RANS
   任一阈值的可靠重定位立即跳回并从当前位置重建 Path。
 - 暂时看不到已建图区域时保留最后校正并进入 `vio_only`，不会隐藏模型；再次匹配
   地图后继续校准累积漂移。
-- 每路 Insight3 在进入全局重定位前会先检查原生 VIO 的瞬时坐标重置。默认以恒速
-  运动预测的 `3 cm / 5°` 创新作为候选，暂存 4 帧确认后对新 VIO 分段应用刚体
-  校正，因此即使当前看不到 Insight9 地图，后续全局 Pose 也不会继承这次固定
-  偏移。超过 50 ms 的跟踪空洞不会自动拼接，因为空洞期间的真实运动不可观测；
-  缓慢累计漂移仍由地图重定位校正。
+- 每路 Insight3 在进入全局重定位前会先检查原生 VIO 的瞬时坐标重置。相机原生
+  状态为 `TRACKING_STATIC` 时，恒速预测出现 `3 cm / 5°` 创新会在当帧对新 VIO
+  分段应用刚体校正；每个 VIO 输入仍同步产生一个 Pose，不为确认缓存或中断实时
+  输出。普通 `TRACKING` 运动期间只记录候选而不自动改坐标，因为仅凭位姿流无法
+  区分真实快速运动和坐标重置。超过 50 ms 的跟踪空洞同样不会自动拼接；缓慢累计
+  漂移仍由地图重定位校正。
 - Insight3 图像底部夹爪 mask 默认为 `0`（关闭），可在 Settings 按现场遮挡比例热
   更新；不能假设固定 20%。
 - Jetson NX profile 发布 `insight3_a_global_camera_center -> right_tcp` 与
   `insight3_b_global_camera_center -> left_tcp` 静态 TF；未标定 profile 不发布占位变换。
 - `/insight_global/<name>/status` 提供 `tracking_mode`、`correction_mode`、PnP/共识、
   hard relocalization、当前 mask 和 `vio_continuity` 等诊断字段。后者包含已确认的
-  拼接次数、拒绝的候选、跟踪空洞、累计局部校正以及最近一次跳变的时间和幅度。
+  拼接次数、受状态门抑制的候选、跟踪空洞、累计局部校正、输入/输出样本计数以及
+  最近一次跳变的时间和幅度；正常实时链路的 `input_samples` 和 `output_samples` 必须相等。
 
 验证镜像包含：
 

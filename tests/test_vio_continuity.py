@@ -43,15 +43,20 @@ def _pose_from_planar_matrix(stamp_ns: int, transform: np.ndarray) -> PoseSample
 
 
 def _push_all(
-    stitcher: VioContinuityStitcher, samples: list[PoseSample]
+    stitcher: VioContinuityStitcher,
+    samples: list[PoseSample],
+    *,
+    allow_stitch: bool = True,
 ) -> list[PoseSample]:
     output = []
     for sample in samples:
-        output.extend(stitcher.push(sample))
+        corrected = stitcher.push(sample, allow_stitch=allow_stitch)
+        assert len(corrected) == 1
+        output.extend(corrected)
     return output
 
 
-def test_stitches_stationary_translation_reset_after_confirmation():
+def test_stitches_stationary_translation_reset_without_withholding_pose():
     stitcher = VioContinuityStitcher(VioContinuityConfig())
     samples = [
         *[_pose(index * 10_000_000, 0.0) for index in range(5)],
@@ -67,6 +72,8 @@ def test_stitches_stationary_translation_reset_after_confirmation():
         [sample.translation[0] for sample in output], 0.0, atol=1e-9
     )
     assert stitcher.stitch_events == 1
+    assert stitcher.input_samples == len(samples)
+    assert stitcher.output_samples == len(samples)
     assert stitcher.status()["last_event_translation_m"] == 0.08
     assert stitcher.status()["state"] == "tracking"
 
@@ -118,10 +125,7 @@ def test_replaces_correction_after_multiple_coordinate_resets():
 
 
 def test_constant_fast_motion_is_released_instead_of_stitched():
-    config = VioContinuityConfig(
-        translation_threshold_m=0.02,
-        max_confirmation_linear_speed_m_s=3.0,
-    )
+    config = VioContinuityConfig(translation_threshold_m=0.02)
     stitcher = VioContinuityStitcher(config)
     samples = [_pose(index * 10_000_000, index * 0.04) for index in range(8)]
 
@@ -168,7 +172,7 @@ def test_timestamp_rollback_starts_a_fresh_local_frame():
     )
     assert stitcher.stitch_events == 1
 
-    output = stitcher.push(_pose(5_000_000, 0.25))
+    output = stitcher.push(_pose(5_000_000, 0.25), allow_stitch=True)
 
     assert len(output) == 1
     assert output[0].translation[0] == 0.25
@@ -176,24 +180,22 @@ def test_timestamp_rollback_starts_a_fresh_local_frame():
     np.testing.assert_allclose(stitcher.correction, np.eye(4), atol=1e-12)
 
 
-def test_timestamp_rollback_discards_an_unconfirmed_reset():
+def test_external_gate_suppresses_motion_candidate_without_interrupting_output():
     stitcher = VioContinuityStitcher(VioContinuityConfig())
-    output = _push_all(
+    initial = _push_all(
         stitcher,
         [
             _pose(0, 0.0),
             _pose(10_000_000, 0.0),
             _pose(20_000_000, 0.0),
-            _pose(30_000_000, 0.08),
         ],
     )
-    assert len(output) == 3
-    assert stitcher.confirming
 
-    output = stitcher.push(_pose(5_000_000, 0.3))
+    output = stitcher.push(_pose(30_000_000, 0.08), allow_stitch=False)
 
+    assert len(initial) == 3
     assert len(output) == 1
-    assert output[0].translation[0] == 0.3
-    assert stitcher.timestamp_resets == 1
-    assert not stitcher.confirming
+    assert output[0].translation[0] == 0.08
+    assert stitcher.stitch_events == 0
+    assert stitcher.rejected_candidates == 1
     np.testing.assert_allclose(stitcher.correction, np.eye(4), atol=1e-12)
