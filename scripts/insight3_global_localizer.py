@@ -29,6 +29,8 @@ from insight9_mapping_core import (  # noqa: E402
     PoseSample,
     RelocalizationEkf,
     RelocalizationEkfConfig,
+    VioContinuityConfig,
+    VioContinuityStitcher,
     compose_transform,
     left_to_stereo_center,
     load_tcp_frame_calibrations,
@@ -208,6 +210,7 @@ class CameraState:
         history_points: int,
         ekf_config: RelocalizationEkfConfig,
         adaptive_config: AdaptiveRelocalizationConfig,
+        vio_continuity_config: VioContinuityConfig,
     ) -> None:
         self.name = name
         self.lock = threading.Lock()
@@ -220,6 +223,7 @@ class CameraState:
         self.consensus = LocalizationConsensus(config)
         self.pose_filter = RelocalizationEkf(ekf_config)
         self.relocalization_policy = AdaptiveRelocalizationPolicy(adaptive_config)
+        self.vio_stitcher = VioContinuityStitcher(vio_continuity_config)
         self.last_relocalization_measurement: Optional[np.ndarray] = None
         self.hard_relocalizations = 0
         self.last_vio_stamp_ns = -1
@@ -275,6 +279,18 @@ class Insight3GlobalLocalizer(Node):
             jump_translation_m=args.jump_translation_m,
             jump_rotation_deg=args.jump_rotation_deg,
         )
+        vio_continuity_config = VioContinuityConfig(
+            translation_threshold_m=args.vio_stitch_translation_m,
+            rotation_threshold_deg=args.vio_stitch_rotation_deg,
+            confirmation_frames=args.vio_stitch_confirmation_frames,
+            max_gap_ms=args.vio_stitch_max_gap_ms,
+            max_confirmation_linear_speed_m_s=(
+                args.vio_stitch_max_linear_speed_m_s
+            ),
+            max_confirmation_angular_speed_deg_s=(
+                args.vio_stitch_max_angular_speed_deg_s
+            ),
+        )
         self._matcher = IpcSuperGlueBackend(Path(args.inference_socket))
         self._map_lock = threading.Lock()
         self._map_points = np.empty((0, 3), dtype=np.float32)
@@ -286,6 +302,7 @@ class Insight3GlobalLocalizer(Node):
                 history_points=args.path_points,
                 ekf_config=ekf_config,
                 adaptive_config=adaptive_config,
+                vio_continuity_config=vio_continuity_config,
             )
             for name in CAMERAS
         }
@@ -407,6 +424,8 @@ class Insight3GlobalLocalizer(Node):
         for state in self._cameras.values():
             with state.lock:
                 state.history.clear()
+                state.pose_buffer.clear()
+                state.vio_stitcher.reset()
                 state.consensus = LocalizationConsensus(state.consensus.config)
                 state.pose_filter.reset()
                 state.last_relocalization_measurement = None
@@ -498,19 +517,8 @@ class Insight3GlobalLocalizer(Node):
                 )
                 if not buffer_due:
                     return
-                publish_due, state.next_vio_publish_stamp_ns = select_timestamp(
-                    stamp_ns,
-                    state.next_vio_publish_stamp_ns,
-                    self._args.pose_publish_hz,
-                )
-                history_due = (
-                    input_reset
-                    or state.last_history_stamp_ns < 0
-                    or stamp_ns - state.last_history_stamp_ns
-                    >= self._args.path_interval_ms * 1_000_000
-                )
             pose = message.pose
-            sample = PoseSample(
+            raw_sample = PoseSample(
                 stamp_ns=stamp_ns,
                 translation=np.array(
                     [pose.position.x, pose.position.y, pose.position.z],
@@ -526,40 +534,60 @@ class Insight3GlobalLocalizer(Node):
                     dtype=np.float64,
                 ),
             )
-            global_pose = None
             try:
-                odom_to_imu = matrix_from_pose(sample)
+                matrix_from_pose(raw_sample)
             except ValueError:
                 return
+            global_poses = []
+            stitch_event = None
             with state.lock:
-                reset = state.pose_buffer.append(sample)
-                if reset:
-                    state.history.clear()
-                    state.consensus = LocalizationConsensus(state.consensus.config)
-                    state.pose_filter.reset()
-                    state.last_relocalization_measurement = None
-                    state.hard_relocalizations = 0
-                    state.last_vio_stamp_ns = -1
-                    state.last_input_vio_stamp_ns = sample.stamp_ns
-                    state.last_image_stamp_ns = -1
-                    state.last_history_stamp_ns = -1
-                    state.transformed_history.clear()
-                    state.transformed_output_extrinsic = None
-                    state.last_transformed_stamp_ns = -1
-                    state.last_global_pose_publish_ns = -1
-                    state.path = PathMsg()
-                    state.path.header.frame_id = self._map_frame
-                    state.path_dirty = True
-                    state.status = {
-                        "state": "waiting_for_relocalization",
-                        "localized": False,
-                        "tracking_mode": "unlocalized",
-                    }
-                if history_due:
-                    state.history.append(sample)
-                    state.last_history_stamp_ns = sample.stamp_ns
-                    state.path_dirty = True
-                if publish_due:
+                previous_stitch_events = state.vio_stitcher.stitch_events
+                corrected_samples = state.vio_stitcher.push(raw_sample)
+                if state.vio_stitcher.stitch_events > previous_stitch_events:
+                    stitch_event = state.vio_stitcher.status()
+                for sample in corrected_samples:
+                    reset = state.pose_buffer.append(sample)
+                    if reset:
+                        state.history.clear()
+                        state.consensus = LocalizationConsensus(
+                            state.consensus.config
+                        )
+                        state.pose_filter.reset()
+                        state.last_relocalization_measurement = None
+                        state.hard_relocalizations = 0
+                        state.last_vio_stamp_ns = -1
+                        state.last_input_vio_stamp_ns = sample.stamp_ns
+                        state.last_image_stamp_ns = -1
+                        state.last_history_stamp_ns = -1
+                        state.transformed_history.clear()
+                        state.transformed_output_extrinsic = None
+                        state.last_transformed_stamp_ns = -1
+                        state.last_global_pose_publish_ns = -1
+                        state.path = PathMsg()
+                        state.path.header.frame_id = self._map_frame
+                        state.path_dirty = True
+                        state.status = {
+                            "state": "waiting_for_relocalization",
+                            "localized": False,
+                            "tracking_mode": "unlocalized",
+                        }
+                    history_due = (
+                        reset
+                        or state.last_history_stamp_ns < 0
+                        or sample.stamp_ns - state.last_history_stamp_ns
+                        >= self._args.path_interval_ms * 1_000_000
+                    )
+                    if history_due:
+                        state.history.append(sample)
+                        state.last_history_stamp_ns = sample.stamp_ns
+                        state.path_dirty = True
+                    publish_due, state.next_vio_publish_stamp_ns = select_timestamp(
+                        sample.stamp_ns,
+                        state.next_vio_publish_stamp_ns,
+                        self._args.pose_publish_hz,
+                    )
+                    if not publish_due:
+                        continue
                     if state.last_vio_stamp_ns >= 0:
                         state.pose_filter.predict(
                             (sample.stamp_ns - state.last_vio_stamp_ns) / 1e9
@@ -572,15 +600,24 @@ class Insight3GlobalLocalizer(Node):
                         else state.imu_to_center.copy()
                     )
                     state.last_global_pose_publish_ns = sample.stamp_ns
-                else:
-                    correction = None
-                    extrinsic = None
-            if publish_due and correction is not None and extrinsic is not None:
-                transform = correction @ odom_to_imu @ extrinsic
-                global_pose = pose_message(
-                    transform, message.header.stamp, self._map_frame
+                    if correction is None or extrinsic is None:
+                        continue
+                    transform = correction @ matrix_from_pose(sample) @ extrinsic
+                    sample_stamp = Time(nanoseconds=sample.stamp_ns).to_msg()
+                    global_poses.append(
+                        pose_message(transform, sample_stamp, self._map_frame)
+                    )
+            if stitch_event is not None:
+                self.get_logger().warning(
+                    "%s stitched VIO reset %d: %.3f m / %.2f deg"
+                    % (
+                        name,
+                        stitch_event["events"],
+                        stitch_event["last_event_translation_m"],
+                        stitch_event["last_event_rotation_deg"],
+                    )
                 )
-            if global_pose is not None:
+            for global_pose in global_poses:
                 self._pose_publishers[name].publish(global_pose)
 
         return callback
@@ -977,6 +1014,7 @@ class Insight3GlobalLocalizer(Node):
                 status["jump_rotation_deg"] = (
                     state.relocalization_policy.config.jump_rotation_deg
                 )
+                status["vio_continuity"] = state.vio_stitcher.status()
             status["gripper_mask_height_ratio"] = self._gripper_mask_height_ratio
             status["pose_frame"] = f"{name}_global_camera_center"
             calibration = self._tcp_calibrations.get(name)
@@ -1046,6 +1084,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--jump-translation-m", type=float, default=0.15)
     parser.add_argument("--jump-rotation-deg", type=float, default=10.0)
+    parser.add_argument("--vio-stitch-translation-m", type=float, default=0.03)
+    parser.add_argument("--vio-stitch-rotation-deg", type=float, default=5.0)
+    parser.add_argument("--vio-stitch-confirmation-frames", type=int, default=4)
+    parser.add_argument("--vio-stitch-max-gap-ms", type=float, default=50.0)
+    parser.add_argument(
+        "--vio-stitch-max-linear-speed-m-s", type=float, default=3.0
+    )
+    parser.add_argument(
+        "--vio-stitch-max-angular-speed-deg-s", type=float, default=540.0
+    )
     return parser
 
 
