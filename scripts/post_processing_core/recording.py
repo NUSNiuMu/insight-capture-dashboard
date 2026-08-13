@@ -1,4 +1,4 @@
-"""Recording lifecycle, crash recovery, merge, and host synchronization."""
+"""Recording lifecycle, crash recovery, and merge."""
 
 import contextlib
 import json
@@ -28,8 +28,6 @@ from .network_audit import (
     compare_network_snapshots,
     format_network_audit,
 )
-from .sync import RecordingSync
-
 try:
     import yaml
 except Exception:  # pragma: no cover - recovery degrades gracefully
@@ -130,9 +128,6 @@ class RecordingManager:
         rosbag_root: Path,
         max_cache_size: int,
         default_topics: Sequence[str],
-        host_sync_dir: Optional[Path] = None,
-        host_sync_ssh_target: str = "",
-        sync_to_host_on_stop: bool = False,
         publisher_checker: Optional[Callable[[str], bool]] = None,
         image_topics: Optional[Sequence[str]] = None,
         start_image_recording: Optional[Callable[[Dict[str, str]], None]] = None,
@@ -144,9 +139,6 @@ class RecordingManager:
         self.rosbag_root.mkdir(parents=True, exist_ok=True)
         self.max_cache_size = int(max_cache_size)
         self.default_topics = _normalize_topics(default_topics)
-        self.host_sync_dir = host_sync_dir.resolve() if host_sync_dir else None
-        self.host_sync_ssh_target = str(host_sync_ssh_target or "").strip()
-        self.sync_to_host_on_stop = bool(sync_to_host_on_stop)
         self.publisher_checker = publisher_checker
         # Reuse dashboard image subscriptions; tests may fall back to subprocesses.
         self._image_topics: Set[str] = set(_normalize_topics(image_topics or []))
@@ -169,18 +161,10 @@ class RecordingManager:
         self._lock = threading.Lock()
         self._merge_thread: Optional[threading.Thread] = None
         self._recording_completed_callbacks: List[Callable[[Path], None]] = []
-        self.merge_state: str = "idle"  # idle | merging | syncing | done | error
+        self.merge_state: str = "idle"  # idle | merging | done | error
         self.merge_error: Optional[str] = None
         self._last_topic_refresh_monotonic: float = 0.0
-        self.last_sync_status: Dict[str, object] = {
-            "state": "idle",
-            "message": "Host sync idle",
-            "source_path": None,
-            "target_path": None,
-            "finished_at": None,
-        }
         self._recovery_service = RecordingRecovery(self)
-        self._sync_service = RecordingSync(self)
 
     def add_recording_completed_callback(self, callback: Callable[[Path], None]) -> None:
         """Register lightweight work to enqueue after a merged bag is durable."""
@@ -257,7 +241,7 @@ class RecordingManager:
             self._cleanup_if_exited_unlocked()
             if self.processes or self._image_writer_active:
                 raise RuntimeError("Recording is already running.")
-            if self.merge_state in {"merging", "syncing"}:
+            if self.merge_state == "merging":
                 raise RuntimeError(
                     f"Previous recording is still {self.merge_state} -- wait for it to finish."
                 )
@@ -347,13 +331,6 @@ class RecordingManager:
             self._output_lines.clear()
             self.merge_state = "idle"
             self.merge_error = None
-            self.last_sync_status = {
-                "state": "idle",
-                "message": "Host sync idle",
-                "source_path": str(output_path),
-                "target_path": None,
-                "finished_at": None,
-            }
         return self.status()
 
     def stop(self, timeout_sec: float = 8.0) -> Dict[str, object]:
@@ -490,12 +467,6 @@ class RecordingManager:
 
             shutil.rmtree(staging_dir, ignore_errors=True)
             self._output_lines.append(f"[merge] Combined {len(part_bags)} recorder(s) into {output_path}")
-            if self.sync_to_host_on_stop:
-                with self._lock:
-                    self.merge_state = "syncing"
-                self._output_lines.append("[sync] Waiting for automatic host sync to finish")
-                sync_status = self.sync_recording_to_host(str(output_path))
-                self._output_lines.append(f"[sync] {sync_status.get('message', 'Host sync finished')}")
             with self._lock:
                 self.merge_state = "done"
             self._notify_recording_completed(output_path)
@@ -541,22 +512,6 @@ class RecordingManager:
         self._recovery_service._convert_merge(part_bags, output_path)
 
 
-    def _build_sync_target_path(self, source_path: Path) -> Path:
-        return self._sync_service._build_sync_target_path(source_path)
-
-
-    def _remote_sync_target(self, source_path: Path) -> str:
-        return self._sync_service._remote_sync_target(source_path)
-
-
-    def _sync_recording_to_remote_host(self, source_path: Path) -> Dict[str, object]:
-        return self._sync_service._sync_recording_to_remote_host(source_path)
-
-
-    def sync_recording_to_host(self, output_path: Optional[str] = None) -> Dict[str, object]:
-        return self._sync_service.sync_recording_to_host(output_path)
-
-
     def status(self) -> Dict[str, object]:
         with self._lock:
             self._cleanup_if_exited_unlocked()
@@ -571,5 +526,4 @@ class RecordingManager:
                 "network_audit": self._network_audit,
                 "merge_state": self.merge_state,
                 "merge_error": self.merge_error,
-                "sync_status": dict(self.last_sync_status),
             }

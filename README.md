@@ -137,8 +137,8 @@ python3 scripts/multi_camera_dashboard_web.py &
 Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，
 支持整组勾选），`Start` 只录勾选的 topic。三路 dashboard 图像复用现有 DDS reader，
 直接交给每路 `InProcessBagWriter`；IMU、VIO 等小消息仍由独立 `ros2 bag record`
-子进程写入。`Stop` 会依次结束 writer、合包、生成 live header/network audit，并在
-profile 启用时自动同步到主机；收尾完成前不能开始下一段。默认选择同时包含原始
+子进程写入。`Stop` 会依次结束 writer、合包并生成 live header/network audit；
+合包完成前不能开始下一段。默认选择同时包含原始
 `vio_100hz` 和配置的全局 pose，供单臂/双臂数据集导出使用。
 
 手势录制默认关闭，可在 Settings 开启；Insight9 同时检测到双手“拇指向上、四指

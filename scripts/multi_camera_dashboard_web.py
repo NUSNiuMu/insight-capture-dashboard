@@ -761,25 +761,10 @@ def main() -> None:
         or post_processing_config.get("rosbag_dir")
         or "rosbags"
     )
-    host_rosbag_sync_value = (
-        os.environ.get("INSIGHT_HOST_ROSBAG_SYNC_DIR")
-        or post_processing_config.get("host_rosbag_sync_dir")
-        or ""
-    )
-    host_rosbag_sync_ssh_target = (
-        os.environ.get("INSIGHT_HOST_ROSBAG_SYNC_SSH_TARGET")
-        or post_processing_config.get("host_rosbag_sync_ssh_target")
-        or ""
-    )
     results_dir_value = post_processing_config.get("results_dir", "outputs/results")
     rosbag_root = Path(rosbag_dir_value)
     if not rosbag_root.is_absolute():
         rosbag_root = (project_root / rosbag_root).resolve()
-    host_rosbag_sync_root: Optional[Path] = None
-    if str(host_rosbag_sync_value).strip():
-        host_rosbag_sync_root = Path(str(host_rosbag_sync_value).strip())
-        if not host_rosbag_sync_root.is_absolute():
-            host_rosbag_sync_root = (project_root / host_rosbag_sync_root).resolve()
     results_root = Path(results_dir_value)
     if not results_root.is_absolute():
         results_root = (project_root / results_root).resolve()
@@ -805,9 +790,6 @@ def main() -> None:
         rosbag_root=rosbag_root,
         max_cache_size=int(post_processing_config.get("max_cache_size", 2147483648)),
         default_topics=default_record_topics,
-        host_sync_dir=host_rosbag_sync_root,
-        host_sync_ssh_target=str(host_rosbag_sync_ssh_target or "").strip(),
-        sync_to_host_on_stop=bool(post_processing_config.get("sync_rosbag_to_host", False)),
         publisher_checker=None,
         image_topics=[camera.topic for camera in node.cameras],
         start_image_recording=node.start_image_recording,

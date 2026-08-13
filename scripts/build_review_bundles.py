@@ -34,7 +34,7 @@ def _dashboard_recording(api_root: str) -> bool | None:
     try:
         with urlopen(f"{api_root.rstrip('/')}/api/recording/status", timeout=2.0) as response:
             payload = json.load(response)
-        return bool(payload.get("recording")) or payload.get("merge_state") in {"merging", "syncing"}
+        return bool(payload.get("recording")) or payload.get("merge_state") == "merging"
     except (OSError, URLError, ValueError):
         return None
 

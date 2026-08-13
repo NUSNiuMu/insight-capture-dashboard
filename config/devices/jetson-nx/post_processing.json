@@ -1,8 +1,5 @@
 {
   "rosbag_dir": "rosbags",
-  "host_rosbag_sync_dir": "/home/zhaofengli/Looper_test/nvidia",
-  "host_rosbag_sync_ssh_target": "zhaofengli@192.168.19.241:/home/zhaofengli/Looper_test/nvidia",
-  "sync_rosbag_to_host": true,
   "results_dir": "outputs/results",
   "max_cache_size": 104857600,
   "record_topics": [],

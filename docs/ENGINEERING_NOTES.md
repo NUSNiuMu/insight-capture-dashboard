@@ -54,8 +54,6 @@
 - 全局 Pose 与各自相机小消息共用 recorder；完整 Path 是 Pose 可重建的冗余
   调试数据，不默认录制。不要为全局 namespace 再增加两个 recorder 进程。
 - staging 恢复中的 reindex、salvage、convert 和输出验证是一个完整流程；`ros2 bag convert` 成功返回不代表输出一定可信。
-- 自动 host sync 与合包同属录制收尾；同步完成前禁止开始下一段，避免大 bag 的
-  rsync 读盘/CPU 负载与新一段采集重叠。
 - 数据集连续性门发现坐标跳变时不得直接低通平滑。孤立、持久的刚体坐标重置只有在
   跳变前后各自稳定、切段后满足最短 episode 且双臂公共坐标关系可重新确认时，才能丢弃
   边界保护帧并按段重锚；短时振荡、多次米级跳变或仅单臂全局 Pose 失配应保留原 bag，

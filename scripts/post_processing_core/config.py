@@ -6,9 +6,6 @@ from typing import Dict
 
 DEFAULT_POST_PROCESSING_CONFIG = {
     "rosbag_dir": "rosbags",
-    "host_rosbag_sync_dir": "",
-    "host_rosbag_sync_ssh_target": "",
-    "sync_rosbag_to_host": False,
     "results_dir": "outputs/results",
     "max_cache_size": 2147483648,
     "record_topics": [],
