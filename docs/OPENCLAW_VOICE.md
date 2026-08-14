@@ -9,9 +9,10 @@
 2. SenseVoice INT8 在本机离线转写，只有整句匹配“宸境”或配置的同音转写时才唤醒；
 3. 立即播放服务启动时预生成的“我在”，播完后重新打开麦克风；
 4. Silero VAD 截取随后的命令，由同一个 SenseVoice 实例离线转写；
-5. 只有唤醒后的命令文本发送给本机 OpenClaw，OpenClaw 使用当前用户的 Codex 登录完成推理；
-6. `insight_capture` 插件仅通过 `http://127.0.0.1:8765` 访问 Dashboard；
-7. 简短回复由服务启动时常驻加载的本地 Piper 合成，并通过同一 USB 音响播放。
+5. “开始/停止录制”和“开始校准”等固定指令直接调用本机 Dashboard，不经过 OpenClaw；
+6. 其他唤醒后命令文本才发送给本机 OpenClaw，OpenClaw 使用当前用户的 Codex 登录完成推理；
+7. `insight_capture` 插件仅通过 `http://127.0.0.1:8765` 访问 Dashboard；
+8. 简短回复由服务启动时常驻加载的本地 Piper 合成，并通过同一 USB 音响播放。
 
 原始音频不会发送给 OpenClaw、Codex 或 Dashboard。唤醒后的转写文本以及回答请求所需
 的本机数采状态会交给当前 Codex 订阅处理，因此启用常驻服务前必须获得设备使用者明确
@@ -52,6 +53,16 @@ scripts/run_openclaw_voice.sh --echo-once
 命令转写。默认一次命令等待 15 秒，每次唤醒只处理一句话；回答后必须重新说唤醒词，
 避免把周围谈话误当成连续指令。
 
+以下短指令使用精确匹配的本地快捷路径，执行和回复都不依赖 OpenClaw：
+
+- “开始录制”“开始录像”“开始采集”；
+- “结束录制”“停止录制”及对应的录像、采集说法；
+- “开始校准”“重新校准”“重置校准”。
+
+服务启动时会预生成成功、重复录制和失败等确认语音，命中快捷指令后直接播放缓存。
+“开始校准”调用 `/api/mapping/reset`，语义是清空 Insight9 地图和 Insight3 全局定位状态，
+立即开始新一轮在线校准，不是夹爪尺寸标定。
+
 服务每次启动都会把 USB 音响的 PCM 音量恢复到 40%。可通过环境变量
 `LOOPER_PLAYBACK_VOLUME` 覆盖。
 
@@ -64,8 +75,9 @@ Fast 最终向 Codex/OpenAI 请求传递 Priority service tier，并禁用默认
 
 插件目录是 `integrations/openclaw-insight-capture/`，工作区是
 `integrations/openclaw-workspace/`。权限分为只读的 `insight_capture_status` 和写操作
-`insight_capture_recording`；后者必须由设备使用者单独授权，并且每次开始/停止仍要求
-当前语音明确下令。开始录制使用服务器默认 topics，并生成
+`insight_capture_recording`；后者必须由设备使用者单独授权。自然语言录制请求仍通过
+OpenClaw 工具，固定短指令则使用语音桥的本地快捷路径；两者每次开始/停止都要求当前
+语音明确下令。开始录制使用服务器默认 topics，并生成
 `looper_record_YYYYmmdd_HHMMSS`；停止接口只接受这个前缀。若网页、手势或其他程序正在
 录制，宸境会拒绝覆盖或停止。
 

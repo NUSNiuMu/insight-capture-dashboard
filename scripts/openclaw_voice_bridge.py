@@ -14,6 +14,8 @@ import struct
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import wave
 from pathlib import Path
 from typing import Iterable, Optional
@@ -26,14 +28,44 @@ DEFAULT_SENSE_VOICE_ROOT = (
 )
 DEFAULT_WAKE_PHRASE = "宸境"
 DEFAULT_WAKE_ALIASES = (
+    "澄净",
+    "澄静",
     "沉浸",
     "辰境",
     "晨景",
     "晨静",
     "陈静",
-    "曾经",
-    "陈经",
 )
+
+LOCAL_COMMAND_ALIASES = {
+    "recording_start": ("开始录制", "开始录像", "开始采集"),
+    "recording_stop": (
+        "结束录制",
+        "停止录制",
+        "结束录像",
+        "停止录像",
+        "结束采集",
+        "停止采集",
+    ),
+    "calibration_start": ("开始校准", "重新校准", "重置校准"),
+}
+LOCAL_COMMAND_ENDPOINTS = {
+    "recording_start": "/api/automation/recording/start",
+    "recording_stop": "/api/automation/recording/stop",
+    "calibration_start": "/api/mapping/reset",
+}
+LOCAL_COMMAND_REPLY_KEYS = {
+    "recording_start": "recording_started",
+    "recording_stop": "recording_stopped",
+    "calibration_start": "calibration_started",
+}
+CANNED_REPLIES = {
+    "recording_started": "录制已经开始。",
+    "recording_stopped": "录制已经结束。",
+    "calibration_started": "校准已经开始。",
+    "recording_already_active": "当前已经在录制。",
+    "command_failed": "指令执行失败，请检查数采服务。",
+}
 
 
 def normalize_transcript(text: object) -> str:
@@ -53,6 +85,23 @@ def wake_word_detected(text: object, wake_phrases: Iterable[str]) -> bool:
         ):
             return True
     return False
+
+
+def match_local_command(text: object) -> Optional[str]:
+    """Return an exact local action for a short deterministic command."""
+    normalized = normalize_transcript(text).replace(" ", "")
+    for prefix in ("请帮我", "帮我", "请"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix) :]
+            break
+    for suffix in ("一下", "吧"):
+        if normalized.endswith(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    for action, aliases in LOCAL_COMMAND_ALIASES.items():
+        if normalized in aliases:
+            return action
+    return None
 
 
 def extract_openclaw_reply(payload: object) -> str:
@@ -233,6 +282,7 @@ class OpenClawVoiceBridge:
         self._piper_voice = None
         self._piper_synthesis_config = None
         self._wake_feedback_audio: Optional[Path] = None
+        self._canned_audio: dict[str, Path] = {}
         self._wake_candidates = 0
 
     @staticmethod
@@ -257,6 +307,7 @@ class OpenClawVoiceBridge:
             debug=False,
         )
         self._prepare_wake_feedback()
+        self._prepare_canned_audio()
 
     def _load_piper(self) -> None:
         if self._piper_voice is not None:
@@ -285,6 +336,37 @@ class OpenClawVoiceBridge:
         output_path = Path(tempfile.gettempdir()) / f"looper-wake-{os.getuid()}.wav"
         self._synthesize_piper(self.args.acknowledgement, output_path)
         self._wake_feedback_audio = output_path
+
+    def _synthesize_text(self, text: str, output_path: Path) -> None:
+        if self.args.tts_engine == "piper":
+            self._synthesize_piper(text, output_path)
+            return
+        subprocess.run(
+            [
+                self.args.tts_bin,
+                "-v",
+                self.args.tts_voice,
+                "-s",
+                str(self.args.tts_speed),
+                "-w",
+                str(output_path),
+                "--",
+                text,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def _prepare_canned_audio(self) -> None:
+        if self.args.no_tts:
+            return
+        output_dir = Path(tempfile.gettempdir()) / f"looper-canned-{os.getuid()}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for key, text in CANNED_REPLIES.items():
+            output_path = output_dir / f"{key}.wav"
+            self._synthesize_text(text, output_path)
+            self._canned_audio[key] = output_path
 
     def _capture(self) -> AlsaCapture:
         return AlsaCapture(
@@ -494,6 +576,50 @@ class OpenClawVoiceBridge:
             raise RuntimeError(f"OpenClaw agent failed: {message}")
         return speech_text(extract_openclaw_reply(json.loads(completed.stdout)))
 
+    def execute_local_command(self, action: str) -> str:
+        endpoint = LOCAL_COMMAND_ENDPOINTS[action]
+        request = urllib.request.Request(
+            f"{self.args.dashboard_url.rstrip('/')}{endpoint}",
+            data=b"{}",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=self.args.dashboard_timeout_sec
+            ) as response:
+                payload = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            if action == "recording_start" and exc.code == 409:
+                return "recording_already_active"
+            raise RuntimeError(f"Dashboard API returned HTTP {exc.code}") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("Dashboard API returned a non-object payload")
+        if action == "recording_start" and not payload.get("recording"):
+            raise RuntimeError("Dashboard did not start recording")
+        if action == "recording_stop" and payload.get("recording"):
+            raise RuntimeError("Dashboard did not stop recording")
+        if action == "calibration_start" and not payload.get("ok"):
+            message = payload.get("error") or "Dashboard did not reset calibration"
+            raise RuntimeError(str(message))
+        self._emit("local_command", action=action, endpoint=endpoint, ok=True)
+        return LOCAL_COMMAND_REPLY_KEYS[action]
+
+    def speak_canned(self, key: str) -> None:
+        text = CANNED_REPLIES[key]
+        if self.args.no_tts:
+            self._emit("speech", text=text, canned=True, played=False)
+            return
+        audio_path = self._canned_audio.get(key)
+        if audio_path is None:
+            self.speak(text)
+            return
+        subprocess.run(
+            ["aplay", "-q", "-D", self.args.playback_device, str(audio_path)],
+            check=True,
+        )
+        self._emit("speech", text=text, canned=True, played=True)
+
     def speak(self, text: str) -> None:
         text = speech_text(text)
         if not text:
@@ -502,26 +628,7 @@ class OpenClawVoiceBridge:
             self._emit("speech", text=text, played=False)
             return
         with tempfile.NamedTemporaryFile(prefix="looper-reply-", suffix=".wav") as audio:
-            if self.args.tts_engine == "piper":
-                self._synthesize_piper(text, Path(audio.name))
-            else:
-                tts_command = [
-                    self.args.tts_bin,
-                    "-v",
-                    self.args.tts_voice,
-                    "-s",
-                    str(self.args.tts_speed),
-                    "-w",
-                    audio.name,
-                    "--",
-                    text,
-                ]
-                subprocess.run(
-                    tts_command,
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+            self._synthesize_text(text, Path(audio.name))
             subprocess.run(
                 ["aplay", "-q", "-D", self.args.playback_device, audio.name],
                 check=True,
@@ -529,6 +636,15 @@ class OpenClawVoiceBridge:
         self._emit("speech", text=text, played=True)
 
     def handle_utterance(self, utterance: str) -> None:
+        local_action = match_local_command(utterance)
+        if local_action is not None:
+            try:
+                reply_key = self.execute_local_command(local_action)
+            except Exception as exc:  # noqa: BLE001 - keep voice control available
+                self._emit("error", stage="local_command", message=str(exc))
+                reply_key = "command_failed"
+            self.speak_canned(reply_key)
+            return
         try:
             reply = self.ask_openclaw(utterance)
         except Exception as exc:  # noqa: BLE001 - stay available after transient failures
@@ -599,6 +715,8 @@ def parse_args() -> argparse.Namespace:
         default="off",
     )
     parser.add_argument("--command-timeout-sec", type=float, default=15.0)
+    parser.add_argument("--dashboard-url", default="http://127.0.0.1:8765")
+    parser.add_argument("--dashboard-timeout-sec", type=float, default=15.0)
     parser.add_argument("--acknowledgement", default="我在。")
     parser.add_argument(
         "--wake-feedback",
@@ -654,6 +772,7 @@ def parse_args() -> argparse.Namespace:
     args.wake_pause_sec = max(0.2, args.wake_pause_sec)
     args.agent_timeout_sec = max(10, args.agent_timeout_sec)
     args.command_timeout_sec = max(1.0, args.command_timeout_sec)
+    args.dashboard_timeout_sec = max(1.0, args.dashboard_timeout_sec)
     args.wake_tone_ms = max(50, min(1000, args.wake_tone_ms))
     args.wake_tone_frequency = max(100, min(4000, args.wake_tone_frequency))
     args.wake_tone_volume = max(0.05, min(1.0, args.wake_tone_volume))

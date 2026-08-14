@@ -4,6 +4,7 @@ import sys
 import unittest
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -11,9 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from openclaw_voice_bridge import (  # noqa: E402
+    OpenClawVoiceBridge,
     build_agent_command,
     clean_utterance_transcript,
     extract_openclaw_reply,
+    match_local_command,
     normalize_transcript,
     speech_text,
     strip_wake_prefix,
@@ -27,11 +30,68 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
     def test_normalize_and_match_wake_word(self):
         self.assertEqual(normalize_transcript("  宸境！ "), "宸境")
         self.assertTrue(wake_word_detected("宸境", ["宸境"]))
+        self.assertTrue(wake_word_detected("澄净。", ["宸境", "澄净"]))
         self.assertTrue(wake_word_detected("沉浸。", ["宸境", "沉浸"]))
-        self.assertTrue(wake_word_detected("曾经。", ["宸境", "曾经"]))
-        self.assertTrue(wake_word_detected("陈经。", ["宸境", "陈经"]))
         self.assertFalse(wake_word_detected("我喜欢沉浸式体验", ["宸境", "沉浸"]))
-        self.assertFalse(wake_word_detected("我曾经去过", ["宸境", "曾经"]))
+        self.assertFalse(wake_word_detected("我曾经去过", ["宸境", "澄净"]))
+
+    def test_local_command_matching_is_exact_and_accepts_polite_forms(self):
+        self.assertEqual(match_local_command("开始录制。"), "recording_start")
+        self.assertEqual(match_local_command("请停止录制"), "recording_stop")
+        self.assertEqual(match_local_command("帮我重新校准一下"), "calibration_start")
+        self.assertIsNone(match_local_command("开始录制前先检查磁盘"))
+        self.assertIsNone(match_local_command("现在是否正在录制"))
+
+    def test_local_command_bypasses_openclaw(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        with (
+            mock.patch.object(
+                bridge, "execute_local_command", return_value="recording_started"
+            ) as execute,
+            mock.patch.object(bridge, "speak_canned") as speak,
+            mock.patch.object(bridge, "ask_openclaw") as ask_openclaw,
+        ):
+            bridge.handle_utterance("开始录制")
+        execute.assert_called_once_with("recording_start")
+        speak.assert_called_once_with("recording_started")
+        ask_openclaw.assert_not_called()
+
+    def test_local_command_calls_dashboard_automation_endpoint(self):
+        bridge = OpenClawVoiceBridge(
+            SimpleNamespace(
+                dashboard_url="http://127.0.0.1:8765/",
+                dashboard_timeout_sec=7.0,
+            )
+        )
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"recording": true}'
+        with mock.patch("urllib.request.urlopen", return_value=response) as urlopen:
+            reply_key = bridge.execute_local_command("recording_start")
+        self.assertEqual(reply_key, "recording_started")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "http://127.0.0.1:8765/api/automation/recording/start",
+        )
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 7.0)
+
+    def test_calibration_command_calls_mapping_reset(self):
+        bridge = OpenClawVoiceBridge(
+            SimpleNamespace(
+                dashboard_url="http://127.0.0.1:8765",
+                dashboard_timeout_sec=7.0,
+            )
+        )
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok": true}'
+        with mock.patch("urllib.request.urlopen", return_value=response) as urlopen:
+            reply_key = bridge.execute_local_command("calibration_start")
+        self.assertEqual(reply_key, "calibration_started")
+        self.assertEqual(
+            urlopen.call_args.args[0].full_url,
+            "http://127.0.0.1:8765/api/mapping/reset",
+        )
 
     def test_extract_reply_prefers_visible_final_text(self):
         payload = {
@@ -90,7 +150,9 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             args = parse_args()
         self.assertEqual(args.wake_pause_sec, 0.5)
         self.assertEqual(args.wake_phrase, ["宸境"])
+        self.assertIn("澄净", args.wake_alias)
         self.assertIn("沉浸", args.wake_alias)
+        self.assertNotIn("曾经", args.wake_alias)
         self.assertEqual(args.wake_feedback, "speech")
         self.assertEqual(args.agent_thinking, "off")
 

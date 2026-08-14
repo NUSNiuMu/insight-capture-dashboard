@@ -9,8 +9,9 @@
 - 宸境自然语言语音助手运行在宿主机独立进程。SenseVoice INT8 同时负责中文唤醒词与命令转写，
   Silero VAD 只负责本地语音分段，
   Piper 离线播报；原始音频不能进入 ROS
-  callback、Dashboard 或 OpenClaw。OpenClaw 只接收唤醒后的文本，并通过 loopback
-  插件访问 Dashboard API。自动停止接口只允许结束 `looper_record_*`，避免误停网页、
+  callback、Dashboard 或 OpenClaw。精确匹配的录制与在线校准短指令由语音桥直接访问
+  loopback Dashboard API，并播放服务启动时生成的缓存回复；其他唤醒后文本才发送给
+  OpenClaw。自动停止接口只允许结束 `looper_record_*`，避免误停网页、
   手势或其他控制器创建的录制。
 - 唤醒和命令录音是两个独立 capture 周期：Silero VAD 等待 0.5 秒静音后，
   常驻 SenseVoice 只接受整句“宸境”或它的配置同音转写，然后播放启动时缓存的“我在”，播放结束后才重新
