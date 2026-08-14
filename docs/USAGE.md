@@ -290,8 +290,9 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 “我在”后再说“检查数采状态”“开始录制”“停止录制”或“开始校准”。录制和校准等固定
 短指令直接调用本机 Dashboard 并播放预生成确认语音，不等待 OpenClaw；其他自然语言
 仍交给 OpenClaw。这里的“开始校准”会清空旧地图和全局定位状态，开始新一轮在线校准。
+当两路 Insight3 首次都完成全局定位时，音响会再播报一次“校准完成”。
 回复会从 USB 音响播出；服务
-每次启动会把 USB PCM 音量恢复到 40%。开始/停止属于有
+每次启动会把 USB PCM 音量恢复到 50%。开始/停止属于有
 副作用的操作，必须明确说出；自动化只能停止自己创建的 `looper_record_*`，不会停止
 网页或手势录制。旧的固定命令声控默认关闭，Recording 页 `voice disabled` 是正常状态。
 

@@ -152,7 +152,7 @@ Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic�
 识别唤醒词和后续命令；固定的录制/校准指令直连本机 Dashboard 并播放启动时预生成的
 回复，其他自然语言再由 OpenClaw 调用受限的数采工具。单独说“宸境”并停顿 0.5 秒后
 会先听到“我在”，随后再说命令；服务启动会把
-USB PCM 音量恢复到 40%。自动化只能停止自己创建的 `looper_record_*`，不能停止网页
+USB PCM 音量恢复到 50%。自动化只能停止自己创建的 `looper_record_*`，不能停止网页
 或手势开始的录制。
 
 Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、message/topic 数量，

@@ -13,6 +13,7 @@ import re
 import struct
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -30,6 +31,7 @@ DEFAULT_WAKE_PHRASE = "宸境"
 DEFAULT_WAKE_ALIASES = (
     "澄净",
     "澄静",
+    "成静",
     "沉浸",
     "辰境",
     "晨景",
@@ -63,6 +65,7 @@ CANNED_REPLIES = {
     "recording_started": "录制已经开始。",
     "recording_stopped": "录制已经结束。",
     "calibration_started": "校准已经开始。",
+    "calibration_completed": "校准完成。",
     "recording_already_active": "当前已经在录制。",
     "command_failed": "指令执行失败，请检查数采服务。",
 }
@@ -102,6 +105,20 @@ def match_local_command(text: object) -> Optional[str]:
         if normalized in aliases:
             return action
     return None
+
+
+def calibration_is_complete(payload: object) -> bool:
+    """Return whether both Insight3 devices have a first global localization."""
+    if not isinstance(payload, dict):
+        return False
+    statuses = payload.get("statuses")
+    if not isinstance(statuses, dict):
+        return False
+    return all(
+        isinstance(statuses.get(name), dict)
+        and bool(statuses[name].get("localized"))
+        for name in ("insight3_a", "insight3_b")
+    )
 
 
 def extract_openclaw_reply(payload: object) -> str:
@@ -283,6 +300,8 @@ class OpenClawVoiceBridge:
         self._piper_synthesis_config = None
         self._wake_feedback_audio: Optional[Path] = None
         self._canned_audio: dict[str, Path] = {}
+        self._playback_lock = threading.Lock()
+        self._calibration_monitor_generation = 0
         self._wake_candidates = 0
 
     @staticmethod
@@ -406,6 +425,12 @@ class OpenClawVoiceBridge:
                         vad.pop()
                         self._wake_candidates += 1
                         transcript = self._decode_sense_voice(segment, mode="wake")
+                        if self.args.log_wake_candidates:
+                            self._emit(
+                                "wake_candidate",
+                                recognized_text=transcript,
+                                candidate=self._wake_candidates,
+                            )
                         if wake_word_detected(transcript, wake_variants):
                             self._emit(
                                 "wake",
@@ -530,28 +555,30 @@ class OpenClawVoiceBridge:
                 return
             if self._wake_feedback_audio is None:
                 raise RuntimeError("Wake acknowledgement audio was not prepared")
-            subprocess.run(
-                [
-                    "aplay",
-                    "-q",
-                    "-D",
-                    self.args.playback_device,
-                    str(self._wake_feedback_audio),
-                ],
-                check=True,
-            )
+            with self._playback_lock:
+                subprocess.run(
+                    [
+                        "aplay",
+                        "-q",
+                        "-D",
+                        self.args.playback_device,
+                        str(self._wake_feedback_audio),
+                    ],
+                    check=True,
+                )
             self._emit("wake_feedback", kind="speech", played=True)
             return
-        subprocess.run(
-            ["aplay", "-q", "-D", self.args.playback_device],
-            input=wake_tone_wav(
-                self.args.sample_rate,
-                self.args.wake_tone_ms,
-                self.args.wake_tone_frequency,
-                self.args.wake_tone_volume,
-            ),
-            check=True,
-        )
+        with self._playback_lock:
+            subprocess.run(
+                ["aplay", "-q", "-D", self.args.playback_device],
+                input=wake_tone_wav(
+                    self.args.sample_rate,
+                    self.args.wake_tone_ms,
+                    self.args.wake_tone_frequency,
+                    self.args.wake_tone_volume,
+                ),
+                check=True,
+            )
         self._emit("wake_feedback", kind="tone", played=True)
 
     def ask_openclaw(self, utterance: str) -> str:
@@ -603,7 +630,65 @@ class OpenClawVoiceBridge:
             message = payload.get("error") or "Dashboard did not reset calibration"
             raise RuntimeError(str(message))
         self._emit("local_command", action=action, endpoint=endpoint, ok=True)
+        if action == "calibration_start":
+            self._start_calibration_monitor()
         return LOCAL_COMMAND_REPLY_KEYS[action]
+
+    def _start_calibration_monitor(self) -> None:
+        self._calibration_monitor_generation += 1
+        generation = self._calibration_monitor_generation
+        thread = threading.Thread(
+            target=self._monitor_calibration,
+            args=(generation,),
+            name="voice_calibration_monitor",
+            daemon=True,
+        )
+        thread.start()
+
+    def _monitor_calibration(self, generation: int) -> None:
+        deadline = time.monotonic() + self.args.calibration_monitor_timeout_sec
+        saw_incomplete = False
+        self._emit("calibration_monitor", state="waiting", generation=generation)
+        while (
+            generation == self._calibration_monitor_generation
+            and time.monotonic() < deadline
+        ):
+            request = urllib.request.Request(
+                f"{self.args.dashboard_url.rstrip('/')}/api/mapping",
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=self.args.dashboard_timeout_sec
+                ) as response:
+                    payload = json.loads(response.read())
+            except Exception as exc:  # noqa: BLE001 - retry transient local API errors
+                self._emit(
+                    "error",
+                    stage="calibration_monitor",
+                    message=str(exc),
+                    generation=generation,
+                )
+                time.sleep(1.0)
+                continue
+            complete = calibration_is_complete(payload)
+            if not complete:
+                saw_incomplete = True
+            elif saw_incomplete:
+                self._emit(
+                    "calibration_monitor",
+                    state="completed",
+                    generation=generation,
+                )
+                self.speak_canned("calibration_completed")
+                return
+            time.sleep(1.0)
+        if generation == self._calibration_monitor_generation:
+            self._emit(
+                "calibration_monitor",
+                state="timeout",
+                generation=generation,
+            )
 
     def speak_canned(self, key: str) -> None:
         text = CANNED_REPLIES[key]
@@ -614,10 +699,11 @@ class OpenClawVoiceBridge:
         if audio_path is None:
             self.speak(text)
             return
-        subprocess.run(
-            ["aplay", "-q", "-D", self.args.playback_device, str(audio_path)],
-            check=True,
-        )
+        with self._playback_lock:
+            subprocess.run(
+                ["aplay", "-q", "-D", self.args.playback_device, str(audio_path)],
+                check=True,
+            )
         self._emit("speech", text=text, canned=True, played=True)
 
     def speak(self, text: str) -> None:
@@ -629,10 +715,11 @@ class OpenClawVoiceBridge:
             return
         with tempfile.NamedTemporaryFile(prefix="looper-reply-", suffix=".wav") as audio:
             self._synthesize_text(text, Path(audio.name))
-            subprocess.run(
-                ["aplay", "-q", "-D", self.args.playback_device, audio.name],
-                check=True,
-            )
+            with self._playback_lock:
+                subprocess.run(
+                    ["aplay", "-q", "-D", self.args.playback_device, audio.name],
+                    check=True,
+                )
         self._emit("speech", text=text, played=True)
 
     def handle_utterance(self, utterance: str) -> None:
@@ -699,6 +786,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vad-min-speech-sec", type=float, default=0.25)
     parser.add_argument("--vad-max-speech-sec", type=float, default=12.0)
     parser.add_argument("--wake-pause-sec", type=float, default=0.5)
+    parser.add_argument("--log-wake-candidates", action="store_true")
     parser.add_argument("--wake-phrase", action="append", default=[])
     parser.add_argument("--wake-alias", action="append", default=[])
     parser.add_argument("--session-key", default="looper-voice")
@@ -717,6 +805,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--command-timeout-sec", type=float, default=15.0)
     parser.add_argument("--dashboard-url", default="http://127.0.0.1:8765")
     parser.add_argument("--dashboard-timeout-sec", type=float, default=15.0)
+    parser.add_argument("--calibration-monitor-timeout-sec", type=float, default=600.0)
     parser.add_argument("--acknowledgement", default="我在。")
     parser.add_argument(
         "--wake-feedback",
@@ -773,6 +862,9 @@ def parse_args() -> argparse.Namespace:
     args.agent_timeout_sec = max(10, args.agent_timeout_sec)
     args.command_timeout_sec = max(1.0, args.command_timeout_sec)
     args.dashboard_timeout_sec = max(1.0, args.dashboard_timeout_sec)
+    args.calibration_monitor_timeout_sec = max(
+        5.0, args.calibration_monitor_timeout_sec
+    )
     args.wake_tone_ms = max(50, min(1000, args.wake_tone_ms))
     args.wake_tone_frequency = max(100, min(4000, args.wake_tone_frequency))
     args.wake_tone_volume = max(0.05, min(1.0, args.wake_tone_volume))

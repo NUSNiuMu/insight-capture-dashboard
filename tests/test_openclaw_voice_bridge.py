@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from openclaw_voice_bridge import (  # noqa: E402
     OpenClawVoiceBridge,
     build_agent_command,
+    calibration_is_complete,
     clean_utterance_transcript,
     extract_openclaw_reply,
     match_local_command,
@@ -31,6 +32,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(normalize_transcript("  宸境！ "), "宸境")
         self.assertTrue(wake_word_detected("宸境", ["宸境"]))
         self.assertTrue(wake_word_detected("澄净。", ["宸境", "澄净"]))
+        self.assertTrue(wake_word_detected("成静。", ["宸境", "成静"]))
         self.assertTrue(wake_word_detected("沉浸。", ["宸境", "沉浸"]))
         self.assertFalse(wake_word_detected("我喜欢沉浸式体验", ["宸境", "沉浸"]))
         self.assertFalse(wake_word_detected("我曾经去过", ["宸境", "澄净"]))
@@ -85,12 +87,39 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         )
         response = mock.MagicMock()
         response.__enter__.return_value.read.return_value = b'{"ok": true}'
-        with mock.patch("urllib.request.urlopen", return_value=response) as urlopen:
+        with (
+            mock.patch("urllib.request.urlopen", return_value=response) as urlopen,
+            mock.patch.object(bridge, "_start_calibration_monitor") as monitor,
+        ):
             reply_key = bridge.execute_local_command("calibration_start")
         self.assertEqual(reply_key, "calibration_started")
+        monitor.assert_called_once_with()
         self.assertEqual(
             urlopen.call_args.args[0].full_url,
             "http://127.0.0.1:8765/api/mapping/reset",
+        )
+
+    def test_calibration_completion_requires_both_insight3_devices(self):
+        self.assertFalse(calibration_is_complete({"statuses": {}}))
+        self.assertFalse(
+            calibration_is_complete(
+                {
+                    "statuses": {
+                        "insight3_a": {"localized": True},
+                        "insight3_b": {"localized": False},
+                    }
+                }
+            )
+        )
+        self.assertTrue(
+            calibration_is_complete(
+                {
+                    "statuses": {
+                        "insight3_a": {"localized": True},
+                        "insight3_b": {"localized": True},
+                    }
+                }
+            )
         )
 
     def test_extract_reply_prefers_visible_final_text(self):
@@ -151,6 +180,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(args.wake_pause_sec, 0.5)
         self.assertEqual(args.wake_phrase, ["宸境"])
         self.assertIn("澄净", args.wake_alias)
+        self.assertIn("成静", args.wake_alias)
         self.assertIn("沉浸", args.wake_alias)
         self.assertNotIn("曾经", args.wake_alias)
         self.assertEqual(args.wake_feedback, "speech")

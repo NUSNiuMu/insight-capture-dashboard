@@ -61,9 +61,11 @@ scripts/run_openclaw_voice.sh --echo-once
 
 服务启动时会预生成成功、重复录制和失败等确认语音，命中快捷指令后直接播放缓存。
 “开始校准”调用 `/api/mapping/reset`，语义是清空 Insight9 地图和 Insight3 全局定位状态，
-立即开始新一轮在线校准，不是夹爪尺寸标定。
+立即开始新一轮在线校准，不是夹爪尺寸标定。语音桥随后在后台检查本机 mapping 状态；
+Insight3 A、B 在本次 reset 后首次同时进入 `localized=true` 时，播放一次预生成的
+“校准完成”。
 
-服务每次启动都会把 USB 音响的 PCM 音量恢复到 40%。可通过环境变量
+服务每次启动都会把 USB 音响的 PCM 音量恢复到 50%。可通过环境变量
 `LOOPER_PLAYBACK_VOLUME` 覆盖。
 
 语音入口固定使用 `openai/gpt-5.6-luna`、`thinking=off` 和 OpenClaw `fastMode=true`；
