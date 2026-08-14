@@ -397,7 +397,12 @@ class OpenClawVoiceBridge:
             self.args.chunk_frames,
         )
 
-    def wait_for_wake_word(self, capture: Optional[AlsaCapture] = None) -> None:
+    def wait_for_activation(
+        self,
+        capture: Optional[AlsaCapture] = None,
+        *,
+        allow_local_commands: bool = True,
+    ) -> tuple[str, str]:
         import numpy as np
 
         vad, window_size = self._new_vad(
@@ -409,9 +414,10 @@ class OpenClawVoiceBridge:
         wake_variants = [*self.args.wake_phrase, *self.args.wake_alias]
         self._emit(
             "listening",
-            mode="wake",
+            mode="activation" if allow_local_commands else "wake",
             engine="sensevoice",
             phrases=self.args.wake_phrase,
+            direct_commands=allow_local_commands,
             pause_sec=self.args.wake_pause_sec,
         )
         capture_context = contextlib.nullcontext(capture) if capture else self._capture()
@@ -427,13 +433,29 @@ class OpenClawVoiceBridge:
                         segment = np.copy(vad.front.samples)
                         vad.pop()
                         self._wake_candidates += 1
-                        transcript = self._decode_sense_voice(segment, mode="wake")
+                        transcript = self._decode_sense_voice(
+                            segment,
+                            mode="activation" if allow_local_commands else "wake",
+                        )
                         if self.args.log_wake_candidates:
                             self._emit(
                                 "wake_candidate",
                                 recognized_text=transcript,
                                 candidate=self._wake_candidates,
                             )
+                        local_action = (
+                            match_local_command(transcript)
+                            if allow_local_commands
+                            else None
+                        )
+                        if local_action is not None:
+                            self._emit(
+                                "direct_command",
+                                text=transcript,
+                                action=local_action,
+                                engine="sensevoice",
+                            )
+                            return "local_command", transcript
                         if wake_word_detected(transcript, wake_variants):
                             self._emit(
                                 "wake",
@@ -443,7 +465,10 @@ class OpenClawVoiceBridge:
                                 pause_sec=self.args.wake_pause_sec,
                                 candidates=self._wake_candidates,
                             )
-                            return
+                            return "wake", transcript
+
+    def wait_for_wake_word(self, capture: Optional[AlsaCapture] = None) -> None:
+        self.wait_for_activation(capture, allow_local_commands=False)
 
     def _new_vad(
         self,
@@ -725,8 +750,10 @@ class OpenClawVoiceBridge:
                 )
         self._emit("speech", text=text, played=True)
 
-    def handle_utterance(self, utterance: str) -> None:
-        local_action = match_local_command(utterance)
+    def handle_utterance(
+        self, utterance: str, *, allow_local_commands: bool = True
+    ) -> None:
+        local_action = match_local_command(utterance) if allow_local_commands else None
         if local_action is not None:
             try:
                 reply_key = self.execute_local_command(local_action)
@@ -753,13 +780,16 @@ class OpenClawVoiceBridge:
             wake_phrases=self.args.wake_phrase,
         )
         while True:
-            self.wait_for_wake_word()
+            activation, transcript = self.wait_for_activation()
+            if activation == "local_command":
+                self.handle_utterance(transcript, allow_local_commands=True)
+                continue
             self.play_wake_feedback()
             utterance = self.listen_for_utterance(self.args.command_timeout_sec)
             if not utterance:
                 self.speak("没听清。")
                 continue
-            self.handle_utterance(utterance)
+            self.handle_utterance(utterance, allow_local_commands=False)
 
 
 def parse_args() -> argparse.Namespace:

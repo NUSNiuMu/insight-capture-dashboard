@@ -61,6 +61,18 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         speak.assert_called_once_with("recording_started")
         ask_openclaw.assert_not_called()
 
+    def test_wake_followup_forces_openclaw_even_for_fixed_command(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        with (
+            mock.patch.object(bridge, "execute_local_command") as execute,
+            mock.patch.object(bridge, "ask_openclaw", return_value="好的。") as ask,
+            mock.patch.object(bridge, "speak") as speak,
+        ):
+            bridge.handle_utterance("开始录制", allow_local_commands=False)
+        execute.assert_not_called()
+        ask.assert_called_once_with("开始录制")
+        speak.assert_called_once_with("好的。")
+
     def test_local_command_calls_dashboard_automation_endpoint(self):
         bridge = OpenClawVoiceBridge(
             SimpleNamespace(
