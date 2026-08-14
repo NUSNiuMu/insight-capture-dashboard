@@ -12,7 +12,6 @@ import os
 import re
 import struct
 import subprocess
-import sys
 import tempfile
 import time
 import wave
@@ -216,6 +215,8 @@ class OpenClawVoiceBridge:
         self._speech_model = None
         self._sense_voice = None
         self._sherpa_onnx = None
+        self._piper_voice = None
+        self._piper_synthesis_config = None
         self._wake_feedback_audio: Optional[Path] = None
 
     @staticmethod
@@ -253,33 +254,32 @@ class OpenClawVoiceBridge:
             )
         self._prepare_wake_feedback()
 
-    def _piper_command(self, text: str, output_path: Path) -> list[str]:
+    def _load_piper(self) -> None:
+        if self._piper_voice is not None:
+            return
         if not self.args.piper_model.is_file():
             raise FileNotFoundError(f"Piper voice model not found: {self.args.piper_model}")
-        return [
-            sys.executable,
-            "-m",
-            "piper",
-            "-m",
-            str(self.args.piper_model),
-            "-f",
-            str(output_path),
-            "--length-scale",
-            str(self.args.piper_length_scale),
-            "--",
-            text,
-        ]
+        from piper import PiperVoice, SynthesisConfig
+
+        self._piper_voice = PiperVoice.load(self.args.piper_model)
+        self._piper_synthesis_config = SynthesisConfig(
+            length_scale=self.args.piper_length_scale,
+        )
+
+    def _synthesize_piper(self, text: str, output_path: Path) -> None:
+        self._load_piper()
+        with wave.open(str(output_path), "wb") as wav_file:
+            self._piper_voice.synthesize_wav(
+                text,
+                wav_file,
+                syn_config=self._piper_synthesis_config,
+            )
 
     def _prepare_wake_feedback(self) -> None:
         if self.args.no_tts or self.args.wake_feedback != "speech":
             return
         output_path = Path(tempfile.gettempdir()) / f"looper-wake-{os.getuid()}.wav"
-        subprocess.run(
-            self._piper_command(self.args.acknowledgement, output_path),
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        self._synthesize_piper(self.args.acknowledgement, output_path)
         self._wake_feedback_audio = output_path
 
     def _capture(self) -> AlsaCapture:
@@ -538,7 +538,7 @@ class OpenClawVoiceBridge:
             return
         with tempfile.NamedTemporaryFile(prefix="looper-reply-", suffix=".wav") as audio:
             if self.args.tts_engine == "piper":
-                tts_command = self._piper_command(text, Path(audio.name))
+                self._synthesize_piper(text, Path(audio.name))
             else:
                 tts_command = [
                     self.args.tts_bin,
@@ -551,12 +551,12 @@ class OpenClawVoiceBridge:
                     "--",
                     text,
                 ]
-            subprocess.run(
-                tts_command,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+                subprocess.run(
+                    tts_command,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
             subprocess.run(
                 ["aplay", "-q", "-D", self.args.playback_device, audio.name],
                 check=True,

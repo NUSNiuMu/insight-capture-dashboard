@@ -10,7 +10,7 @@ Looper 在 Jetson 宿主机上提供“唤醒词 → 自然语言 → 数采工�
 3. Silero VAD 截取用户随后说的一段话，SenseVoice INT8 在本机离线转写中文；
 4. 只有转写文本发送给本机 OpenClaw，OpenClaw 使用当前用户的 Codex 登录完成推理；
 5. `insight_capture` 插件仅通过 `http://127.0.0.1:8765` 访问 Dashboard；
-6. 简短回复由本地 Piper 合成，并通过同一 USB 音响播放。
+6. 简短回复由服务启动时常驻加载的本地 Piper 合成，并通过同一 USB 音响播放。
 
 原始音频不会发送给 OpenClaw、Codex 或 Dashboard。唤醒后的转写文本以及回答请求所需
 的本机数采状态会交给当前 Codex 订阅处理，因此启用常驻服务前必须获得设备使用者明确
