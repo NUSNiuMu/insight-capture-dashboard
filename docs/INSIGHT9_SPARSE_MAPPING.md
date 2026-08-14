@@ -21,8 +21,8 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图；配置的左右手
   显存与 stream 通过 CUDA C API 直接管理。
 - SuperPoint 的卷积、softmax、NMS、边界过滤、Top-K 和描述子采样全部位于
   FP16 TensorRT 引擎内；数值敏感的 SuperGlue/Sinkhorn 使用 FP32。
-- `/insight9_a/camera/hand_keypoints` 使用彩色相机坐标系，不能直接作为红外图像
-  遮罩。当前通过至少三个关键帧的世界坐标一致性过滤移动人手和物体。
+- `/insight9_a/camera/hand_keypoints` 使用彩色相机坐标系，不能直接作为左右目图像
+  遮罩。当前通过至少三次独立双目观测的世界坐标一致性过滤移动人手和物体。
 
 ## 数据链
 
@@ -43,8 +43,10 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图；配置的左右手
   -> 可选的调试 points PointCloud2 + Path
 ```
 
-稳定地图点必须在三个不同关键帧落入同一个 4 cm 体素。候选点超过 12 个关键帧
-未再次观测会被删除，避免单帧动态物体永久进入地图。
+稳定地图点必须在至少三次独立双目观测中落入同一个 4 cm 体素。运动超过 5 cm
+或 3° 才向位姿图增加关键帧；初始地图不足 80 点时，即使相机静止，也会每 0.4 秒
+补充一次确认观测，最多六次，但不会向位姿图添加重复静止节点。候选点超过 12 次
+观测未再次出现会被删除，避免单帧动态物体永久进入地图。
 
 Insight9 每两个关键帧尝试一次自身回环，并从候选地图中排除最近 30 个关键帧
 内首次建立的地标，避免把连续跟踪误判成回环。当前左目特征与历史三维地标通过
@@ -202,7 +204,7 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 以下 RViz 调试输出默认关闭；同时为 mapper 和 localizer 传入
 `--publish-debug-topics` 后才创建 publisher：
 
-- `/insight9_sparse_map/points`：经过多关键帧确认的稀疏地图。
+- `/insight9_sparse_map/points`：经过多次独立观测确认的稀疏地图。
 - `/insight9_sparse_map/path`：2 Hz、最多 200 点的 Insight9 调试轨迹。
 - `/insight_global/insight3_a/path`、`/insight_global/insight3_b/path`：2 Hz、
   最多 200 点的 Insight3 调试轨迹。

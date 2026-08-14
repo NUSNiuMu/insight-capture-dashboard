@@ -40,8 +40,6 @@ const newMapButton = document.getElementById("new-map-button");
 const captureCheckLine = document.getElementById("capture-check-line");
 const captureCheckStatus = document.getElementById("capture-check-status");
 const captureCheckMeta = document.getElementById("capture-check-meta");
-const captureCheckButton = document.getElementById("capture-check-button");
-const captureReferenceButton = document.getElementById("capture-reference-button");
 const obsModeToggle = document.getElementById("obs-mode-toggle");
 const POSE_STREAM_STALE_MS = 4000;
 const OBS_MODE_STORAGE_KEY = "insight.obs-performance-mode";
@@ -134,12 +132,6 @@ if (keepTrajectoryToggle) {
 }
 if (newMapButton) {
   newMapButton.addEventListener("click", () => { void resetMapping(); });
-}
-if (captureCheckButton) {
-  captureCheckButton.addEventListener("click", () => { void runCaptureCheck(); });
-}
-if (captureReferenceButton) {
-  captureReferenceButton.addEventListener("click", () => { void setCaptureReference(); });
 }
 if (obsModeToggle) {
   obsModeToggle.addEventListener("click", () => {
@@ -315,34 +307,6 @@ async function refreshCaptureCheckStatus() {
   }
 }
 
-async function runCaptureCheck() {
-  if (!captureCheckButton || captureCheckButton.disabled) return;
-  captureCheckButton.disabled = true;
-  captureCheckButton.textContent = "Checking...";
-  try {
-    const response = await fetch("/api/capture-check/run", { method: "POST" });
-    renderCaptureCheck(await response.json());
-  } finally {
-    captureCheckButton.disabled = false;
-    captureCheckButton.textContent = "Check rig";
-  }
-}
-
-async function setCaptureReference() {
-  if (!captureReferenceButton || captureReferenceButton.disabled) return;
-  const prompt = "Save the current stable three-camera pose as the station baseline? Only do this after calibration has been verified.";
-  if (!window.confirm(prompt)) return;
-  captureReferenceButton.disabled = true;
-  captureReferenceButton.textContent = "Saving...";
-  try {
-    const response = await fetch("/api/capture-check/reference", { method: "POST" });
-    renderCaptureCheck(await response.json());
-  } finally {
-    captureReferenceButton.disabled = false;
-    captureReferenceButton.textContent = "Set station";
-  }
-}
-
 function renderCaptureCheck(payload) {
   const result = payload.type === "capture_check_result" ? payload : payload.last_result;
   const state = String(result?.state || payload.state || "not_ready");
@@ -371,14 +335,11 @@ function renderCaptureCheck(payload) {
   } else if (state === "pass") {
     detail = "Global station poses are within threshold. The next unit may start.";
   } else if (state === "reference_saved") {
-    detail = "Use Check rig after every recorded unit.";
+    detail = "Say 检查相机 after every recorded unit.";
   }
   if (captureCheckLine) captureCheckLine.dataset.state = state;
   if (captureCheckStatus) captureCheckStatus.textContent = labels[state] || state;
   if (captureCheckMeta) captureCheckMeta.textContent = detail;
-  const enabled = payload.enabled !== false && state !== "disabled";
-  if (captureCheckButton) captureCheckButton.disabled = !enabled;
-  if (captureReferenceButton) captureReferenceButton.disabled = !enabled;
 }
 
 window.setInterval(() => {

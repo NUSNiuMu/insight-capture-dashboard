@@ -199,10 +199,11 @@ def descriptor_cloud(
 
 
 @dataclass(frozen=True)
-class MappingKeyframe:
-    """Compact stereo observations retained for map rebuilding after loops."""
+class MappingObservation:
+    """Compact stereo observation retained for map rebuilding after loops."""
 
-    keyframe_id: int
+    observation_id: int
+    source_keyframe_id: int
     stamp_ns: int
     odom_to_left: np.ndarray
     points_left: np.ndarray
@@ -228,6 +229,17 @@ class Insight9SparseMapper(Node):
             for value in pose_graph_runtime_limits
         ):
             raise ValueError("pose graph scheduling thresholds must be positive")
+        if (
+            not np.isfinite(args.stationary_observation_interval_sec)
+            or args.stationary_observation_interval_sec <= 0.0
+        ):
+            raise ValueError("stationary observation interval must be positive")
+        if args.stationary_bootstrap_min_points < 0:
+            raise ValueError("stationary bootstrap point target cannot be negative")
+        if args.stationary_bootstrap_max_observations < args.confirmation_observations:
+            raise ValueError(
+                "stationary bootstrap observation limit must cover confirmation"
+            )
         self._pose_buffer = PoseBuffer(max_bracket_gap_ns=50_000_000)
         self._stereo_sync: StereoPairSynchronizer[Image] = StereoPairSynchronizer(
             tolerance_ns=int(args.stereo_tolerance_ms * 1_000_000)
@@ -253,7 +265,7 @@ class Insight9SparseMapper(Node):
             )
         )
         self._graph_lock = threading.RLock()
-        self._mapping_keyframes: list[MappingKeyframe] = []
+        self._mapping_observations: list[MappingObservation] = []
         self._pose_graph_active = bool(args.pose_graph_enabled)
         self._pose_graph_pending = False
         self._pose_graph_optimization_count = 0
@@ -323,6 +335,9 @@ class Insight9SparseMapper(Node):
         self._feature_map_dirty = True
         self._last_keyframe_transform: Optional[np.ndarray] = None
         self._keyframe_id = 0
+        self._observation_id = 0
+        self._current_keyframe_observations = 0
+        self._last_map_observation_stamp_ns = 0
         self._path = deque(maxlen=args.path_points)
         self._path_lock = threading.Lock()
         self._map_lock = threading.Lock()
@@ -410,6 +425,9 @@ class Insight9SparseMapper(Node):
                 self._last_feature_publish_monotonic = 0.0
             self._last_keyframe_transform = None
             self._keyframe_id = 0
+            self._observation_id = 0
+            self._current_keyframe_observations = 0
+            self._last_map_observation_stamp_ns = 0
             self._last_mapping_attempt_monotonic = 0.0
         self._latest_stats = {"state": "waiting_for_motion", "reset": True}
         self._publish_map()
@@ -419,7 +437,7 @@ class Insight9SparseMapper(Node):
     def _reset_loop_closure(self) -> None:
         with self._graph_lock:
             self._pose_graph.clear()
-            self._mapping_keyframes.clear()
+            self._mapping_observations.clear()
             self._pose_graph_active = bool(self._args.pose_graph_enabled)
             self._pose_graph_pending = False
             self._pose_graph_optimization_count = 0
@@ -688,7 +706,12 @@ class Insight9SparseMapper(Node):
                 }
                 continue
             odom_to_left = compose_transform(matrix_from_pose(pose), imu_to_left)
-            if not self._is_keyframe(odom_to_left):
+            motion_keyframe = self._is_keyframe(odom_to_left)
+            stationary_observation = (
+                not motion_keyframe
+                and self._stationary_observation_due(pair.stamp_ns)
+            )
+            if not motion_keyframe and not stationary_observation:
                 continue
             with self._graph_lock:
                 session_generation = self._session_generation
@@ -713,9 +736,15 @@ class Insight9SparseMapper(Node):
                     max_reprojection_error_px=self._args.max_reprojection_error_px,
                 )
                 source = triangulated.source_indices
-                next_keyframe_id = self._keyframe_id + 1
-                keyframe = MappingKeyframe(
-                    keyframe_id=next_keyframe_id,
+                source_keyframe_id = (
+                    self._keyframe_id + 1
+                    if motion_keyframe
+                    else self._keyframe_id
+                )
+                next_observation_id = self._observation_id + 1
+                observation = MappingObservation(
+                    observation_id=next_observation_id,
+                    source_keyframe_id=source_keyframe_id,
                     stamp_ns=pair.stamp_ns,
                     odom_to_left=odom_to_left.copy(),
                     points_left=np.asarray(
@@ -730,55 +759,84 @@ class Insight9SparseMapper(Node):
                     if session_generation != self._session_generation:
                         continue
                     graph_target_id: Optional[int] = None
-                    if self._pose_graph_active and self._pose_graph.full:
+                    if (
+                        motion_keyframe
+                        and self._pose_graph_active
+                        and self._pose_graph.full
+                    ):
                         self._pose_graph_active = False
                         self.get_logger().warning(
                             "pose graph reached %d keyframes; continuing with "
                             "the existing global correction without further graph updates"
                             % self._pose_graph.keyframe_count
                         )
-                    if self._pose_graph_active:
+                    if motion_keyframe and self._pose_graph_active:
                         initial_map_pose = compose_transform(
                             self._map_to_odom(smoothed=False), odom_to_left
                         )
                         map_to_left = self._pose_graph.add_keyframe(
-                            next_keyframe_id,
+                            source_keyframe_id,
                             pair.stamp_ns,
                             odom_to_left,
                             initial_map_pose=initial_map_pose,
                         )
-                        self._mapping_keyframes.append(keyframe)
-                        self._keyframe_storage_bytes += sum(
-                            value.nbytes
-                            for value in (
-                                keyframe.odom_to_left,
-                                keyframe.points_left,
-                                keyframe.descriptors,
-                                keyframe.scores,
-                            )
-                        )
-                        graph_target_id = next_keyframe_id
-                    else:
+                        graph_target_id = source_keyframe_id
+                    elif motion_keyframe:
                         map_to_left = compose_transform(
                             self._map_to_odom(smoothed=False), odom_to_left
                         )
-                    # The graph/keyframe retention above is durable even if a later
-                    # loop solve fails; advance the ID so the next frame cannot
-                    # collide with a partially processed node.
-                    self._keyframe_id = next_keyframe_id
-                    loop_diagnostics, graph_optimized = self._detect_loop_closure(
-                        next_keyframe_id,
-                        matches.left_points,
-                        matches.descriptors,
-                        calibration,
-                        odom_to_left,
-                        left.shape,
-                        graph_target_id=graph_target_id,
-                    )
+                    else:
+                        graph_correction = (
+                            self._pose_graph.correction_at(pair.stamp_ns)
+                            if self._pose_graph.keyframe_count > 0
+                            else None
+                        )
+                        map_to_left = compose_transform(
+                            self._map_to_odom(smoothed=False)
+                            if graph_correction is None
+                            else graph_correction,
+                            odom_to_left,
+                        )
+                    if self._pose_graph_active:
+                        self._mapping_observations.append(observation)
+                        self._keyframe_storage_bytes += sum(
+                            value.nbytes
+                            for value in (
+                                observation.odom_to_left,
+                                observation.points_left,
+                                observation.descriptors,
+                                observation.scores,
+                            )
+                        )
+                    self._observation_id = next_observation_id
+                    self._last_map_observation_stamp_ns = pair.stamp_ns
+                    if motion_keyframe:
+                        # Retention above is durable even if a later loop solve
+                        # fails; advance IDs before running loop closure.
+                        self._keyframe_id = source_keyframe_id
+                        self._current_keyframe_observations = 1
+                        self._last_keyframe_transform = odom_to_left
+                        loop_diagnostics, graph_optimized = self._detect_loop_closure(
+                            source_keyframe_id,
+                            matches.left_points,
+                            matches.descriptors,
+                            calibration,
+                            odom_to_left,
+                            left.shape,
+                            graph_target_id=graph_target_id,
+                        )
+                    else:
+                        self._current_keyframe_observations += 1
+                        loop_diagnostics = {
+                            "loop_checked": False,
+                            "loop_closures": self._loop_closure_count,
+                            "pose_graph_optimized": False,
+                        }
+                        graph_optimized = False
                     map_rebuild_ms = 0.0
                     if graph_optimized:
                         rebuild_started = time.perf_counter()
-                        update = self._rebuild_landmarks_from_keyframes()
+                        update = self._rebuild_landmarks_from_observations()
                         map_rebuild_ms = (
                             time.perf_counter() - rebuild_started
                         ) * 1000.0
@@ -788,17 +846,20 @@ class Insight9SparseMapper(Node):
                         )
                         with self._map_lock:
                             update = self._landmarks.update(
-                                next_keyframe_id,
+                                source_keyframe_id,
                                 map_points,
+                                observation_id=next_observation_id,
                                 descriptors=matches.descriptors[source],
                                 scores=matches.scores[source],
                             )
                             self._pointcloud_dirty = True
                             self._feature_map_dirty = True
-                self._last_keyframe_transform = odom_to_left
                 self._latest_stats = {
                     "state": "mapping",
                     "keyframe": self._keyframe_id,
+                    "observation": self._observation_id,
+                    "stationary_observation": stationary_observation,
+                    "keyframe_observations": self._current_keyframe_observations,
                     "detected_left": matches.detected_left,
                     "detected_right": matches.detected_right,
                     "stereo_matches": len(matches.left_points),
@@ -1059,22 +1120,23 @@ class Insight9SparseMapper(Node):
         )
         return result
 
-    def _rebuild_landmarks_from_keyframes(self):
+    def _rebuild_landmarks_from_observations(self):
         """Re-fuse retained stereo observations using optimized keyframe poses."""
 
-        poses = self._pose_graph.pose_snapshot()
         rebuilt = LandmarkMap(self._landmark_config)
         update = None
-        for keyframe in self._mapping_keyframes:
-            pose = poses.get(keyframe.keyframe_id)
-            if pose is None:
-                continue
-            map_points = transform_points(pose, keyframe.points_left)
+        for observation in self._mapping_observations:
+            correction = self._pose_graph.correction_at(observation.stamp_ns)
+            if correction is None:
+                correction = self._map_to_odom(smoothed=False)
+            map_to_left = compose_transform(correction, observation.odom_to_left)
+            map_points = transform_points(map_to_left, observation.points_left)
             update = rebuilt.update(
-                keyframe.keyframe_id,
+                observation.source_keyframe_id,
                 map_points,
-                descriptors=np.asarray(keyframe.descriptors, dtype=np.float32),
-                scores=np.asarray(keyframe.scores, dtype=np.float32),
+                observation_id=observation.observation_id,
+                descriptors=np.asarray(observation.descriptors, dtype=np.float32),
+                scores=np.asarray(observation.scores, dtype=np.float32),
             )
         if update is None:
             raise RuntimeError("cannot rebuild an empty keyframe map")
@@ -1094,6 +1156,25 @@ class Insight9SparseMapper(Node):
             translation >= self._args.keyframe_translation_m
             or rotation >= self._args.keyframe_rotation_deg
         )
+
+    def _stationary_observation_due(self, stamp_ns: int) -> bool:
+        """Collect a short temporal confirmation burst without graph nodes."""
+
+        if self._keyframe_id <= 0:
+            return False
+        if (
+            self._current_keyframe_observations
+            >= self._args.stationary_bootstrap_max_observations
+        ):
+            return False
+        with self._map_lock:
+            confirmed = self._landmarks.confirmed_count()
+        if confirmed >= self._args.stationary_bootstrap_min_points:
+            return False
+        interval_ns = int(
+            self._args.stationary_observation_interval_sec * 1_000_000_000
+        )
+        return stamp_ns - self._last_map_observation_stamp_ns >= interval_ns
 
     def _publish_map(self) -> None:
         now = time.monotonic()
@@ -1275,6 +1356,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keyframe-rotation-deg", type=float, default=3.0)
     parser.add_argument("--voxel-size-m", type=float, default=0.04)
     parser.add_argument("--confirmation-observations", type=int, default=3)
+    parser.add_argument(
+        "--stationary-observation-interval-sec",
+        type=float,
+        default=0.4,
+        help="interval between temporal confirmations that do not add graph keyframes",
+    )
+    parser.add_argument(
+        "--stationary-bootstrap-min-points",
+        type=int,
+        default=80,
+        help="stop stationary bootstrap once this many landmarks are confirmed",
+    )
+    parser.add_argument(
+        "--stationary-bootstrap-max-observations",
+        type=int,
+        default=6,
+        help="bound stationary bootstrap inference when a scene lacks texture",
+    )
     parser.add_argument("--candidate-ttl-keyframes", type=int, default=12)
     parser.add_argument("--max-landmarks", type=int, default=100_000)
     parser.add_argument("--path-points", type=int, default=200)

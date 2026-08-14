@@ -38,6 +38,7 @@ class _Landmark:
     observations: int
     first_keyframe: int
     last_keyframe: int
+    last_observation: int
     score: float
 
 
@@ -69,10 +70,14 @@ class LandmarkMap:
         keyframe_id: int,
         points_world: np.ndarray,
         *,
+        observation_id: Optional[int] = None,
         descriptors: Optional[np.ndarray] = None,
         scores: Optional[np.ndarray] = None,
     ) -> MapUpdate:
-        """Insert a keyframe, counting at most one observation per voxel."""
+        """Insert one stereo observation, counting each voxel at most once."""
+
+        keyframe_id = int(keyframe_id)
+        observation_id = keyframe_id if observation_id is None else int(observation_id)
 
         points = np.asarray(points_world, dtype=np.float64).reshape(-1, 3)
         if descriptors is not None:
@@ -105,12 +110,15 @@ class LandmarkMap:
         for key, index in representatives.items():
             descriptor = None if descriptors is None else descriptors[index]
             if key in self._confirmed:
+                if self._confirmed[key].last_observation == observation_id:
+                    continue
                 self._merge(
                     self._confirmed[key],
                     points[index],
                     descriptor,
                     float(scores_array[index]),
-                    int(keyframe_id),
+                    keyframe_id,
+                    observation_id,
                 )
                 continue
 
@@ -120,19 +128,21 @@ class LandmarkMap:
                     position=points[index].copy(),
                     descriptor=self._normalized_descriptor(descriptor),
                     observations=1,
-                    first_keyframe=int(keyframe_id),
-                    last_keyframe=int(keyframe_id),
+                    first_keyframe=keyframe_id,
+                    last_keyframe=keyframe_id,
+                    last_observation=observation_id,
                     score=float(scores_array[index]),
                 )
                 continue
-            if candidate.last_keyframe == int(keyframe_id):
+            if candidate.last_observation == observation_id:
                 continue
             self._merge(
                 candidate,
                 points[index],
                 descriptor,
                 float(scores_array[index]),
-                int(keyframe_id),
+                keyframe_id,
+                observation_id,
             )
             if candidate.observations >= self.config.confirmation_observations:
                 if len(self._confirmed) < self.config.max_landmarks:
@@ -140,11 +150,11 @@ class LandmarkMap:
                     promoted += 1
                 del self._candidates[key]
 
-        oldest = int(keyframe_id) - self.config.candidate_ttl_keyframes
+        oldest = observation_id - self.config.candidate_ttl_keyframes
         self._candidates = {
             key: value
             for key, value in self._candidates.items()
-            if value.last_keyframe >= oldest
+            if value.last_observation >= oldest
         }
         return MapUpdate(
             input_points=len(points),
@@ -169,6 +179,7 @@ class LandmarkMap:
         descriptor: Optional[np.ndarray],
         score: float,
         keyframe_id: int,
+        observation_id: int,
     ) -> None:
         next_count = landmark.observations + 1
         landmark.position += (position - landmark.position) / next_count
@@ -182,6 +193,7 @@ class LandmarkMap:
                 )
         landmark.observations = next_count
         landmark.last_keyframe = keyframe_id
+        landmark.last_observation = observation_id
         landmark.score = max(landmark.score, score)
 
     def points(self) -> np.ndarray:

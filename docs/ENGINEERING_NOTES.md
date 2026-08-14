@@ -185,8 +185,9 @@
 
 同日的第四轮后台 CPU 优化不改变 5 Hz 建图上限、30 Hz Pose 或 5 Hz TF：
 
-- mapper 在一次输入尝试开始时推进 5 Hz deadline；缺 Pose 或静止未形成关键帧时，
-  不再对每个双目帧重复等待和变换。
+- mapper 在一次输入尝试开始时推进 5 Hz deadline；缺 Pose 时不再对每个双目帧重复
+  等待和变换。新地图不足 80 个确认点时，静止相机会以 0.4 秒间隔执行最多六次
+  时域确认观测，但这些观测不进入位姿图；达到目标后恢复仅由运动关键帧触发推理。
 - status 继续以 2 Hz 发布；完整稀疏点云只在地图变化时以最高 1 Hz 发布，稳定地图
   每 10 秒刷新一次供晚加入的 volatile RViz subscriber 使用。
 - mapper 和两路 localizer 的 200 点调试 Path 降至 2 Hz，TF 使用独立的 5 Hz timer，
