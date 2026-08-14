@@ -16,6 +16,7 @@ const TRAIL_RADIUS_BY_ROLE = {
   right_hand: 0.008
 };
 const TRAIL_TESSELLATION = 6;
+const TRAIL_MIN_MOTION_M = 0.005;
 const HAND_RIG_EDGES = [
   [0, 1, "thumb"], [1, 2, "thumb"], [2, 3, "thumb"], [3, 4, "thumb"],
   [0, 5, "palm"], [5, 6, "index"], [6, 7, "index"], [7, 8, "index"],
@@ -304,7 +305,10 @@ export function queuePoseUpdate(payload) {
     for (const pose of payload.poses || []) {
       const update = pose.trace_update;
       const existing = traceCaches.get(pose.role);
-      if (update && update.mode !== "snapshot" && !existing) continue;
+      if (update && update.mode !== "snapshot" && !existing) {
+        traceStateValid = false;
+        continue;
+      }
       traceStateValid = applyTraceUpdate(
         traceCaches,
         pose,
@@ -947,7 +951,9 @@ function updateTrailFromPose(pose, tracePoints) {
     const kept = keptPoints.get(pose.role) || [];
     if (kept.length >= 2) {
       const firstPoint = kept[0];
-      const hasMotion = kept.some((point) => BABYLON.Vector3.Distance(point, firstPoint) > 0.02);
+      const hasMotion = kept.some(
+        (point) => BABYLON.Vector3.Distance(point, firstPoint) > TRAIL_MIN_MOTION_M
+      );
       if (hasMotion) {
         trail.points = kept.map((p) => p.clone());
         refreshTrailMesh(trail);
@@ -968,9 +974,12 @@ function updateTrailFromPose(pose, tracePoints) {
     return;
   }
   const firstPoint = sourcePoints[0];
-  const hasMotion = sourcePoints.some((point) => BABYLON.Vector3.Distance(point, firstPoint) > 0.02);
+  const hasMotion = sourcePoints.some(
+    (point) => BABYLON.Vector3.Distance(point, firstPoint) > TRAIL_MIN_MOTION_M
+  );
   if (!hasMotion) {
-    clearTrail(trail);
+    // Preserve the last meaningful path while a bounded server trace window
+    // fills with stationary samples. New-map and Clear trail explicitly reset it.
     return;
   }
   trail.points = sourcePoints;

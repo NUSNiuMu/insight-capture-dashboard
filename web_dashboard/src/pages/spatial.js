@@ -17,7 +17,7 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260813-native-spatial-resolution";
+} from "../spatial/renderer.js?v=20260814-trail-recovery";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");
@@ -37,9 +37,6 @@ const mappingStatus = document.getElementById("mapping-status");
 const mappingMeta = document.getElementById("mapping-meta");
 const mappingCameraStates = document.getElementById("mapping-camera-states");
 const newMapButton = document.getElementById("new-map-button");
-const captureCheckLine = document.getElementById("capture-check-line");
-const captureCheckStatus = document.getElementById("capture-check-status");
-const captureCheckMeta = document.getElementById("capture-check-meta");
 const obsModeToggle = document.getElementById("obs-mode-toggle");
 const POSE_STREAM_STALE_MS = 4000;
 const OBS_MODE_STORAGE_KEY = "insight.obs-performance-mode";
@@ -47,7 +44,6 @@ const wsUrl = resolveWebSocketUrl();
 let playbackBusy = false;
 let playbackPollTimer = null;
 let mappingPollTimer = null;
-let captureCheckPollTimer = null;
 let keepTrajectory = false;
 let pageUnloading = false;
 let activeWs = null;
@@ -81,7 +77,6 @@ window.addEventListener("pagehide", () => {
   }
   if (playbackPollTimer) window.clearInterval(playbackPollTimer);
   if (mappingPollTimer) window.clearInterval(mappingPollTimer);
-  if (captureCheckPollTimer) window.clearInterval(captureCheckPollTimer);
   stopSpatialRenderer();
 });
 
@@ -91,8 +86,6 @@ function scheduleStartup() {
     startCameraDashboard({ cameraStaggerMs: 450 });
     void refreshMappingStatus();
     mappingPollTimer = window.setInterval(() => { void refreshMappingStatus(); }, 500);
-    void refreshCaptureCheckStatus();
-    captureCheckPollTimer = window.setInterval(() => { void refreshCaptureCheckStatus(); }, 1000);
   }, 250);
   scheduleStartupTask(() => initializeRosbags(), 1500);
   scheduleStartupTask(() => setAvatarLoadStage(1), 1900);
@@ -295,51 +288,6 @@ function renderMappingStatus(payload) {
       return `<span class="${active ? "is-ok" : ""}"><i></i>${escapeHtml(label)} · ${escapeHtml(state)}</span>`;
     }).join("");
   }
-}
-
-async function refreshCaptureCheckStatus() {
-  try {
-    const response = await fetch(`/api/capture-check?ts=${Date.now()}`, { cache: "no-store" });
-    if (!response.ok) return;
-    renderCaptureCheck(await response.json());
-  } catch (_error) {
-    renderCaptureCheck({ state: "not_ready", readiness: { reasons: ["Capture-check API unavailable"] } });
-  }
-}
-
-function renderCaptureCheck(payload) {
-  const result = payload.type === "capture_check_result" ? payload : payload.last_result;
-  const state = String(result?.state || payload.state || "not_ready");
-  const labels = {
-    pass: "Station check PASS",
-    retry: "Reseat cameras and retry",
-    recalibrate: "Recalibration required",
-    reference_saved: "Station reference saved",
-    no_reference: "Station reference required",
-    ready: "Ready for station check",
-    not_ready: "Waiting for stable cameras",
-    disabled: "Station check disabled",
-  };
-  const reasons = result?.reasons || payload.readiness?.reasons || [];
-  const comparisons = result?.comparisons || {};
-  const worst = Object.entries(comparisons).sort((left, right) => {
-    const leftValue = Number(left[1]?.translation_error_m || 0) * 1000 + Number(left[1]?.rotation_error_deg || 0);
-    const rightValue = Number(right[1]?.translation_error_m || 0) * 1000 + Number(right[1]?.rotation_error_deg || 0);
-    return rightValue - leftValue;
-  })[0];
-  let detail = "Return all three cameras to the fixed station after each unit.";
-  if (worst) {
-    detail = `${worst[0]} · ${(Number(worst[1].translation_error_m) * 1000).toFixed(1)} mm · ${Number(worst[1].rotation_error_deg).toFixed(1)}°`;
-  } else if (reasons.length) {
-    detail = reasons.slice(0, 2).join(" · ");
-  } else if (state === "pass") {
-    detail = "Global station poses are within threshold. The next unit may start.";
-  } else if (state === "reference_saved") {
-    detail = "Say 检查相机 after every recorded unit.";
-  }
-  if (captureCheckLine) captureCheckLine.dataset.state = state;
-  if (captureCheckStatus) captureCheckStatus.textContent = labels[state] || state;
-  if (captureCheckMeta) captureCheckMeta.textContent = detail;
 }
 
 window.setInterval(() => {
