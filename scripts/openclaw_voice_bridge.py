@@ -24,6 +24,16 @@ DEFAULT_SENSE_VOICE_ROOT = (
     DEFAULT_DATA_ROOT
     / "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
 )
+DEFAULT_WAKE_PHRASE = "宸境"
+DEFAULT_WAKE_ALIASES = (
+    "沉浸",
+    "辰境",
+    "晨景",
+    "晨静",
+    "陈静",
+    "曾经",
+    "陈经",
+)
 
 
 def normalize_transcript(text: object) -> str:
@@ -48,6 +58,15 @@ def wake_word_detected(text: object, wake_phrases: Iterable[str]) -> bool:
 def extract_openclaw_reply(payload: object) -> str:
     if not isinstance(payload, dict):
         raise ValueError("OpenClaw returned a non-object JSON payload")
+    result = payload.get("result")
+    if isinstance(result, dict):
+        payload = result
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str) and content.strip():
+            return content.strip()
     meta = payload.get("meta")
     if isinstance(meta, dict):
         visible = meta.get("finalAssistantVisibleText")
@@ -77,7 +96,7 @@ def speech_text(text: object, max_chars: int = 240) -> str:
 
 
 def clean_utterance_transcript(text: object) -> str:
-    """Join CJK tokens and repair narrow, domain-specific Vosk homophones."""
+    """Join CJK tokens and repair narrow, domain-specific homophones."""
     value = str(text or "").strip()
     value = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", value)
     for homophone in ("素材", "素菜"):
@@ -137,14 +156,13 @@ def build_agent_command(
     model: str = "openai/gpt-5.6-luna",
 ) -> list[str]:
     prompt = (
-        "以下内容由本地麦克风离线转写。按 Looper 语音助手规则处理；"
+        "以下内容由本地麦克风离线转写。按宸境语音助手规则处理；"
         "除非用户明确要求详情，否则最多用两句简短中文回答。\n\n"
         f"用户说：{utterance}"
     )
     return [
         str(openclaw_bin),
         "agent",
-        "--local",
         "--session-key",
         session_key,
         "--model",
@@ -210,48 +228,34 @@ class AlsaCapture:
 class OpenClawVoiceBridge:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
-        self._vosk = None
-        self._wake_model = None
-        self._speech_model = None
         self._sense_voice = None
         self._sherpa_onnx = None
         self._piper_voice = None
         self._piper_synthesis_config = None
         self._wake_feedback_audio: Optional[Path] = None
+        self._wake_candidates = 0
 
     @staticmethod
     def _emit(event: str, **payload: object) -> None:
         print(json.dumps({"event": event, **payload}, ensure_ascii=False), flush=True)
 
     def load_models(self) -> None:
-        if not self.args.wake_model.is_dir():
-            raise FileNotFoundError(f"Wake model not found: {self.args.wake_model}")
-        from vosk import KaldiRecognizer, Model, SetLogLevel
-
-        SetLogLevel(-1)
-        self._vosk = KaldiRecognizer
-        self._wake_model = Model(str(self.args.wake_model))
         if not self.args.vad_model.is_file():
             raise FileNotFoundError(f"VAD model not found: {self.args.vad_model}")
         import sherpa_onnx
 
         self._sherpa_onnx = sherpa_onnx
-        if self.args.speech_engine == "vosk":
-            if not self.args.speech_model.is_dir():
-                raise FileNotFoundError(f"Speech model not found: {self.args.speech_model}")
-            self._speech_model = Model(str(self.args.speech_model))
-        else:
-            for asset in (self.args.sense_voice_model, self.args.sense_voice_tokens):
-                if not asset.is_file():
-                    raise FileNotFoundError(f"SenseVoice asset not found: {asset}")
-            self._sense_voice = sherpa_onnx.OfflineRecognizer.from_sense_voice(
-                model=str(self.args.sense_voice_model),
-                tokens=str(self.args.sense_voice_tokens),
-                num_threads=self.args.speech_threads,
-                language="zh",
-                use_itn=True,
-                debug=False,
-            )
+        for asset in (self.args.sense_voice_model, self.args.sense_voice_tokens):
+            if not asset.is_file():
+                raise FileNotFoundError(f"SenseVoice asset not found: {asset}")
+        self._sense_voice = sherpa_onnx.OfflineRecognizer.from_sense_voice(
+            model=str(self.args.sense_voice_model),
+            tokens=str(self.args.sense_voice_tokens),
+            num_threads=self.args.speech_threads,
+            language="zh",
+            use_itn=True,
+            debug=False,
+        )
         self._prepare_wake_feedback()
 
     def _load_piper(self) -> None:
@@ -292,19 +296,17 @@ class OpenClawVoiceBridge:
     def wait_for_wake_word(self, capture: Optional[AlsaCapture] = None) -> None:
         import numpy as np
 
-        grammar = json.dumps(self.args.wake_phrase + ["[unk]"])
-        recognizer = self._vosk(self._wake_model, self.args.sample_rate, grammar)
         vad, window_size = self._new_vad(
             min_silence_sec=self.args.wake_pause_sec,
             min_speech_sec=0.1,
             max_speech_sec=5.0,
         )
         pending = np.empty(0, dtype=np.float32)
-        wake_detected = False
-        detected_transcript = ""
+        wake_variants = [*self.args.wake_phrase, *self.args.wake_alias]
         self._emit(
             "listening",
             mode="wake",
+            engine="sensevoice",
             phrases=self.args.wake_phrase,
             pause_sec=self.args.wake_pause_sec,
         )
@@ -312,66 +314,26 @@ class OpenClawVoiceBridge:
         with capture_context as active_capture:
             while True:
                 audio = active_capture.read()
-                complete = recognizer.AcceptWaveform(audio)
-                result = recognizer.Result() if complete else recognizer.PartialResult()
-                field = "text" if complete else "partial"
-                transcript = json.loads(result).get(field, "")
-                if wake_word_detected(transcript, self.args.wake_phrase):
-                    wake_detected = True
-                    detected_transcript = transcript
-
                 samples = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
                 pending = np.concatenate((pending, samples))
                 while len(pending) >= window_size:
                     vad.accept_waveform(pending[:window_size])
                     pending = pending[window_size:]
                     if not vad.empty():
+                        segment = np.copy(vad.front.samples)
                         vad.pop()
-                        if wake_detected:
+                        self._wake_candidates += 1
+                        transcript = self._decode_sense_voice(segment, mode="wake")
+                        if wake_word_detected(transcript, wake_variants):
                             self._emit(
                                 "wake",
-                                text=detected_transcript,
+                                text=self.args.wake_phrase[0],
+                                recognized_text=transcript,
+                                engine="sensevoice",
                                 pause_sec=self.args.wake_pause_sec,
+                                candidates=self._wake_candidates,
                             )
                             return
-
-    def _listen_with_vosk(
-        self,
-        timeout_sec: float,
-        capture: Optional[AlsaCapture] = None,
-        initial_audio: bytes = b"",
-    ) -> Optional[str]:
-        recognizer = self._vosk(self._speech_model, self.args.sample_rate)
-        deadline = time.monotonic() + timeout_sec
-        heard_speech = False
-        self._emit("listening", mode="command", timeout_sec=timeout_sec)
-        capture_context = contextlib.nullcontext(capture) if capture else self._capture()
-        queued_audio = initial_audio
-        with capture_context as active_capture:
-            while time.monotonic() < deadline:
-                audio = queued_audio or active_capture.read()
-                queued_audio = b""
-                if recognizer.AcceptWaveform(audio):
-                    text = clean_utterance_transcript(
-                        json.loads(recognizer.Result()).get("text", "")
-                    )
-                    text = strip_wake_prefix(text, self.args.wake_phrase)
-                    if text:
-                        self._emit("transcript", text=text)
-                        return text
-                    if heard_speech:
-                        return None
-                else:
-                    partial = str(json.loads(recognizer.PartialResult()).get("partial", ""))
-                    heard_speech = heard_speech or bool(partial.strip())
-            final = clean_utterance_transcript(
-                json.loads(recognizer.FinalResult()).get("text", "")
-            )
-            final = strip_wake_prefix(final, self.args.wake_phrase)
-            if final:
-                self._emit("transcript", text=final)
-                return final
-        return None
 
     def _new_vad(
         self,
@@ -402,7 +364,7 @@ class OpenClawVoiceBridge:
         )
         return vad, config.silero_vad.window_size
 
-    def _decode_sense_voice(self, samples) -> str:
+    def _decode_sense_voice(self, samples, *, mode: str = "command") -> str:
         stream = self._sense_voice.create_stream()
         stream.accept_waveform(self.args.sample_rate, samples)
         started = time.monotonic()
@@ -411,6 +373,7 @@ class OpenClawVoiceBridge:
         self._emit(
             "recognition",
             engine="sensevoice",
+            mode=mode,
             audio_sec=round(len(samples) / self.args.sample_rate, 2),
             decode_sec=round(time.monotonic() - started, 2),
         )
@@ -452,13 +415,17 @@ class OpenClawVoiceBridge:
                         segment = np.copy(vad.front.samples)
                         vad.pop()
                         text = self._decode_sense_voice(segment)
-                        text = strip_wake_prefix(text, self.args.wake_phrase)
+                        text = strip_wake_prefix(
+                            text, [*self.args.wake_phrase, *self.args.wake_alias]
+                        )
                         if text:
                             self._emit("transcript", text=text)
                             return text
             if heard_speech and captured:
                 text = self._decode_sense_voice(np.concatenate(captured))
-                text = strip_wake_prefix(text, self.args.wake_phrase)
+                text = strip_wake_prefix(
+                    text, [*self.args.wake_phrase, *self.args.wake_alias]
+                )
                 if text:
                     self._emit("transcript", text=text)
                     return text
@@ -470,9 +437,7 @@ class OpenClawVoiceBridge:
         capture: Optional[AlsaCapture] = None,
         initial_audio: bytes = b"",
     ) -> Optional[str]:
-        if self.args.speech_engine == "sensevoice":
-            return self._listen_with_sense_voice(timeout_sec, capture, initial_audio)
-        return self._listen_with_vosk(timeout_sec, capture, initial_audio)
+        return self._listen_with_sense_voice(timeout_sec, capture, initial_audio)
 
     def play_wake_feedback(self) -> None:
         if self.args.wake_feedback == "none":
@@ -598,21 +563,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-rate", type=int, default=16000)
     parser.add_argument("--chunk-frames", type=int, default=4000)
     parser.add_argument(
-        "--wake-model",
-        type=Path,
-        default=DEFAULT_DATA_ROOT / "vosk-model-small-en-us-0.15",
-    )
-    parser.add_argument(
-        "--speech-model",
-        type=Path,
-        default=DEFAULT_DATA_ROOT / "vosk-cn-small",
-    )
-    parser.add_argument(
-        "--speech-engine",
-        choices=("sensevoice", "vosk"),
-        default="sensevoice",
-    )
-    parser.add_argument(
         "--sense-voice-model",
         type=Path,
         default=DEFAULT_SENSE_VOICE_ROOT / "model.int8.onnx",
@@ -634,6 +584,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vad-max-speech-sec", type=float, default=12.0)
     parser.add_argument("--wake-pause-sec", type=float, default=0.5)
     parser.add_argument("--wake-phrase", action="append", default=[])
+    parser.add_argument("--wake-alias", action="append", default=[])
     parser.add_argument("--session-key", default="looper-voice")
     parser.add_argument("--agent-model", default="openai/gpt-5.6-luna")
     parser.add_argument(
@@ -690,7 +641,9 @@ def parse_args() -> argparse.Namespace:
     )
     args = parser.parse_args()
     if not args.wake_phrase:
-        args.wake_phrase = ["looper"]
+        args.wake_phrase = [DEFAULT_WAKE_PHRASE]
+    if not args.wake_alias:
+        args.wake_alias = list(DEFAULT_WAKE_ALIASES)
     args.sample_rate = max(8000, args.sample_rate)
     args.chunk_frames = max(400, args.chunk_frames)
     args.speech_threads = max(1, args.speech_threads)

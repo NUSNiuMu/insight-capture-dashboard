@@ -1,7 +1,7 @@
 [Unit]
-Description=Looper OpenClaw voice assistant
-After=network-online.target sound.target docker.service
-Wants=network-online.target
+Description=宸境 OpenClaw voice assistant
+After=network-online.target sound.target docker.service openclaw-gateway.service
+Wants=network-online.target openclaw-gateway.service
 
 [Service]
 Type=simple

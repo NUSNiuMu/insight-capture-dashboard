@@ -6,13 +6,15 @@
 
 - ROS 图像 callback 只负责轻量状态更新、录制 writer 投递和 latest-frame 交接，不执行编码或磁盘 I/O。
 - 图像由主进程现有 DDS reader 直接交给 `InProcessBagWriter`，不能恢复为额外的 `ros2 bag record` 图像订阅，否则会与预览、WebRTC 竞争。
-- Looper 自然语言语音助手运行在宿主机独立进程。Vosk 只做低负载英文唤醒，唤醒后由
-  SenseVoice INT8 + Silero VAD 离线转写，Piper 离线播报；原始音频不能进入 ROS
+- 宸境自然语言语音助手运行在宿主机独立进程。SenseVoice INT8 同时负责中文唤醒词与命令转写，
+  Silero VAD 只负责本地语音分段，
+  Piper 离线播报；原始音频不能进入 ROS
   callback、Dashboard 或 OpenClaw。OpenClaw 只接收唤醒后的文本，并通过 loopback
   插件访问 Dashboard API。自动停止接口只允许结束 `looper_record_*`，避免误停网页、
   手势或其他控制器创建的录制。
-- 唤醒和命令录音是两个独立 capture 周期：Vosk 识别 `Looper` 后由 Silero VAD 等待
-  0.5 秒静音，播放启动时缓存的“我在”，播放结束后才重新打开命令录音。禁止把唤醒词
+- 唤醒和命令录音是两个独立 capture 周期：Silero VAD 等待 0.5 秒静音后，
+  常驻 SenseVoice 只接受整句“宸境”或它的配置同音转写，然后播放启动时缓存的“我在”，播放结束后才重新
+  打开命令录音。禁止把唤醒词
   尾音继续交给命令识别，也禁止回答后自动打开 follow-up 窗口；每次唤醒只处理一句话，
   避免周围谈话被误当成第二条命令。OpenClaw 语音请求固定使用 Luna、thinking off 和
   fast mode；默认 agent 不加载无关技能，避免为短问答注入额外提示。
@@ -66,10 +68,10 @@
 - 正常录制合包优先按 topic ID 重映射批量复制 SQLite BLOB，并在插入时完成启动裁剪；
   输出通过消息数、时间边界与 `quick_check` 后才原子发布。布局不兼容或验证失败必须自动
   回退到 `ros2 bag convert`；损坏 staging 的恢复探测始终使用官方 convert，不走快速路径。
-- 旧的固定命令 Vosk worker 默认关闭，避免它与 Looper 同时独占 USB capture device。
-  Looper 由 systemd user service 监管，缺少模型或声卡时按服务重启间隔恢复；不得把
+- 旧的固定命令 Vosk worker 默认关闭，避免它与宸境同时独占 USB capture device。
+  宸境由 systemd user service 监管，缺少模型或声卡时按服务重启间隔恢复；不得把
   SenseVoice 模型反复加载到每个命令周期，常驻进程只在启动时加载一次。服务启动应把
-  USB PCM 音量恢复到 30%，避免声卡重连后的硬件默认值覆盖用户体验。Piper ONNX 会话
+  USB PCM 音量恢复到 40%，避免声卡重连后的硬件默认值覆盖用户体验。Piper ONNX 会话
   也必须常驻复用；启动时生成“我在”可同时完成预热，回答阶段不得重新启动 Piper CLI。
 - 数据集连续性门发现坐标跳变时不得直接低通平滑。孤立、持久的刚体坐标重置只有在
   跳变前后各自稳定、切段后满足最短 episode 且双臂公共坐标关系可重新确认时，才能丢弃

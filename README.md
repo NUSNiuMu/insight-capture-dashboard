@@ -148,10 +148,10 @@ Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic�
 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
 
 `jetson-nx` profile 的旧固定命令 Vosk worker 默认关闭。需要自然语言声控时使用宿主机
-上的 [Looper OpenClaw 语音助手](docs/OPENCLAW_VOICE.md)：本地 Vosk 检测唤醒词，
-SenseVoice 离线转写中文，OpenClaw 调用受限的数采工具，Piper 再从 USB 音响播报简短
-回复。单独说“Looper”并停顿 0.5 秒后会先听到“我在”，随后再说命令；服务启动会把
-USB PCM 音量恢复到 30%。自动化只能停止自己创建的 `looper_record_*`，不能停止网页
+上的 [宸境 OpenClaw 语音助手](docs/OPENCLAW_VOICE.md)：同一个 SenseVoice INT8 中文模型在本地
+识别唤醒词和后续命令，OpenClaw 调用受限的数采工具，Piper 再从 USB 音响播报简短
+回复。单独说“宸境”并停顿 0.5 秒后会先听到“我在”，随后再说命令；服务启动会把
+USB PCM 音量恢复到 40%。自动化只能停止自己创建的 `looper_record_*`，不能停止网页
 或手势开始的录制。
 
 Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、message/topic 数量，
@@ -181,7 +181,7 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 | 脚本 | 作用 |
 |---|---|
 | `scripts/run_dashboard.sh` | 统一启动入口，`docker compose up -d` + 健康检查，`--jetson` 额外拉起本机 kiosk 窗口 |
-| `scripts/openclaw_voice_bridge.py` | Looper 唤醒、本地中文 STT、OpenClaw 对话与本地 TTS 桥接 |
+| `scripts/openclaw_voice_bridge.py` | 宸境唤醒、本地中文 STT、OpenClaw 对话与本地 TTS 桥接 |
 | `scripts/multi_camera_dashboard_web.py` | Web dashboard 稳定进程入口与 ROS 生命周期组合 |
 | `scripts/dashboard_web/` / `dashboard_runtime/` | Web API、WebSocket 与 Dashboard 运行时领域实现 |
 | `scripts/dashboard_media/` | 硬件 JPEG 编解码与 WebRTC 流实现 |

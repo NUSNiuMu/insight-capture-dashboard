@@ -3,8 +3,8 @@ import json
 import sys
 import unittest
 import wave
-from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,10 +25,13 @@ from openclaw_voice_bridge import (  # noqa: E402
 
 class OpenClawVoiceBridgeTest(unittest.TestCase):
     def test_normalize_and_match_wake_word(self):
-        self.assertEqual(normalize_transcript("  Looper! "), "looper")
-        self.assertTrue(wake_word_detected("looper", ["looper"]))
-        self.assertFalse(wake_word_detected("blooper", ["looper"]))
-        self.assertTrue(wake_word_detected("小 智", ["小智"]))
+        self.assertEqual(normalize_transcript("  宸境！ "), "宸境")
+        self.assertTrue(wake_word_detected("宸境", ["宸境"]))
+        self.assertTrue(wake_word_detected("沉浸。", ["宸境", "沉浸"]))
+        self.assertTrue(wake_word_detected("曾经。", ["宸境", "曾经"]))
+        self.assertTrue(wake_word_detected("陈经。", ["宸境", "陈经"]))
+        self.assertFalse(wake_word_detected("我喜欢沉浸式体验", ["宸境", "沉浸"]))
+        self.assertFalse(wake_word_detected("我曾经去过", ["宸境", "曾经"]))
 
     def test_extract_reply_prefers_visible_final_text(self):
         payload = {
@@ -43,6 +46,16 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             "第一句。\n第二句。",
         )
 
+    def test_extract_reply_accepts_gateway_result_wrapper(self):
+        payload = {
+            "status": "ok",
+            "result": {
+                "payloads": [{"text": "我是宸境。"}],
+                "meta": {"finalAssistantVisibleText": "我是宸境。"},
+            },
+        }
+        self.assertEqual(extract_openclaw_reply(payload), "我是宸境。")
+
     def test_speech_text_removes_markdown_and_caps_length(self):
         self.assertEqual(speech_text("**查看** [页面](http://localhost)"), "查看 页面")
         self.assertEqual(speech_text("一" * 8, max_chars=5), "一一一一。")
@@ -53,8 +66,8 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(clean_utterance_transcript("开始 录制。"), "开始录制。")
 
     def test_strip_wake_prefix_preserves_command(self):
-        self.assertEqual(strip_wake_prefix("Looper，检查数采状态。", ["looper"]), "检查数采状态。")
-        self.assertEqual(strip_wake_prefix("检查 Looper 状态", ["looper"]), "检查 Looper 状态")
+        self.assertEqual(strip_wake_prefix("宸境，检查数采状态。", ["宸境"]), "检查数采状态。")
+        self.assertEqual(strip_wake_prefix("检查宸境状态", ["宸境"]), "检查宸境状态")
 
     def test_wake_tone_is_valid_mono_wav(self):
         payload = wake_tone_wav(16000, 140, 880, 0.3)
@@ -65,9 +78,9 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
 
     def test_agent_command_keeps_utterance_in_single_argument(self):
         command = build_agent_command(Path("/openclaw"), "voice", "开始录制", 90)
-        self.assertEqual(command[:5], ["/openclaw", "agent", "--local", "--session-key", "voice"])
+        self.assertEqual(command[:4], ["/openclaw", "agent", "--session-key", "voice"])
         self.assertIn("openai/gpt-5.6-luna", command)
-        self.assertIn("用户说：开始录制", command[8])
+        self.assertIn("用户说：开始录制", command[7])
         self.assertIn("off", command)
         self.assertEqual(command[-3:], ["--timeout", "90", "--json"])
         self.assertEqual(json.loads(json.dumps(command)), command)
@@ -76,6 +89,8 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         with mock.patch.object(sys, "argv", ["openclaw_voice_bridge.py"]):
             args = parse_args()
         self.assertEqual(args.wake_pause_sec, 0.5)
+        self.assertEqual(args.wake_phrase, ["宸境"])
+        self.assertIn("沉浸", args.wake_alias)
         self.assertEqual(args.wake_feedback, "speech")
         self.assertEqual(args.agent_thinking, "off")
 

@@ -12,16 +12,11 @@ if [[ ! -x "${openclaw_bin}" ]]; then
   echo "OpenClaw is not installed at ${HOME}/.openclaw/bin/openclaw" >&2
   exit 1
 fi
-if [[ ! -d "${voice_root}/python/vosk" ]]; then
-  echo "Vosk runtime is missing under ${voice_root}/python" >&2
-  exit 1
-fi
 if ! PYTHONPATH="${voice_root}/python" python3 -c 'import sherpa_onnx' 2>/dev/null; then
   echo "sherpa-onnx runtime is missing under ${voice_root}/python" >&2
   exit 1
 fi
 for required in \
-  "${voice_root}/vosk-model-small-en-us-0.15" \
   "${voice_root}/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx" \
   "${voice_root}/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/tokens.txt" \
   "${voice_root}/silero_vad.onnx" \
@@ -37,7 +32,11 @@ done
   '{"openai/gpt-5.6-luna":{"params":{"fastMode":true}}}' \
   --strict-json --merge
 "${openclaw_bin}" config set --batch-json \
-  '[{"path":"agents.defaults.model.primary","value":"openai/gpt-5.6-luna"},{"path":"agents.defaults.thinkingDefault","value":"off"},{"path":"agents.defaults.skills","value":[]}]'
+  '[{"path":"agents.defaults.model.primary","value":"openai/gpt-5.6-luna"},{"path":"agents.defaults.thinkingDefault","value":"off"},{"path":"agents.defaults.skills","value":[]},{"path":"gateway.http.endpoints.chatCompletions.enabled","value":false}]'
+if ! systemctl --user is-enabled openclaw-gateway.service >/dev/null 2>&1; then
+  "${openclaw_bin}" gateway install
+fi
+"${openclaw_bin}" gateway start
 
 mkdir -p "${unit_dir}"
 temporary_unit="$(mktemp)"
@@ -49,5 +48,6 @@ sed \
 install -m 0644 "${temporary_unit}" "${unit_path}"
 
 systemctl --user daemon-reload
-systemctl --user enable --now looper-openclaw-voice.service
+systemctl --user enable looper-openclaw-voice.service
+systemctl --user restart looper-openclaw-voice.service
 systemctl --user --no-pager --full status looper-openclaw-voice.service
