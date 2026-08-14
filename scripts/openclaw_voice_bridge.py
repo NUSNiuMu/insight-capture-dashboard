@@ -611,30 +611,44 @@ class OpenClawVoiceBridge:
             if self._wake_feedback_audio is None:
                 raise RuntimeError("Wake acknowledgement audio was not prepared")
             with self._playback_lock:
-                subprocess.run(
-                    [
-                        "aplay",
-                        "-q",
-                        "-D",
-                        self.args.playback_device,
-                        str(self._wake_feedback_audio),
-                    ],
-                    check=True,
-                )
+                self._play_wav(self._wake_feedback_audio)
             self._emit("wake_feedback", kind="speech", played=True)
             return
-        with self._playback_lock:
-            subprocess.run(
-                ["aplay", "-q", "-D", self.args.playback_device],
-                input=wake_tone_wav(
+        with tempfile.NamedTemporaryFile(prefix="looper-wake-", suffix=".wav") as audio:
+            audio.write(
+                wake_tone_wav(
                     self.args.sample_rate,
                     self.args.wake_tone_ms,
                     self.args.wake_tone_frequency,
                     self.args.wake_tone_volume,
-                ),
-                check=True,
+                )
             )
+            audio.flush()
+            with self._playback_lock:
+                self._play_wav(Path(audio.name))
         self._emit("wake_feedback", kind="tone", played=True)
+
+    def _play_wav(self, audio_path: Path) -> None:
+        """Play a WAV through the configured shared or direct audio backend."""
+        if self.args.playback_backend == "pulse":
+            command = ["paplay"]
+            if self.args.pulse_sink:
+                command.extend(["--device", self.args.pulse_sink])
+            command.append(str(audio_path))
+        else:
+            command = [
+                "aplay",
+                "-q",
+                "-D",
+                self.args.playback_device,
+                str(audio_path),
+            ]
+        try:
+            subprocess.run(command, check=True)
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            raise RuntimeError(
+                f"Audio feedback failed via {self.args.playback_backend}: {exc}"
+            ) from exc
 
     def ask_openclaw(self, utterance: str) -> str:
         command = build_agent_command(
@@ -693,6 +707,46 @@ class OpenClawVoiceBridge:
             return capture_check_reply_key(payload, reference=True)
         return LOCAL_COMMAND_REPLY_KEYS[action]
 
+    def _recording_status(self) -> dict[str, object]:
+        request = urllib.request.Request(
+            f"{self.args.dashboard_url.rstrip('/')}/api/recording/status",
+            method="GET",
+        )
+        with urllib.request.urlopen(
+            request, timeout=self.args.dashboard_timeout_sec
+        ) as response:
+            payload = json.loads(response.read())
+        if not isinstance(payload, dict):
+            raise RuntimeError("Dashboard recording status was not an object")
+        return payload
+
+    def _read_recording_status(self, stage: str) -> Optional[dict[str, object]]:
+        try:
+            return self._recording_status()
+        except Exception as exc:  # noqa: BLE001 - status is an added safety signal
+            self._emit("error", stage=stage, message=str(exc))
+            return None
+
+    def _rollback_new_unconfirmed_recording(
+        self, before: Optional[dict[str, object]]
+    ) -> bool:
+        if before is None or before.get("recording"):
+            return False
+        after = self._read_recording_status("recording_feedback_status_after")
+        if after is None or not after.get("recording"):
+            return False
+        output_path = Path(str(after.get("output_path") or ""))
+        if not output_path.name.startswith("looper_record_"):
+            return False
+        self._emit(
+            "recording_feedback_rollback",
+            ok=False,
+            reason="new_automation_recording_has_no_feedback",
+            output_path=str(output_path),
+        )
+        self._rollback_unconfirmed_recording()
+        return True
+
     def _start_calibration_monitor(self) -> None:
         self._calibration_monitor_generation += 1
         generation = self._calibration_monitor_generation
@@ -749,65 +803,115 @@ class OpenClawVoiceBridge:
                 generation=generation,
             )
 
-    def speak_canned(self, key: str) -> None:
+    def speak_canned(self, key: str) -> bool:
         text = CANNED_REPLIES[key]
         if self.args.no_tts:
             self._emit("speech", text=text, canned=True, played=False)
-            return
+            return False
         audio_path = self._canned_audio.get(key)
         if audio_path is None:
-            self.speak(text)
-            return
+            return self.speak(text)
         with self._playback_lock:
-            subprocess.run(
-                ["aplay", "-q", "-D", self.args.playback_device, str(audio_path)],
-                check=True,
-            )
+            self._play_wav(audio_path)
         self._emit("speech", text=text, canned=True, played=True)
+        return True
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str) -> bool:
         text = speech_text(text)
         if not text:
-            return
+            return False
         if self.args.no_tts:
             self._emit("speech", text=text, played=False)
-            return
+            return False
         with tempfile.NamedTemporaryFile(prefix="looper-reply-", suffix=".wav") as audio:
             self._synthesize_text(text, Path(audio.name))
             with self._playback_lock:
-                subprocess.run(
-                    ["aplay", "-q", "-D", self.args.playback_device, audio.name],
-                    check=True,
-                )
+                self._play_wav(Path(audio.name))
         self._emit("speech", text=text, played=True)
+        return True
+
+    def _rollback_unconfirmed_recording(self) -> None:
+        """Keep stopping until a recording with failed confirmation is no longer active."""
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                self.execute_local_command("recording_stop")
+            except Exception as exc:  # noqa: BLE001 - recording safety takes priority
+                self._emit(
+                    "error",
+                    stage="recording_feedback_rollback",
+                    attempt=attempt,
+                    message=str(exc),
+                )
+                time.sleep(min(5.0, 0.5 * attempt))
+                continue
+            self._emit(
+                "recording_feedback_rollback",
+                ok=True,
+                attempt=attempt,
+                reason="start_feedback_not_played",
+            )
+            return
 
     def handle_utterance(
         self, utterance: str, *, allow_local_commands: bool = True
     ) -> None:
         local_action = match_local_command(utterance) if allow_local_commands else None
         if local_action is not None:
+            command_succeeded = False
             try:
                 reply_key = self.execute_local_command(local_action)
+                command_succeeded = True
             except Exception as exc:  # noqa: BLE001 - keep voice control available
                 self._emit("error", stage="local_command", message=str(exc))
                 reply_key = "command_failed"
-            self.speak_canned(reply_key)
+            try:
+                feedback_played = self.speak_canned(reply_key)
+            except Exception as exc:  # noqa: BLE001 - do not crash after state change
+                self._emit(
+                    "error",
+                    stage="local_command_feedback",
+                    action=local_action,
+                    message=str(exc),
+                )
+                feedback_played = False
+            if (
+                local_action == "recording_start"
+                and command_succeeded
+                and reply_key == "recording_started"
+                and not feedback_played
+            ):
+                self._rollback_unconfirmed_recording()
             return
+        recording_before = self._read_recording_status(
+            "recording_feedback_status_before"
+        )
         try:
             reply = self.ask_openclaw(utterance)
         except Exception as exc:  # noqa: BLE001 - stay available after transient failures
             self._emit("error", stage="agent", message=str(exc))
-            self.speak("OpenClaw 暂时不可用。")
+            self._rollback_new_unconfirmed_recording(recording_before)
+            with contextlib.suppress(Exception):
+                self.speak("OpenClaw 暂时不可用。")
             return
         self._emit("reply", text=reply)
-        self.speak(reply)
+        try:
+            feedback_played = self.speak(reply)
+        except Exception as exc:  # noqa: BLE001 - keep listening after playback errors
+            self._emit("error", stage="agent_feedback", message=str(exc))
+            feedback_played = False
+        if not feedback_played:
+            self._rollback_new_unconfirmed_recording(recording_before)
 
     def run_forever(self) -> None:
         self.load_models()
         self._emit(
             "ready",
             device=self.args.device,
+            playback_backend=self.args.playback_backend,
             playback_device=self.args.playback_device,
+            pulse_sink=self.args.pulse_sink or "default",
             wake_phrases=self.args.wake_phrase,
         )
         while True:
@@ -815,10 +919,17 @@ class OpenClawVoiceBridge:
             if activation == "local_command":
                 self.handle_utterance(transcript, allow_local_commands=True)
                 continue
-            self.play_wake_feedback()
+            try:
+                self.play_wake_feedback()
+            except Exception as exc:  # noqa: BLE001 - keep the listener alive
+                self._emit("error", stage="wake_feedback", message=str(exc))
+                continue
             utterance = self.listen_for_utterance(self.args.command_timeout_sec)
             if not utterance:
-                self.speak("没听清。")
+                try:
+                    self.speak("没听清。")
+                except Exception as exc:  # noqa: BLE001 - keep the listener alive
+                    self._emit("error", stage="no_speech_feedback", message=str(exc))
                 continue
             self.handle_utterance(utterance, allow_local_commands=False)
 
@@ -827,6 +938,17 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="plughw:E3,0")
     parser.add_argument("--playback-device", default="plughw:E3,0")
+    parser.add_argument(
+        "--playback-backend",
+        choices=("pulse", "alsa"),
+        default=os.environ.get("LOOPER_PLAYBACK_BACKEND", "pulse"),
+        help="Use shared PulseAudio playback by default; ALSA is an explicit fallback.",
+    )
+    parser.add_argument(
+        "--pulse-sink",
+        default=os.environ.get("LOOPER_PULSE_SINK", ""),
+        help="Optional PulseAudio sink name; the current default sink is used when empty.",
+    )
     parser.add_argument("--sample-rate", type=int, default=16000)
     parser.add_argument("--chunk-frames", type=int, default=4000)
     parser.add_argument(
@@ -949,7 +1071,9 @@ def main() -> int:
             bridge._emit(
                 "ready",
                 device=args.device,
+                playback_backend=args.playback_backend,
                 playback_device=args.playback_device,
+                pulse_sink=args.pulse_sink or "default",
                 wake_phrases=args.wake_phrase,
             )
             if args.echo_once:

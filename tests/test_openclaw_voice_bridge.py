@@ -56,13 +56,78 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             mock.patch.object(
                 bridge, "execute_local_command", return_value="recording_started"
             ) as execute,
-            mock.patch.object(bridge, "speak_canned") as speak,
+            mock.patch.object(bridge, "speak_canned", return_value=True) as speak,
             mock.patch.object(bridge, "ask_openclaw") as ask_openclaw,
+            mock.patch.object(bridge, "_rollback_unconfirmed_recording") as rollback,
         ):
             bridge.handle_utterance("开始录制")
         execute.assert_called_once_with("recording_start")
         speak.assert_called_once_with("recording_started")
         ask_openclaw.assert_not_called()
+        rollback.assert_not_called()
+
+    def test_recording_is_rolled_back_when_start_feedback_fails(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        with (
+            mock.patch.object(
+                bridge, "execute_local_command", return_value="recording_started"
+            ),
+            mock.patch.object(
+                bridge, "speak_canned", side_effect=RuntimeError("sink busy")
+            ),
+            mock.patch.object(bridge, "_rollback_unconfirmed_recording") as rollback,
+        ):
+            bridge.handle_utterance("开始录制")
+        rollback.assert_called_once_with()
+
+    def test_non_recording_feedback_failure_does_not_crash_or_rollback(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        with (
+            mock.patch.object(
+                bridge, "execute_local_command", return_value="calibration_started"
+            ),
+            mock.patch.object(
+                bridge, "speak_canned", side_effect=RuntimeError("sink busy")
+            ),
+            mock.patch.object(bridge, "_rollback_unconfirmed_recording") as rollback,
+        ):
+            bridge.handle_utterance("开始校准")
+        rollback.assert_not_called()
+
+    def test_shared_playback_uses_pulse_sink(self):
+        bridge = OpenClawVoiceBridge(
+            SimpleNamespace(
+                playback_backend="pulse",
+                pulse_sink="alsa_output.usb-E3",
+                playback_device="plughw:E3,0",
+            )
+        )
+        with mock.patch("subprocess.run") as run:
+            bridge._play_wav(Path("/tmp/feedback.wav"))
+        run.assert_called_once_with(
+            [
+                "paplay",
+                "--device",
+                "alsa_output.usb-E3",
+                "/tmp/feedback.wav",
+            ],
+            check=True,
+        )
+
+    def test_unconfirmed_recording_rollback_retries_until_stopped(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        with (
+            mock.patch.object(
+                bridge,
+                "execute_local_command",
+                side_effect=[RuntimeError("dashboard restarting"), "recording_stopped"],
+            ) as execute,
+            mock.patch("time.sleep") as sleep,
+        ):
+            bridge._rollback_unconfirmed_recording()
+        self.assertEqual(execute.call_count, 2)
+        execute.assert_called_with("recording_stop")
+        sleep.assert_called_once_with(0.5)
 
     def test_wake_followup_forces_openclaw_even_for_fixed_command(self):
         bridge = OpenClawVoiceBridge(SimpleNamespace())
@@ -70,11 +135,53 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             mock.patch.object(bridge, "execute_local_command") as execute,
             mock.patch.object(bridge, "ask_openclaw", return_value="好的。") as ask,
             mock.patch.object(bridge, "speak") as speak,
+            mock.patch.object(
+                bridge, "_read_recording_status", return_value={"recording": False}
+            ),
         ):
             bridge.handle_utterance("开始录制", allow_local_commands=False)
         execute.assert_not_called()
         ask.assert_called_once_with("开始录制")
         speak.assert_called_once_with("好的。")
+
+    def test_openclaw_recording_is_rolled_back_when_reply_is_not_played(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        with (
+            mock.patch.object(bridge, "ask_openclaw", return_value="录制已经开始。"),
+            mock.patch.object(bridge, "speak", return_value=False),
+            mock.patch.object(
+                bridge,
+                "_read_recording_status",
+                side_effect=[
+                    {"recording": False},
+                    {
+                        "recording": True,
+                        "output_path": "/bags/looper_record_20260814_160000",
+                    },
+                ],
+            ),
+            mock.patch.object(bridge, "_rollback_unconfirmed_recording") as rollback,
+        ):
+            bridge.handle_utterance("帮我开始这一轮采集", allow_local_commands=False)
+        rollback.assert_called_once_with()
+
+    def test_unplayed_openclaw_reply_does_not_stop_manual_recording(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        with (
+            mock.patch.object(bridge, "ask_openclaw", return_value="好的。"),
+            mock.patch.object(bridge, "speak", return_value=False),
+            mock.patch.object(
+                bridge,
+                "_read_recording_status",
+                side_effect=[
+                    {"recording": False},
+                    {"recording": True, "output_path": "/bags/manual_capture"},
+                ],
+            ),
+            mock.patch.object(bridge, "_rollback_unconfirmed_recording") as rollback,
+        ):
+            bridge.handle_utterance("查看录制状态", allow_local_commands=False)
+        rollback.assert_not_called()
 
     def test_local_command_calls_dashboard_automation_endpoint(self):
         bridge = OpenClawVoiceBridge(
@@ -232,6 +339,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertIn("沉浸", args.wake_alias)
         self.assertNotIn("曾经", args.wake_alias)
         self.assertEqual(args.wake_feedback, "speech")
+        self.assertEqual(args.playback_backend, "pulse")
         self.assertEqual(args.agent_thinking, "off")
 
 

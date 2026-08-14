@@ -12,7 +12,8 @@
 5. Silero VAD 截取随后的命令，由同一个 SenseVoice 实例离线转写并发送给 OpenClaw；
 6. OpenClaw 使用当前用户的 Codex 登录完成推理；
 7. `insight_capture` 插件仅通过 `http://127.0.0.1:8765` 访问 Dashboard；
-8. 简短回复由服务启动时常驻加载的本地 Piper 合成，并通过同一 USB 音响播放。
+8. 简短回复由服务启动时常驻加载的本地 Piper 合成，并经 PulseAudio 共享通道从同一 USB
+   音响播放，避免与桌面播报程序互相独占声卡。
 
 原始音频不会发送给 OpenClaw、Codex 或 Dashboard。唤醒后的转写文本以及回答请求所需
 的本机数采状态会交给当前 Codex 订阅处理，因此启用常驻服务前必须获得设备使用者明确
@@ -63,6 +64,11 @@ OpenClaw，也不需要先说“宸境”：
 - “设置检测位”“记录检测位”“保存检测位”（仅标定负责人使用）。
 
 服务启动时会预生成成功、重复录制和失败等确认语音，命中快捷指令后直接播放缓存。
+所有语音录制入口采用确认闭环：固定“开始录制”指令必须完整播放“录制已经开始”；
+OpenClaw 自然语言工具调用则在请求前后核对录制状态，必须完整播放本轮回复。任一路径没有
+成功反馈时，语音桥都会持续调用受限停止接口，直到本轮新建的 `looper_record_*` 被停止。
+播放异常只记录为单次交互错误，不能再导致常驻监听服务退出，因此不允许出现无声音反馈却
+继续后台录制。人工、网页或手势创建的其他录制不会被该回滚逻辑停止。
 “开始校准”调用 `/api/mapping/reset`，语义是清空 Insight9 地图和 Insight3 全局定位状态，
 立即开始新一轮在线校准，不是夹爪尺寸标定。语音桥随后在后台检查本机 mapping 状态；
 Insight3 A、B 在本次 reset 后首次同时进入 `localized=true` 时，播放一次预生成的
@@ -77,7 +83,9 @@ Insight3 A、B 在本次 reset 后首次同时进入 `localized=true` 时，播�
 即使内容恰好是“开始录制”，也不会再由本地快捷路径截获。
 
 服务每次启动都会把 USB 音响的 PCM 音量恢复到 50%。可通过环境变量
-`LOOPER_PLAYBACK_VOLUME` 覆盖。
+`LOOPER_PLAYBACK_VOLUME` 覆盖。默认播放后端是 PulseAudio；仅在没有 PulseAudio 的设备上
+显式设置 `LOOPER_PLAYBACK_BACKEND=alsa`。需要固定共享输出设备时可用
+`LOOPER_PULSE_SINK` 指定 sink 名称。
 
 语音入口固定使用 `openai/gpt-5.6-luna`、`thinking=off` 和 OpenClaw `fastMode=true`；
 Fast 最终向 Codex/OpenAI 请求传递 Priority service tier，并禁用默认 agent 的无关技能
