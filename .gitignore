@@ -3,6 +3,8 @@ logs/
 scripts/__pycache__/
 __pycache__/
 *.py[cod]
+node_modules/
+integrations/openclaw-workspace/openclaw-workspace-state.json
 
 # Runtime/recording data and release build artifacts -- never tracked, but
 # also weren't actually gitignored (relying on nobody running `git add -A`).

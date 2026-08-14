@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import time
+from pathlib import Path
 
 from aiohttp import web
 
@@ -55,6 +57,44 @@ class RecordingRoutes:
 
     async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
         return web.json_response(self.context.recording_manager.stop())
+
+    async def _handle_automation_recording_start(
+        self, _request: web.Request
+    ) -> web.Response:
+        """Start a default-topic recording owned by the local automation agent."""
+        current = self.context.recording_manager.status()
+        if current.get("recording"):
+            return web.json_response(
+                {
+                    "error": "Recording is already active.",
+                    "recording": True,
+                    "output_path": current.get("output_path"),
+                },
+                status=409,
+            )
+        bag_name = time.strftime("looper_record_%Y%m%d_%H%M%S")
+        status = self.context.recording_manager.start(topics=None, bag_name=bag_name)
+        return web.json_response({"automation": "openclaw", **status})
+
+    async def _handle_automation_recording_stop(
+        self, _request: web.Request
+    ) -> web.Response:
+        """Stop only recordings created through the automation start route."""
+        current = self.context.recording_manager.status()
+        if not current.get("recording"):
+            return web.json_response({"automation": "openclaw", **current})
+        output_path = str(current.get("output_path") or "")
+        if not Path(output_path).name.startswith("looper_record_"):
+            return web.json_response(
+                {
+                    "error": "A manual or non-OpenClaw recording is active; automation stop refused.",
+                    "recording": True,
+                    "output_path": output_path,
+                },
+                status=409,
+            )
+        status = self.context.recording_manager.stop()
+        return web.json_response({"automation": "openclaw", **status})
 
     async def _handle_rosbag_list(self, _request: web.Request) -> web.Response:
         loop = asyncio.get_event_loop()

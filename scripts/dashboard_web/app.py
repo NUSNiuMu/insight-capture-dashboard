@@ -54,6 +54,14 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/recording/topics", recording._handle_recording_topics)
     app.router.add_post("/api/recording/start", recording._handle_recording_start)
     app.router.add_post("/api/recording/stop", recording._handle_recording_stop)
+    app.router.add_post(
+        "/api/automation/recording/start",
+        recording._handle_automation_recording_start,
+    )
+    app.router.add_post(
+        "/api/automation/recording/stop",
+        recording._handle_automation_recording_stop,
+    )
     app.router.add_get("/api/rosbags", recording._handle_rosbag_list)
     app.router.add_post("/api/gripper-extraction/start", gripper._handle_start)
     app.router.add_get("/api/gripper-extraction/status", gripper._handle_status)

@@ -17,7 +17,7 @@
     "min_free_ratio": 0.1
   },
   "voice_recording": {
-    "enabled": true,
+    "enabled": false,
     "device": "plughw:YDPI4MIC,0",
     "model_path": "/opt/insight/models/vosk-cn-small",
     "sample_rate": 16000,

@@ -1,0 +1,46 @@
+{
+  "id": "insight-capture",
+  "name": "Insight Capture",
+  "description": "Safely inspect and control the local Insight data-capture dashboard",
+  "version": "0.1.0",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "insight_capture_status",
+      "insight_capture_recording"
+    ]
+  },
+  "toolMetadata": {
+    "insight_capture_status": {
+      "optional": true
+    },
+    "insight_capture_recording": {
+      "optional": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 100,
+        "maximum": 30000
+      }
+    }
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "Dashboard base URL",
+      "placeholder": "http://127.0.0.1:8765"
+    },
+    "timeoutMs": {
+      "label": "Request timeout (ms)"
+    }
+  }
+}

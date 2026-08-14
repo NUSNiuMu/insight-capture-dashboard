@@ -286,15 +286,22 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 开始的录制；磁盘剩余低于 10% 或上一段仍在合并时也不会自动开始。Recording
 页顶部的 `gesture` 标签显示 armed、保持、释放和录制状态。
 
-使用声控时，确认 Recording 页顶部显示 `voice listening`，再清晰说“开始录制”。
-看到 `voice recording` 后开始操作，完成后说“结束录制”或“停止录制”。若显示
-`voice unavailable`，检查麦克风和 worker 日志：
+已配置 Looper 语音助手的设备可以自然语言操作：单独说“Looper”并停顿 0.5 秒，听到
+“我在”后再说“检查数采状态”“开始录制”或“停止录制”。回复会从 USB 音响播出；服务
+每次启动会把 USB PCM 音量恢复到 30%。开始/停止属于有
+副作用的操作，必须明确说出；自动化只能停止自己创建的 `looper_record_*`，不会停止
+网页或手势录制。旧的固定命令声控默认关闭，Recording 页 `voice disabled` 是正常状态。
+
+检查 Looper 服务和 USB 声卡：
 
 ```bash
 arecord -l
-docker exec insight-dashboard arecord -l
-tail -n 100 outputs/voice_control_worker.log
+aplay -l
+systemctl --user status looper-openclaw-voice.service
+journalctl --user -u looper-openclaw-voice.service -n 100 --no-pager
 ```
+
+完整安装、隐私边界和离线测试见 [OPENCLAW_VOICE.md](OPENCLAW_VOICE.md)。
 
 命令行等价方式（脚本化/无浏览器时）：
 

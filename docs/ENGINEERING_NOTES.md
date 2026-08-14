@@ -6,10 +6,16 @@
 
 - ROS 图像 callback 只负责轻量状态更新、录制 writer 投递和 latest-frame 交接，不执行编码或磁盘 I/O。
 - 图像由主进程现有 DDS reader 直接交给 `InProcessBagWriter`，不能恢复为额外的 `ros2 bag record` 图像订阅，否则会与预览、WebRTC 竞争。
-- 常驻麦克风采集和 Vosk 中文识别运行在 `voice_control_worker.py` 独立进程；主进程
-  只接收限定的 start/stop 事件并通过后台线程调用 `RecordingManager`。音频不能进入
-  ROS callback，也不能由前端上传。自动停止只允许结束同一控制器创建的录制，避免
-  误停网页手动录制。
+- Looper 自然语言语音助手运行在宿主机独立进程。Vosk 只做低负载英文唤醒，唤醒后由
+  SenseVoice INT8 + Silero VAD 离线转写，Piper 离线播报；原始音频不能进入 ROS
+  callback、Dashboard 或 OpenClaw。OpenClaw 只接收唤醒后的文本，并通过 loopback
+  插件访问 Dashboard API。自动停止接口只允许结束 `looper_record_*`，避免误停网页、
+  手势或其他控制器创建的录制。
+- 唤醒和命令录音是两个独立 capture 周期：Vosk 识别 `Looper` 后由 Silero VAD 等待
+  0.5 秒静音，播放启动时缓存的“我在”，播放结束后才重新打开命令录音。禁止把唤醒词
+  尾音继续交给命令识别，也禁止回答后自动打开 follow-up 窗口；每次唤醒只处理一句话，
+  避免周围谈话被误当成第二条命令。OpenClaw 语音请求固定使用 Luna、thinking off 和
+  fast mode；默认 agent 不加载无关技能，避免为短问答注入额外提示。
 - Insight3 在线重定位同样不能再直接增加两个全速原图 DDS reader。dashboard
   复用既有 reader，以 2 Hz 发布 `/insight_mapping/...` 定位图；localizer
   只订阅该中继。实机 A/B 测试中，这使 Insight3 B 从 13–14 FPS 恢复到 20 FPS。
@@ -60,8 +66,10 @@
 - 正常录制合包优先按 topic ID 重映射批量复制 SQLite BLOB，并在插入时完成启动裁剪；
   输出通过消息数、时间边界与 `quick_check` 后才原子发布。布局不兼容或验证失败必须自动
   回退到 `ros2 bag convert`；损坏 staging 的恢复探测始终使用官方 convert，不走快速路径。
-- 离线声控 worker 连续退出时按 2、4、8…60 秒退避，稳定运行 30 秒后重置；麦克风
-  未连接时不得每两秒反复加载 Vosk 模型，与合包或采集争抢 CPU 和磁盘。
+- 旧的固定命令 Vosk worker 默认关闭，避免它与 Looper 同时独占 USB capture device。
+  Looper 由 systemd user service 监管，缺少模型或声卡时按服务重启间隔恢复；不得把
+  SenseVoice 模型反复加载到每个命令周期，常驻进程只在启动时加载一次。服务启动应把
+  USB PCM 音量恢复到 30%，避免声卡重连后的硬件默认值覆盖用户体验。
 - 数据集连续性门发现坐标跳变时不得直接低通平滑。孤立、持久的刚体坐标重置只有在
   跳变前后各自稳定、切段后满足最短 episode 且双臂公共坐标关系可重新确认时，才能丢弃
   边界保护帧并按段重锚；短时振荡、多次米级跳变或仅单臂全局 Pose 失配应保留原 bag，

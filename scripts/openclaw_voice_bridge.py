@@ -1,0 +1,749 @@
+#!/usr/bin/env python3
+"""Run a local wake-word/STT loop and send utterances to OpenClaw."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import io
+import json
+import math
+import os
+import re
+import struct
+import subprocess
+import sys
+import tempfile
+import time
+import wave
+from pathlib import Path
+from typing import Iterable, Optional
+
+
+DEFAULT_DATA_ROOT = Path.home() / ".local" / "share" / "looper-voice"
+DEFAULT_SENSE_VOICE_ROOT = (
+    DEFAULT_DATA_ROOT
+    / "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
+)
+
+
+def normalize_transcript(text: object) -> str:
+    """Normalize a wake transcript without accepting substring matches."""
+    return " ".join(re.findall(r"[0-9a-zA-Z]+|[\u4e00-\u9fff]+", str(text or "").lower()))
+
+
+def wake_word_detected(text: object, wake_phrases: Iterable[str]) -> bool:
+    transcript = normalize_transcript(text)
+    if not transcript:
+        return False
+    compact = transcript.replace(" ", "")
+    for phrase in wake_phrases:
+        normalized = normalize_transcript(phrase)
+        if normalized and (
+            normalized in transcript.split() or normalized.replace(" ", "") == compact
+        ):
+            return True
+    return False
+
+
+def extract_openclaw_reply(payload: object) -> str:
+    if not isinstance(payload, dict):
+        raise ValueError("OpenClaw returned a non-object JSON payload")
+    meta = payload.get("meta")
+    if isinstance(meta, dict):
+        visible = meta.get("finalAssistantVisibleText")
+        if isinstance(visible, str) and visible.strip():
+            return visible.strip()
+    texts = []
+    for item in payload.get("payloads", []):
+        if isinstance(item, dict) and isinstance(item.get("text"), str):
+            texts.append(item["text"].strip())
+    reply = "\n".join(text for text in texts if text).strip()
+    if not reply:
+        raise ValueError("OpenClaw returned no assistant text")
+    return reply
+
+
+def speech_text(text: object, max_chars: int = 240) -> str:
+    """Remove formatting that sounds unnatural when spoken."""
+    value = str(text or "")
+    value = re.sub(r"\[([^\]]+)]\([^)]+\)", r"\1", value)
+    value = re.sub(r"\[\[tts:[^\]]+]]", "", value)
+    value = value.replace("[[/tts:text]]", "").replace("[[tts:text]]", "")
+    value = re.sub(r"[`*_#>|]", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    if len(value) <= max_chars:
+        return value
+    return value[: max(1, max_chars - 1)].rstrip("，。！？；：,.!?;:") + "。"
+
+
+def clean_utterance_transcript(text: object) -> str:
+    """Join CJK tokens and repair narrow, domain-specific Vosk homophones."""
+    value = str(text or "").strip()
+    value = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", value)
+    for homophone in ("素材", "素菜"):
+        value = value.replace(f"{homophone}状态", "数采状态")
+        value = value.replace(f"{homophone}系统", "数采系统")
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def strip_wake_prefix(text: object, wake_phrases: Iterable[str]) -> str:
+    """Remove a leading wake phrase without touching the rest of the command."""
+    value = str(text or "").strip()
+    for phrase in sorted(wake_phrases, key=len, reverse=True):
+        value = re.sub(
+            rf"^\s*{re.escape(phrase)}(?:\s|[，。！？,.!?:：；;-])*",
+            "",
+            value,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return value.strip()
+
+
+def wake_tone_wav(
+    sample_rate: int,
+    duration_ms: int,
+    frequency_hz: int,
+    volume: float,
+) -> bytes:
+    """Build a short in-memory WAV used as immediate wake feedback."""
+    frame_count = max(1, round(sample_rate * duration_ms / 1000))
+    fade_frames = max(1, min(frame_count // 2, round(sample_rate * 0.02)))
+    pcm = bytearray()
+    for index in range(frame_count):
+        envelope = min(1.0, index / fade_frames, (frame_count - index) / fade_frames)
+        sample = int(
+            32767
+            * volume
+            * envelope
+            * math.sin(2.0 * math.pi * frequency_hz * index / sample_rate)
+        )
+        pcm.extend(struct.pack("<h", sample))
+    output = io.BytesIO()
+    with wave.open(output, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
+    return output.getvalue()
+
+
+def build_agent_command(
+    openclaw_bin: Path,
+    session_key: str,
+    utterance: str,
+    timeout_sec: int,
+    thinking_level: str = "off",
+    model: str = "openai/gpt-5.6-luna",
+) -> list[str]:
+    prompt = (
+        "以下内容由本地麦克风离线转写。按 Looper 语音助手规则处理；"
+        "除非用户明确要求详情，否则最多用两句简短中文回答。\n\n"
+        f"用户说：{utterance}"
+    )
+    return [
+        str(openclaw_bin),
+        "agent",
+        "--local",
+        "--session-key",
+        session_key,
+        "--model",
+        model,
+        "--message",
+        prompt,
+        "--thinking",
+        thinking_level,
+        "--timeout",
+        str(timeout_sec),
+        "--json",
+    ]
+
+
+class AlsaCapture:
+    def __init__(self, device: str, sample_rate: int, chunk_frames: int) -> None:
+        self.device = device
+        self.sample_rate = sample_rate
+        self.chunk_frames = chunk_frames
+        self.process: Optional[subprocess.Popen] = None
+
+    def __enter__(self) -> "AlsaCapture":
+        self.process = subprocess.Popen(
+            [
+                "arecord",
+                "-q",
+                "-D",
+                self.device,
+                "-f",
+                "S16_LE",
+                "-r",
+                str(self.sample_rate),
+                "-c",
+                "1",
+                "-t",
+                "raw",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        if self.process.stdout is None:
+            raise RuntimeError("ALSA capture stdout is unavailable")
+        return self
+
+    def read(self) -> bytes:
+        assert self.process is not None and self.process.stdout is not None
+        audio = self.process.stdout.read(self.chunk_frames * 2)
+        if not audio:
+            raise RuntimeError(f"ALSA capture stopped (exit {self.process.poll()})")
+        return audio
+
+    def __exit__(self, *_exc_info) -> None:
+        if self.process is None:
+            return
+        self.process.terminate()
+        try:
+            self.process.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=2.0)
+
+
+class OpenClawVoiceBridge:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
+        self._vosk = None
+        self._wake_model = None
+        self._speech_model = None
+        self._sense_voice = None
+        self._sherpa_onnx = None
+        self._wake_feedback_audio: Optional[Path] = None
+
+    @staticmethod
+    def _emit(event: str, **payload: object) -> None:
+        print(json.dumps({"event": event, **payload}, ensure_ascii=False), flush=True)
+
+    def load_models(self) -> None:
+        if not self.args.wake_model.is_dir():
+            raise FileNotFoundError(f"Wake model not found: {self.args.wake_model}")
+        from vosk import KaldiRecognizer, Model, SetLogLevel
+
+        SetLogLevel(-1)
+        self._vosk = KaldiRecognizer
+        self._wake_model = Model(str(self.args.wake_model))
+        if not self.args.vad_model.is_file():
+            raise FileNotFoundError(f"VAD model not found: {self.args.vad_model}")
+        import sherpa_onnx
+
+        self._sherpa_onnx = sherpa_onnx
+        if self.args.speech_engine == "vosk":
+            if not self.args.speech_model.is_dir():
+                raise FileNotFoundError(f"Speech model not found: {self.args.speech_model}")
+            self._speech_model = Model(str(self.args.speech_model))
+        else:
+            for asset in (self.args.sense_voice_model, self.args.sense_voice_tokens):
+                if not asset.is_file():
+                    raise FileNotFoundError(f"SenseVoice asset not found: {asset}")
+            self._sense_voice = sherpa_onnx.OfflineRecognizer.from_sense_voice(
+                model=str(self.args.sense_voice_model),
+                tokens=str(self.args.sense_voice_tokens),
+                num_threads=self.args.speech_threads,
+                language="zh",
+                use_itn=True,
+                debug=False,
+            )
+        self._prepare_wake_feedback()
+
+    def _piper_command(self, text: str, output_path: Path) -> list[str]:
+        if not self.args.piper_model.is_file():
+            raise FileNotFoundError(f"Piper voice model not found: {self.args.piper_model}")
+        return [
+            sys.executable,
+            "-m",
+            "piper",
+            "-m",
+            str(self.args.piper_model),
+            "-f",
+            str(output_path),
+            "--length-scale",
+            str(self.args.piper_length_scale),
+            "--",
+            text,
+        ]
+
+    def _prepare_wake_feedback(self) -> None:
+        if self.args.no_tts or self.args.wake_feedback != "speech":
+            return
+        output_path = Path(tempfile.gettempdir()) / f"looper-wake-{os.getuid()}.wav"
+        subprocess.run(
+            self._piper_command(self.args.acknowledgement, output_path),
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self._wake_feedback_audio = output_path
+
+    def _capture(self) -> AlsaCapture:
+        return AlsaCapture(
+            self.args.device,
+            self.args.sample_rate,
+            self.args.chunk_frames,
+        )
+
+    def wait_for_wake_word(self, capture: Optional[AlsaCapture] = None) -> None:
+        import numpy as np
+
+        grammar = json.dumps(self.args.wake_phrase + ["[unk]"])
+        recognizer = self._vosk(self._wake_model, self.args.sample_rate, grammar)
+        vad, window_size = self._new_vad(
+            min_silence_sec=self.args.wake_pause_sec,
+            min_speech_sec=0.1,
+            max_speech_sec=5.0,
+        )
+        pending = np.empty(0, dtype=np.float32)
+        wake_detected = False
+        detected_transcript = ""
+        self._emit(
+            "listening",
+            mode="wake",
+            phrases=self.args.wake_phrase,
+            pause_sec=self.args.wake_pause_sec,
+        )
+        capture_context = contextlib.nullcontext(capture) if capture else self._capture()
+        with capture_context as active_capture:
+            while True:
+                audio = active_capture.read()
+                complete = recognizer.AcceptWaveform(audio)
+                result = recognizer.Result() if complete else recognizer.PartialResult()
+                field = "text" if complete else "partial"
+                transcript = json.loads(result).get(field, "")
+                if wake_word_detected(transcript, self.args.wake_phrase):
+                    wake_detected = True
+                    detected_transcript = transcript
+
+                samples = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+                pending = np.concatenate((pending, samples))
+                while len(pending) >= window_size:
+                    vad.accept_waveform(pending[:window_size])
+                    pending = pending[window_size:]
+                    if not vad.empty():
+                        vad.pop()
+                        if wake_detected:
+                            self._emit(
+                                "wake",
+                                text=detected_transcript,
+                                pause_sec=self.args.wake_pause_sec,
+                            )
+                            return
+
+    def _listen_with_vosk(
+        self,
+        timeout_sec: float,
+        capture: Optional[AlsaCapture] = None,
+        initial_audio: bytes = b"",
+    ) -> Optional[str]:
+        recognizer = self._vosk(self._speech_model, self.args.sample_rate)
+        deadline = time.monotonic() + timeout_sec
+        heard_speech = False
+        self._emit("listening", mode="command", timeout_sec=timeout_sec)
+        capture_context = contextlib.nullcontext(capture) if capture else self._capture()
+        queued_audio = initial_audio
+        with capture_context as active_capture:
+            while time.monotonic() < deadline:
+                audio = queued_audio or active_capture.read()
+                queued_audio = b""
+                if recognizer.AcceptWaveform(audio):
+                    text = clean_utterance_transcript(
+                        json.loads(recognizer.Result()).get("text", "")
+                    )
+                    text = strip_wake_prefix(text, self.args.wake_phrase)
+                    if text:
+                        self._emit("transcript", text=text)
+                        return text
+                    if heard_speech:
+                        return None
+                else:
+                    partial = str(json.loads(recognizer.PartialResult()).get("partial", ""))
+                    heard_speech = heard_speech or bool(partial.strip())
+            final = clean_utterance_transcript(
+                json.loads(recognizer.FinalResult()).get("text", "")
+            )
+            final = strip_wake_prefix(final, self.args.wake_phrase)
+            if final:
+                self._emit("transcript", text=final)
+                return final
+        return None
+
+    def _new_vad(
+        self,
+        *,
+        min_silence_sec: Optional[float] = None,
+        min_speech_sec: Optional[float] = None,
+        max_speech_sec: Optional[float] = None,
+    ):
+        config = self._sherpa_onnx.VadModelConfig()
+        config.silero_vad.model = str(self.args.vad_model)
+        config.silero_vad.threshold = self.args.vad_threshold
+        config.silero_vad.min_silence_duration = (
+            self.args.vad_silence_sec if min_silence_sec is None else min_silence_sec
+        )
+        config.silero_vad.min_speech_duration = (
+            self.args.vad_min_speech_sec if min_speech_sec is None else min_speech_sec
+        )
+        config.silero_vad.max_speech_duration = (
+            self.args.vad_max_speech_sec if max_speech_sec is None else max_speech_sec
+        )
+        config.sample_rate = self.args.sample_rate
+        vad = self._sherpa_onnx.VoiceActivityDetector(
+            config,
+            buffer_size_in_seconds=max(
+                30,
+                int(config.silero_vad.max_speech_duration + 5),
+            ),
+        )
+        return vad, config.silero_vad.window_size
+
+    def _decode_sense_voice(self, samples) -> str:
+        stream = self._sense_voice.create_stream()
+        stream.accept_waveform(self.args.sample_rate, samples)
+        started = time.monotonic()
+        self._sense_voice.decode_stream(stream)
+        text = clean_utterance_transcript(stream.result.text)
+        self._emit(
+            "recognition",
+            engine="sensevoice",
+            audio_sec=round(len(samples) / self.args.sample_rate, 2),
+            decode_sec=round(time.monotonic() - started, 2),
+        )
+        return text
+
+    def _listen_with_sense_voice(
+        self,
+        timeout_sec: float,
+        capture: Optional[AlsaCapture] = None,
+        initial_audio: bytes = b"",
+    ) -> Optional[str]:
+        import numpy as np
+
+        vad, window_size = self._new_vad()
+        deadline = time.monotonic() + timeout_sec
+        pending = np.empty(0, dtype=np.float32)
+        captured = []
+        heard_speech = False
+        self._emit(
+            "listening",
+            mode="command",
+            engine="sensevoice",
+            timeout_sec=timeout_sec,
+        )
+        capture_context = contextlib.nullcontext(capture) if capture else self._capture()
+        queued_audio = initial_audio
+        with capture_context as active_capture:
+            while time.monotonic() < deadline:
+                raw = queued_audio or active_capture.read()
+                queued_audio = b""
+                samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                captured.append(samples)
+                pending = np.concatenate((pending, samples))
+                while len(pending) >= window_size:
+                    vad.accept_waveform(pending[:window_size])
+                    pending = pending[window_size:]
+                    heard_speech = heard_speech or vad.is_speech_detected()
+                    if not vad.empty():
+                        segment = np.copy(vad.front.samples)
+                        vad.pop()
+                        text = self._decode_sense_voice(segment)
+                        text = strip_wake_prefix(text, self.args.wake_phrase)
+                        if text:
+                            self._emit("transcript", text=text)
+                            return text
+            if heard_speech and captured:
+                text = self._decode_sense_voice(np.concatenate(captured))
+                text = strip_wake_prefix(text, self.args.wake_phrase)
+                if text:
+                    self._emit("transcript", text=text)
+                    return text
+        return None
+
+    def listen_for_utterance(
+        self,
+        timeout_sec: float,
+        capture: Optional[AlsaCapture] = None,
+        initial_audio: bytes = b"",
+    ) -> Optional[str]:
+        if self.args.speech_engine == "sensevoice":
+            return self._listen_with_sense_voice(timeout_sec, capture, initial_audio)
+        return self._listen_with_vosk(timeout_sec, capture, initial_audio)
+
+    def play_wake_feedback(self) -> None:
+        if self.args.wake_feedback == "none":
+            return
+        if self.args.wake_feedback == "speech":
+            if self.args.no_tts:
+                self._emit("wake_feedback", kind="speech", played=False)
+                return
+            if self._wake_feedback_audio is None:
+                raise RuntimeError("Wake acknowledgement audio was not prepared")
+            subprocess.run(
+                [
+                    "aplay",
+                    "-q",
+                    "-D",
+                    self.args.playback_device,
+                    str(self._wake_feedback_audio),
+                ],
+                check=True,
+            )
+            self._emit("wake_feedback", kind="speech", played=True)
+            return
+        subprocess.run(
+            ["aplay", "-q", "-D", self.args.playback_device],
+            input=wake_tone_wav(
+                self.args.sample_rate,
+                self.args.wake_tone_ms,
+                self.args.wake_tone_frequency,
+                self.args.wake_tone_volume,
+            ),
+            check=True,
+        )
+        self._emit("wake_feedback", kind="tone", played=True)
+
+    def ask_openclaw(self, utterance: str) -> str:
+        command = build_agent_command(
+            self.args.openclaw_bin,
+            self.args.session_key,
+            utterance,
+            self.args.agent_timeout_sec,
+            self.args.agent_thinking,
+            self.args.agent_model,
+        )
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=self.args.agent_timeout_sec + 15,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip().splitlines()
+            message = detail[-1] if detail else f"exit {completed.returncode}"
+            raise RuntimeError(f"OpenClaw agent failed: {message}")
+        return speech_text(extract_openclaw_reply(json.loads(completed.stdout)))
+
+    def speak(self, text: str) -> None:
+        text = speech_text(text)
+        if not text:
+            return
+        if self.args.no_tts:
+            self._emit("speech", text=text, played=False)
+            return
+        with tempfile.NamedTemporaryFile(prefix="looper-reply-", suffix=".wav") as audio:
+            if self.args.tts_engine == "piper":
+                tts_command = self._piper_command(text, Path(audio.name))
+            else:
+                tts_command = [
+                    self.args.tts_bin,
+                    "-v",
+                    self.args.tts_voice,
+                    "-s",
+                    str(self.args.tts_speed),
+                    "-w",
+                    audio.name,
+                    "--",
+                    text,
+                ]
+            subprocess.run(
+                tts_command,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            subprocess.run(
+                ["aplay", "-q", "-D", self.args.playback_device, audio.name],
+                check=True,
+            )
+        self._emit("speech", text=text, played=True)
+
+    def handle_utterance(self, utterance: str) -> None:
+        try:
+            reply = self.ask_openclaw(utterance)
+        except Exception as exc:  # noqa: BLE001 - stay available after transient failures
+            self._emit("error", stage="agent", message=str(exc))
+            self.speak("OpenClaw 暂时不可用。")
+            return
+        self._emit("reply", text=reply)
+        self.speak(reply)
+
+    def run_forever(self) -> None:
+        self.load_models()
+        self._emit(
+            "ready",
+            device=self.args.device,
+            playback_device=self.args.playback_device,
+            wake_phrases=self.args.wake_phrase,
+        )
+        while True:
+            self.wait_for_wake_word()
+            self.play_wake_feedback()
+            utterance = self.listen_for_utterance(self.args.command_timeout_sec)
+            if not utterance:
+                self.speak("没听清。")
+                continue
+            self.handle_utterance(utterance)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--device", default="plughw:E3,0")
+    parser.add_argument("--playback-device", default="plughw:E3,0")
+    parser.add_argument("--sample-rate", type=int, default=16000)
+    parser.add_argument("--chunk-frames", type=int, default=4000)
+    parser.add_argument(
+        "--wake-model",
+        type=Path,
+        default=DEFAULT_DATA_ROOT / "vosk-model-small-en-us-0.15",
+    )
+    parser.add_argument(
+        "--speech-model",
+        type=Path,
+        default=DEFAULT_DATA_ROOT / "vosk-cn-small",
+    )
+    parser.add_argument(
+        "--speech-engine",
+        choices=("sensevoice", "vosk"),
+        default="sensevoice",
+    )
+    parser.add_argument(
+        "--sense-voice-model",
+        type=Path,
+        default=DEFAULT_SENSE_VOICE_ROOT / "model.int8.onnx",
+    )
+    parser.add_argument(
+        "--sense-voice-tokens",
+        type=Path,
+        default=DEFAULT_SENSE_VOICE_ROOT / "tokens.txt",
+    )
+    parser.add_argument(
+        "--vad-model",
+        type=Path,
+        default=DEFAULT_DATA_ROOT / "silero_vad.onnx",
+    )
+    parser.add_argument("--speech-threads", type=int, default=2)
+    parser.add_argument("--vad-threshold", type=float, default=0.5)
+    parser.add_argument("--vad-silence-sec", type=float, default=0.7)
+    parser.add_argument("--vad-min-speech-sec", type=float, default=0.25)
+    parser.add_argument("--vad-max-speech-sec", type=float, default=12.0)
+    parser.add_argument("--wake-pause-sec", type=float, default=0.5)
+    parser.add_argument("--wake-phrase", action="append", default=[])
+    parser.add_argument("--session-key", default="looper-voice")
+    parser.add_argument("--agent-model", default="openai/gpt-5.6-luna")
+    parser.add_argument(
+        "--openclaw-bin",
+        type=Path,
+        default=Path.home() / ".openclaw" / "bin" / "openclaw",
+    )
+    parser.add_argument("--agent-timeout-sec", type=int, default=90)
+    parser.add_argument(
+        "--agent-thinking",
+        choices=("off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"),
+        default="off",
+    )
+    parser.add_argument("--command-timeout-sec", type=float, default=15.0)
+    parser.add_argument("--acknowledgement", default="我在。")
+    parser.add_argument(
+        "--wake-feedback",
+        choices=("tone", "speech", "none"),
+        default="speech",
+    )
+    parser.add_argument("--wake-tone-ms", type=int, default=140)
+    parser.add_argument("--wake-tone-frequency", type=int, default=880)
+    parser.add_argument("--wake-tone-volume", type=float, default=0.3)
+    parser.add_argument("--tts-engine", choices=("piper", "espeak"), default="piper")
+    parser.add_argument(
+        "--piper-model",
+        type=Path,
+        default=DEFAULT_DATA_ROOT / "zh_CN-huayan-medium.onnx",
+    )
+    parser.add_argument("--piper-length-scale", type=float, default=0.9)
+    parser.add_argument("--tts-bin", default="espeak-ng")
+    parser.add_argument("--tts-voice", default="cmn")
+    parser.add_argument("--tts-speed", type=int, default=185)
+    parser.add_argument("--no-tts", action="store_true")
+    test_mode = parser.add_mutually_exclusive_group()
+    test_mode.add_argument(
+        "--wake-only",
+        action="store_true",
+        help="Exit after detecting the wake phrase without sending anything to OpenClaw.",
+    )
+    test_mode.add_argument(
+        "--transcribe-once",
+        action="store_true",
+        help="Transcribe one utterance and exit without sending anything to OpenClaw.",
+    )
+    test_mode.add_argument(
+        "--speak-text",
+        help="Synthesize and play one local test phrase, then exit.",
+    )
+    test_mode.add_argument(
+        "--echo-once",
+        action="store_true",
+        help="Run one fully local wake, transcription, and spoken echo cycle.",
+    )
+    args = parser.parse_args()
+    if not args.wake_phrase:
+        args.wake_phrase = ["looper"]
+    args.sample_rate = max(8000, args.sample_rate)
+    args.chunk_frames = max(400, args.chunk_frames)
+    args.speech_threads = max(1, args.speech_threads)
+    args.vad_threshold = max(0.1, min(0.9, args.vad_threshold))
+    args.vad_silence_sec = max(0.1, args.vad_silence_sec)
+    args.vad_min_speech_sec = max(0.1, args.vad_min_speech_sec)
+    args.vad_max_speech_sec = max(1.0, args.vad_max_speech_sec)
+    args.wake_pause_sec = max(0.2, args.wake_pause_sec)
+    args.agent_timeout_sec = max(10, args.agent_timeout_sec)
+    args.command_timeout_sec = max(1.0, args.command_timeout_sec)
+    args.wake_tone_ms = max(50, min(1000, args.wake_tone_ms))
+    args.wake_tone_frequency = max(100, min(4000, args.wake_tone_frequency))
+    args.wake_tone_volume = max(0.05, min(1.0, args.wake_tone_volume))
+    args.piper_length_scale = max(0.5, min(2.0, args.piper_length_scale))
+    return args
+
+
+def main() -> int:
+    args = parse_args()
+    if not args.openclaw_bin.is_file():
+        raise FileNotFoundError(f"OpenClaw executable not found: {args.openclaw_bin}")
+    bridge = OpenClawVoiceBridge(args)
+    try:
+        if args.speak_text is not None:
+            bridge.speak(args.speak_text)
+        elif args.wake_only or args.transcribe_once or args.echo_once:
+            bridge.load_models()
+            bridge._emit(
+                "ready",
+                device=args.device,
+                playback_device=args.playback_device,
+                wake_phrases=args.wake_phrase,
+            )
+            if args.echo_once:
+                bridge.wait_for_wake_word()
+                bridge.play_wake_feedback()
+                utterance = bridge.listen_for_utterance(args.command_timeout_sec)
+                bridge.speak(f"收到，{utterance}" if utterance else "没听清。")
+            elif args.wake_only:
+                bridge.wait_for_wake_word()
+            else:
+                bridge.listen_for_utterance(args.command_timeout_sec)
+        else:
+            bridge.run_forever()
+    except KeyboardInterrupt:
+        with contextlib.suppress(BrokenPipeError):
+            bridge._emit("stopped")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:  # noqa: BLE001 - systemd needs a clear fatal reason
+        print(json.dumps({"event": "fatal", "message": str(exc)}, ensure_ascii=False))
+        raise SystemExit(1)

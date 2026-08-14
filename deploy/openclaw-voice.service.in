@@ -1,0 +1,17 @@
+[Unit]
+Description=Looper OpenClaw voice assistant
+After=network-online.target sound.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_ROOT@
+Environment=PYTHONUNBUFFERED=1
+Environment=LOOPER_VOICE_ROOT=@VOICE_ROOT@
+ExecStart=@PROJECT_ROOT@/scripts/run_openclaw_voice.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target
