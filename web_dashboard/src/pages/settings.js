@@ -66,18 +66,6 @@ function renderSettings(payload) {
     insight3MaskForm.hidden = false;
     insight3MaskRatio.value = String(payload.insight3_gripper_mask_height_ratio ?? 0.2);
   }
-  const stickRow = document.getElementById("stick-figure-row");
-  const stickToggle = document.getElementById("stick-figure-toggle");
-  if (stickRow && stickToggle) {
-    stickRow.hidden = false;
-    stickToggle.checked = Boolean(payload && payload.stick_figure_mode);
-    if (!stickToggle.dataset.bound) {
-      stickToggle.dataset.bound = "1";
-      stickToggle.addEventListener("change", () => {
-        void setStickFigureMode(stickToggle.checked);
-      });
-    }
-  }
   const gestureRow = document.getElementById("gesture-recording-row");
   const gestureToggle = document.getElementById("gesture-recording-toggle");
   if (gestureRow && gestureToggle) {
@@ -87,18 +75,6 @@ function renderSettings(payload) {
       gestureToggle.dataset.bound = "1";
       gestureToggle.addEventListener("change", () => {
         void setGestureRecordingEnabled(gestureToggle.checked);
-      });
-    }
-  }
-  const voiceRow = document.getElementById("voice-recording-row");
-  const voiceToggle = document.getElementById("voice-recording-toggle");
-  if (voiceRow && voiceToggle) {
-    voiceRow.hidden = false;
-    voiceToggle.checked = Boolean(payload && payload.voice_recording_enabled);
-    if (!voiceToggle.dataset.bound) {
-      voiceToggle.dataset.bound = "1";
-      voiceToggle.addEventListener("change", () => {
-        void setVoiceRecordingEnabled(voiceToggle.checked);
       });
     }
   }
@@ -182,26 +158,6 @@ async function setInsight3GripperMaskRatio(rawValue) {
   }
 }
 
-async function setStickFigureMode(enabled) {
-  setSettingsStatus("Updating stick-figure mode...");
-  try {
-    const response = await fetch("/api/settings/stick-figure", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled })
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to update stick-figure mode.");
-    }
-    renderSettings(payload);
-    setSettingsStatus(`Stick-figure mode ${enabled ? "enabled" : "disabled"}.`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setSettingsStatus(`Failed to update stick-figure mode: ${message}`);
-  }
-}
-
 async function setGestureRecordingEnabled(enabled) {
   setSettingsStatus("Updating gesture recording...");
   try {
@@ -219,26 +175,6 @@ async function setGestureRecordingEnabled(enabled) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setSettingsStatus(`Failed to update gesture recording: ${message}`);
-  }
-}
-
-async function setVoiceRecordingEnabled(enabled) {
-  setSettingsStatus("Updating voice recording...");
-  try {
-    const response = await fetch("/api/settings/voice-recording", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled })
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to update voice recording.");
-    }
-    renderSettings(payload);
-    setSettingsStatus(`Voice recording ${enabled ? "enabled" : "disabled"}.`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setSettingsStatus(`Failed to update voice recording: ${message}`);
   }
 }
 

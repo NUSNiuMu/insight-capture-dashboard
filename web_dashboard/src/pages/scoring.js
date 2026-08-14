@@ -134,9 +134,13 @@ function renderIntegrityResult(report) {
   const topics = Array.isArray(report.topics) ? report.topics : [];
   const rows = topics.map((topic) => {
     const color = topic.ok ? okColor : badColor;
+    const messages = `${Number(topic.msgs || 0).toLocaleString()} msgs`;
+    const measuredRate = Number.isFinite(Number(topic.avg_hz)) && Number(topic.avg_hz) > 0
+      ? ` · measured ${Number(topic.avg_hz)} Hz`
+      : "";
     const detail = topic.error
-      ? escapeHtml(topic.error)
-      : `${Number(topic.msgs).toLocaleString()} msgs · ${topic.avg_hz}/${topic.nominal_hz}Hz · loss ${topic.loss_pct}%`;
+      ? `${messages}${measuredRate} · ${escapeHtml(topic.error)}`
+      : `${messages}${measuredRate} · expected ${Number(topic.nominal_hz)} Hz · loss ${Number(topic.loss_pct)}%`;
     return `
       <tr>
         <td style="padding:4px 10px 4px 0;font-family:monospace;font-size:0.78rem;white-space:nowrap">${escapeHtml(topic.name || "")}</td>
