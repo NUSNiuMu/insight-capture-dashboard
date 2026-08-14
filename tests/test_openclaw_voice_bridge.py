@@ -300,6 +300,23 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             )
         )
 
+    def test_calibration_completion_uses_configured_hand_roles(self):
+        payload = {
+            "camera_roles": {
+                "insight7_a": "right_hand",
+                "insight7_b": "left_hand",
+                "insight7_c": "head",
+            },
+            "statuses": {
+                "insight7_a": {"localized": True},
+                "insight7_b": {"localized": True},
+                "insight7_c": {"localized": False},
+            },
+        }
+        self.assertTrue(calibration_is_complete(payload))
+        payload["statuses"]["insight7_b"]["localized"] = False
+        self.assertFalse(calibration_is_complete(payload))
+
     def test_capture_check_states_have_deterministic_canned_replies(self):
         self.assertEqual(capture_check_reply_key({"state": "pass"}), "capture_check_pass")
         self.assertEqual(capture_check_reply_key({"state": "retry"}), "capture_check_retry")

@@ -1,9 +1,10 @@
-# Insight9 在线稀疏建图与 Insight3 全局重定位
+# 头部在线稀疏建图与手部相机全局重定位
 
-在线栈使用 Insight9 校正后的左右红外图、100 Hz VIO 和 Magic Leap 官方
-SuperPoint/SuperGlue，在当前会话内建立稀疏地图；两路 Insight3 随后定位到同一
-地图并持续发布统一世界系 Pose。v2.0.0 起该栈进入客户发布，RViz/稠密地图仍只作
-内部验证。
+在线栈使用配置头部相机校正后的左右目、100 Hz VIO 和 Magic Leap 官方
+SuperPoint/SuperGlue，在当前会话内建立稀疏地图；配置的左右手相机随后定位到同一
+地图并持续发布统一世界系 Pose。当前 Jetson NX 的三路 Insight7 左右目均为 NV12
+彩色流（固件沿用 `infra1/infra2` topic 名）；特征提取只取 Y 平面。v2.0.0 起该栈
+进入客户发布，RViz/稠密地图仍只作内部验证。
 
 ## 当前边界
 
@@ -26,7 +27,7 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图；两路 Insight3 �
 ## 数据链
 
 ```text
-左右 mono8 图像
+左右 mono8/NV12 图像（特征使用亮度平面）
   -> 20 ms 近时同步
   -> 官方 SuperPoint + SuperGlue
   -> 极线、视差、深度和重投影过滤
@@ -82,10 +83,10 @@ TensorRT 推理、Insight9 mapper 和 Insight3 localizer：
 docker compose up -d --wait insight-dashboard
 ```
 
-打开 `http://<设备地址>:8765/3d` 可直接查看稀疏建图状态，以及 Insight9、
-Insight3 A、Insight3 B 三条全局轨迹。页面会显示三路在线状态、Insight9
+打开 `http://<设备地址>:8765/3d` 可直接查看稀疏建图状态，以及头部、左手、右手
+三条全局轨迹。页面会显示三路在线状态、头部
 关键帧和最近一次晋升的地图点数量；点击 **New map** 会清空当前地图、三条轨迹
-和两个 Insight3 已确认的全局校正，从当前相机位姿开始新会话。
+和两个手部相机已确认的全局校正，从当前相机位姿开始新会话。
 建图在线时网页只显示这三条全局轨迹，不再叠加原有的三条局部 VIO 轨迹；
 三个模型的位置和朝向也直接使用对应全局 Pose。建图离线时不会回退到局部
 VIO，避免模型在两套坐标源之间跳变。
@@ -103,11 +104,12 @@ remap 后继续驱动同一套模型和轨迹。旧 rosbag 如果没有这些全
 轨迹或模型位置，不会回退到旧 VIO。原 AprilTag 在线对齐的订阅、定时器、
 Web API、前端控制和 WebSocket payload 已停用，建图重定位是唯一在线校准源。
 
-## Insight3 全局重定位
+## 手部相机全局重定位
 
-Dashboard 复用两路 Insight3 现有图像 reader，以 2 Hz 中继到
-`/insight_mapping/<name>/infra1/image_rect_raw`；localizer 不再增加全速图像 DDS
-reader。查询特征与 Insight9 的 3D 描述子地图匹配，通过 PnP-RANSAC 与连续三帧
+Dashboard 按 `global_localization_image_stream` 订阅手部相机左目，并以 2 Hz 中继到
+`/insight_mapping/<name>/infra1/image_rect_raw`；若网页显示同一流则复用 reader，否则
+由 Dashboard 建立独立 reader，localizer 自身不再重复订阅原始全速图像。查询特征与
+头部相机的 3D 描述子地图匹配，通过 PnP-RANSAC 与连续三帧
 共识后得到 `T_map_odom`，再以 30 Hz 原始 VIO 外推全局 Pose。
 
 - 首次定位直接初始化；小于 `0.15 m / 10°` 的修正由误差状态 EKF 平滑吸收；达到

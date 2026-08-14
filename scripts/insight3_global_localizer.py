@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Localize both Insight3 cameras in the Insight9 SuperPoint map."""
+"""Localize configured hand cameras in the head-camera SuperPoint map."""
 
 from __future__ import annotations
 
@@ -67,7 +67,21 @@ except ImportError as exc:  # pragma: no cover - exercised in the ROS image
     raise SystemExit(f"ROS 2 Python dependencies are unavailable: {exc}") from exc
 
 
-CAMERAS = ("insight3_a", "insight3_b")
+
+def localization_cameras(config_path: Path) -> dict[str, str]:
+    """Return enabled hand camera names mapped to their ROS namespaces."""
+
+    with Path(config_path).open("r", encoding="utf-8") as stream:
+        payload = json.load(stream)
+    cameras = {
+        str(camera["name"]): str(camera["namespace"])
+        for camera in payload.get("cameras", [])
+        if camera.get("enabled", True)
+        and camera.get("teleop_role") in {"left_hand", "right_hand"}
+    }
+    if not cameras:
+        raise ValueError(f"no enabled hand cameras in {config_path}")
+    return cameras
 
 
 def stamp_to_ns(stamp) -> int:
@@ -246,7 +260,7 @@ class CameraState:
 
 
 class Insight3GlobalLocalizer(Node):
-    """Match both Insight3 streams to the shared Insight9 3D descriptor map."""
+    """Match configured hand-camera streams to the shared head-camera map."""
 
     def __init__(self, args: argparse.Namespace) -> None:
         super().__init__("insight3_global_localizer")
@@ -287,6 +301,8 @@ class Insight3GlobalLocalizer(Node):
             max_gap_ms=args.vio_stitch_max_gap_ms,
         )
         self._matcher = IpcSuperGlueBackend(Path(args.inference_socket))
+        self._camera_namespaces = localization_cameras(Path(args.camera_config))
+        camera_names = tuple(self._camera_namespaces)
         self._map_lock = threading.Lock()
         self._map_points = np.empty((0, 3), dtype=np.float32)
         self._normalized_map_descriptors = np.empty((0, 256), dtype=np.float32)
@@ -299,14 +315,14 @@ class Insight3GlobalLocalizer(Node):
                 adaptive_config=adaptive_config,
                 vio_continuity_config=vio_continuity_config,
             )
-            for name in CAMERAS
+            for name in camera_names
         }
         self._path_publishers = (
             {
                 name: self.create_publisher(
                     PathMsg, f"insight_global/{name}/path", 1
                 )
-                for name in CAMERAS
+                for name in camera_names
             }
             if args.publish_debug_topics
             else {}
@@ -315,19 +331,19 @@ class Insight3GlobalLocalizer(Node):
             name: self.create_publisher(
                 PoseStamped, f"insight_global/{name}/pose", 1
             )
-            for name in CAMERAS
+            for name in camera_names
         }
         self._status_publishers = {
             name: self.create_publisher(
                 String, f"insight_global/{name}/status", 1
             )
-            for name in CAMERAS
+            for name in camera_names
         }
         self._reset_service = self.create_service(
             Empty, "insight_global/reset", self._on_reset
         )
         self._tcp_calibrations = load_tcp_frame_calibrations(
-            Path(args.camera_config), CAMERAS
+            Path(args.camera_config), camera_names
         )
         self._tf_broadcaster = TransformBroadcaster(self)
         self._static_tf_broadcaster = StaticTransformBroadcaster(self)
@@ -341,7 +357,7 @@ class Insight3GlobalLocalizer(Node):
             1,
         )
         self._camera_subscriptions = []
-        for name in CAMERAS:
+        for name, namespace in self._camera_namespaces.items():
             image_topic = args.image_topic_template.format(name=name)
             self._camera_subscriptions.extend(
                 [
@@ -353,19 +369,19 @@ class Insight3GlobalLocalizer(Node):
                     ),
                     self.create_subscription(
                         CameraInfo,
-                        f"/{name}/camera/infra1/camera_info",
+                        f"/{namespace}/camera/infra1/camera_info",
                         self._camera_info_callback(name),
                         qos_profile_sensor_data,
                     ),
                     self.create_subscription(
                         PoseStamped,
-                        f"/{name}/camera/vio_100hz",
+                        f"/{namespace}/camera/vio_100hz",
                         self._vio_callback(name),
                         qos_profile_sensor_data,
                     ),
                     self.create_subscription(
                         String,
-                        f"/{name}/camera/vio_status",
+                        f"/{namespace}/camera/vio_status",
                         self._vio_status_callback(name),
                         qos_profile_sensor_data,
                     ),
@@ -387,7 +403,7 @@ class Insight3GlobalLocalizer(Node):
         )
         self.create_timer(0.5, self._publish_status)
         self.get_logger().info(
-            "SuperPoint global localizer started for insight3_a and insight3_b; "
+            f"SuperPoint global localizer started for {', '.join(camera_names)}; "
             f"masking the bottom {self._gripper_mask_height_ratio:.1%} of both images"
         )
         if not args.publish_debug_topics:
@@ -449,7 +465,7 @@ class Insight3GlobalLocalizer(Node):
                     "localized": False,
                     "tracking_mode": "unlocalized",
                 }
-        self.get_logger().info("Cleared Insight3 global corrections for a new map")
+        self.get_logger().info("Cleared hand-camera global corrections for a new map")
         return response
 
     def destroy_node(self) -> bool:
@@ -644,6 +660,7 @@ class Insight3GlobalLocalizer(Node):
 
     def _resolve_extrinsics(self) -> None:
         for name, state in self._cameras.items():
+            namespace = self._camera_namespaces[name]
             with state.lock:
                 imu_to_left = state.imu_to_left
                 center_ready = state.imu_to_center is not None
@@ -652,8 +669,8 @@ class Insight3GlobalLocalizer(Node):
             if imu_to_left is None:
                 try:
                     transform = self._tf_buffer.lookup_transform(
-                        f"{name}_camera_imu",
-                        f"{name}_camera_left",
+                        f"{namespace}_camera_imu",
+                        f"{namespace}_camera_left",
                         Time(),
                         timeout=Duration(seconds=0.05),
                     )
@@ -674,8 +691,8 @@ class Insight3GlobalLocalizer(Node):
                 self.get_logger().info(f"resolved {name} T_imu_left")
             try:
                 transform = self._tf_buffer.lookup_transform(
-                    f"{name}_camera_left",
-                    f"{name}_camera_right",
+                    f"{namespace}_camera_left",
+                    f"{namespace}_camera_right",
                     Time(),
                     timeout=Duration(seconds=0.05),
                 )

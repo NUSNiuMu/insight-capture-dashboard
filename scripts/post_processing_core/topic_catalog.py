@@ -95,6 +95,11 @@ def build_recording_topic_catalog(
     default_selected = set(_normalize_topics(default_selected_topics or []))
     topics_by_camera: Dict[str, List[Dict[str, str]]] = {}
     enabled = enabled_cameras(raw_config)
+    head_namespaces = {
+        str(camera["namespace"])
+        for camera in enabled
+        if camera.get("teleop_role") == "head"
+    }
     cameras: List[Dict[str, object]] = []
     other: List[Dict[str, str]] = []
 
@@ -119,7 +124,7 @@ def build_recording_topic_catalog(
             prefix = f"/{namespace}/camera/"
             global_prefix = (
                 "/insight9_sparse_map/"
-                if namespace == "insight9_a"
+                if namespace in head_namespaces
                 else f"/insight_global/{namespace}/"
             )
             if topic.startswith(prefix):
@@ -219,12 +224,17 @@ def discover_live_topics(
     return build_recording_topic_catalog(raw_config, filtered, build_default_topics(raw_config))
 
 
-def _topic_group(topic: str) -> str:
+def _topic_group(topic: str, raw_config: Optional[Dict] = None) -> str:
     """Keep global poses with their camera recorder instead of spawning extras."""
 
     if topic.startswith("/insight9_sparse_map/"):
+        if raw_config is not None:
+            for camera in enabled_cameras(raw_config):
+                if camera.get("teleop_role") == "head":
+                    return str(camera["namespace"])
         return "insight9_a"
-    for namespace in ("insight3_a", "insight3_b"):
-        if topic.startswith(f"/insight_global/{namespace}/"):
-            return namespace
+    if topic.startswith("/insight_global/"):
+        parts = topic.strip("/").split("/")
+        if len(parts) >= 3:
+            return parts[1]
     return topic.strip("/").split("/", 1)[0]

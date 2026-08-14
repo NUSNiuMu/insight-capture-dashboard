@@ -267,13 +267,14 @@ class RecordingManager:
 
             groups: Dict[str, List[str]] = {}
             for topic in other_topics:
-                groups.setdefault(_topic_group(topic), []).append(topic)
+                groups.setdefault(_topic_group(topic, self.raw_config), []).append(topic)
 
             image_writer_active = False
             if image_topics:
                 # Keep large camera streams on independent writers.
                 topic_output_paths = {
-                    topic: str(staging_dir / f"_images_{_topic_group(topic)}") for topic in image_topics
+                    topic: str(staging_dir / f"_images_{_topic_group(topic, self.raw_config)}")
+                    for topic in image_topics
                 }
                 self._start_image_recording(topic_output_paths)
                 image_writer_active = True

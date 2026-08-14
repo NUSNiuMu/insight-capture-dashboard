@@ -124,16 +124,28 @@ def match_local_command(text: object) -> Optional[str]:
 
 
 def calibration_is_complete(payload: object) -> bool:
-    """Return whether both Insight3 devices have a first global localization."""
+    """Return whether all configured hand cameras have a global localization."""
     if not isinstance(payload, dict):
         return False
     statuses = payload.get("statuses")
     if not isinstance(statuses, dict):
         return False
-    return all(
+    roles = payload.get("camera_roles")
+    hand_names = (
+        [
+            str(name)
+            for name, role in roles.items()
+            if role in {"left_hand", "right_hand"}
+        ]
+        if isinstance(roles, dict)
+        else []
+    )
+    if not hand_names:
+        hand_names = ["insight3_a", "insight3_b"]
+    return bool(hand_names) and all(
         isinstance(statuses.get(name), dict)
         and bool(statuses[name].get("localized"))
-        for name in ("insight3_a", "insight3_b")
+        for name in hand_names
     )
 
 

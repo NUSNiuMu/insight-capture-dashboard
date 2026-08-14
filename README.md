@@ -2,8 +2,9 @@
 
 面向机器人学习数据采集的多相机工作站：实时查看多路相机图像和统一世界系轨迹，
 录制并校验 rosbag，离线提取 Hand pose、夹爪状态，并导出 LeRobot/UMI 训练数据。
-在线空间基准由 Insight9 稀疏建图与 Insight3 全局重定位提供；旧 AprilTag 在线对齐
-链路已经移除。
+在线空间基准由配置为 `head` 的相机做稀疏建图、两路手部相机做全局重定位；当前
+`jetson-nx` profile 使用 Insight7 C 作为头部、Insight7 A/B 作为双手。旧 AprilTag
+在线对齐链路已经移除。
 
 > **交付给客户的使用手册在 [docs/USAGE.md](docs/USAGE.md)**（日常操作、采集
 > 流程、故障排查诊断树；不含安装——环境由我们出厂配置好）。
@@ -86,9 +87,9 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 | 字段 | 作用 | 例子 |
 |---|---|---|
-| `namespace` | 相机的 ROS 命名空间 | `insight3_a` |
+| `namespace` | 相机的 ROS 命名空间 | `insight7_a` |
 | `dashboard_image_stream` | dashboard 显示用哪路图像流 | `infra1` / `color_compressed` |
-| `dashboard_pose_stream` | 全局建图/重定位 pose 流 | `/insight_global/insight3_a/pose` |
+| `dashboard_pose_stream` | 全局建图/重定位 pose 流 | `/insight_global/insight7_a/pose` |
 | `teleop_role` | 决定 3D 场景里用哪个位置/朝向预设 | `head` / `left_hand` / `right_hand` |
 | `avatar_model` | 3D 场景里这个相机用的模型，见下方"Web avatar 模型配置" | `assets/models/vis_assembly.glb` |
 
@@ -112,7 +113,8 @@ python3 scripts/multi_camera_dashboard_web.py &
 ./scripts/reboot_cameras.sh --sync-phase
 ```
 
-该模式使用 Insight3 A/B 红外图像与 Insight9 中间 30 Hz RGB 图像进行测量；SSH
+该模式按每台相机的 `sync_image_stream` 测量；当前三路 Insight7 都使用左目彩色
+NV12（固件沿用 `infra1` topic 名）。SSH
 密码只交互读取一次，也可用 `INSIGHT_CAMERA_SSH_PASSWORD` 或 SSH key 提供。
 
 ## Web Dashboard 功能
@@ -144,7 +146,8 @@ Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic�
 或验证失败时自动回退到 `ros2 bag convert`。合包完成前不能开始下一段。默认选择同时包含原始
 `vio_100hz` 和配置的全局 pose，供单臂/双臂数据集导出使用。
 
-手势录制默认关闭，可在 Settings 开启；Insight9 同时检测到双手“拇指向上、四指
+手势录制默认关闭；只有配置的头部相机发布 HandEngine 结果时才可在 Settings 开启。
+头部画面同时检测到双手“拇指向上、四指
 握拳”持续 0.8 秒时，会用服务器默认 topics 开始录制，解除 2 秒后再次保持同一
 手势可停止，且不会停止网页手动开始的录制。输出目录优先级：CLI `--rosbag-dir` >
 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
@@ -171,7 +174,7 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 
 ```json
 {
-  "name": "insight9_a",
+  "name": "insight7_c",
   "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",
   "avatar_scale": 0.5
 }
@@ -194,9 +197,9 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 | `scripts/hand_tracking/` | 实时手部 landmark、双手手势识别和夹爪跟踪 |
 | `scripts/handpose/` | 从已有 rosbag 离线提取并管理 Hand pose 结果 |
 | `scripts/webrtc_worker.py` / `hand_overlay_worker.py` | 独立进程中的 WebRTC 编码/信令与 JPEG 手部叠加 |
-| `scripts/insight9_sparse_mapper.py` | Insight9 SuperPoint/SuperGlue 在线稀疏建图与位姿图入口 |
+| `scripts/insight9_sparse_mapper.py` | 配置头部相机的 SuperPoint/SuperGlue 在线稀疏建图与位姿图兼容入口 |
 | `scripts/insight9_dense_mapper.py` | 仅内部验证的 StereoSGBM/VIO 稠密点云入口 |
-| `scripts/insight3_global_localizer.py` | 两路 Insight3 到 Insight9 3D 描述子地图的全局定位与轨迹重建节点 |
+| `scripts/insight3_global_localizer.py` | 配置手部相机到头部 3D 描述子地图的全局定位与轨迹重建兼容入口 |
 | `scripts/run_mapping_validation_rviz.sh` | 清空上一会话后启动稀疏三相机重定位与 RViz |
 | `Dockerfile.superglue-validation` | 客户发布与开发共用的 NVIDIA Jetson TensorRT/SuperGlue GPU 镜像 |
 | `scripts/camera_setup.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |

@@ -156,7 +156,21 @@ class UmiExportManager:
         if len(set(bag_names)) != len(bag_names):
             raise ValueError("Duplicate rosbag names are not allowed.")
         if camera_names is None:
-            camera_names = ["insight3_a", "insight3_b", "insight9_a"]
+            config = json.loads(
+                (self.project_root / "config" / "cameras.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            cameras_by_role = {
+                str(camera.get("teleop_role")): str(camera["name"])
+                for camera in config.get("cameras", [])
+                if camera.get("enabled", True)
+            }
+            camera_names = [
+                cameras_by_role[role]
+                for role in ("right_hand", "left_hand", "head")
+                if role in cameras_by_role
+            ]
         if not camera_names:
             raise ValueError("Select at least one camera.")
         camera_names = [

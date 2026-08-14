@@ -53,7 +53,7 @@ class ImagePipeline:
         """Reuse the display reader instead of adding another full-rate DDS reader."""
 
         publisher = self.owner._localization_image_publishers.get(camera_name)
-        if publisher is None:
+        if publisher is None or RosImage is None or not isinstance(msg, RosImage):
             return
         stamp_ns = self.owner._stamp_to_ns(msg.header.stamp)
         previous = self.owner._last_localization_image_relay_ns.get(camera_name, -1)

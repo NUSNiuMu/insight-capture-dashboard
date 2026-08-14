@@ -275,7 +275,8 @@ CycloneDDS；FastDDS 的约 65 KB UDP 报文会在多路大图订阅时触发分
 首次安装完成后，如果这台设备接的是跟别的 jetson-nx 设备不同的相机机群，
 `config/cameras.json` 里的相机列表是 profile 的默认值；如果这台设备接的是
 不同的相机机群，需要按实际命名空间和全局建图/重定位 topic 调整。固定机群
-（本项目目前是：insight3_a / insight3_b / insight9_a）无需额外执行轨迹对齐操作。
+（当前 `jetson-nx` profile 是：`insight7_a` / `insight7_b` / `insight7_c`，C 为头部）
+无需额外执行轨迹对齐操作。
 
 浏览器访问 `http://<设备IP>:8765/`，或 `./scripts/run_dashboard.sh --jetson`
 在设备屏幕本机打开全屏看板。日常操作和故障排查见 `docs/USAGE.md`。

@@ -94,6 +94,22 @@ class CaptureCheckManager:
                 recalibrate_rotation_deg=15.0,
             ),
         }
+        configured_groups = settings.get("camera_threshold_groups")
+        self.camera_threshold_groups = (
+            {
+                str(camera): str(group)
+                for camera, group in configured_groups.items()
+            }
+            if isinstance(configured_groups, dict)
+            else {}
+        )
+        for group in set(self.camera_threshold_groups.values()):
+            base = self.thresholds[
+                "insight3" if "localizer" in group else "insight9"
+            ]
+            self.thresholds[group] = self._parse_thresholds(
+                settings.get(group), **base
+            )
         self.minimum_map_points = max(0, int(settings.get("minimum_map_points", 30)))
         self.pose_roles = dict(pose_roles)
         self.role_names = {
@@ -158,8 +174,13 @@ class CaptureCheckManager:
         return parsed
 
     def _camera_thresholds(self, camera_name: str) -> dict:
-        group = "insight3" if camera_name.startswith("insight3") else "insight9"
-        return self.thresholds[group]
+        return self.thresholds[self._camera_threshold_group(camera_name)]
+
+    def _camera_threshold_group(self, camera_name: str) -> str:
+        return self.camera_threshold_groups.get(
+            camera_name,
+            "insight3" if camera_name.startswith("insight3") else "insight9",
+        )
 
     def record_pose(
         self, name: str, sample: PoseSample, received_monotonic: Optional[float] = None
@@ -271,9 +292,7 @@ class CaptureCheckManager:
                     "state": camera_state,
                     "translation_error_m": round(translation_error, 5),
                     "rotation_error_deg": round(rotation_error, 3),
-                    "threshold_group": (
-                        "insight3" if camera_name.startswith("insight3") else "insight9"
-                    ),
+                    "threshold_group": self._camera_threshold_group(camera_name),
                 }
             else:
                 result = self._result(
@@ -300,12 +319,14 @@ class CaptureCheckManager:
         statuses = mapping.get("statuses") if isinstance(mapping, dict) else None
         statuses = statuses if isinstance(statuses, dict) else {}
         reasons = []
-        mapper = statuses.get("insight9")
+        head_name = self.role_names["head"]
+        mapper = statuses.get(head_name)
         if not isinstance(mapper, dict) or not mapper.get("online"):
-            reasons.append("Insight9 mapping status is offline")
+            reasons.append(f"{head_name} mapping status is offline")
         if int(mapping.get("map_point_count", 0) or 0) < self.minimum_map_points:
             reasons.append(f"map has fewer than {self.minimum_map_points} confirmed points")
-        for status_name in ("insight3_a", "insight3_b"):
+        for role in ("left_hand", "right_hand"):
+            status_name = self.role_names[role]
             status = statuses.get(status_name)
             if not isinstance(status, dict) or not status.get("online"):
                 reasons.append(f"{status_name} localization status is offline")
@@ -387,8 +408,7 @@ class CaptureCheckManager:
 
     def _threshold_payload(self) -> dict:
         return {
-            "insight3": dict(self.thresholds["insight3"]),
-            "insight9": dict(self.thresholds["insight9"]),
+            **{name: dict(values) for name, values in self.thresholds.items()},
             "minimum_map_points": self.minimum_map_points,
         }
 

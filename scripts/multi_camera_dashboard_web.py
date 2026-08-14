@@ -42,8 +42,10 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
 
 from camera_setup import (
     AVAILABLE_AVATAR_MODELS,
+    IMAGE_STREAMS,
     avatar_model_defaults,
     build_dashboard_config,
+    image_topic,
     load_setup,
 )
 from hand_tracking.gripper import GripperTrackingMixin
@@ -133,8 +135,9 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         enabled_camera_map = {
             camera["name"]: camera for camera in raw_config.get("cameras", []) if camera.get("enabled", True)
         }
+        self._enabled_camera_config = enabled_camera_map
         trajectory_config = config.get("trajectory", {})
-        # Reliable image QoS prevents whole-frame loss from fragmented UDP samples.
+        # Profiles choose reliability according to camera firmware and link behavior.
         self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
         self.pose_publish_hz = max(1.0, float(trajectory_config.get("pose_publish_hz", pose_publish_hz)))
         self.display_fps_limit = min(
@@ -330,10 +333,21 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.append(playback_sub)
-            if camera.name in ("insight3_a", "insight3_b") and msg_type is RosImage:
-                relay_topic = (
-                    f"/insight_mapping/{camera.name}/infra1/image_rect_raw"
-                )
+            runtime_config = self._enabled_camera_config[camera.name]
+            localization_stream = runtime_config.get(
+                "global_localization_image_stream"
+            )
+            # Preserve profiles created before the relay became configurable.
+            if localization_stream is None and camera.name.startswith("insight3_"):
+                localization_stream = "infra1"
+            if localization_stream:
+                stream = str(localization_stream)
+                stream_config = IMAGE_STREAMS.get(stream)
+                if not stream_config or stream_config["type"] != "image":
+                    raise ValueError(
+                        f"global localization stream for {camera.name} must be a raw image"
+                    )
+                relay_topic = f"/insight_mapping/{camera.name}/{stream}/image_rect_raw"
                 self._localization_image_publishers[camera.name] = (
                     self.create_publisher(
                         RosImage,
@@ -344,6 +358,22 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 self.get_logger().info(
                     f"Localization relay: {camera.name} -> {relay_topic} at 2 Hz"
                 )
+                localization_topic = image_topic(camera.namespace, stream)
+                if localization_topic != camera.topic:
+                    localization_sub = self.create_subscription(
+                        RosImage,
+                        localization_topic,
+                        lambda msg, name=camera.name: self._image_pipeline._maybe_relay_localization_image(
+                            name, msg
+                        ),
+                        make_image_qos(depth=1, reliability="best_effort"),
+                        callback_group=self.ros_callback_group,
+                        event_callbacks=self.subscription_event_callbacks,
+                    )
+                    self.dashboard_subscriptions.append(localization_sub)
+                    self.get_logger().info(
+                        f"Localization source: {camera.name} <- {localization_topic}"
+                    )
             threading.Thread(
                 target=self._frame_worker_loop,
                 args=(camera.name, camera.topic_type),

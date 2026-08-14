@@ -15,11 +15,6 @@ except ImportError:  # pragma: no cover - only fake/non-ROS imports use this pat
     Empty = None
 
 
-STATUS_TOPICS = {
-    "insight9": "/insight9_sparse_map/status",
-    "insight3_a": "/insight_global/insight3_a/status",
-    "insight3_b": "/insight_global/insight3_b/status",
-}
 class MappingStream:
     """Hold lightweight map counters and status without forwarding geometry."""
 
@@ -27,12 +22,11 @@ class MappingStream:
         self.owner = owner
         self._lock = threading.Lock()
         self._map_point_count = 0
-        self._statuses: Dict[str, Dict[str, object]] = {
-            name: {"state": "unavailable"} for name in STATUS_TOPICS
-        }
-        self._last_received: Dict[str, float] = {
-            name: 0.0 for name in STATUS_TOPICS
-        }
+        self._camera_roles: Dict[str, str] = {}
+        self._camera_labels: Dict[str, str] = {}
+        self._status_topics: Dict[str, str] = {}
+        self._statuses: Dict[str, Dict[str, object]] = {}
+        self._last_received: Dict[str, float] = {}
         self._subscriptions = []
         self._mapper_reset_client = None
         self._localizer_reset_client = None
@@ -40,11 +34,31 @@ class MappingStream:
     def start(self) -> None:
         if String is None or Empty is None:
             return
+        self._camera_roles = {
+            pose.name: pose.teleop_role
+            for pose in self.owner.poses
+            if pose.teleop_role in {"head", "left_hand", "right_hand"}
+        }
+        self._camera_labels = {
+            camera.name: camera.label for camera in self.owner.cameras
+        }
+        self._status_topics = {
+            name: (
+                "/insight9_sparse_map/status"
+                if role == "head"
+                else f"/insight_global/{name}/status"
+            )
+            for name, role in self._camera_roles.items()
+        }
+        self._statuses = {
+            name: {"state": "unavailable"} for name in self._status_topics
+        }
+        self._last_received = {name: 0.0 for name in self._status_topics}
         kwargs = {
             "callback_group": self.owner.ros_callback_group,
             "event_callbacks": self.owner.subscription_event_callbacks,
         }
-        for name, topic in STATUS_TOPICS.items():
+        for name, topic in self._status_topics.items():
             self._subscriptions.append(
                 self.owner.create_subscription(
                     String, topic, self._status_callback(name), 1, **kwargs
@@ -71,7 +85,7 @@ class MappingStream:
                 status = {"state": "error", "error": "invalid status payload"}
             with self._lock:
                 self._statuses[name] = status
-                if name == "insight9":
+                if self._camera_roles.get(name) == "head":
                     try:
                         self._map_point_count = max(
                             0, int(status.get("map_point_count", self._map_point_count))
@@ -95,6 +109,8 @@ class MappingStream:
                 "type": "mapping_update",
                 "map_point_count": self._map_point_count,
                 "statuses": statuses,
+                "camera_roles": dict(self._camera_roles),
+                "camera_labels": dict(self._camera_labels),
             }
             return payload
 

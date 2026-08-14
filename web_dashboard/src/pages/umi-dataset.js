@@ -18,7 +18,7 @@ const progressFill = document.getElementById("umi-progress-fill");
 const resultElement = document.getElementById("umi-result");
 let bags = [];
 let pollTimer = null;
-const CAMERA_LAYOUTS = {
+let cameraLayouts = {
   single_a: {
     label: "Single arm · Insight3 A",
     cameras: ["insight3_a"],
@@ -41,7 +41,47 @@ const CAMERA_LAYOUTS = {
 };
 
 function selectedLayout() {
-  return CAMERA_LAYOUTS[cameraLayoutInput.value] || CAMERA_LAYOUTS.single_a;
+  return cameraLayouts[cameraLayoutInput.value] || cameraLayouts.single_a;
+}
+
+async function loadCameraLayouts() {
+  try {
+    const response = await fetch(`/api/settings?ts=${Date.now()}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Failed to load camera roles.");
+    const poses = Array.isArray(payload.poses) ? payload.poses : [];
+    const byRole = Object.fromEntries(poses.map((pose) => [pose.role, pose]));
+    const right = byRole.right_hand;
+    const left = byRole.left_hand;
+    const head = byRole.head;
+    if (!right || !left || !head) return;
+    cameraLayouts = {
+      single_a: {
+        label: `Single arm · ${right.name}`,
+        cameras: [right.name],
+        schema: [["right_wrist_0_rgb / arm 10D", `${right.name} · absolute EE pose + width`]],
+      },
+      single_b: {
+        label: `Single arm · ${left.name}`,
+        cameras: [left.name],
+        schema: [["right_wrist_0_rgb / arm 10D", `${left.name} · absolute EE pose + width`]],
+      },
+      bimanual: {
+        label: `Bimanual · ${right.name} + ${left.name} + ${head.name}`,
+        cameras: [right.name, left.name, head.name],
+        schema: [
+          ["left 10D / left_wrist_0_rgb", `${left.name} · absolute EE pose + width`],
+          ["right 10D / right_wrist_0_rgb", `${right.name} · absolute EE pose + width`],
+          ["base_0_rgb", `Global view · ${head.name}`],
+        ],
+      },
+    };
+    for (const option of cameraLayoutInput.options) {
+      if (cameraLayouts[option.value]) option.textContent = cameraLayouts[option.value].label;
+    }
+  } catch (_error) {
+    // Keep the legacy labels when settings are temporarily unavailable.
+  }
 }
 
 function renderLayout() {
@@ -239,5 +279,5 @@ exportButton.addEventListener("click", async () => {
 });
 
 void loadBags();
-renderLayout();
+void loadCameraLayouts().finally(renderLayout);
 void pollStatus();

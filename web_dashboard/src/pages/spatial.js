@@ -269,7 +269,10 @@ async function refreshMappingStatus() {
 
 function renderMappingStatus(payload) {
   const statuses = payload.statuses || {};
-  const mapper = statuses.insight9 || {};
+  const roles = payload.camera_roles || {};
+  const labels = payload.camera_labels || {};
+  const headName = Object.keys(roles).find((name) => roles[name] === "head") || "insight9";
+  const mapper = statuses[headName] || {};
   const onlineCount = Object.values(statuses).filter((status) => status.online).length;
   const points = Number(payload.map_point_count || 0);
   if (mappingStatus) {
@@ -291,15 +294,12 @@ function renderMappingStatus(payload) {
       `last promoted ${promoted} · loops ${loops}${loopCheck}`;
   }
   if (mappingCameraStates) {
-    const labels = {
-      insight9: "Insight9 map",
-      insight3_a: "Insight3 A",
-      insight3_b: "Insight3 B",
-    };
-    mappingCameraStates.innerHTML = Object.entries(labels).map(([name, label]) => {
+    const names = Object.keys(roles).length ? Object.keys(roles) : Object.keys(statuses);
+    mappingCameraStates.innerHTML = names.map((name) => {
       const status = statuses[name] || {};
       const state = status.online ? String(status.state || "online") : "offline";
-      const active = status.online && (name === "insight9" || Boolean(status.localized));
+      const active = status.online && (roles[name] === "head" || name === headName || Boolean(status.localized));
+      const label = labels[name] || name;
       return `<span class="${active ? "is-ok" : ""}"><i></i>${escapeHtml(label)} · ${escapeHtml(state)}</span>`;
     }).join("");
   }

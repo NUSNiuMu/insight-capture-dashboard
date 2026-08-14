@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Build a session-local Insight9 sparse stereo map and publish it for RViz."""
+"""Build a session-local head-camera sparse stereo map and publish it for RViz."""
 
 from __future__ import annotations
 
@@ -500,7 +500,7 @@ class Insight9SparseMapper(Node):
         )
         baseline_m = float(np.linalg.norm(left_to_right[:3, 3]))
         self.get_logger().info(
-            f"resolved Insight9 stereo center from {baseline_m:.4f} m baseline"
+            f"resolved {self._args.head_camera_name} stereo center from {baseline_m:.4f} m baseline"
         )
 
     def _on_vio(self, message: PoseStamped) -> None:
@@ -872,7 +872,7 @@ class Insight9SparseMapper(Node):
                 with self._loop_lock:
                     self._loop_pose_filter.observe(correction)
                 self.get_logger().info(
-                    "optimized deferred Insight9 pose graph: %.1f ms, "
+                    "optimized deferred head-camera pose graph: %.1f ms, "
                     "maximum correction %.3f m / %.2f deg"
                     % (
                         result.elapsed_ms,
@@ -1008,7 +1008,7 @@ class Insight9SparseMapper(Node):
                 np.eye(4, dtype=np.float64), applied_measurement
             )
             self.get_logger().info(
-                "accepted Insight9 loop closure %d: correction=%.3f m / %.2f deg; "
+                "accepted head-camera loop closure %d: correction=%.3f m / %.2f deg; "
                 "pose_graph=%s"
                 % (
                     loop_count,
@@ -1205,6 +1205,35 @@ class Insight9SparseMapper(Node):
         self._tf_broadcaster.sendTransform(transform)
 
 
+def configure_head_camera(args: argparse.Namespace) -> None:
+    """Fill unspecified mapper inputs from the configured head camera."""
+
+    config_path = Path(args.camera_config)
+    try:
+        with config_path.open("r", encoding="utf-8") as stream:
+            payload = json.load(stream)
+        head = next(
+            camera
+            for camera in payload.get("cameras", [])
+            if camera.get("enabled", True)
+            and camera.get("teleop_role") == "head"
+        )
+    except (OSError, ValueError, StopIteration, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot resolve the head camera from {config_path}: {exc}") from exc
+
+    namespace = str(head["namespace"])
+    args.head_camera_name = str(head["name"])
+    base = f"/{namespace}/camera"
+    args.left_image_topic = args.left_image_topic or f"{base}/infra1/image_rect_raw"
+    args.right_image_topic = args.right_image_topic or f"{base}/infra2/image_rect_raw"
+    args.left_info_topic = args.left_info_topic or f"{base}/infra1/camera_info"
+    args.right_info_topic = args.right_info_topic or f"{base}/infra2/camera_info"
+    args.vio_topic = args.vio_topic or f"{base}/vio_100hz"
+    args.imu_frame = args.imu_frame or f"{namespace}_camera_imu"
+    args.left_frame = args.left_frame or f"{namespace}_camera_left"
+    args.right_frame = args.right_frame or f"{namespace}_camera_right"
+
+
 def build_parser() -> argparse.ArgumentParser:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -1212,18 +1241,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--superglue-checkout",
         default=str(root / "data" / "models" / "SuperGluePretrainedNetwork"),
     )
+    parser.add_argument(
+        "--camera-config",
+        default=str(root / "config" / "cameras.json"),
+        help="resolve unspecified stereo/VIO inputs from the enabled head camera",
+    )
     parser.add_argument("--backend", choices=("ipc", "official-torch"), default="ipc")
     parser.add_argument("--inference-socket", default="/run/superglue/matcher.sock")
     parser.add_argument("--superglue-weights", choices=("indoor", "outdoor"), default="indoor")
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
-    parser.add_argument("--left-image-topic", default="/insight9_a/camera/infra1/image_rect_raw")
-    parser.add_argument("--right-image-topic", default="/insight9_a/camera/infra2/image_rect_raw")
-    parser.add_argument("--left-info-topic", default="/insight9_a/camera/infra1/camera_info")
-    parser.add_argument("--right-info-topic", default="/insight9_a/camera/infra2/camera_info")
-    parser.add_argument("--vio-topic", default="/insight9_a/camera/vio_100hz")
-    parser.add_argument("--imu-frame", default="insight9_a_camera_imu")
-    parser.add_argument("--left-frame", default="insight9_a_camera_left")
-    parser.add_argument("--right-frame", default="insight9_a_camera_right")
+    parser.add_argument("--left-image-topic")
+    parser.add_argument("--right-image-topic")
+    parser.add_argument("--left-info-topic")
+    parser.add_argument("--right-info-topic")
+    parser.add_argument("--vio-topic")
+    parser.add_argument("--imu-frame")
+    parser.add_argument("--left-frame")
+    parser.add_argument("--right-frame")
     parser.add_argument("--map-frame", default="insight9_map")
     parser.add_argument("--mapping-camera-frame", default="insight9_mapping_camera_center")
     parser.add_argument("--mapping-hz", type=float, default=5.0)
@@ -1304,6 +1338,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args, ros_args = build_parser().parse_known_args()
+    configure_head_camera(args)
     rclpy.init(args=ros_args)
     node: Optional[Insight9SparseMapper] = None
     executor: Optional[MultiThreadedExecutor] = None

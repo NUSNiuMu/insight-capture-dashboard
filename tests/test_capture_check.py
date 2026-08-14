@@ -23,7 +23,7 @@ def mapping_snapshot():
     return {
         "map_point_count": 120,
         "statuses": {
-            "insight9": {"online": True},
+            "insight9_a": {"online": True},
             "insight3_a": {
                 "online": True,
                 "localized": True,

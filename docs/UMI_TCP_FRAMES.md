@@ -4,10 +4,10 @@
 
 双臂数据使用两个固定语义的 ROS 坐标系：
 
-| 手别 | `teleop_role` | TCP frame | Jetson NX / Lite 位姿源 | Lite 779 位姿源 |
-| --- | --- | --- | --- | --- |
-| 右手 | `right_hand` | `right_tcp` | `insight3_a` | `insight7_a` |
-| 左手 | `left_hand` | `left_tcp` | `insight3_b` | `insight7_b` |
+| 手别 | `teleop_role` | TCP frame | Jetson NX 位姿源 | Lite 位姿源 | Lite 779 位姿源 |
+| --- | --- | --- | --- | --- | --- |
+| 右手 | `right_hand` | `right_tcp` | `insight7_a` | `insight3_a` | `insight7_a` |
+| 左手 | `left_hand` | `left_tcp` | `insight7_b` | `insight3_b` | `insight7_b` |
 
 左右 TCP 都采用相同的右手坐标系，不对左手做镜像：
 
@@ -25,22 +25,9 @@ T_map_tcp = T_map_camera_center * T_camera_center_tcp
 T_camera_center_tcp.rotation = identity
 ```
 
-Jetson NX 当前实测的左右外参一致：
-
-```text
-translation_m = [0.00, 0.08, 0.18]
-rotation_xyzw = [0.00, 0.00, 0.00, 1.00]
-```
-
-即 TCP 相对 `camera_center` 向下 8 cm、向前 18 cm，旋转为 identity。
-Insight3 global localizer 发布以下静态 TF：
-
-```text
-insight3_a_global_camera_center -> right_tcp
-insight3_b_global_camera_center -> left_tcp
-```
-
-其他设备 profile 仍需单独实测，不复用 Jetson NX 或 UMI GoPro 的机械尺寸。
+每个设备 profile 都必须单独实测，不能复用旧 Insight3 或 UMI GoPro 的机械尺寸。
+当前 Jetson NX 的 Insight7 A/B 尚未写入 `camera_center_to_tcp`，因此系统不会发布
+对应静态 TCP TF，也不会用占位值冒充机械标定。
 
 ## 数据集约定
 
@@ -57,5 +44,5 @@ insight3_b_global_camera_center -> left_tcp
 
 ## 当前标定状态
 
-Jetson NX 的两路 TCP 平移已配置；其中 `insight3_b` 的夹爪宽度标定仍待完成。
-双臂数据导出会在关键宽度标定缺失时安全失败，不应通过默认常数绕过检查。
+Jetson NX 的两路 TCP 外参和米制夹爪宽度标定仍需按实物重新测量。双臂数据导出会在
+关键标定缺失时安全失败，不应通过默认常数绕过检查。

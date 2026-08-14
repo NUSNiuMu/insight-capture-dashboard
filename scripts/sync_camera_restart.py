@@ -23,11 +23,6 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 
-DEFAULT_CAMERAS = (
-    ("insight3_a", "169.254.10.1", "169.254.10.2"),
-    ("insight3_b", "169.254.20.1", "169.254.20.2"),
-    ("insight9_a", "169.254.30.1", "169.254.30.2"),
-)
 NTP_OFFSET_RE = re.compile(r"offset\s+([+-]?\d+(?:\.\d+)?)")
 LPWM_EVENT_RE = re.compile(
     r"\[(\d+(?:\.\d+)?)\].*\bVIN lpwm_enable=(\d+)\b"
@@ -36,6 +31,7 @@ LPWM_EVENT_RE = re.compile(
 
 MEASUREMENT_WORKER = r'''
 import bisect
+import itertools
 import json
 import os
 import statistics
@@ -47,13 +43,11 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage, Image
 
 
+STREAM_CONFIG = json.loads(os.environ["CAMERA_MEASURE_STREAMS"])
+MESSAGE_TYPES = {"image": Image, "compressed": CompressedImage}
 STREAMS = {
-    "insight3_a": (Image, "/insight3_a/camera/infra1/image_rect_raw"),
-    "insight3_b": (Image, "/insight3_b/camera/infra1/image_rect_raw"),
-    "insight9_a": (
-        CompressedImage,
-        "/insight9_a/camera/color/image_rect_raw/compressed",
-    ),
+    name: (MESSAGE_TYPES[spec["type"]], spec["topic"])
+    for name, spec in STREAM_CONFIG.items()
 }
 SAMPLES = {name: [] for name in STREAMS}
 
@@ -154,11 +148,7 @@ for name, values in SAMPLES.items():
 result = {
     "duration_sec": duration,
     "streams": streams,
-    "pairs": [
-        compare("insight3_a", "insight3_b"),
-        compare("insight3_a", "insight9_a"),
-        compare("insight3_b", "insight9_a"),
-    ],
+    "pairs": [compare(left, right) for left, right in itertools.combinations(STREAMS, 2)],
 }
 print("CAMERA_RESTART_MEASUREMENT=" + json.dumps(result, sort_keys=True))
 '''
@@ -359,7 +349,11 @@ def collect_restart_details(
 
 
 def measure_image_timestamps(
-    *, container: str, ros_domain_id: int, duration_sec: float
+    *,
+    container: str,
+    ros_domain_id: int,
+    duration_sec: float,
+    streams: dict[str, dict[str, str]],
 ) -> dict[str, object]:
     command = [
         "docker",
@@ -371,6 +365,8 @@ def measure_image_timestamps(
         "ROS_LOG_DIR=/tmp/camera_restart_measurement",
         "-e",
         f"CAMERA_MEASURE_SECONDS={duration_sec}",
+        "-e",
+        f"CAMERA_MEASURE_STREAMS={json.dumps(streams, separators=(',', ':'))}",
         container,
         "bash",
         "-lc",
@@ -406,6 +402,53 @@ def load_ros_domain_id(config_path: Path) -> int:
             return int(json.load(stream).get("ros_domain_id", 20))
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         return 20
+
+
+def load_camera_specs(
+    config_path: Path,
+) -> tuple[list[CameraSpec], dict[str, dict[str, str]]]:
+    """Build SSH and timestamp-measurement inputs from the active profile."""
+
+    with config_path.open(encoding="utf-8") as stream:
+        payload = json.load(stream)
+    enabled = [
+        camera
+        for camera in payload.get("cameras", [])
+        if camera.get("enabled", True)
+    ]
+    if len(enabled) < 2:
+        raise CameraSyncError("camera config must contain at least two enabled cameras")
+    specs = []
+    streams = {}
+    for index, camera in enumerate(enabled, start=1):
+        name = str(camera["name"])
+        namespace = str(camera["namespace"])
+        subnet = index * 10
+        specs.append(
+            CameraSpec(
+                name=name,
+                host=str(camera.get("device_ip", f"169.254.{subnet}.1")),
+                ntp_server=str(camera.get("ntp_server", f"169.254.{subnet}.2")),
+            )
+        )
+        image_stream = str(
+            camera.get("sync_image_stream", camera.get("dashboard_image_stream", "color_compressed"))
+        )
+        if image_stream == "color_compressed":
+            streams[name] = {
+                "type": "compressed",
+                "topic": f"/{namespace}/camera/color/image_rect_raw/compressed",
+            }
+        elif image_stream in {"infra1", "infra2", "color", "depth"}:
+            streams[name] = {
+                "type": "image",
+                "topic": f"/{namespace}/camera/{image_stream}/image_rect_raw",
+            }
+        else:
+            raise CameraSyncError(
+                f"unsupported sync image stream '{image_stream}' for {name}"
+            )
+    return specs, streams
 
 
 def print_clock_offsets(title: str, offsets: dict[str, float]) -> None:
@@ -505,8 +548,9 @@ def main() -> int:
         raise CameraSyncError("Measurement and recovery durations must be positive")
 
     root = Path(__file__).resolve().parents[1]
-    ros_domain_id = load_ros_domain_id(root / "config" / "cameras.json")
-    specs = [CameraSpec(*values) for values in DEFAULT_CAMERAS]
+    camera_config_path = root / "config" / "cameras.json"
+    ros_domain_id = load_ros_domain_id(camera_config_path)
+    specs, measurement_streams = load_camera_specs(camera_config_path)
     password = None
     if not args.identity_file:
         password = os.environ.get(args.password_env)
@@ -574,6 +618,7 @@ def main() -> int:
             container=args.container,
             ros_domain_id=ros_domain_id,
             duration_sec=args.measure_seconds,
+            streams=measurement_streams,
         )
         report = {
             "target_epoch": target_epoch,
