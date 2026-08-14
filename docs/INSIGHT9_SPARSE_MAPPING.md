@@ -188,24 +188,27 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 - `GET /api/mapping`：当前地图点数和三路状态快照。
 - `GET /ws`：30 Hz 三路全局位姿流，同时驱动模型和网页轨迹。
 - `POST /api/mapping/reset`：同时重置 mapper 与 localizer。
-- ROS service `/insight9_sparse_map/reset`：清空 Insight9 会话地图。
-- ROS service `/insight_global/reset`：清空两个 Insight3 的校正和全局轨迹。
+- ROS service `/insight_mapping/<head>/sparse_map/reset`：清空当前头部相机会话地图。
+- ROS service `/insight_mapping/<head>/sparse_map/global_reset`：清空两路手部相机的
+  校正和全局轨迹。按头部相机命名空间隔离后，同一 ROS Domain 中的旧建图节点不会
+  覆盖当前地图状态、特征或 reset 服务。
 
 默认输出：
 
-- `/insight9_sparse_map/features`：确认地标的三维位置和 256 维 SuperPoint 描述子。
-- `/insight9_sparse_map/pose`：30 Hz 最新全局位姿。
-- `/insight9_sparse_map/status`：匹配数、三角化数、稳定点数、回环候选/拒绝
+- `/insight_mapping/<head>/sparse_map/features`：确认地标的三维位置和 256 维
+  SuperPoint 描述子。
+- `/insight_mapping/<head>/sparse_map/pose`：30 Hz 最新全局位姿。
+- `/insight_mapping/<head>/sparse_map/status`：匹配数、三角化数、稳定点数、回环候选/拒绝
   诊断、图节点/边/回环边数量、pending 状态、图优化前后代价、最大位姿修正、
   地图重建耗时、观测内存和累计接受次数 JSON。
-- TF `insight9_map -> insight9_mapping_camera_center`：位于左右目光心中点，
+- TF `<head>_map -> <head>_mapping_camera_center`：位于左右目光心中点，
   姿态沿用左目；使用独立命名避免与设备 TF 多父冲突。
 
 以下 RViz 调试输出默认关闭；同时为 mapper 和 localizer 传入
 `--publish-debug-topics` 后才创建 publisher：
 
-- `/insight9_sparse_map/points`：经过多次独立观测确认的稀疏地图。
-- `/insight9_sparse_map/path`：2 Hz、最多 200 点的 Insight9 调试轨迹。
+- `/insight_mapping/<head>/sparse_map/points`：经过多次独立观测确认的稀疏地图。
+- `/insight_mapping/<head>/sparse_map/path`：2 Hz、最多 200 点的头部相机调试轨迹。
 - `/insight_global/insight3_a/path`、`/insight_global/insight3_b/path`：2 Hz、
   最多 200 点的 Insight3 调试轨迹。
 
@@ -214,7 +217,7 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 查看状态：
 
 ```bash
-ros2 topic echo /insight9_sparse_map/status
+ros2 topic echo /insight_mapping/insight7_c/sparse_map/status
 ```
 
 需要完全停止建图服务时：

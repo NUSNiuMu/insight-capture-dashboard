@@ -25,7 +25,9 @@ def nominal_for(topic: str) -> Optional[float]:
     if topic.endswith("/vio_100hz"):
         # Insight3 B is a measured 97 Hz source even without a recorder.
         return 97.0 if topic.startswith("/insight3_b/") else 99.0
-    if topic.startswith(("/insight_global/", "/insight9_sparse_map/")):
+    if topic.startswith(("/insight_global/", "/insight9_sparse_map/")) or (
+        topic.startswith("/insight_mapping/") and "/sparse_map/" in topic
+    ):
         # Mapping/localization output is conditional: pose/path streams can be
         # silent until a map exists or localization succeeds.
         return None

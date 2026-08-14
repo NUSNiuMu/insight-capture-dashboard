@@ -95,6 +95,24 @@ def vio_topic(namespace: str, rate: str) -> str:
     return f"{camera_base(namespace)}/vio_{rate}"
 
 
+def sparse_mapping_prefix(camera_name: str) -> str:
+    """Return the rig-local sparse mapping ROS namespace for a head camera."""
+
+    return f"/insight_mapping/{camera_name}/sparse_map"
+
+
+def sparse_mapping_topic(camera_name: str, endpoint: str) -> str:
+    return f"{sparse_mapping_prefix(camera_name)}/{endpoint.lstrip('/')}"
+
+
+def sparse_mapping_map_frame(camera_name: str) -> str:
+    return f"{camera_name}_map"
+
+
+def sparse_mapping_camera_frame(camera_name: str) -> str:
+    return f"{camera_name}_mapping_camera_center"
+
+
 def enabled_cameras(config: Dict) -> List[Dict]:
     return [camera for camera in config.get("cameras", []) if camera.get("enabled", True)]
 

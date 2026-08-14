@@ -56,7 +56,7 @@
       "dashboard_image_stream": "color_compressed",
       "sync_image_stream": "infra1",
       "dashboard_label": "Insight7 C Center Color",
-      "dashboard_pose_stream": "/insight9_sparse_map/pose",
+      "dashboard_pose_stream": "/insight_mapping/insight7_c/sparse_map/pose",
       "dashboard_rotation_deg": 0,
       "teleop_role": "head",
       "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",

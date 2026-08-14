@@ -45,6 +45,10 @@ from insight3_localization_settings import (  # noqa: E402
     load_gripper_mask_height_ratio,
     validate_gripper_mask_height_ratio,
 )
+from camera_setup import (  # noqa: E402
+    sparse_mapping_map_frame,
+    sparse_mapping_prefix,
+)
 
 try:
     import rclpy
@@ -82,6 +86,28 @@ def localization_cameras(config_path: Path) -> dict[str, str]:
     if not cameras:
         raise ValueError(f"no enabled hand cameras in {config_path}")
     return cameras
+
+
+def configure_mapping_source(args: argparse.Namespace) -> None:
+    """Resolve the rig-local head map namespace from cameras.json."""
+
+    config_path = Path(args.camera_config)
+    with config_path.open("r", encoding="utf-8") as stream:
+        payload = json.load(stream)
+    try:
+        head = next(
+            camera
+            for camera in payload.get("cameras", [])
+            if camera.get("enabled", True)
+            and camera.get("teleop_role") == "head"
+        )
+    except (StopIteration, TypeError) as exc:
+        raise ValueError(f"no enabled head camera in {config_path}") from exc
+    args.head_camera_name = str(head["name"])
+    prefix = sparse_mapping_prefix(args.head_camera_name)
+    args.feature_map_topic = args.feature_map_topic or f"{prefix}/features"
+    args.map_frame = args.map_frame or sparse_mapping_map_frame(args.head_camera_name)
+    args.reset_service = args.reset_service or f"{prefix}/global_reset"
 
 
 def stamp_to_ns(stamp) -> int:
@@ -225,6 +251,7 @@ class CameraState:
         ekf_config: RelocalizationEkfConfig,
         adaptive_config: AdaptiveRelocalizationConfig,
         vio_continuity_config: VioContinuityConfig,
+        map_frame: str,
     ) -> None:
         self.name = name
         self.lock = threading.Lock()
@@ -251,7 +278,7 @@ class CameraState:
         self.next_process_monotonic = 0.0
         self.status: dict[str, object] = {"state": "waiting_for_inputs"}
         self.path = PathMsg()
-        self.path.header.frame_id = "insight9_map"
+        self.path.header.frame_id = map_frame
         self.path_dirty = True
         self.transformed_history: deque[PoseStamped] = deque(maxlen=history_points)
         self.transformed_output_extrinsic: Optional[np.ndarray] = None
@@ -263,7 +290,7 @@ class Insight3GlobalLocalizer(Node):
     """Match configured hand-camera streams to the shared head-camera map."""
 
     def __init__(self, args: argparse.Namespace) -> None:
-        super().__init__("insight3_global_localizer")
+        super().__init__(f"{args.head_camera_name}_global_localizer")
         self._args = args
         self._map_frame = args.map_frame
         self._gripper_mask_height_ratio = validate_gripper_mask_height_ratio(
@@ -314,6 +341,7 @@ class Insight3GlobalLocalizer(Node):
                 ekf_config=ekf_config,
                 adaptive_config=adaptive_config,
                 vio_continuity_config=vio_continuity_config,
+                map_frame=args.map_frame,
             )
             for name in camera_names
         }
@@ -340,7 +368,7 @@ class Insight3GlobalLocalizer(Node):
             for name in camera_names
         }
         self._reset_service = self.create_service(
-            Empty, "insight_global/reset", self._on_reset
+            Empty, args.reset_service, self._on_reset
         )
         self._tcp_calibrations = load_tcp_frame_calibrations(
             Path(args.camera_config), camera_names
@@ -1086,14 +1114,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--settings-config",
         default=str(SCRIPT_DIR.parent / "config" / "post_processing.json"),
     )
-    parser.add_argument(
-        "--feature-map-topic", default="/insight9_sparse_map/features"
-    )
+    parser.add_argument("--feature-map-topic")
+    parser.add_argument("--reset-service")
     parser.add_argument(
         "--image-topic-template",
         default="/insight_mapping/{name}/infra1/image_rect_raw",
     )
-    parser.add_argument("--map-frame", default="insight9_map")
+    parser.add_argument("--map-frame")
     parser.add_argument("--localization-hz", type=float, default=1.0)
     parser.add_argument(
         "--gripper-mask-height-ratio",
@@ -1140,6 +1167,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args, ros_args = build_parser().parse_known_args()
+    configure_mapping_source(args)
     rclpy.init(args=ros_args)
     node: Optional[Insight3GlobalLocalizer] = None
     try:

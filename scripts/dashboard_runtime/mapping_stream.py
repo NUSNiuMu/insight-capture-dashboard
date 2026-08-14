@@ -7,6 +7,8 @@ import threading
 import time
 from typing import Dict
 
+from camera_setup import sparse_mapping_prefix
+
 try:
     from std_msgs.msg import String
     from std_srvs.srv import Empty
@@ -44,7 +46,7 @@ class MappingStream:
         }
         self._status_topics = {
             name: (
-                "/insight9_sparse_map/status"
+                f"{sparse_mapping_prefix(name)}/status"
                 if role == "head"
                 else f"/insight_global/{name}/status"
             )
@@ -64,12 +66,19 @@ class MappingStream:
                     String, topic, self._status_callback(name), 1, **kwargs
                 )
             )
-        self._mapper_reset_client = self.owner.create_client(
-            Empty, "/insight9_sparse_map/reset", callback_group=self.owner.ros_callback_group
-        )
-        self._localizer_reset_client = self.owner.create_client(
-            Empty, "/insight_global/reset", callback_group=self.owner.ros_callback_group
-        )
+        head_names = [
+            name for name, role in self._camera_roles.items() if role == "head"
+        ]
+        if head_names:
+            prefix = sparse_mapping_prefix(head_names[0])
+            self._mapper_reset_client = self.owner.create_client(
+                Empty, f"{prefix}/reset", callback_group=self.owner.ros_callback_group
+            )
+            self._localizer_reset_client = self.owner.create_client(
+                Empty,
+                f"{prefix}/global_reset",
+                callback_group=self.owner.ros_callback_group,
+            )
         self.owner.dashboard_subscriptions.extend(self._subscriptions)
         self.owner.get_logger().info(
             "Mapping status bridge subscribed without receiving sparse cloud data"

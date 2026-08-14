@@ -4,7 +4,14 @@ import os
 import subprocess
 from typing import Callable, Dict, List, Optional, Sequence, Set
 
-from camera_setup import camera_base, camera_info_topic, enabled_cameras, image_topic
+from camera_setup import (
+    camera_base,
+    camera_info_topic,
+    enabled_cameras,
+    image_topic,
+    sparse_mapping_prefix,
+)
+
 
 def _normalize_topic_name(topic: str) -> str:
     value = str(topic or "").strip()
@@ -59,10 +66,28 @@ def build_default_topics(raw_config: Dict) -> List[str]:
 
 
 def filter_recordable_live_topics(raw_config: Dict, live_topics: Sequence[str]) -> List[str]:
+    enabled_camera_list = enabled_cameras(raw_config)
     enabled = {
         str(camera["namespace"]): camera
-        for camera in enabled_cameras(raw_config)
+        for camera in enabled_camera_list
     }
+    allowed_global_prefixes = {
+        f"/insight_global/{camera['name']}/"
+        for camera in enabled_camera_list
+        if camera.get("teleop_role") in {"left_hand", "right_hand"}
+    }
+    allowed_mapping_prefixes = {
+        f"{sparse_mapping_prefix(str(camera['name']))}/"
+        for camera in enabled_camera_list
+        if camera.get("teleop_role") == "head"
+    }
+    legacy_mapping_enabled = any(
+        str(camera.get("dashboard_pose_stream", "")).startswith(
+            "/insight9_sparse_map/"
+        )
+        for camera in enabled_camera_list
+        if camera.get("teleop_role") == "head"
+    )
     excluded = set(_normalize_topics(raw_config.get("recording_excluded_topics") or []))
     filtered: List[str] = []
     for topic in live_topics:
@@ -75,7 +100,13 @@ def filter_recordable_live_topics(raw_config: Dict, live_topics: Sequence[str]) 
         if normalized == "/tf_static":
             filtered.append(normalized)
             continue
-        if normalized.startswith(("/insight9_sparse_map/", "/insight_global/")):
+        if any(normalized.startswith(prefix) for prefix in allowed_global_prefixes):
+            filtered.append(normalized)
+            continue
+        if any(normalized.startswith(prefix) for prefix in allowed_mapping_prefixes):
+            filtered.append(normalized)
+            continue
+        if legacy_mapping_enabled and normalized.startswith("/insight9_sparse_map/"):
             filtered.append(normalized)
             continue
         for namespace in enabled:
@@ -123,7 +154,7 @@ def build_recording_topic_catalog(
             namespace = str(camera["namespace"])
             prefix = f"/{namespace}/camera/"
             global_prefix = (
-                "/insight9_sparse_map/"
+                f"{sparse_mapping_prefix(str(camera['name']))}/"
                 if namespace in head_namespaces
                 else f"/insight_global/{namespace}/"
             )
@@ -227,6 +258,14 @@ def discover_live_topics(
 def _topic_group(topic: str, raw_config: Optional[Dict] = None) -> str:
     """Keep global poses with their camera recorder instead of spawning extras."""
 
+    if topic.startswith("/insight_mapping/") and "/sparse_map/" in topic:
+        parts = topic.strip("/").split("/")
+        if len(parts) >= 4:
+            if raw_config is not None:
+                for camera in enabled_cameras(raw_config):
+                    if str(camera.get("name")) == parts[1]:
+                        return str(camera["namespace"])
+            return parts[1]
     if topic.startswith("/insight9_sparse_map/"):
         if raw_config is not None:
             for camera in enabled_cameras(raw_config):

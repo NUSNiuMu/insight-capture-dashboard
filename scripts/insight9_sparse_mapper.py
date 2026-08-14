@@ -51,6 +51,11 @@ from insight9_mapping_core.pose_graph import (  # noqa: E402
     PoseGraphConfig,
     PoseGraphOptimizationResult,
 )
+from camera_setup import (  # noqa: E402
+    sparse_mapping_camera_frame,
+    sparse_mapping_map_frame,
+    sparse_mapping_prefix,
+)
 
 try:
     import rclpy
@@ -215,7 +220,7 @@ class Insight9SparseMapper(Node):
     """Coordinate lightweight ROS callbacks with a single inference worker."""
 
     def __init__(self, args: argparse.Namespace) -> None:
-        super().__init__("insight9_sparse_mapper")
+        super().__init__(f"{args.head_camera_name}_sparse_mapper")
         self._args = args
         self._map_frame = args.map_frame
         self._camera_frame = args.mapping_camera_frame
@@ -349,27 +354,28 @@ class Insight9SparseMapper(Node):
         # on its own executor lane so visualization poses never queue behind it.
         self._vio_callback_group = MutuallyExclusiveCallbackGroup()
 
+        topic_prefix = args.mapping_topic_prefix
         self._pointcloud_publisher = (
-            self.create_publisher(PointCloud2, "insight9_sparse_map/points", 1)
+            self.create_publisher(PointCloud2, f"{topic_prefix}/points", 1)
             if args.publish_debug_topics
             else None
         )
         self._feature_map_publisher = self.create_publisher(
-            PointCloud2, "insight9_sparse_map/features", 1
+            PointCloud2, f"{topic_prefix}/features", 1
         )
         self._path_publisher = (
-            self.create_publisher(PathMsg, "insight9_sparse_map/path", 1)
+            self.create_publisher(PathMsg, f"{topic_prefix}/path", 1)
             if args.publish_debug_topics
             else None
         )
         self._pose_publisher = self.create_publisher(
-            PoseStamped, "insight9_sparse_map/pose", 1
+            PoseStamped, f"{topic_prefix}/pose", 1
         )
         self._status_publisher = self.create_publisher(
-            String, "insight9_sparse_map/status", 1
+            String, f"{topic_prefix}/status", 1
         )
         self._reset_service = self.create_service(
-            Empty, "insight9_sparse_map/reset", self._on_reset
+            Empty, f"{topic_prefix}/reset", self._on_reset
         )
         self.create_subscription(
             PoseStamped,
@@ -1218,6 +1224,7 @@ class Insight9SparseMapper(Node):
             self._last_feature_publish_monotonic = now
         status = String()
         status_payload = dict(self._latest_stats)
+        status_payload["camera"] = self._args.head_camera_name
         status_payload["map_point_count"] = point_count
         status_payload["center_extrinsic_ready"] = self._imu_to_center is not None
         status_payload["pose_frame"] = self._camera_frame
@@ -1304,6 +1311,14 @@ def configure_head_camera(args: argparse.Namespace) -> None:
 
     namespace = str(head["namespace"])
     args.head_camera_name = str(head["name"])
+    args.mapping_topic_prefix = (
+        args.mapping_topic_prefix or sparse_mapping_prefix(args.head_camera_name)
+    ).rstrip("/")
+    args.map_frame = args.map_frame or sparse_mapping_map_frame(args.head_camera_name)
+    args.mapping_camera_frame = (
+        args.mapping_camera_frame
+        or sparse_mapping_camera_frame(args.head_camera_name)
+    )
     base = f"/{namespace}/camera"
     args.left_image_topic = args.left_image_topic or f"{base}/infra1/image_rect_raw"
     args.right_image_topic = args.right_image_topic or f"{base}/infra2/image_rect_raw"
@@ -1339,8 +1354,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--imu-frame")
     parser.add_argument("--left-frame")
     parser.add_argument("--right-frame")
-    parser.add_argument("--map-frame", default="insight9_map")
-    parser.add_argument("--mapping-camera-frame", default="insight9_mapping_camera_center")
+    parser.add_argument("--mapping-topic-prefix")
+    parser.add_argument("--map-frame")
+    parser.add_argument("--mapping-camera-frame")
     parser.add_argument("--mapping-hz", type=float, default=5.0)
     parser.add_argument("--pose-wait-ms", type=float, default=30.0)
     parser.add_argument("--stereo-tolerance-ms", type=float, default=20.0)

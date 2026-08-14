@@ -45,7 +45,7 @@
       "dashboard_hand_tracking": true,
       "dashboard_image_stream": "color_compressed",
       "dashboard_label": "Insight9 A Color",
-      "dashboard_pose_stream": "/insight9_sparse_map/pose",
+      "dashboard_pose_stream": "/insight_mapping/insight9_a/sparse_map/pose",
       "dashboard_rotation_deg": 0,
       "teleop_role": "head",
       "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",

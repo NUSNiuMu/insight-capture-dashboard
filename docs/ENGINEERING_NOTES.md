@@ -129,6 +129,10 @@
 - 轨迹渲染必须在建立 WebSocket 前启用。若前端收到增量包时缺少本地快照基线，
   必须让当前连接失效并重连取回完整快照，不能静默丢弃增量。轨迹以 5 mm 位移作为
   有效移动门槛，并在后续静止窗口中保留最近一次有效路径，直到显式清除或新建地图。
+- mapper 的状态、特征、Pose 和 reset 接口使用
+  `/insight_mapping/<head>/sparse_map/`；地图与相机 TF frame 也包含头部相机名。不要恢复
+  到 `/insight9_sparse_map/` 等全局固定名称，否则同一 ROS Domain 的另一套建图节点会
+  交替覆盖网页点数，并可能把错误特征送给全局重定位。
 - Jetson kiosk 的 3D 场景以独立的 wall-clock timer 固定在 30 Hz。实测中
   `requestAnimationFrame` 即使单帧场景工作不足 10 ms，仍会在 Firefox 合成繁忙时
   出现 67–119 ms 的 callback 间隔；固定 timer 在相同负载下维持约 30 Hz。
