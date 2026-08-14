@@ -11,6 +11,7 @@ DEFAULT_POST_PROCESSING_CONFIG = {
     "record_topics": [],
     "gesture_recording": {"enabled": False},
     "voice_recording": {"enabled": False},
+    "capture_check": {"enabled": True},
 }
 
 

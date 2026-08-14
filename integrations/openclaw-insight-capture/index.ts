@@ -71,9 +71,13 @@ function summarize(action: CaptureAction, payload: JsonObject): string {
   }
   const recording = payload.recording as JsonObject | undefined;
   const cameras = payload.cameras as JsonObject | undefined;
+  const captureCheck = payload.captureCheck as JsonObject | undefined;
   const cameraList = Array.isArray(cameras?.cameras) ? cameras.cameras : [];
   const active = Boolean(recording?.recording);
-  return `${active ? "正在录制" : "当前空闲"}，检测到 ${cameraList.length} 路相机。`;
+  const stationState = String(captureCheck?.last_result && typeof captureCheck.last_result === "object"
+    ? (captureCheck.last_result as JsonObject).state ?? captureCheck.state ?? "未知"
+    : captureCheck?.state ?? "未知");
+  return `${active ? "正在录制" : "当前空闲"}，检测到 ${cameraList.length} 路相机，检测位状态 ${stationState}。`;
 }
 
 export default definePluginEntry({
@@ -104,12 +108,13 @@ export default definePluginEntry({
           if (action === "list_recordings") {
             payload = await requestJson(baseUrl, timeout, "/api/rosbags");
           } else {
-            const [recording, cameras, mapping] = await Promise.all([
+            const [recording, cameras, mapping, captureCheck] = await Promise.all([
               requestJson(baseUrl, timeout, "/api/recording/status"),
               requestJson(baseUrl, timeout, "/api/cameras"),
               requestJson(baseUrl, timeout, "/api/mapping"),
+              requestJson(baseUrl, timeout, "/api/capture-check"),
             ]);
-            payload = { recording, cameras, mapping };
+            payload = { recording, cameras, mapping, captureCheck };
           }
           return {
             content: [{ type: "text", text: summarize(action, payload) }],

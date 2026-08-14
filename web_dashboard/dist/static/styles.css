@@ -474,6 +474,12 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
 .mapping-camera-states i { width: 5px; height: 5px; border-radius: 50%; background: var(--muted-light); }
 .mapping-camera-states span.is-ok { border-color: rgba(31, 138, 85, 0.4); color: var(--green); }
 .mapping-camera-states span.is-ok i { background: var(--green); }
+.capture-check-line { display: flex; margin-top: 7px; padding-top: 7px; overflow: hidden; border-top: 1px solid var(--line); align-items: baseline; gap: 8px; font-family: var(--mono); }
+.capture-check-line strong { flex: none; color: var(--muted); font-size: 9px; font-weight: 650; }
+.capture-check-line span { overflow: hidden; color: var(--muted-light); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.capture-check-line[data-state="pass"] strong, .capture-check-line[data-state="reference_saved"] strong, .capture-check-line[data-state="ready"] strong { color: var(--green); }
+.capture-check-line[data-state="retry"] strong, .capture-check-line[data-state="no_reference"] strong, .capture-check-line[data-state="not_ready"] strong { color: var(--accent); }
+.capture-check-line[data-state="recalibrate"] strong { color: var(--red); }
 .legend { grid-column: 2; grid-row: 2 / span 3; }
 .legend { width: 100%; min-width: 0; min-height: 88px; padding: 10px 14px; }
 .legend:empty { display: none; }

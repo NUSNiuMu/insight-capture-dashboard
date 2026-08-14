@@ -8,6 +8,8 @@
 > **交付给客户的使用手册在 [docs/USAGE.md](docs/USAGE.md)**（日常操作、采集
 > 流程、故障排查诊断树；不含安装——环境由我们出厂配置好）。
 > **怎么打包发布镜像 / 给设备升级 / 全新设备怎么部署，见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
+>
+> **叠杯批量采集、每单元检测位复核和异常重录规则见 [docs/CUP_STACKING_DATA_COLLECTION_SOP.md](docs/CUP_STACKING_DATA_COLLECTION_SOP.md)**
 > （开发者打包手册 + 使用者升级手册 + 全新 Jetson 首次部署，两条路径）。
 > 内部装机用 `./scripts/setup_host.sh`（幂等：runtime 检查 + CycloneDDS/分片/RPS 调优 +
 > 构建 + 启动）；录制后数据完整性检查用 `scripts/check_bag.py`。
@@ -149,7 +151,7 @@ Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic�
 
 `jetson-nx` profile 的旧固定命令 Vosk worker 默认关闭。需要自然语言声控时使用宿主机
 上的 [宸境 OpenClaw 语音助手](docs/OPENCLAW_VOICE.md)：同一个 SenseVoice INT8 中文模型在本地
-识别常驻固定指令和唤醒后的自然语言；直接说录制/校准指令会连接本机 Dashboard 并
+识别常驻固定指令和唤醒后的自然语言；直接说录制、校准或“检查相机”会连接本机 Dashboard 并
 播放启动时预生成的回复，不需要唤醒。单独说“宸境”并停顿 0.5 秒后会先听到“我在”，
 随后那句话才交给 OpenClaw；服务启动会把
 USB PCM 音量恢复到 50%。自动化只能停止自己创建的 `looper_record_*`，不能停止网页

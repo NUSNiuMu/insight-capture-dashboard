@@ -5,6 +5,7 @@ from aiohttp import web
 from .context import DashboardContext
 from .middleware import create_json_error_middleware, create_static_cache_middleware
 from .routes.cameras import CameraRoutes
+from .routes.capture_check import CaptureCheckRoutes
 from .routes.gripper import GripperExtractionRoutes
 from .routes.handpose import HandPoseRoutes
 from .routes.mapping import MappingRoutes
@@ -26,6 +27,7 @@ def create_app(context: DashboardContext) -> web.Application:
     )
     websocket = PoseWebSocketService(context)
     cameras = CameraRoutes(context)
+    capture_check = CaptureCheckRoutes(context)
     gripper = GripperExtractionRoutes(context)
     handpose = HandPoseRoutes(context)
     mapping = MappingRoutes(context)
@@ -48,6 +50,9 @@ def create_app(context: DashboardContext) -> web.Application:
     )
     app.router.add_get("/api/mapping", mapping._handle_snapshot)
     app.router.add_post("/api/mapping/reset", mapping._handle_reset)
+    app.router.add_get("/api/capture-check", capture_check._handle_status)
+    app.router.add_post("/api/capture-check/reference", capture_check._handle_reference)
+    app.router.add_post("/api/capture-check/run", capture_check._handle_run)
     app.router.add_get("/api/cameras/{camera_name}/frame", cameras._handle_camera_frame)
     app.router.add_get("/api/images/capabilities", cameras._handle_image_capabilities)
     app.router.add_get("/api/recording/status", recording._handle_recording_status)

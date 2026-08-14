@@ -11,5 +11,19 @@
   },
   "voice_recording": {
     "enabled": false
+  },
+  "capture_check": {
+    "enabled": true,
+    "sample_window_sec": 1.2,
+    "minimum_window_sec": 0.8,
+    "minimum_samples": 12,
+    "maximum_pose_age_sec": 0.5,
+    "stationary_translation_m": 0.01,
+    "stationary_rotation_deg": 2.0,
+    "pass_translation_m": 0.015,
+    "pass_rotation_deg": 3.0,
+    "recalibrate_translation_m": 0.03,
+    "recalibrate_rotation_deg": 6.0,
+    "minimum_map_points": 30
   }
 }

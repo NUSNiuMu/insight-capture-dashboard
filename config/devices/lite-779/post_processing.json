@@ -11,5 +11,8 @@
   },
   "voice_recording": {
     "enabled": false
+  },
+  "capture_check": {
+    "enabled": false
   }
 }

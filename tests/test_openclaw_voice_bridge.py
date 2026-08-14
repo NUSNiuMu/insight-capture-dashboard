@@ -15,6 +15,7 @@ from openclaw_voice_bridge import (  # noqa: E402
     OpenClawVoiceBridge,
     build_agent_command,
     calibration_is_complete,
+    capture_check_reply_key,
     clean_utterance_transcript,
     extract_openclaw_reply,
     match_local_command,
@@ -44,6 +45,8 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(match_local_command("开始录制。"), "recording_start")
         self.assertEqual(match_local_command("请停止录制"), "recording_stop")
         self.assertEqual(match_local_command("帮我重新校准一下"), "calibration_start")
+        self.assertEqual(match_local_command("检查相机"), "capture_check")
+        self.assertEqual(match_local_command("请设置检测位"), "capture_reference")
         self.assertIsNone(match_local_command("开始录制前先检查磁盘"))
         self.assertIsNone(match_local_command("现在是否正在录制"))
 
@@ -114,6 +117,23 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             "http://127.0.0.1:8765/api/mapping/reset",
         )
 
+    def test_capture_check_command_calls_local_quality_gate(self):
+        bridge = OpenClawVoiceBridge(
+            SimpleNamespace(
+                dashboard_url="http://127.0.0.1:8765",
+                dashboard_timeout_sec=7.0,
+            )
+        )
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"state": "pass"}'
+        with mock.patch("urllib.request.urlopen", return_value=response) as urlopen:
+            reply_key = bridge.execute_local_command("capture_check")
+        self.assertEqual(reply_key, "capture_check_pass")
+        self.assertEqual(
+            urlopen.call_args.args[0].full_url,
+            "http://127.0.0.1:8765/api/capture-check/run",
+        )
+
     def test_calibration_completion_requires_both_insight3_devices(self):
         self.assertFalse(calibration_is_complete({"statuses": {}}))
         self.assertFalse(
@@ -135,6 +155,18 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                     }
                 }
             )
+        )
+
+    def test_capture_check_states_have_deterministic_canned_replies(self):
+        self.assertEqual(capture_check_reply_key({"state": "pass"}), "capture_check_pass")
+        self.assertEqual(capture_check_reply_key({"state": "retry"}), "capture_check_retry")
+        self.assertEqual(
+            capture_check_reply_key({"state": "recalibrate"}),
+            "capture_check_recalibrate",
+        )
+        self.assertEqual(
+            capture_check_reply_key({"state": "reference_saved"}, reference=True),
+            "capture_reference_saved",
         )
 
     def test_extract_reply_prefers_visible_final_text(self):

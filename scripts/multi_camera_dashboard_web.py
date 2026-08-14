@@ -61,6 +61,7 @@ from dashboard_web import WebDashboardServer, bagplay_topic
 from dashboard_runtime import (
     CameraFrame,
     CameraSpec,
+    CaptureCheckManager,
     GestureRecordingController,
     ImagePipeline,
     MappingStream,
@@ -217,6 +218,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._configure_hand_overlay()
         self._gesture_recording_controller: Optional[GestureRecordingController] = None
         self._voice_recording_controller: Optional[VoiceRecordingController] = None
+        self._capture_check_manager: Optional[CaptureCheckManager] = None
         # NVJPEG is optional; call sites retain their cv2 fallback.
         self._hw_jpeg = HwJpegCodec.create(log=self.get_logger().info)
         # WebRTC runs out of process to avoid GIL contention with pose broadcasts.
@@ -539,6 +541,34 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             self.get_logger().info,
         )
 
+    def configure_capture_check(
+        self, config: Dict[str, object], results_root: Path
+    ) -> None:
+        self._capture_check_manager = CaptureCheckManager(
+            pose_roles={pose.name: pose.teleop_role for pose in self.poses},
+            mapping_snapshot=self.build_mapping_payload,
+            results_root=results_root,
+            config=config,
+        )
+
+    def capture_check_status(self, *, bag_name: Optional[str] = None) -> Dict[str, object]:
+        manager = self._capture_check_manager
+        if manager is None:
+            return {"type": "capture_check", "enabled": False, "state": "disabled"}
+        return manager.snapshot(bag_name=bag_name)
+
+    def set_capture_check_reference(self) -> Dict[str, object]:
+        manager = self._capture_check_manager
+        if manager is None:
+            return {"type": "capture_check_result", "state": "disabled"}
+        return manager.set_reference()
+
+    def run_capture_check(self, *, bag_name: Optional[str] = None) -> Dict[str, object]:
+        manager = self._capture_check_manager
+        if manager is None:
+            return {"type": "capture_check_result", "state": "disabled"}
+        return manager.check(bag_name=bag_name)
+
     def voice_recording_status(
         self, recording_status: Optional[Dict[str, object]] = None
     ) -> Dict[str, object]:
@@ -598,12 +628,16 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
 
 
     def _record_pose_sample(self, pose_name: str, pose_sample: PoseSample) -> None:
+        received = time.monotonic()
         with self.pose_lock:
             self.latest_pose_sample[pose_name] = pose_sample
-            self.last_pose_received_time[pose_name] = time.monotonic()
+            self.last_pose_received_time[pose_name] = received
             self.trace_sequences[pose_name] += 1
             self.raw_traces[pose_name].append(pose_sample.position)
             self.raw_trace_sequences[pose_name].append(self.trace_sequences[pose_name])
+        capture_check = self._capture_check_manager
+        if capture_check is not None:
+            capture_check.record_pose(pose_name, pose_sample, received)
 
     def clear_traces(self) -> None:
         with self.pose_lock:
@@ -806,6 +840,10 @@ def main() -> None:
     node.configure_voice_recording(
         recording_manager,
         dict(post_processing_config.get("voice_recording") or {}),
+    )
+    node.configure_capture_check(
+        dict(post_processing_config.get("capture_check") or {}),
+        results_root,
     )
     executor = MultiThreadedExecutor()
     executor.add_node(node)

@@ -53,22 +53,34 @@ LOCAL_COMMAND_ALIASES = {
         "停止采集",
     ),
     "calibration_start": ("开始校准", "重新校准", "重置校准"),
+    "capture_check": ("检查相机", "开始检测", "位置检测", "检测相机"),
+    "capture_reference": ("设置检测位", "记录检测位", "保存检测位"),
 }
 LOCAL_COMMAND_ENDPOINTS = {
     "recording_start": "/api/automation/recording/start",
     "recording_stop": "/api/automation/recording/stop",
     "calibration_start": "/api/mapping/reset",
+    "capture_check": "/api/capture-check/run",
+    "capture_reference": "/api/capture-check/reference",
 }
 LOCAL_COMMAND_REPLY_KEYS = {
     "recording_start": "recording_started",
     "recording_stop": "recording_stopped",
     "calibration_start": "calibration_started",
+    "capture_check": "capture_check_not_ready",
+    "capture_reference": "capture_reference_saved",
 }
 CANNED_REPLIES = {
     "recording_started": "录制已经开始。",
-    "recording_stopped": "录制已经结束。",
+    "recording_stopped": "录制已经结束。请将三台相机放回检测位，静止后说检查相机。",
     "calibration_started": "校准已经开始。",
     "calibration_completed": "校准完成。",
+    "capture_reference_saved": "检测位基准已经记录。",
+    "capture_check_pass": "三相机位置正常，可以开始下一次采集。",
+    "capture_check_retry": "检测结果超出通过范围。请确认三台相机完全放回检测位，然后再说检查相机。",
+    "capture_check_recalibrate": "三相机相对位置异常。请说开始校准，完成后再检查相机。",
+    "capture_check_not_ready": "检测条件未满足。请确认三台相机都已静止并完成全局定位。",
+    "capture_check_no_reference": "还没有检测位基准。请放好三台相机，然后说设置检测位。",
     "recording_already_active": "当前已经在录制。",
     "command_failed": "指令执行失败，请检查数采服务。",
 }
@@ -122,6 +134,21 @@ def calibration_is_complete(payload: object) -> bool:
         and bool(statuses[name].get("localized"))
         for name in ("insight3_a", "insight3_b")
     )
+
+
+def capture_check_reply_key(payload: object, *, reference: bool = False) -> str:
+    """Map deterministic station-check states to pre-generated speech."""
+    if not isinstance(payload, dict):
+        return "capture_check_not_ready"
+    state = str(payload.get("state") or "not_ready")
+    if reference and state == "reference_saved":
+        return "capture_reference_saved"
+    return {
+        "pass": "capture_check_pass",
+        "retry": "capture_check_retry",
+        "recalibrate": "capture_check_recalibrate",
+        "no_reference": "capture_check_no_reference",
+    }.get(state, "capture_check_not_ready")
 
 
 def extract_openclaw_reply(payload: object) -> str:
@@ -660,6 +687,10 @@ class OpenClawVoiceBridge:
         self._emit("local_command", action=action, endpoint=endpoint, ok=True)
         if action == "calibration_start":
             self._start_calibration_monitor()
+        if action == "capture_check":
+            return capture_check_reply_key(payload)
+        if action == "capture_reference":
+            return capture_check_reply_key(payload, reference=True)
         return LOCAL_COMMAND_REPLY_KEYS[action]
 
     def _start_calibration_monitor(self) -> None:
