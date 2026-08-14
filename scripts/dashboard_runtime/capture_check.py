@@ -1,4 +1,4 @@
-"""Fixed-station three-camera relative-pose quality gate."""
+"""Fixed-station three-camera global-pose quality gate."""
 
 from __future__ import annotations
 
@@ -15,11 +15,6 @@ from .models import PoseSample
 
 
 REQUIRED_ROLES = ("head", "left_hand", "right_hand")
-ROLE_PAIRS = (
-    ("head", "left_hand"),
-    ("head", "right_hand"),
-    ("left_hand", "right_hand"),
-)
 
 
 def _normalize_quaternion(values: Iterable[float]) -> Tuple[float, float, float, float]:
@@ -28,45 +23,6 @@ def _normalize_quaternion(values: Iterable[float]) -> Tuple[float, float, float,
     if norm <= 1e-12:
         return (0.0, 0.0, 0.0, 1.0)
     return tuple(value / norm for value in quaternion)  # type: ignore[return-value]
-
-
-def _quaternion_conjugate(
-    quaternion: Tuple[float, float, float, float]
-) -> Tuple[float, float, float, float]:
-    x, y, z, w = quaternion
-    return (-x, -y, -z, w)
-
-
-def _quaternion_multiply(
-    left: Tuple[float, float, float, float],
-    right: Tuple[float, float, float, float],
-) -> Tuple[float, float, float, float]:
-    lx, ly, lz, lw = left
-    rx, ry, rz, rw = right
-    return _normalize_quaternion(
-        (
-            lw * rx + lx * rw + ly * rz - lz * ry,
-            lw * ry - lx * rz + ly * rw + lz * rx,
-            lw * rz + lx * ry - ly * rx + lz * rw,
-            lw * rw - lx * rx - ly * ry - lz * rz,
-        )
-    )
-
-
-def _rotate_vector(
-    quaternion: Tuple[float, float, float, float],
-    vector: Tuple[float, float, float],
-) -> Tuple[float, float, float]:
-    x, y, z, w = quaternion
-    vx, vy, vz = vector
-    tx = 2.0 * (y * vz - z * vy)
-    ty = 2.0 * (z * vx - x * vz)
-    tz = 2.0 * (x * vy - y * vx)
-    return (
-        vx + w * tx + (y * tz - z * ty),
-        vy + w * ty + (z * tx - x * tz),
-        vz + w * tz + (x * ty - y * tx),
-    )
 
 
 def _rotation_error_deg(
@@ -97,24 +53,8 @@ def _average_quaternion(
     )
 
 
-def _relative_pose(source: dict, target: dict) -> dict:
-    source_position = tuple(source["position"])
-    target_position = tuple(target["position"])
-    source_quaternion = _normalize_quaternion(source["quaternion_xyzw"])
-    target_quaternion = _normalize_quaternion(target["quaternion_xyzw"])
-    inverse = _quaternion_conjugate(source_quaternion)
-    delta = tuple(b - a for a, b in zip(source_position, target_position))
-    return {
-        "translation_m": [round(value, 6) for value in _rotate_vector(inverse, delta)],
-        "quaternion_xyzw": [
-            round(value, 7)
-            for value in _quaternion_multiply(inverse, target_quaternion)
-        ],
-    }
-
-
 class CaptureCheckManager:
-    """Measure a stable station pose and compare its pairwise camera geometry."""
+    """Measure stable global poses and compare each camera with its station pose."""
 
     def __init__(
         self,
@@ -134,26 +74,26 @@ class CaptureCheckManager:
         self.maximum_pose_age_sec = max(
             0.1, float(settings.get("maximum_pose_age_sec", 0.5))
         )
-        self.stationary_translation_m = max(
-            0.001, float(settings.get("stationary_translation_m", 0.01))
-        )
-        self.stationary_rotation_deg = max(
-            0.1, float(settings.get("stationary_rotation_deg", 2.0))
-        )
-        self.pass_translation_m = max(
-            0.001, float(settings.get("pass_translation_m", 0.015))
-        )
-        self.pass_rotation_deg = max(
-            0.1, float(settings.get("pass_rotation_deg", 3.0))
-        )
-        self.recalibrate_translation_m = max(
-            self.pass_translation_m,
-            float(settings.get("recalibrate_translation_m", 0.03)),
-        )
-        self.recalibrate_rotation_deg = max(
-            self.pass_rotation_deg,
-            float(settings.get("recalibrate_rotation_deg", 6.0)),
-        )
+        self.thresholds = {
+            "insight3": self._parse_thresholds(
+                settings.get("insight3"),
+                stationary_translation_m=0.006,
+                stationary_rotation_deg=1.5,
+                pass_translation_m=0.01,
+                pass_rotation_deg=2.0,
+                recalibrate_translation_m=0.025,
+                recalibrate_rotation_deg=5.0,
+            ),
+            "insight9": self._parse_thresholds(
+                settings.get("insight9"),
+                stationary_translation_m=0.025,
+                stationary_rotation_deg=5.0,
+                pass_translation_m=0.04,
+                pass_rotation_deg=8.0,
+                recalibrate_translation_m=0.08,
+                recalibrate_rotation_deg=15.0,
+            ),
+        }
         self.minimum_map_points = max(0, int(settings.get("minimum_map_points", 30)))
         self.pose_roles = dict(pose_roles)
         self.role_names = {
@@ -170,6 +110,56 @@ class CaptureCheckManager:
         self.history_path = self.output_dir / "history.jsonl"
         self.reference = self._load_reference()
         self.last_result: Optional[dict] = None
+
+    @staticmethod
+    def _parse_thresholds(
+        payload: object,
+        *,
+        stationary_translation_m: float,
+        stationary_rotation_deg: float,
+        pass_translation_m: float,
+        pass_rotation_deg: float,
+        recalibrate_translation_m: float,
+        recalibrate_rotation_deg: float,
+    ) -> dict:
+        settings = payload if isinstance(payload, dict) else {}
+        parsed = {
+            "stationary_translation_m": max(
+                0.001,
+                float(
+                    settings.get(
+                        "stationary_translation_m", stationary_translation_m
+                    )
+                ),
+            ),
+            "stationary_rotation_deg": max(
+                0.1,
+                float(settings.get("stationary_rotation_deg", stationary_rotation_deg)),
+            ),
+            "pass_translation_m": max(
+                0.001, float(settings.get("pass_translation_m", pass_translation_m))
+            ),
+            "pass_rotation_deg": max(
+                0.1, float(settings.get("pass_rotation_deg", pass_rotation_deg))
+            ),
+        }
+        parsed["recalibrate_translation_m"] = max(
+            parsed["pass_translation_m"],
+            float(
+                settings.get(
+                    "recalibrate_translation_m", recalibrate_translation_m
+                )
+            ),
+        )
+        parsed["recalibrate_rotation_deg"] = max(
+            parsed["pass_rotation_deg"],
+            float(settings.get("recalibrate_rotation_deg", recalibrate_rotation_deg)),
+        )
+        return parsed
+
+    def _camera_thresholds(self, camera_name: str) -> dict:
+        group = "insight3" if camera_name.startswith("insight3") else "insight9"
+        return self.thresholds[group]
 
     def record_pose(
         self, name: str, sample: PoseSample, received_monotonic: Optional[float] = None
@@ -212,10 +202,10 @@ class CaptureCheckManager:
             self.last_result = result
             return result
         reference = {
-            "version": 1,
+            "version": 2,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "role_names": dict(self.role_names),
-            "pairs": measurement["pairs"],
+            "poses": measurement["poses"],
             "thresholds": self._threshold_payload(),
         }
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -246,41 +236,53 @@ class CaptureCheckManager:
         else:
             comparisons = {}
             worst_state = "pass"
-            for pair_name, current in measurement["pairs"].items():
-                baseline = self.reference["pairs"].get(pair_name)
+            suspect_roles = []
+            suspect_cameras = []
+            for role, current in measurement["poses"].items():
+                baseline = self.reference["poses"].get(role)
                 if not isinstance(baseline, dict):
                     result = self._result(
                         "no_reference",
                         bag_name=bag_name,
-                        reasons=[f"reference is missing pair {pair_name}"],
+                        reasons=[f"reference is missing global pose for {role}"],
                     )
                     break
                 translation_error = _distance(
-                    current["translation_m"], baseline["translation_m"]
+                    current["position"], baseline["position"]
                 )
                 rotation_error = _rotation_error_deg(
                     _normalize_quaternion(current["quaternion_xyzw"]),
                     _normalize_quaternion(baseline["quaternion_xyzw"]),
                 )
-                pair_state = self._comparison_state(translation_error, rotation_error)
-                if pair_state == "recalibrate":
+                camera_name = current["camera"]
+                thresholds = self._camera_thresholds(camera_name)
+                camera_state = self._comparison_state(
+                    translation_error, rotation_error, thresholds
+                )
+                if camera_state == "recalibrate":
                     worst_state = "recalibrate"
-                elif pair_state == "retry" and worst_state == "pass":
+                elif camera_state == "retry" and worst_state == "pass":
                     worst_state = "retry"
-                comparisons[pair_name] = {
-                    "state": pair_state,
+                if camera_state != "pass":
+                    suspect_roles.append(role)
+                    suspect_cameras.append(camera_name)
+                comparisons[camera_name] = {
+                    "role": role,
+                    "state": camera_state,
                     "translation_error_m": round(translation_error, 5),
                     "rotation_error_deg": round(rotation_error, 3),
+                    "threshold_group": (
+                        "insight3" if camera_name.startswith("insight3") else "insight9"
+                    ),
                 }
             else:
-                suspects = self._suspect_roles(comparisons)
                 result = self._result(
                     worst_state,
                     bag_name=bag_name,
                     measurement=measurement,
                     comparisons=comparisons,
-                    suspect_roles=suspects,
-                    suspect_cameras=[self.role_names[role] for role in suspects],
+                    suspect_roles=suspect_roles,
+                    suspect_cameras=suspect_cameras,
                 )
         self.last_result = result
         self._append_history(result)
@@ -309,8 +311,6 @@ class CaptureCheckManager:
                 reasons.append(f"{status_name} localization status is offline")
             elif not status.get("localized"):
                 reasons.append(f"{status_name} is not globally localized")
-            elif status.get("tracking_mode") != "map_matched":
-                reasons.append(f"{status_name} is not currently matched to the map")
 
         now = time.monotonic()
         poses = {}
@@ -325,6 +325,7 @@ class CaptureCheckManager:
             }
         for role, samples in sample_sets.items():
             name = self.role_names[role]
+            thresholds = self._camera_thresholds(name)
             if len(samples) < self.minimum_samples:
                 reasons.append(f"{name} has only {len(samples)} recent pose samples")
                 continue
@@ -346,11 +347,11 @@ class CaptureCheckManager:
             rotation_spread = max(
                 _rotation_error_deg(item, quaternion) for item in quaternions
             )
-            if translation_spread > self.stationary_translation_m:
+            if translation_spread > thresholds["stationary_translation_m"]:
                 reasons.append(
                     f"{name} is moving ({translation_spread * 1000.0:.1f} mm spread)"
                 )
-            if rotation_spread > self.stationary_rotation_deg:
+            if rotation_spread > thresholds["stationary_rotation_deg"]:
                 reasons.append(f"{name} is rotating ({rotation_spread:.1f} deg spread)")
             poses[role] = {
                 "camera": name,
@@ -363,48 +364,31 @@ class CaptureCheckManager:
             }
         if reasons:
             return None, reasons
-        pairs = {
-            f"{source}->{target}": _relative_pose(poses[source], poses[target])
-            for source, target in ROLE_PAIRS
-        }
         return {
             "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "poses": poses,
-            "pairs": pairs,
         }, []
 
-    def _comparison_state(self, translation_error: float, rotation_error: float) -> str:
+    @staticmethod
+    def _comparison_state(
+        translation_error: float, rotation_error: float, thresholds: dict
+    ) -> str:
         if (
-            translation_error > self.recalibrate_translation_m
-            or rotation_error > self.recalibrate_rotation_deg
+            translation_error > thresholds["recalibrate_translation_m"]
+            or rotation_error > thresholds["recalibrate_rotation_deg"]
         ):
             return "recalibrate"
         if (
-            translation_error > self.pass_translation_m
-            or rotation_error > self.pass_rotation_deg
+            translation_error > thresholds["pass_translation_m"]
+            or rotation_error > thresholds["pass_rotation_deg"]
         ):
             return "retry"
         return "pass"
 
-    @staticmethod
-    def _suspect_roles(comparisons: dict) -> list[str]:
-        failing = [name for name, item in comparisons.items() if item["state"] != "pass"]
-        counts = {role: 0 for role in REQUIRED_ROLES}
-        for pair_name in failing:
-            source, target = pair_name.split("->", 1)
-            counts[source] += 1
-            counts[target] += 1
-        suspects = [role for role, count in counts.items() if count >= 2]
-        return suspects if len(suspects) == 1 else []
-
     def _threshold_payload(self) -> dict:
         return {
-            "stationary_translation_m": self.stationary_translation_m,
-            "stationary_rotation_deg": self.stationary_rotation_deg,
-            "pass_translation_m": self.pass_translation_m,
-            "pass_rotation_deg": self.pass_rotation_deg,
-            "recalibrate_translation_m": self.recalibrate_translation_m,
-            "recalibrate_rotation_deg": self.recalibrate_rotation_deg,
+            "insight3": dict(self.thresholds["insight3"]),
+            "insight9": dict(self.thresholds["insight9"]),
             "minimum_map_points": self.minimum_map_points,
         }
 
@@ -422,7 +406,11 @@ class CaptureCheckManager:
             payload = json.loads(self.reference_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return None
-        return payload if isinstance(payload, dict) and payload.get("version") == 1 else None
+        if not isinstance(payload, dict) or payload.get("version") != 2:
+            return None
+        if not isinstance(payload.get("poses"), dict):
+            return None
+        return payload
 
     def _append_history(self, result: dict) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)

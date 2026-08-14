@@ -241,6 +241,42 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             "http://127.0.0.1:8765/api/capture-check/run",
         )
 
+    def test_capture_check_announces_start_before_calling_dashboard(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        events = []
+
+        def speak(key):
+            events.append(("speak", key))
+            return True
+
+        def execute(action):
+            events.append(("execute", action))
+            return "capture_check_pass"
+
+        with (
+            mock.patch.object(bridge, "speak_canned", side_effect=speak),
+            mock.patch.object(bridge, "execute_local_command", side_effect=execute),
+        ):
+            bridge.handle_utterance("检测相机")
+        self.assertEqual(
+            events,
+            [
+                ("speak", "capture_check_started"),
+                ("execute", "capture_check"),
+                ("speak", "capture_check_pass"),
+            ],
+        )
+
+    def test_capture_check_is_not_run_without_start_feedback(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        with (
+            mock.patch.object(bridge, "speak_canned", return_value=False) as speak,
+            mock.patch.object(bridge, "execute_local_command") as execute,
+        ):
+            bridge.handle_utterance("检查相机")
+        speak.assert_called_once_with("capture_check_started")
+        execute.assert_not_called()
+
     def test_calibration_completion_requires_both_insight3_devices(self):
         self.assertFalse(calibration_is_complete({"statuses": {}}))
         self.assertFalse(

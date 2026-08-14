@@ -369,7 +369,7 @@ function renderCaptureCheck(payload) {
   } else if (reasons.length) {
     detail = reasons.slice(0, 2).join(" · ");
   } else if (state === "pass") {
-    detail = "Relative geometry is within threshold. The next unit may start.";
+    detail = "Global station poses are within threshold. The next unit may start.";
   } else if (state === "reference_saved") {
     detail = "Use Check rig after every recorded unit.";
   }

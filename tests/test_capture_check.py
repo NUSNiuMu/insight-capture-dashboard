@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from dashboard_runtime.capture_check import CaptureCheckManager  # noqa: E402
+from dashboard_runtime.capture_check import CaptureCheckManager, REQUIRED_ROLES  # noqa: E402
 from dashboard_runtime.models import PoseSample  # noqa: E402
 
 
@@ -73,6 +73,8 @@ class CaptureCheckManagerTest(unittest.TestCase):
     def test_reference_and_identical_check_pass(self):
         self.feed()
         self.assertEqual(self.manager.set_reference()["state"], "reference_saved")
+        self.assertEqual(self.manager.reference["version"], 2)
+        self.assertEqual(set(self.manager.reference["poses"]), set(REQUIRED_ROLES))
         self.feed()
         result = self.manager.check(bag_name="cup_stack_001")
         self.assertEqual(result["state"], "pass")
@@ -87,6 +89,7 @@ class CaptureCheckManagerTest(unittest.TestCase):
         result = self.manager.check()
         self.assertEqual(result["state"], "retry")
         self.assertEqual(result["suspect_roles"], ["right_hand"])
+        self.assertEqual(result["comparisons"]["insight3_a"]["threshold_group"], "insight3")
 
     def test_large_offset_requires_recalibration(self):
         self.feed()
@@ -95,6 +98,28 @@ class CaptureCheckManagerTest(unittest.TestCase):
         result = self.manager.check()
         self.assertEqual(result["state"], "recalibrate")
         self.assertEqual(result["suspect_cameras"], ["insight3_b"])
+
+    def test_common_global_offset_is_not_hidden_by_relative_geometry(self):
+        self.feed()
+        self.manager.set_reference()
+        common_offset = {name: (0.02, 0.0, 0.0) for name in POSES}
+        self.feed(offsets=common_offset)
+        result = self.manager.check()
+        self.assertEqual(result["state"], "retry")
+        self.assertCountEqual(
+            result["suspect_cameras"], ["insight3_a", "insight3_b"]
+        )
+        self.assertEqual(result["comparisons"]["insight9_a"]["state"], "pass")
+
+    def test_insight9_uses_looser_global_pose_thresholds(self):
+        self.feed()
+        self.manager.set_reference()
+        self.feed(offsets={"insight9_a": (0.03, 0.0, 0.0)})
+        self.assertEqual(self.manager.check()["state"], "pass")
+        self.feed(offsets={"insight9_a": (0.05, 0.0, 0.0)})
+        result = self.manager.check()
+        self.assertEqual(result["state"], "retry")
+        self.assertEqual(result["suspect_cameras"], ["insight9_a"])
 
     def test_motion_prevents_measurement(self):
         self.feed(jitter=0.012)
@@ -106,14 +131,19 @@ class CaptureCheckManagerTest(unittest.TestCase):
         self.feed()
         self.assertEqual(self.manager.check()["state"], "no_reference")
 
-    def test_stale_localizer_correction_is_not_accepted(self):
+    def test_global_localization_is_required_but_current_rematch_is_not(self):
         self.feed()
-        stale_mapping = mapping_snapshot()
-        stale_mapping["statuses"]["insight3_a"]["tracking_mode"] = "vio_only"
-        self.manager.mapping_snapshot = lambda: stale_mapping
+        localized_mapping = mapping_snapshot()
+        localized_mapping["statuses"]["insight3_a"]["tracking_mode"] = "vio_only"
+        self.manager.mapping_snapshot = lambda: localized_mapping
+        self.assertEqual(self.manager.set_reference()["state"], "reference_saved")
+
+        unlocalized_mapping = mapping_snapshot()
+        unlocalized_mapping["statuses"]["insight3_a"]["localized"] = False
+        self.manager.mapping_snapshot = lambda: unlocalized_mapping
         result = self.manager.set_reference()
         self.assertEqual(result["state"], "not_ready")
-        self.assertTrue(any("matched to the map" in item for item in result["reasons"]))
+        self.assertTrue(any("globally localized" in item for item in result["reasons"]))
 
 
 if __name__ == "__main__":

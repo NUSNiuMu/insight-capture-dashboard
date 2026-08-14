@@ -75,6 +75,7 @@ CANNED_REPLIES = {
     "recording_stopped": "录制已经结束。请将三台相机放回检测位，静止后说检查相机。",
     "calibration_started": "校准已经开始。",
     "calibration_completed": "校准完成。",
+    "capture_check_started": "开始检测。",
     "capture_reference_saved": "检测位基准已经记录。",
     "capture_check_pass": "三相机位置正常，可以开始下一次采集。",
     "capture_check_retry": "检测结果超出通过范围。请确认三台相机完全放回检测位，然后再说检查相机。",
@@ -859,6 +860,18 @@ class OpenClawVoiceBridge:
     ) -> None:
         local_action = match_local_command(utterance) if allow_local_commands else None
         if local_action is not None:
+            if local_action == "capture_check":
+                try:
+                    start_feedback_played = self.speak_canned("capture_check_started")
+                except Exception as exc:  # noqa: BLE001 - keep the listener alive
+                    self._emit(
+                        "error",
+                        stage="capture_check_start_feedback",
+                        message=str(exc),
+                    )
+                    start_feedback_played = False
+                if not start_feedback_played:
+                    return
             command_succeeded = False
             try:
                 reply_key = self.execute_local_command(local_action)
