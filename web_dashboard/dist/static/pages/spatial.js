@@ -324,13 +324,13 @@ async function runCaptureCheck() {
     renderCaptureCheck(await response.json());
   } finally {
     captureCheckButton.disabled = false;
-    captureCheckButton.textContent = "Check rig";
+    captureCheckButton.textContent = "Check episode";
   }
 }
 
 async function setCaptureReference() {
   if (!captureReferenceButton || captureReferenceButton.disabled) return;
-  const prompt = "Save the current stable three-camera pose as the station baseline? Only do this after calibration has been verified.";
+  const prompt = "Freeze the current Insight9 natural map and save both stable hand-camera station poses? Only do this after calibration has been verified.";
   if (!window.confirm(prompt)) return;
   captureReferenceButton.disabled = true;
   captureReferenceButton.textContent = "Saving...";
@@ -339,7 +339,7 @@ async function setCaptureReference() {
     renderCaptureCheck(await response.json());
   } finally {
     captureReferenceButton.disabled = false;
-    captureReferenceButton.textContent = "Set station";
+    captureReferenceButton.textContent = "Set batch reference";
   }
 }
 
@@ -347,31 +347,40 @@ function renderCaptureCheck(payload) {
   const result = payload.type === "capture_check_result" ? payload : payload.last_result;
   const state = String(result?.state || payload.state || "not_ready");
   const labels = {
-    pass: "Station check PASS",
-    retry: "Reseat cameras and retry",
+    pass: "Episode check PASS",
+    retry: "Reseat hands or rescan scene",
     recalibrate: "Recalibration required",
-    reference_saved: "Station reference saved",
-    no_reference: "Station reference required",
-    ready: "Ready for station check",
-    not_ready: "Waiting for stable cameras",
-    disabled: "Station check disabled",
+    reference_saved: "Batch reference saved",
+    no_reference: "Batch reference required",
+    ready: "Ready for episode check",
+    not_ready: "Waiting for hand stations and mapping",
+    disabled: "Episode check disabled",
   };
   const reasons = result?.reasons || payload.readiness?.reasons || [];
   const comparisons = result?.comparisons || {};
+  const stateRank = { recalibrate: 2, retry: 1, pass: 0 };
   const worst = Object.entries(comparisons).sort((left, right) => {
+    const stateDelta = Number(stateRank[right[1]?.state] || 0) - Number(stateRank[left[1]?.state] || 0);
+    if (stateDelta) return stateDelta;
     const leftValue = Number(left[1]?.translation_error_m || 0) * 1000 + Number(left[1]?.rotation_error_deg || 0);
     const rightValue = Number(right[1]?.translation_error_m || 0) * 1000 + Number(right[1]?.rotation_error_deg || 0);
     return rightValue - leftValue;
   })[0];
-  let detail = "Return all three cameras to the fixed station after each unit.";
+  let detail = "Dock both hand cameras and look around the mapped workspace after each unit.";
   if (worst) {
-    detail = `${worst[0]} · ${(Number(worst[1].translation_error_m) * 1000).toFixed(1)} mm · ${Number(worst[1].rotation_error_deg).toFixed(1)}°`;
+    if (worst[1]?.reason) {
+      detail = worst[1].reason;
+    } else {
+      const method = worst[1]?.method === "frozen_natural_map_closure" ? "frozen-map closure" : "hand station";
+      const quality = worst[1]?.inliers == null ? "" : ` · ${Number(worst[1].inliers)} inliers`;
+      detail = `${worst[0]} · ${method} · ${(Number(worst[1].translation_error_m) * 1000).toFixed(1)} mm · ${Number(worst[1].rotation_error_deg).toFixed(1)}°${quality}`;
+    }
   } else if (reasons.length) {
     detail = reasons.slice(0, 2).join(" · ");
   } else if (state === "pass") {
-    detail = "Global station poses are within threshold. The next unit may start.";
+    detail = "Both hand stations and a fresh Insight9 frozen-map closure are within threshold.";
   } else if (state === "reference_saved") {
-    detail = "Use Check rig after every recorded unit.";
+    detail = "Use Check episode after every recorded unit.";
   }
   if (captureCheckLine) captureCheckLine.dataset.state = state;
   if (captureCheckStatus) captureCheckStatus.textContent = labels[state] || state;

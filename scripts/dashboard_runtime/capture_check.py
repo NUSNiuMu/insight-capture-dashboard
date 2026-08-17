@@ -1,4 +1,4 @@
-"""Fixed-station three-camera global-pose quality gate."""
+"""Episode gate using hand-camera stations and Insight9 natural-map closure."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from .models import PoseSample
 
 
 REQUIRED_ROLES = ("head", "left_hand", "right_hand")
+FIXED_STATION_ROLES = ("left_hand", "right_hand")
 
 
 def _normalize_quaternion(values: Iterable[float]) -> Tuple[float, float, float, float]:
@@ -54,7 +55,7 @@ def _average_quaternion(
 
 
 class CaptureCheckManager:
-    """Measure stable global poses and compare each camera with its station pose."""
+    """Validate docked hand cameras and fresh Insight9 closure to a frozen map."""
 
     def __init__(
         self,
@@ -74,6 +75,10 @@ class CaptureCheckManager:
         self.maximum_pose_age_sec = max(
             0.1, float(settings.get("maximum_pose_age_sec", 0.5))
         )
+        self.maximum_insight9_validation_age_sec = max(
+            0.5,
+            float(settings.get("maximum_insight9_validation_age_sec", 5.0)),
+        )
         self.thresholds = {
             "insight3": self._parse_thresholds(
                 settings.get("insight3"),
@@ -85,7 +90,7 @@ class CaptureCheckManager:
                 recalibrate_rotation_deg=5.0,
             ),
             "insight9": self._parse_thresholds(
-                settings.get("insight9"),
+                settings.get("insight9_closure", settings.get("insight9")),
                 stationary_translation_m=0.025,
                 stationary_rotation_deg=5.0,
                 pass_translation_m=0.04,
@@ -195,28 +200,35 @@ class CaptureCheckManager:
             "last_result": self.last_result,
         }
 
-    def set_reference(self) -> dict:
+    def set_reference(self, *, insight9_reference: Optional[dict] = None) -> dict:
         measurement, reasons = self._measure()
         if measurement is None:
             result = self._result("not_ready", reasons=reasons)
             self.last_result = result
             return result
+        validation = self._parse_validation_reference(insight9_reference)
+        if validation is None:
+            result = self._result(
+                "not_ready",
+                reasons=["Insight9 natural-map reference was not frozen"],
+            )
+            self.last_result = result
+            return result
         reference = {
-            "version": 2,
+            "version": 3,
             "created_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "role_names": dict(self.role_names),
             "poses": measurement["poses"],
+            "insight9_validation": validation,
             "thresholds": self._threshold_payload(),
         }
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        temporary = self.reference_path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(reference, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(self.reference_path)
+        self._write_reference(reference)
         self.reference = reference
-        result = self._result("reference_saved", measurement=measurement)
+        result = self._result(
+            "reference_saved",
+            measurement=measurement,
+            insight9_reference=validation,
+        )
         self.last_result = result
         self._append_history(result)
         return result
@@ -238,6 +250,44 @@ class CaptureCheckManager:
             worst_state = "pass"
             suspect_roles = []
             suspect_cameras = []
+            validation, validation_reason = self._current_validation(measurement)
+            if validation is None:
+                raw_validation = measurement.get("insight9_validation")
+                reference_lost = (
+                    isinstance(raw_validation, dict)
+                    and not raw_validation.get("reference_active")
+                )
+                result = self._result(
+                    "recalibrate" if reference_lost else "not_ready",
+                    bag_name=bag_name,
+                    reasons=[validation_reason],
+                    suspect_roles=["head"] if reference_lost else [],
+                    suspect_cameras=(
+                        [self.role_names["head"]] if reference_lost else []
+                    ),
+                )
+                self.last_result = result
+                self._append_history(result)
+                if bag_name:
+                    self._write_bag_result(bag_name, result)
+                return result
+            reference_validation = self.reference.get("insight9_validation")
+            identity_reason = self._validation_identity_reason(
+                reference_validation, validation
+            )
+            if identity_reason:
+                result = self._result(
+                    "recalibrate",
+                    bag_name=bag_name,
+                    reasons=[identity_reason],
+                    suspect_roles=["head"],
+                    suspect_cameras=[self.role_names["head"]],
+                )
+                self.last_result = result
+                self._append_history(result)
+                if bag_name:
+                    self._write_bag_result(bag_name, result)
+                return result
             for role, current in measurement["poses"].items():
                 baseline = self.reference["poses"].get(role)
                 if not isinstance(baseline, dict):
@@ -268,6 +318,7 @@ class CaptureCheckManager:
                     suspect_cameras.append(camera_name)
                 comparisons[camera_name] = {
                     "role": role,
+                    "method": "fixed_station_pose",
                     "state": camera_state,
                     "translation_error_m": round(translation_error, 5),
                     "rotation_error_deg": round(rotation_error, 3),
@@ -276,6 +327,22 @@ class CaptureCheckManager:
                     ),
                 }
             else:
+                head_name = self.role_names["head"]
+                head_comparison = self._insight9_comparison(
+                    validation,
+                    reference_validation
+                    if isinstance(reference_validation, dict)
+                    else {},
+                )
+                head_state = str(head_comparison["state"])
+                comparisons[head_name] = head_comparison
+                if head_state == "recalibrate":
+                    worst_state = "recalibrate"
+                elif head_state == "retry" and worst_state == "pass":
+                    worst_state = "retry"
+                if head_state != "pass":
+                    suspect_roles.append("head")
+                    suspect_cameras.append(head_name)
                 result = self._result(
                     worst_state,
                     bag_name=bag_name,
@@ -284,6 +351,11 @@ class CaptureCheckManager:
                     suspect_roles=suspect_roles,
                     suspect_cameras=suspect_cameras,
                 )
+                if worst_state == "pass":
+                    reference_validation["validated_count"] = int(
+                        validation["validation_count"]
+                    )
+                    self._write_reference(self.reference)
         self.last_result = result
         self._append_history(result)
         if bag_name:
@@ -321,7 +393,7 @@ class CaptureCheckManager:
                     for stamp, sample in self._samples[self.role_names[role]]
                     if now - stamp <= self.sample_window_sec
                 ]
-                for role in REQUIRED_ROLES
+                for role in FIXED_STATION_ROLES
             }
         for role, samples in sample_sets.items():
             name = self.role_names[role]
@@ -367,7 +439,178 @@ class CaptureCheckManager:
         return {
             "captured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "poses": poses,
+            "insight9_validation": (
+                mapper.get("capture_validation") if isinstance(mapper, dict) else None
+            ),
         }, []
+
+    @staticmethod
+    def _parse_validation_reference(payload: object) -> Optional[dict]:
+        if not isinstance(payload, dict) or not payload.get("reference_active"):
+            return None
+        session_id = str(payload.get("session_id") or "")
+        if not session_id:
+            return None
+        try:
+            parsed = {
+                "session_id": session_id,
+                "session_generation": int(payload["session_generation"]),
+                "reference_id": int(payload["reference_id"]),
+                "reference_keyframe": int(payload["reference_keyframe"]),
+                "validated_count": int(payload.get("validation_count", 0)),
+            }
+        except (KeyError, TypeError, ValueError):
+            return None
+        return parsed
+
+    @staticmethod
+    def _current_validation(measurement: dict) -> tuple[Optional[dict], str]:
+        validation = measurement.get("insight9_validation")
+        if not isinstance(validation, dict):
+            return None, "Insight9 natural-map validation status is unavailable"
+        if not validation.get("reference_active"):
+            return None, "Insight9 natural-map reference is not active"
+        return validation, ""
+
+    @staticmethod
+    def _validation_identity_reason(reference: object, current: dict) -> str:
+        if not isinstance(reference, dict):
+            return "Insight9 validation reference is missing"
+        try:
+            expected = (
+                str(reference.get("session_id") or ""),
+                int(reference.get("session_generation", -1)),
+                int(reference.get("reference_id", -1)),
+                int(reference.get("reference_keyframe", -1)),
+            )
+            observed = (
+                str(current.get("session_id") or ""),
+                int(current.get("session_generation", -2)),
+                int(current.get("reference_id", -2)),
+                int(current.get("reference_keyframe", -2)),
+            )
+        except (TypeError, ValueError):
+            return "Insight9 validation status is malformed; recalibration is required"
+        if expected != observed:
+            return "Insight9 map session or frozen reference changed; recalibration is required"
+        return ""
+
+    def _insight9_comparison(self, validation: dict, reference: dict) -> dict:
+        camera_name = self.role_names["head"]
+        sequence = int(validation.get("validation_count", 0) or 0)
+        validated = int(reference.get("validated_count", 0) or 0)
+        last = validation.get("last_validation")
+        if sequence <= validated or not isinstance(last, dict):
+            return {
+                "role": "head",
+                "method": "frozen_natural_map_closure",
+                "state": "retry",
+                "translation_error_m": None,
+                "rotation_error_deg": None,
+                "threshold_group": "insight9_closure",
+                "validation_count": sequence,
+                "reason": (
+                    "no fresh Insight9 closure; look around the mapped workspace "
+                    "and retry"
+                ),
+            }
+        validation_age = float(last.get("age_sec", math.inf))
+        if validation_age > self.maximum_insight9_validation_age_sec:
+            return {
+                "role": "head",
+                "method": "frozen_natural_map_closure",
+                "state": "retry",
+                "translation_error_m": None,
+                "rotation_error_deg": None,
+                "threshold_group": "insight9_closure",
+                "validation_count": sequence,
+                "validation_age_sec": round(validation_age, 3),
+                "reason": (
+                    "Insight9 closure is stale; look around the mapped workspace "
+                    "and retry"
+                ),
+            }
+        recent = [
+            item
+            for item in validation.get("recent_validations", [])
+            if isinstance(item, dict)
+            and int(item.get("sequence", -1)) > validated
+        ]
+        if recent and int(recent[0].get("sequence", -1)) > validated + 1:
+            return {
+                "role": "head",
+                "method": "frozen_natural_map_closure",
+                "state": "retry",
+                "translation_error_m": None,
+                "rotation_error_deg": None,
+                "threshold_group": "insight9_closure",
+                "validation_count": sequence,
+                "reason": (
+                    "Insight9 validation history is incomplete; set a new batch "
+                    "reference before continuing"
+                ),
+            }
+        critical = [
+            item
+            for item in recent
+            if self._comparison_state(
+                float(item.get("translation_error_m", math.inf)),
+                float(item.get("rotation_error_deg", math.inf)),
+                self.thresholds["insight9"],
+            )
+            == "recalibrate"
+        ]
+        if critical:
+            worst = max(
+                critical,
+                key=lambda item: max(
+                    float(item.get("translation_error_m", math.inf))
+                    / self.thresholds["insight9"]["recalibrate_translation_m"],
+                    float(item.get("rotation_error_deg", math.inf))
+                    / self.thresholds["insight9"]["recalibrate_rotation_deg"],
+                ),
+            )
+            return {
+                "role": "head",
+                "method": "frozen_natural_map_closure",
+                "state": "recalibrate",
+                "translation_error_m": round(
+                    float(worst.get("translation_error_m", math.inf)), 5
+                ),
+                "rotation_error_deg": round(
+                    float(worst.get("rotation_error_deg", math.inf)), 3
+                ),
+                "threshold_group": "insight9_closure",
+                "validation_count": sequence,
+                "reason": (
+                    "Insight9 had a critical frozen-map correction since the "
+                    "previous PASS"
+                ),
+            }
+        translation_error = float(last.get("translation_error_m", math.inf))
+        rotation_error = float(last.get("rotation_error_deg", math.inf))
+        state = self._comparison_state(
+            translation_error, rotation_error, self.thresholds["insight9"]
+        )
+        return {
+            "role": "head",
+            "method": "frozen_natural_map_closure",
+            "state": state,
+            "translation_error_m": round(translation_error, 5),
+            "rotation_error_deg": round(rotation_error, 3),
+            "threshold_group": "insight9_closure",
+            "validation_count": sequence,
+            "validation_age_sec": round(validation_age, 3),
+            "reference_keyframe": validation.get("reference_keyframe"),
+            "descriptor_matches": last.get("descriptor_matches"),
+            "inliers": last.get("inliers"),
+            "inlier_ratio": last.get("inlier_ratio"),
+            "median_reprojection_error_px": last.get(
+                "median_reprojection_error_px"
+            ),
+            "grid_cells": last.get("grid_cells"),
+            "camera": camera_name,
+        }
 
     @staticmethod
     def _comparison_state(
@@ -388,8 +631,15 @@ class CaptureCheckManager:
     def _threshold_payload(self) -> dict:
         return {
             "insight3": dict(self.thresholds["insight3"]),
-            "insight9": dict(self.thresholds["insight9"]),
+            "insight9_closure": {
+                key: value
+                for key, value in self.thresholds["insight9"].items()
+                if key.startswith("pass_") or key.startswith("recalibrate_")
+            },
             "minimum_map_points": self.minimum_map_points,
+            "maximum_insight9_validation_age_sec": (
+                self.maximum_insight9_validation_age_sec
+            ),
         }
 
     @staticmethod
@@ -406,11 +656,22 @@ class CaptureCheckManager:
             payload = json.loads(self.reference_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return None
-        if not isinstance(payload, dict) or payload.get("version") != 2:
+        if not isinstance(payload, dict) or payload.get("version") != 3:
             return None
-        if not isinstance(payload.get("poses"), dict):
+        if not isinstance(payload.get("poses"), dict) or not isinstance(
+            payload.get("insight9_validation"), dict
+        ):
             return None
         return payload
+
+    def _write_reference(self, reference: dict) -> None:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        temporary = self.reference_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(reference, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(self.reference_path)
 
     def _append_history(self, result: dict) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
