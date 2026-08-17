@@ -6,7 +6,7 @@
 
 - ROS 图像 callback 只负责轻量状态更新、录制 header audit 和 latest-frame 交接，不执行序列化、编码或磁盘 I/O。
 - 全部录制 topic 由一个原生 C++ `ros2 bag record` 进程订阅并写入。2026-08-17 的
-  44-topic 实测中，这条路径保持三路 IMU 约 398–399 Hz；Python 单 writer 只能处理约
+  44-topic 实测中，这条路径保持三路 IMU 400.0 Hz；Python 单 writer 只能处理约
   1,325 message/s 并导致队列溢出，因此不能把全量写入搬回 Python callback/worker。
 - 宸境自然语言语音助手运行在宿主机独立进程。SenseVoice INT8 同时负责中文唤醒词与命令转写，
   Silero VAD 只负责本地语音分段，
@@ -50,6 +50,10 @@
   topic 缺失约 0.9%–1.7%；MCAP cache 排空仅 0.98 秒且没有 writer loss 日志。
   因此 `host_setup.sh` 同时安装 udev 规则，在每次 cdc_ncm netdev 重建时恢复 RPS/RFS；
   不能只依赖开机 oneshot 服务。
+- 三张网卡 RPS 均为 `3e` 后，FastDDS recorder 的 134 秒全量测试仍新增 30,225 次
+  `UdpRcvbufErrors`；同一进程改用 CycloneDDS 后，最终 130.02 秒测试的 softnet、网卡、
+  IP 重组和 UDP 丢包计数全部为 0，MCAP cache 也未丢弃。Dashboard 主进程无需切换 RMW，
+  只给 recorder 子进程设置 `RMW_IMPLEMENTATION=rmw_cyclonedds_cpp`。
 - 同一轮 4096 长测仍观察到 Insight3 B 的一次同步源节拍缺口：infra1/infra2、
   camera_info 与 VIO image 在同一 header 时间点共同缺样；depth 也有固有的
   120 ms 间隔。它们发生时主机网络与 writer 计数均为零，不能归因于 SSD 或
@@ -61,7 +65,9 @@
 
 ## rosbag 可靠性
 
-- 新录制使用一个原生 MCAP writer 覆盖全部勾选 topic。停止时等待其 cache 排空并原子发布
+- 新录制使用一个 CycloneDDS 原生 MCAP writer 覆盖全部勾选 topic。recorder 先以
+  `--start-paused` 建立三台相机订阅，确认选中的 Dashboard 图像 topic 全部就绪后再 resume，
+  避免不同 participant 分批发现造成 4%–10% 的录制开头缺口。停止时等待 cache 排空并原子发布
   一个标准 rosbag2 目录，不生成 part、不合包、不复制 payload。SQLite 的 WAL +
   `synchronous=OFF` 仅保留给旧 bag 与恢复兼容，不能改回 `NORMAL` 或 `FULL`。
 - 图像 callback 在录制期间独立审计 source header 帧间隔；bag 内时间戳由原生 recorder 统一生成。
@@ -83,7 +89,9 @@
   Firefox 原生媒体计数为 451 总帧、1 丢帧（约 29.93 fps）。Firefox 会节流
   `requestVideoFrameCallback`，因此审阅 FPS 必须按 `totalVideoFrames/droppedVideoFrames`
   的媒体时间增量计算，不能把回调频率约 24 fps 误判为视频掉帧。
-- `/tf_static` 是 latched 单次流，只要求至少存在一条消息，不按 FPS 判断完整性。
+- `/tf_static` 是 latched 单次流，只要求至少存在一条消息，不按 FPS 判断完整性。paused
+  recorder 会在 resume 前消费并丢弃一次 latched sample，因此 Dashboard 缓存它并在 resume 后
+  原样重发一次；最终仍由同一个 MCAP writer 写入。
 - 400 Hz IMU 使用 `config/rosbag_qos_overrides.yaml` 的 best-effort、
   keep-last 1000 深度 reader；默认深度不足时，短时 CPU 调度停顿会先表现为
   单路 IMU 分散丢帧，而图像 writer 仍显示 0 drop。

@@ -11,6 +11,7 @@ DEFAULT_POST_PROCESSING_CONFIG = {
     "results_dir": "outputs/results",
     "max_cache_size": 1073741824,
     "recording_storage_id": "mcap",
+    "recording_rmw_implementation": "rmw_cyclonedds_cpp",
     "record_topics": [],
     "gesture_recording": {"enabled": False},
     "voice_recording": {"enabled": False},

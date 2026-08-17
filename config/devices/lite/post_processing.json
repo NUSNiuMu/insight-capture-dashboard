@@ -3,6 +3,7 @@
   "results_dir": "outputs/results",
   "max_cache_size": 1073741824,
   "recording_storage_id": "mcap",
+  "recording_rmw_implementation": "rmw_cyclonedds_cpp",
   "record_topics": [],
   "insight3_global_localizer": {
     "gripper_mask_height_ratio": 0.2

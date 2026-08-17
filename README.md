@@ -138,8 +138,10 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，
 支持整组勾选），`Start` 只录勾选的 topic。全部勾选消息由一个原生 C++
-`ros2 bag record --storage mcap` 进程直接写成标准单目录 rosbag；dashboard 图像 callback
-只额外做 header 连续性审计，不参与序列化或磁盘写入。`Stop` 等待 writer cache 排空后将
+`ros2 bag record --storage mcap` 进程使用 CycloneDDS 直接写成标准单目录 rosbag。recorder
+先暂停等待三台相机订阅就绪，再从统一边界开始；Dashboard 会在 resume 后补发缓存的
+`/tf_static`。dashboard 图像 callback 只额外做 header 连续性审计，不参与序列化或磁盘写入。
+`Stop` 等待 writer cache 排空后将
 staging 目录原子发布，同时保存 live header/network audit；不分 part、不合包、不重写 payload，
 发布后即可开始下一段。默认选择同时包含原始
 `vio_100hz` 和配置的全局 pose，供单臂/双臂数据集导出使用。

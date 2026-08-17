@@ -26,6 +26,7 @@ from post_processing_core.composite_bag import (  # noqa: E402
 from post_processing_core.config import resolve_recording_root  # noqa: E402
 from post_processing_core.playback import PlaybackManager  # noqa: E402
 from post_processing_core.recording import RecordingManager  # noqa: E402
+from dashboard_runtime.recording_bridge import RecordingBridge  # noqa: E402
 
 
 def _write_part(
@@ -65,6 +66,17 @@ def _write_manifest(root: Path, parts: list[Path]) -> None:
 
 
 class CompositeBagTest(unittest.TestCase):
+    def test_live_audit_republishes_latched_tf_after_recorder_resume(self) -> None:
+        owner = mock.Mock()
+        owner._recording_writer_lock = threading.Lock()
+        owner._recording_writer_by_topic = {}
+        owner._recording_header_audit = {}
+
+        RecordingBridge(owner).start_image_recording({"/camera": "/bag"})
+
+        owner.republish_tf_static.assert_called_once_with()
+        self.assertIn("/camera", owner._recording_header_audit)
+
     def test_recorder_output_distinguishes_actual_cache_loss_from_qos_warning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manager = RecordingManager({}, 20, Path(directory), 1024, ["/camera"])
@@ -93,11 +105,16 @@ class CompositeBagTest(unittest.TestCase):
                 start_image_recording=start_writer,
                 stop_image_recording=lambda: {},
             )
-            process = mock.Mock(stdout=io.StringIO("Recording...\n"))
+            process = mock.Mock(stdout=io.StringIO(
+                "Waiting for recording: Press SPACE to start.\n"
+                "Subscribed to topic '/camera'\n"
+                "All requested topics are subscribed. Stopping discovery...\n"
+                "Resuming recording.\n"
+            ))
             process.poll.return_value = None
             with mock.patch(
                 "post_processing_core.recording.subprocess.Popen", return_value=process
-            ) as popen:
+            ) as popen, mock.patch("post_processing_core.recording.os.write"):
                 manager.start(bag_name="single")
 
             self.assertEqual(set(calls[0]), {"/camera"})
@@ -107,6 +124,11 @@ class CompositeBagTest(unittest.TestCase):
             self.assertEqual(command[command.index("--output") + 1], calls[0]["/camera"])
             self.assertIn("/camera", command)
             self.assertIn("/imu", command)
+            self.assertIn("--start-paused", command)
+            self.assertEqual(
+                popen.call_args.kwargs["env"]["RMW_IMPLEMENTATION"],
+                "rmw_cyclonedds_cpp",
+            )
 
     def test_recording_waits_for_writer_finalization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

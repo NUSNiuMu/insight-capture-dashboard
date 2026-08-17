@@ -3,6 +3,7 @@
 import contextlib
 import json
 import os
+import pty
 import re
 import shutil
 import signal
@@ -134,6 +135,7 @@ class RecordingManager:
         start_image_recording: Optional[Callable[[Dict[str, str]], None]] = None,
         stop_image_recording: Optional[Callable[[], Dict[str, object]]] = None,
         storage_id: str = "mcap",
+        recording_rmw_implementation: str = "rmw_cyclonedds_cpp",
         storage_status: Optional[Dict[str, object]] = None,
     ) -> None:
         self.raw_config = raw_config
@@ -142,6 +144,7 @@ class RecordingManager:
         self.rosbag_root.mkdir(parents=True, exist_ok=True)
         self.max_cache_size = int(max_cache_size)
         self.storage_id = str(storage_id or "mcap")
+        self.recording_rmw_implementation = str(recording_rmw_implementation or "")
         self.storage_status = dict(storage_status or {
             "active_path": str(self.rosbag_root), "using_fallback": False
         })
@@ -168,6 +171,11 @@ class RecordingManager:
         self._output_lines: Deque[str] = deque(maxlen=200)
         self._recorder_loss_lines: List[str] = []
         self._recorder_ready = threading.Event()
+        self._recorder_resumed = threading.Event()
+        self._all_recorder_topics_subscribed = threading.Event()
+        self._last_recorder_subscription_monotonic = 0.0
+        self._recorder_subscribed_topics: Set[str] = set()
+        self._recorder_control_fds: Dict[str, int] = {}
         self._stdout_threads: List[threading.Thread] = []
         self._lock = threading.Lock()
         self._merge_thread: Optional[threading.Thread] = None
@@ -218,8 +226,17 @@ class RecordingManager:
                     break
                 stripped = line.rstrip()
                 self._output_lines.append(f"[{label}] {stripped}")
-                if "Recording..." in stripped:
+                if "Recording..." in stripped or "Waiting for recording:" in stripped:
                     self._recorder_ready.set()
+                if "Resuming recording." in stripped:
+                    self._recorder_resumed.set()
+                if "All requested topics are subscribed." in stripped:
+                    self._all_recorder_topics_subscribed.set()
+                if "Subscribed to topic" in stripped:
+                    self._last_recorder_subscription_monotonic = time.monotonic()
+                    match = re.search(r"Subscribed to topic '([^']+)'", stripped)
+                    if match:
+                        self._recorder_subscribed_topics.add(match.group(1))
                 if re.search(
                     r"(?:cache buffers lost messages|dropping message on topic)",
                     stripped,
@@ -283,8 +300,6 @@ class RecordingManager:
             staging_dir.parent.mkdir(parents=True, exist_ok=True)
             if staging_dir.exists():
                 raise RuntimeError(f"Recording staging path already exists: {staging_dir}")
-            network_snapshot_start = capture_network_snapshot()
-
             single_writer = self.storage_id == "mcap"
             groups: Dict[str, List[str]]
             image_writer_active = False
@@ -300,11 +315,18 @@ class RecordingManager:
 
             env = os.environ.copy()
             env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
+            if self.recording_rmw_implementation:
+                env["RMW_IMPLEMENTATION"] = self.recording_rmw_implementation
             processes: Dict[str, subprocess.Popen] = {}
             stdout_threads: List[threading.Thread] = []
+            control_fds: Dict[str, int] = {}
             self._output_lines.clear()
             self._recorder_loss_lines = []
             self._recorder_ready.clear()
+            self._recorder_resumed.clear()
+            self._all_recorder_topics_subscribed.clear()
+            self._last_recorder_subscription_monotonic = 0.0
+            self._recorder_subscribed_topics = set()
 
             def abort_started_processes() -> None:
                 for started_process in processes.values():
@@ -313,6 +335,9 @@ class RecordingManager:
                 for started_process in processes.values():
                     with contextlib.suppress(subprocess.TimeoutExpired):
                         started_process.wait(timeout=3.0)
+                for control_fd in control_fds.values():
+                    with contextlib.suppress(OSError):
+                        os.close(control_fd)
 
             for group, group_topics in groups.items():
                 recorder_output = staging_dir if single_writer else staging_dir / group
@@ -328,16 +353,32 @@ class RecordingManager:
                     str(self.max_cache_size),
                     *_storage_config_args(self.storage_id),
                     *_qos_override_args(),
+                    *(["--start-paused"] if single_writer else []),
                     *group_topics,
                 ]
-                process = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    start_new_session=True,
-                    env=env,
-                )
+                master_fd: Optional[int] = None
+                slave_fd: Optional[int] = None
+                try:
+                    if single_writer:
+                        master_fd, slave_fd = pty.openpty()
+                    process = subprocess.Popen(
+                        cmd,
+                        stdin=slave_fd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        start_new_session=True,
+                        env=env,
+                    )
+                except Exception:
+                    if master_fd is not None:
+                        os.close(master_fd)
+                    raise
+                finally:
+                    if slave_fd is not None:
+                        os.close(slave_fd)
+                if master_fd is not None:
+                    control_fds[group] = master_fd
                 processes[group] = process
                 thread = threading.Thread(
                     target=self._drain_stdout,
@@ -351,6 +392,39 @@ class RecordingManager:
             if single_writer and not self._recorder_ready.wait(timeout=10.0):
                 abort_started_processes()
                 raise RuntimeError("Native MCAP recorder did not become ready within 10 seconds.")
+            if single_writer:
+                # CycloneDDS discovers each camera participant in a burst. Wait
+                # until every selected dashboard stream has a subscription;
+                # those streams prove that each active camera participant and
+                # its accompanying IMU/VIO topics were discovered. A short
+                # quiet tail lets the remainder of the same burst finish.
+                settle_deadline = time.monotonic() + 20.0
+                while time.monotonic() < settle_deadline:
+                    if self._all_recorder_topics_subscribed.is_set():
+                        break
+                    last_subscription = self._last_recorder_subscription_monotonic
+                    required_topics_ready = audit_topics.issubset(
+                        self._recorder_subscribed_topics
+                    )
+                    quiet_sec = 1.0 if audit_topics else 8.0
+                    if (
+                        required_topics_ready
+                        and last_subscription
+                        and time.monotonic() - last_subscription >= quiet_sec
+                    ):
+                        break
+                    time.sleep(0.1)
+                else:
+                    abort_started_processes()
+                    raise RuntimeError("Native MCAP topic subscriptions did not settle.")
+
+            network_snapshot_start = capture_network_snapshot()
+            if single_writer:
+                for control_fd in control_fds.values():
+                    os.write(control_fd, b" ")
+                if not self._recorder_resumed.wait(timeout=5.0):
+                    abort_started_processes()
+                    raise RuntimeError("Native MCAP recorder did not resume from pause.")
             if self._start_image_recording is not None and audit_topics:
                 try:
                     self._start_image_recording({
@@ -364,6 +438,7 @@ class RecordingManager:
             self.processes = processes
             self._process_exit_codes = {}
             self._stdout_threads = stdout_threads
+            self._recorder_control_fds = control_fds
             self._staging_dir = staging_dir
             self._image_writer_active = image_writer_active
             self._image_header_audit = None
@@ -376,6 +451,7 @@ class RecordingManager:
                 "version": 3 if single_writer else 2,
                 "format": "rosbag2" if single_writer else COMPOSITE_FORMAT,
                 "storage_id": self.storage_id,
+                "rmw_implementation": self.recording_rmw_implementation,
                 "bag_name": name,
                 "selected_topics": list(selected_topics),
                 "started_at_epoch_s": self.started_at,
@@ -392,6 +468,7 @@ class RecordingManager:
             processes = dict(self.processes)
             prior_exit_codes = dict(self._process_exit_codes)
             stdout_threads = list(self._stdout_threads)
+            control_fds = dict(self._recorder_control_fds)
             staging_dir = self._staging_dir
             output_path = self.output_path
             image_writer_active = self._image_writer_active
@@ -471,6 +548,9 @@ class RecordingManager:
                     process.wait(timeout=3.0)
         for thread in stdout_threads:
             thread.join(timeout=2.0)
+        for control_fd in control_fds.values():
+            with contextlib.suppress(OSError):
+                os.close(control_fd)
 
         recorder_loss_lines = list(self._recorder_loss_lines)
 
@@ -484,6 +564,7 @@ class RecordingManager:
         stop_sec = round(time.perf_counter() - stop_started, 3)
         with self._lock:
             self.processes = {}
+            self._recorder_control_fds = {}
             self._process_exit_codes = exit_codes
             self.merge_error = None
             self.merge_timings = {"recorder_stop_sec": stop_sec}

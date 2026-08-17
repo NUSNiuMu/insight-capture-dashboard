@@ -24,6 +24,7 @@ try:
     from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
     from rclpy.qos_event import SubscriptionEventCallbacks
     from sensor_msgs.msg import CompressedImage, Image as RosImage
+    from tf2_msgs.msg import TFMessage
     from vision_msgs.msg import Detection2DArray
 except Exception:  # pragma: no cover - fake mode can run without ROS imports
     rclpy = None
@@ -38,6 +39,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     SubscriptionEventCallbacks = None
     CompressedImage = None
     RosImage = None
+    TFMessage = None
     Detection2DArray = None
 
 from camera_setup import (
@@ -200,6 +202,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             use_default_callbacks=False
         )
         self.dashboard_subscriptions = []
+        self._tf_static_message = None
+        self._tf_static_publisher = None
         # The native recorder owns writes; these flags enable live header audit.
         self._recording_writer_by_topic: Dict[str, bool] = {}
         self._recording_header_audit: Dict[str, Dict[str, object]] = {}
@@ -265,6 +269,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             self.get_logger().info("Running in fake-pose demo mode")
         else:
             self._mapping_stream.start()
+            self._create_tf_static_relay()
             self._create_pose_subscriptions()
             self._create_dashboard_image_subscriptions()
             self._create_hand_overlay_subscriptions()
@@ -273,6 +278,38 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 daemon=True,
                 name="stale_dds_watchdog",
             ).start()
+
+    def _create_tf_static_relay(self) -> None:
+        """Cache the latched transforms so a paused recorder can receive them."""
+        if TFMessage is None:
+            return
+        qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._tf_static_publisher = self.create_publisher(TFMessage, "/tf_static", qos)
+        subscription = self.create_subscription(
+            TFMessage,
+            "/tf_static",
+            self._cache_tf_static,
+            qos,
+            callback_group=self.ros_callback_group,
+            event_callbacks=self.subscription_event_callbacks,
+        )
+        self.dashboard_subscriptions.append(subscription)
+
+    def _cache_tf_static(self, message: object) -> None:
+        self._tf_static_message = message
+
+    def republish_tf_static(self) -> bool:
+        message = self._tf_static_message
+        publisher = self._tf_static_publisher
+        if message is None or publisher is None:
+            return False
+        publisher.publish(message)
+        return True
 
     def _create_pose_subscriptions(self) -> None:
         pose_qos = make_qos()
@@ -833,6 +870,11 @@ def main() -> None:
         start_image_recording=node.start_image_recording,
         stop_image_recording=node.stop_image_recording,
         storage_id=str(post_processing_config.get("recording_storage_id", "mcap")),
+        recording_rmw_implementation=str(
+            post_processing_config.get(
+                "recording_rmw_implementation", "rmw_cyclonedds_cpp"
+            )
+        ),
         storage_status=recording_storage_status,
     )
     # Adopt recordings orphaned in rosbags/_staging/ by a power cut or crash

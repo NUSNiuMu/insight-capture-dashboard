@@ -34,6 +34,12 @@ class RecordingBridge:
                 }
                 for topic in topics
             }
+        # A start-paused rosbag subscription consumes transient-local samples
+        # while paused. Publish the cached transform once after resume so the
+        # same native writer records /tf_static in the clean recording window.
+        republish_tf_static = getattr(self.owner, "republish_tf_static", None)
+        if callable(republish_tf_static):
+            republish_tf_static()
 
     def stop_image_recording(self) -> Dict[str, object]:
         with self.owner._recording_writer_lock:
