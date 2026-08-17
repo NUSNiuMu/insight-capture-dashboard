@@ -49,7 +49,6 @@ from camera_setup import (
 from hand_tracking.gripper import GripperTrackingMixin
 from hand_tracking.overlay import HandOverlayMixin
 from dashboard_media.jpeg import HwJpegCodec
-from inprocess_bag_writer import InProcessBagWriter
 import perf_tracker
 from post_processing import (
     RecordingManager,
@@ -201,11 +200,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             use_default_callbacks=False
         )
         self.dashboard_subscriptions = []
-        # Reuse image subscriptions and keep one writer per camera to avoid drops.
-        self._recording_writers: Dict[str, InProcessBagWriter] = {}
-        self._recording_writer_by_topic: Dict[str, InProcessBagWriter] = {}
-        # Map boot-relative image stamps once while preserving camera cadence.
-        self._recording_timestamp_offsets_ns: Dict[str, Optional[int]] = {}
+        # The native recorder owns writes; these flags enable live header audit.
+        self._recording_writer_by_topic: Dict[str, bool] = {}
         self._recording_header_audit: Dict[str, Dict[str, object]] = {}
         self._recording_writer_lock = threading.Lock()
         # GIL-atomic latest-frame slots keep heavy work out of ROS callbacks.

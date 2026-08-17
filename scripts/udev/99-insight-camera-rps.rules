@@ -1,0 +1,2 @@
+# USB camera netdevs lose their RPS values whenever cdc_ncm reconnects.
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="enx*", DRIVERS=="cdc_ncm", RUN+="@NETWORK_SCRIPT@ $kernel"

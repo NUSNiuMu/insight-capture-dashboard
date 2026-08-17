@@ -265,7 +265,8 @@ cd insight-dashboard-deploy
 **装完 update.sh 之后，还有一步不能漏**：跑一次部署包自带的宿主机调优脚本
 （`scripts/host_setup.sh` 由 `build_release.sh` 一起打进部署包，跟开发者路径
 `setup_host.sh` 用的是同一份逻辑）——它会写内核 UDP 接收缓冲与 IP 分片调优、为相机
-USB 网卡启用 RPS（把集中在 CPU0 的协议处理分散到其余核心），并装好开机自动
+USB 网卡启用 RPS（把集中在 CPU0 的协议处理分散到其余核心），通过 udev 在 USB
+重连、netdev 重建后自动恢复 RPS，并装好开机自动
 恢复相机的 systemd unit。jetson-nx profile 还会把相机 DDS 模式幂等校正为
 CycloneDDS；FastDDS 的约 65 KB UDP 报文会在多路大图订阅时触发分片/重传风暴。
 缺少这些调优时，多路录制会在写盘之前丢包，

@@ -137,11 +137,11 @@ python3 scripts/multi_camera_dashboard_web.py &
 - `/settings`：声控/手势录制、Stick figure、夹爪/手部叠加、Insight3 mask 与 Avatar 设置
 
 Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，
-支持整组勾选），`Start` 只录勾选的 topic。三路 dashboard 图像复用现有 DDS reader，
-直接交给三路 MCAP `InProcessBagWriter`；其余勾选消息共用一个 MCAP `ros2 bag record`
-子进程。`Stop` 排空四个 append-only part 后，以 `recording_manifest.json` 原子发布为一个
-复合 rosbag 会话，同时保存 live header/network audit；不会重写 payload 或等待合包，发布后
-即可开始下一段。Bags、完整性检查和准备式回放都直接识别该复合会话。默认选择同时包含原始
+支持整组勾选），`Start` 只录勾选的 topic。全部勾选消息由一个原生 C++
+`ros2 bag record --storage mcap` 进程直接写成标准单目录 rosbag；dashboard 图像 callback
+只额外做 header 连续性审计，不参与序列化或磁盘写入。`Stop` 等待 writer cache 排空后将
+staging 目录原子发布，同时保存 live header/network audit；不分 part、不合包、不重写 payload，
+发布后即可开始下一段。默认选择同时包含原始
 `vio_100hz` 和配置的全局 pose，供单臂/双臂数据集导出使用。
 
 手势录制默认关闭，可在 Settings 开启；Insight9 同时检测到双手“拇指向上、四指

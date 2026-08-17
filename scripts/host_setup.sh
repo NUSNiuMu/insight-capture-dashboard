@@ -60,6 +60,8 @@ fi
 NETWORK_SCRIPT="${SCRIPT_DIR}/configure_camera_network.sh"
 NETWORK_UNIT_SRC="${SCRIPT_DIR}/systemd/insight-camera-network.service"
 NETWORK_UNIT_DST=/etc/systemd/system/insight-camera-network.service
+NETWORK_UDEV_SRC="${SCRIPT_DIR}/udev/99-insight-camera-rps.rules"
+NETWORK_UDEV_DST=/etc/udev/rules.d/99-insight-camera-rps.rules
 if [[ -f "${NETWORK_SCRIPT}" && -f "${NETWORK_UNIT_SRC}" ]]; then
     chmod +x "${NETWORK_SCRIPT}"
     rendered_network_unit="$(sed \
@@ -73,6 +75,16 @@ if [[ -f "${NETWORK_SCRIPT}" && -f "${NETWORK_UNIT_SRC}" ]]; then
     fi
     sudo systemctl enable insight-camera-network.service >/dev/null 2>&1
     sudo systemctl restart insight-camera-network.service
+    if [[ -f "${NETWORK_UDEV_SRC}" ]]; then
+        rendered_network_udev="$(sed \
+            -e "s#@NETWORK_SCRIPT@#${NETWORK_SCRIPT}#g" \
+            "${NETWORK_UDEV_SRC}")"
+        if [[ "$(cat "${NETWORK_UDEV_DST}" 2>/dev/null || true)" != "${rendered_network_udev}" ]]; then
+            log "installing camera reconnect RPS udev rule..."
+            echo "${rendered_network_udev}" | sudo tee "${NETWORK_UDEV_DST}" >/dev/null
+            sudo udevadm control --reload-rules
+        fi
+    fi
     log "camera RPS/RFS steering: applied + enabled"
 else
     log "WARNING: camera network steering files missing; skipping RPS setup."

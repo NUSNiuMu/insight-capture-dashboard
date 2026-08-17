@@ -3,6 +3,7 @@
 import contextlib
 import json
 import os
+import re
 import shutil
 import signal
 import sqlite3
@@ -19,7 +20,6 @@ from perf_tracker import track
 from .composite_bag import COMPOSITE_FORMAT, MANIFEST_NAME, read_metadata
 from .topic_catalog import (
     _normalize_topics,
-    _topic_group,
     build_recording_topic_catalog,
     discover_live_topics,
 )
@@ -156,9 +156,8 @@ class RecordingManager:
         self._network_snapshot_start: Optional[Dict[str, object]] = None
         self._network_audit: Optional[Dict[str, object]] = None
         self._recording_manifest: Optional[Dict[str, object]] = None
-        # Large dashboard image subscriptions are reused in-process. Every
-        # remaining topic shares one append-only recorder to minimize USB
-        # stream concurrency without adding duplicate image DDS readers.
+        # One native rosbag2 process owns every selected MCAP topic. Dashboard
+        # image callbacks provide only an independent live continuity audit.
         self.processes: Dict[str, subprocess.Popen] = {}
         self._process_exit_codes: Dict[str, int] = {}
         self._staging_dir: Optional[Path] = None
@@ -167,6 +166,8 @@ class RecordingManager:
         self.current_topics: List[str] = []
         self.topic_catalog = build_recording_topic_catalog(raw_config, [], self.default_topics)
         self._output_lines: Deque[str] = deque(maxlen=200)
+        self._recorder_loss_lines: List[str] = []
+        self._recorder_ready = threading.Event()
         self._stdout_threads: List[threading.Thread] = []
         self._lock = threading.Lock()
         self._merge_thread: Optional[threading.Thread] = None
@@ -215,7 +216,16 @@ class RecordingManager:
             for line in iter(stream.readline, ""):
                 if not line:
                     break
-                self._output_lines.append(f"[{label}] {line.rstrip()}")
+                stripped = line.rstrip()
+                self._output_lines.append(f"[{label}] {stripped}")
+                if "Recording..." in stripped:
+                    self._recorder_ready.set()
+                if re.search(
+                    r"(?:cache buffers lost messages|dropping message on topic)",
+                    stripped,
+                    flags=re.IGNORECASE,
+                ):
+                    self._recorder_loss_lines.append(stripped)
         finally:
             with contextlib.suppress(Exception):
                 stream.close()
@@ -270,32 +280,42 @@ class RecordingManager:
                 name = f"insight_record_{timestamp}"
             output_path = self.rosbag_root / name
             staging_dir = self.rosbag_root / "_staging" / name
-            staging_dir.mkdir(parents=True, exist_ok=True)
+            staging_dir.parent.mkdir(parents=True, exist_ok=True)
+            if staging_dir.exists():
+                raise RuntimeError(f"Recording staging path already exists: {staging_dir}")
             network_snapshot_start = capture_network_snapshot()
 
-            if self._start_image_recording is not None:
-                image_topics = [t for t in selected_topics if t in self._image_topics]
-                other_topics = [t for t in selected_topics if t not in self._image_topics]
-            else:
-                image_topics = []
-                other_topics = list(selected_topics)
-
-            groups: Dict[str, List[str]] = {"auxiliary": other_topics} if other_topics else {}
-
+            single_writer = self.storage_id == "mcap"
+            groups: Dict[str, List[str]]
             image_writer_active = False
-            if image_topics:
-                # Keep large camera streams on independent writers.
-                topic_output_paths = {
-                    topic: str(staging_dir / f"_images_{_topic_group(topic)}") for topic in image_topics
-                }
-                self._start_image_recording(topic_output_paths)
-                image_writer_active = True
+            audit_topics = set(selected_topics).intersection(self._image_topics)
+
+            if single_writer:
+                # rosbag2 requires that its output path does not exist yet.
+                # One native C++ recorder owns all subscriptions and MCAP writes.
+                groups = {"single": list(selected_topics)}
+            else:
+                staging_dir.mkdir(parents=True)
+                groups = {"auxiliary": list(selected_topics)}
 
             env = os.environ.copy()
             env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
             processes: Dict[str, subprocess.Popen] = {}
             stdout_threads: List[threading.Thread] = []
+            self._output_lines.clear()
+            self._recorder_loss_lines = []
+            self._recorder_ready.clear()
+
+            def abort_started_processes() -> None:
+                for started_process in processes.values():
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(os.getpgid(started_process.pid), signal.SIGINT)
+                for started_process in processes.values():
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        started_process.wait(timeout=3.0)
+
             for group, group_topics in groups.items():
+                recorder_output = staging_dir if single_writer else staging_dir / group
                 cmd = [
                     "ros2",
                     "bag",
@@ -303,7 +323,7 @@ class RecordingManager:
                     "--storage",
                     self.storage_id,
                     "--output",
-                    str(staging_dir / group),
+                    str(recorder_output),
                     "--max-cache-size",
                     str(self.max_cache_size),
                     *_storage_config_args(self.storage_id),
@@ -328,6 +348,19 @@ class RecordingManager:
                 thread.start()
                 stdout_threads.append(thread)
 
+            if single_writer and not self._recorder_ready.wait(timeout=10.0):
+                abort_started_processes()
+                raise RuntimeError("Native MCAP recorder did not become ready within 10 seconds.")
+            if self._start_image_recording is not None and audit_topics:
+                try:
+                    self._start_image_recording({
+                        topic: str(staging_dir) for topic in audit_topics
+                    })
+                except Exception:
+                    abort_started_processes()
+                    raise
+                image_writer_active = True
+
             self.processes = processes
             self._process_exit_codes = {}
             self._stdout_threads = stdout_threads
@@ -340,14 +373,13 @@ class RecordingManager:
             self.started_at = time.time()
             self.current_topics = list(selected_topics)
             self._recording_manifest = {
-                "version": 2,
-                "format": COMPOSITE_FORMAT,
+                "version": 3 if single_writer else 2,
+                "format": "rosbag2" if single_writer else COMPOSITE_FORMAT,
                 "storage_id": self.storage_id,
                 "bag_name": name,
                 "selected_topics": list(selected_topics),
                 "started_at_epoch_s": self.started_at,
             }
-            self._output_lines.clear()
             self.merge_state = "idle"
             self.merge_error = None
             self.merge_timings = {}
@@ -359,6 +391,7 @@ class RecordingManager:
             self._cleanup_if_exited_unlocked()
             processes = dict(self.processes)
             prior_exit_codes = dict(self._process_exit_codes)
+            stdout_threads = list(self._stdout_threads)
             staging_dir = self._staging_dir
             output_path = self.output_path
             image_writer_active = self._image_writer_active
@@ -384,7 +417,7 @@ class RecordingManager:
                 "network_audit": "recording_network_audit.json" if self._network_audit else None,
             })
 
-        # Stop subprocesses together before detaching image writers.
+        # Stop the native writer and the independent live audit at one boundary.
         for process in processes.values():
             try:
                 os.killpg(os.getpgid(process.pid), signal.SIGINT)
@@ -398,7 +431,13 @@ class RecordingManager:
                 dropped = int(result.get("dropped", 0)) if result else 0
                 if dropped:
                     image_writer_error = f"writer queues dropped {dropped} message(s)"
-                    self._output_lines.append(f"[_images] WARNING: dropped {dropped} message(s) (writer queue full)")
+                    self._output_lines.append(f"[writer] WARNING: dropped {dropped} message(s) (writer queue full)")
+                if result:
+                    pending_topics = list(result.get("pending_topics") or [])
+                    if pending_topics:
+                        self._output_lines.append(
+                            f"[writer] {len(pending_topics)} selected topic(s) remained source-silent"
+                        )
                 self._image_header_audit = result.get("image_header_audit") if result else None
                 if self._image_header_audit:
                     audit_topics = self._image_header_audit.get("topics", {})
@@ -409,10 +448,10 @@ class RecordingManager:
                         f"{item.get('writer_queue_dropped', 0)} writer drops"
                         for topic, item in sorted(audit_topics.items())
                     )
-                    self._output_lines.append(f"[_images] live header audit {verdict} -- {details}")
+                    self._output_lines.append(f"[images] live header audit {verdict} -- {details}")
             except Exception as exc:  # noqa: BLE001 - finalization is rejected below
                 image_writer_error = str(exc)
-                self._output_lines.append(f"[_images] ERROR stopping writer: {exc}")
+                self._output_lines.append(f"[images] ERROR stopping live audit: {exc}")
         deadline = time.monotonic() + max(float(timeout_sec), 0.1)
         still_running = []
         for process in processes.values():
@@ -430,6 +469,10 @@ class RecordingManager:
             for process in still_running:
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=3.0)
+        for thread in stdout_threads:
+            thread.join(timeout=2.0)
+
+        recorder_loss_lines = list(self._recorder_loss_lines)
 
         exit_codes = dict(prior_exit_codes)
         exit_codes.update({group: int(process.returncode) for group, process in processes.items()
@@ -455,9 +498,14 @@ class RecordingManager:
                     f"{group}={return_code}" for group, return_code in sorted(failed_recorders.items())
                 )
                 raise RuntimeError(f"recorder process failure(s): {details}")
+            if recorder_loss_lines:
+                raise RuntimeError(
+                    "native recorder reported message loss: "
+                    + " | ".join(recorder_loss_lines[-3:])
+                )
             if image_writer_error:
                 raise RuntimeError(f"image writer failure: {image_writer_error}")
-            self._publish_composite_session(
+            self._publish_recording_session(
                 staging_dir, Path(output_path) if output_path else None
             )
         except Exception as exc:  # noqa: BLE001 - preserve staging for forensics
@@ -465,9 +513,67 @@ class RecordingManager:
                 self.merge_state = "error"
                 self.merge_error = str(exc)
             self._output_lines.append(
-                f"[finalize] ERROR: {exc} (raw recorder parts kept at {staging_dir})"
+                f"[finalize] ERROR: {exc} (raw staging data kept at {staging_dir})"
             )
         return self.status()
+
+    def _publish_recording_session(
+        self, staging_dir: Optional[Path], output_path: Optional[Path]
+    ) -> None:
+        if staging_dir is not None and (staging_dir / "metadata.yaml").is_file():
+            self._publish_single_mcap_session(staging_dir, output_path)
+            return
+        self._publish_composite_session(staging_dir, output_path)
+
+    def _publish_single_mcap_session(
+        self, staging_dir: Path, output_path: Optional[Path]
+    ) -> None:
+        """Atomically expose one standard rosbag2 MCAP directory."""
+        if output_path is None:
+            raise RuntimeError("Missing recording output path.")
+        started = time.perf_counter()
+        info = read_metadata(staging_dir)
+        mcap_files = sorted(staging_dir.glob("*.mcap"))
+        if not info or not mcap_files:
+            raise RuntimeError("Single MCAP writer did not finalize a readable rosbag.")
+        if len(mcap_files) != 1:
+            raise RuntimeError(
+                f"Single MCAP writer unexpectedly produced {len(mcap_files)} data files."
+            )
+        if self._image_header_audit is not None:
+            (staging_dir / "image_header_audit.json").write_text(
+                json.dumps(self._image_header_audit, indent=2, sort_keys=True)
+            )
+        if self._network_audit is not None:
+            (staging_dir / "recording_network_audit.json").write_text(
+                json.dumps(self._network_audit, indent=2, sort_keys=True)
+            )
+        manifest = dict(self._recording_manifest or {})
+        manifest.update({
+            "message_count": int(info.get("message_count", 0) or 0),
+            "topic_count": len(info.get("topics_with_message_count") or []),
+            "published_at_epoch_s": time.time(),
+        })
+        (staging_dir / MANIFEST_NAME).write_text(
+            json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        if output_path.exists():
+            raise RuntimeError(f"recording output already exists: {output_path}")
+        os.replace(staging_dir, output_path)
+        finalize_sec = round(time.perf_counter() - started, 3)
+        with self._lock:
+            self._staging_dir = None
+            self.merge_state = "done"
+            self.merge_timings.update({
+                "method": "single_mcap_publish",
+                "part_count": 1,
+                "total_sec": finalize_sec,
+            })
+        self._output_lines.append(
+            f"[finalize] Published one standard MCAP rosbag in {finalize_sec:.2f}s: "
+            f"{output_path}"
+        )
+        self._notify_recording_completed(output_path)
 
     def _publish_composite_session(
         self, staging_dir: Optional[Path], output_path: Optional[Path]

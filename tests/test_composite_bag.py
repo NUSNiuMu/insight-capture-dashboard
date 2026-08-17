@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+import io
 import json
 from pathlib import Path
 import sys
@@ -64,6 +65,49 @@ def _write_manifest(root: Path, parts: list[Path]) -> None:
 
 
 class CompositeBagTest(unittest.TestCase):
+    def test_recorder_output_distinguishes_actual_cache_loss_from_qos_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manager = RecordingManager({}, 20, Path(directory), 1024, ["/camera"])
+            process = mock.Mock(stdout=io.StringIO(
+                "Some messages from Reliable publishers could be dropped.\n"
+                "Cache buffers lost messages per topic: /camera=3\n"
+            ))
+
+            manager._drain_stdout("single", process)
+
+            self.assertEqual(
+                manager._recorder_loss_lines,
+                ["Cache buffers lost messages per topic: /camera=3"],
+            )
+
+    def test_native_recorder_receives_every_topic_on_one_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            calls = []
+
+            def start_writer(topic_paths: dict[str, str]) -> None:
+                calls.append(topic_paths)
+
+            manager = RecordingManager(
+                {}, 20, Path(directory), 1024, ["/camera", "/imu"],
+                image_topics=["/camera"],
+                start_image_recording=start_writer,
+                stop_image_recording=lambda: {},
+            )
+            process = mock.Mock(stdout=io.StringIO("Recording...\n"))
+            process.poll.return_value = None
+            with mock.patch(
+                "post_processing_core.recording.subprocess.Popen", return_value=process
+            ) as popen:
+                manager.start(bag_name="single")
+
+            self.assertEqual(set(calls[0]), {"/camera"})
+            self.assertEqual(len(set(calls[0].values())), 1)
+            popen.assert_called_once()
+            command = popen.call_args.args[0]
+            self.assertEqual(command[command.index("--output") + 1], calls[0]["/camera"])
+            self.assertIn("/camera", command)
+            self.assertIn("/imu", command)
+
     def test_recording_waits_for_writer_finalization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             manager = RecordingManager({}, 20, Path(directory), 1024, ["/camera"])
@@ -198,6 +242,44 @@ class CompositeBagTest(unittest.TestCase):
             self.assertEqual(manifest["parts"][0]["path"], "camera")
             self.assertEqual(manager.merge_state, "done")
             self.assertEqual(manager.merge_timings["method"], "composite_publish")
+
+    def test_publish_single_mcap_is_a_standard_rosbag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staging_root = root / "_staging"
+            staging_root.mkdir()
+            staging = _write_part(
+                staging_root,
+                "capture",
+                "/camera",
+                start_ns=1_000,
+                duration_ns=500,
+                messages=5,
+            )
+            output = root / "capture"
+            manager = object.__new__(RecordingManager)
+            manager.storage_id = "mcap"
+            manager._recording_manifest = {
+                "version": 3, "format": "rosbag2", "selected_topics": ["/camera"]
+            }
+            manager._image_header_audit = None
+            manager._network_audit = None
+            manager._lock = threading.Lock()
+            manager._staging_dir = staging
+            manager.merge_state = "finalizing"
+            manager.merge_timings = {}
+            manager._output_lines = deque(maxlen=20)
+            manager._recording_completed_callbacks = []
+
+            manager._publish_recording_session(staging, output)
+
+            self.assertFalse(staging.exists())
+            self.assertTrue((output / "capture_0.mcap").is_file())
+            self.assertTrue((output / "metadata.yaml").is_file())
+            self.assertEqual(session_parts(output), [output])
+            manifest = json.loads((output / "recording_manifest.json").read_text())
+            self.assertNotIn("parts", manifest)
+            self.assertEqual(manager.merge_timings["method"], "single_mcap_publish")
 
 
 if __name__ == "__main__":

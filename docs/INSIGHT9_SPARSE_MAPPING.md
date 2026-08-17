@@ -265,7 +265,8 @@ Jetson Orin NX、544×640 双目红外输入、1024 个最大关键点、官方 
   13–14 Hz，六核 CPU 在录制期间达到 75–90%/核；改为复用 dashboard reader
   并以 2 Hz 中继定位图后，A/B 连续实测均恢复为 20 Hz。
 - 完整 200 点 Path 后续降为 2 Hz 并改成默认关闭的调试输出；当前默认录制只保留
-  30 Hz Pose；三个全局 Pose 合并进对应相机 recorder，录制 part 数由 9 降为 7。
+  30 Hz Pose。2026-08-17 起全部勾选 topic 由同一个原生 MCAP recorder 写成标准 rosbag，
+  不再按相机分 part。
 - 在 3D/WebRTC 同时运行的 30 秒压力录制中，三路图像 live audit 为
   602/602/904 帧，header missing 和 writer drop 均为 0；为 400 Hz IMU
   配置 1000 深度 rosbag QoS 后，三路 IMU 与所有受检话题也均为 0% 丢失。

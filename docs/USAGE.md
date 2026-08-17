@@ -320,8 +320,8 @@ docker exec insight-dashboard python3 scripts/check_bag.py rosbags/<目录名>
 docker exec insight-dashboard python3 scripts/check_bag.py --fast rosbags/<目录名>  # metadata/SQLite 快速聚合；不读取 CDR payload
 ```
 
-`--fast` 对旧 SQLite bag 执行每 topic `COUNT/MIN/MAX(timestamp)`，对 MCAP 复合会话汇总
-各 part 的 metadata；它适合快速盘点，不包含录制期间的图像 header 连续性 live audit。
+`--fast` 对旧 SQLite bag 执行每 topic `COUNT/MIN/MAX(timestamp)`，对 MCAP 读取 metadata
+（旧复合会话则汇总各 part）；它适合快速盘点，不包含录制期间的图像 header 连续性 live audit。
 默认深检会顺序读取 payload 并检查 header 间隔，速度较慢但结论更精确。
 
 `/bags` 的回放会先按 rosbag record timestamp 把已有图像与 Pose 预编码到统一 30 Hz
@@ -462,7 +462,7 @@ INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1
                                         # 相机 cdc_ncm 网卡不能是 00；6 核 Jetson 应为 3e
    ```
    恢复（`scripts/host_setup.sh` 会同时持久化 sysctl，安装并立即运行
-   `insight-camera-network.service`）：
+   `insight-camera-network.service` 和相机 USB 重连时恢复 RPS 的 udev 规则）：
    ```bash
    sudo ./scripts/host_setup.sh
    ```
@@ -482,7 +482,7 @@ INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1
 4. **所有 topic 在同一时间段一起断** → 录制期间设备被其他任务抢占，
    `docker stats insight-dashboard` 观察 CPU；录制时避免同时跑评分/优化任务；
 5. **某台相机自己的全部 topic（含 IMU/VIO）同时断** → 相机侧停顿，
-   与主机无关；若 `recording_network_audit.json` 全部为零且 writer queue 也未丢弃，
+   与主机无关；若 `recording_network_audit.json` 全部为零且原生 recorder 未报告 cache 丢失，
    同一相机多个 topic 在同一 header 时间点一起缺样同样属于发布端节拍缺口。复现请
    记录相机名与时间点后报障；
 6. **磁盘写满**：见 §3.2。

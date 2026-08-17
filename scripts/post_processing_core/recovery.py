@@ -38,6 +38,10 @@ class RecordingRecovery:
                 self.owner._recovery_log(f"{staging_dir.name}: recovery failed, leaving data in place: {exc}")
 
     def _recover_one_staging(self, staging_dir: Path) -> None:
+        root_mcap_files = sorted(staging_dir.glob("*.mcap"))
+        if root_mcap_files:
+            self._recover_single_mcap(staging_dir, root_mcap_files)
+            return
         part_dirs = sorted(
             p for p in staging_dir.iterdir()
             if p.is_dir() and (list(p.glob("*.db3")) or list(p.glob("*.mcap")))
@@ -92,6 +96,55 @@ class RecordingRecovery:
             staging_dir.rename(staging_dir.with_name(f"{staging_dir.name}.leftover"))
         self.owner._recovery_log(
             f"{staging_dir.name}: recovered {len(good_parts)}/{len(part_dirs)} part bags -> {output_path.name}"
+        )
+        self.owner._notify_recording_completed(output_path)
+
+    def _recover_single_mcap(
+        self, staging_dir: Path, mcap_files: Sequence[Path]
+    ) -> None:
+        """Adopt an interrupted standard single-writer MCAP recording."""
+        self.owner._recovery_log(
+            f"{staging_dir.name}: adopting interrupted single-writer MCAP"
+        )
+        if len(mcap_files) != 1:
+            self.owner._recovery_log(
+                f"{staging_dir.name}: expected one MCAP file, found {len(mcap_files)}; "
+                "staging dir kept"
+            )
+            return
+        if not (staging_dir / "metadata.yaml").is_file() and not self.owner._reindex_part(
+            staging_dir
+        ):
+            self.owner._recovery_log(
+                f"{staging_dir.name}: MCAP reindex failed; staging dir kept"
+            )
+            return
+        output_path = self.owner.rosbag_root / staging_dir.name
+        if output_path.exists():
+            output_path = self.owner.rosbag_root / (
+                f"{staging_dir.name}_recovered_{time.strftime('%Y%m%d_%H%M%S')}"
+            )
+        info = read_metadata(staging_dir)
+        manifest_path = staging_dir / MANIFEST_NAME
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            manifest = {}
+        manifest.update({
+            "version": 3,
+            "format": "rosbag2",
+            "storage_id": "mcap",
+            "bag_name": output_path.name,
+            "recovered": True,
+            "message_count": int(info.get("message_count", 0) or 0),
+            "topic_count": len(info.get("topics_with_message_count") or []),
+        })
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        os.replace(staging_dir, output_path)
+        self.owner._recovery_log(
+            f"{staging_dir.name}: recovered standard MCAP -> {output_path.name}"
         )
         self.owner._notify_recording_completed(output_path)
 

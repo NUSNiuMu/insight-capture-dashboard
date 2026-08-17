@@ -4,8 +4,10 @@
 
 ## 采集优先级
 
-- ROS 图像 callback 只负责轻量状态更新、录制 writer 投递和 latest-frame 交接，不执行编码或磁盘 I/O。
-- 图像由主进程现有 DDS reader 直接交给 `InProcessBagWriter`，不能恢复为额外的 `ros2 bag record` 图像订阅，否则会与预览、WebRTC 竞争。
+- ROS 图像 callback 只负责轻量状态更新、录制 header audit 和 latest-frame 交接，不执行序列化、编码或磁盘 I/O。
+- 全部录制 topic 由一个原生 C++ `ros2 bag record` 进程订阅并写入。2026-08-17 的
+  44-topic 实测中，这条路径保持三路 IMU 约 398–399 Hz；Python 单 writer 只能处理约
+  1,325 message/s 并导致队列溢出，因此不能把全量写入搬回 Python callback/worker。
 - 宸境自然语言语音助手运行在宿主机独立进程。SenseVoice INT8 同时负责中文唤醒词与命令转写，
   Silero VAD 只负责本地语音分段，
   Piper 离线播报；原始音频不能进入 ROS
@@ -43,6 +45,11 @@
   `ipfrag_max_dist=1024` 仍累计 342 次重组失败；4096 下 softnet、NIC、IP
   reassembly 与 UDP 丢失计数全部为零，writer queue 也为零。此组合由
   `camera_dds_type`、`host_setup.sh` 和开机相机恢复 unit 共同保持。
+- 2026-08-17 的单原生 MCAP 133 秒压力录制中，一张相机 USB 网卡重连后
+  `rps_cpus` 从 `3e` 重置为 `00`，窗口内 `UdpRcvbufErrors` 增加 9,578，bag 内高频
+  topic 缺失约 0.9%–1.7%；MCAP cache 排空仅 0.98 秒且没有 writer loss 日志。
+  因此 `host_setup.sh` 同时安装 udev 规则，在每次 cdc_ncm netdev 重建时恢复 RPS/RFS；
+  不能只依赖开机 oneshot 服务。
 - 同一轮 4096 长测仍观察到 Insight3 B 的一次同步源节拍缺口：infra1/infra2、
   camera_info 与 VIO image 在同一 header 时间点共同缺样；depth 也有固有的
   120 ms 间隔。它们发生时主机网络与 writer 计数均为零，不能归因于 SSD 或
@@ -54,10 +61,10 @@
 
 ## rosbag 可靠性
 
-- 新录制使用 MCAP：三路 dashboard 主图各有一个进程外 writer，其余 topic 共用一个
-  `ros2 bag record`。停止时只排空并原子发布四个 part，不复制 payload。SQLite 的 WAL +
+- 新录制使用一个原生 MCAP writer 覆盖全部勾选 topic。停止时等待其 cache 排空并原子发布
+  一个标准 rosbag2 目录，不生成 part、不合包、不复制 payload。SQLite 的 WAL +
   `synchronous=OFF` 仅保留给旧 bag 与恢复兼容，不能改回 `NORMAL` 或 `FULL`。
-- 图像 header timestamp 通过录制开始时的固定偏移映射到 recorder timeline，并在录制期间持续审计帧间隔。
+- 图像 callback 在录制期间独立审计 source header 帧间隔；bag 内时间戳由原生 recorder 统一生成。
 - Prepared playback 必须使用 rosbag record timestamp 对齐图像与 Pose。不同相机的
   `header.stamp` 可能分别来自 Unix/NTP 和设备启动时钟，只能用于各 topic 内的节拍审计，
   不能直接求跨相机共同时间段；修改该规则时必须保留跨 header 时钟域回归测试。
@@ -68,7 +75,7 @@
   扫描阶段不能反序列化图像 payload；
   大于输出需求的 JPEG 使用解码器原生半尺寸解码。Jetson 编码路径向 `nvvidconv` 提交
   BGRx，避免整帧 CPU 色彩转换。`manifest.json` 保留各阶段耗时，便于发现性能回退。
-- 审阅包在复合会话发布后排队预生成，录制开始时必须暂停；不能从图像 callback
+- 审阅包在 rosbag 发布后排队预生成，录制开始时必须暂停；不能从图像 callback
   生成，也不能让质检缓存继续占用 `outputs/` 所在的系统盘。历史包通过 3D 页的
   `Prepare all` 或 `scripts/build_review_bundles.py --all` 补建。
 - 2026-08-12 实机验收使用 15.03 秒三相机 bag：NVENC 生成 451 帧 30/1 fps 的
@@ -83,8 +90,8 @@
 - 全局 Pose 与各自相机小消息共用 recorder；完整 Path 是 Pose 可重建的冗余
   调试数据，不默认录制。不要为全局 namespace 再增加两个 recorder 进程。
 - staging 恢复中的 reindex、salvage、convert 和输出验证是一个完整流程；`ros2 bag convert` 成功返回不代表输出一定可信。
-- 正常录制禁止合包重写：各 MCAP part 完成 metadata 后写入 `recording_manifest.json`，再将
-  staging 目录原子改名为最终会话。旧 SQLite staging 的故障恢复仍可使用 reindex、salvage
+- 正常录制禁止合包重写：单个 MCAP 完成 metadata 后写入 `recording_manifest.json`，再将
+  staging 目录原子改名为最终标准 rosbag。旧 composite/SQLite staging 的故障恢复仍可使用 reindex、salvage
   和官方 convert，但输出必须单独验证，不能把 convert 成功返回视作可信。
 - 旧的固定命令 Vosk worker 默认关闭，避免它与宸境同时独占 USB capture device。
   宸境由 systemd user service 监管，缺少模型或声卡时按服务重启间隔恢复；不得把

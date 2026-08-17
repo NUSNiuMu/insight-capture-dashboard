@@ -21,6 +21,34 @@ fi
 rps_mask_value=$(( (1 << cpu_count) - 2 ))
 printf -v rps_mask '%x' "${rps_mask_value}"
 
+configure_interface() {
+    local interface_path="$1"
+    printf '%s\n' "${rps_mask}" > "${interface_path}/queues/rx-0/rps_cpus"
+    if [[ -w "${interface_path}/queues/rx-0/rps_flow_cnt" ]]; then
+        # The kernel rounds this table to a supported power of two.
+        printf '%s\n' 8192 > "${interface_path}/queues/rx-0/rps_flow_cnt"
+    fi
+    log "${interface_path##*/}: rps_cpus=${rps_mask}"
+}
+
+# A USB reconnect recreates the netdev and resets its RPS files to zero. The
+# udev rule installed by host_setup invokes this fast path for that one device.
+if (( $# > 0 )); then
+    interface_name="$1"
+    if [[ ! "${interface_name}" =~ ^enx[[:xdigit:]]+$ ]]; then
+        log "WARNING: refusing unexpected interface name ${interface_name}"
+        exit 0
+    fi
+    interface_path="/sys/class/net/${interface_name}"
+    driver_path="$(readlink -f "${interface_path}/device/driver" 2>/dev/null || true)"
+    if [[ ! -w "${interface_path}/queues/rx-0/rps_cpus" || "${driver_path##*/}" != "cdc_ncm" ]]; then
+        log "WARNING: ${interface_name} is not a writable cdc_ncm camera interface"
+        exit 0
+    fi
+    configure_interface "${interface_path}"
+    exit 0
+fi
+
 timeout_sec="${INSIGHT_NETWORK_TUNING_TIMEOUT:-180}"
 deadline=$(( SECONDS + timeout_sec ))
 expected_interfaces="${INSIGHT_CAMERA_INTERFACE_COUNT:-}"
@@ -53,12 +81,7 @@ if (( ${#camera_interfaces[@]} < expected_interfaces )); then
 fi
 
 for interface_path in "${camera_interfaces[@]}"; do
-    printf '%s\n' "${rps_mask}" > "${interface_path}/queues/rx-0/rps_cpus"
-    if [[ -w "${interface_path}/queues/rx-0/rps_flow_cnt" ]]; then
-        # The kernel rounds this table to a supported power of two.
-        printf '%s\n' 8192 > "${interface_path}/queues/rx-0/rps_flow_cnt"
-    fi
-    log "${interface_path##*/}: rps_cpus=${rps_mask}"
+    configure_interface "${interface_path}"
 done
 
 log "configured ${#camera_interfaces[@]} camera interface(s)"
