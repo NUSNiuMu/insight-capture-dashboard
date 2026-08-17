@@ -71,7 +71,7 @@ LOCAL_COMMAND_REPLY_KEYS = {
     "capture_reference": "capture_reference_saved",
 }
 CANNED_REPLIES = {
-    "recording_starting": "正在开始录制。",
+    "recording_starting": "初始化录制中，请稍等。",
     "recording_started": "录制已经开始。",
     "recording_stopping": "正在结束录制。",
     "recording_stopped": "录制已经结束。请将三台相机放回检测位，静止后说检查相机。",

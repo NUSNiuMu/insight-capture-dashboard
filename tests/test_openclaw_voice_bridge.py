@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from openclaw_voice_bridge import (  # noqa: E402
+    CANNED_REPLIES,
     OpenClawVoiceBridge,
     build_agent_command,
     calibration_is_complete,
@@ -29,6 +30,12 @@ from openclaw_voice_bridge import (  # noqa: E402
 
 
 class OpenClawVoiceBridgeTest(unittest.TestCase):
+    def test_recording_start_uses_requested_immediate_prompt(self):
+        self.assertEqual(
+            CANNED_REPLIES["recording_starting"],
+            "初始化录制中，请稍等。",
+        )
+
     def test_normalize_and_match_wake_word(self):
         self.assertEqual(normalize_transcript("  宸境！ "), "宸境")
         self.assertTrue(wake_word_detected("宸境", ["宸境"]))
