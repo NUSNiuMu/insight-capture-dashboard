@@ -52,17 +52,34 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
 
     def test_local_command_bypasses_openclaw(self):
         bridge = OpenClawVoiceBridge(SimpleNamespace())
+        events = []
+
+        def execute(action):
+            events.append(("execute", action))
+            return "recording_started"
+
+        def speak(key):
+            events.append(("speak", key))
+            return True
+
         with (
             mock.patch.object(
-                bridge, "execute_local_command", return_value="recording_started"
+                bridge, "execute_local_command", side_effect=execute
             ) as execute,
-            mock.patch.object(bridge, "speak_canned", return_value=True) as speak,
+            mock.patch.object(bridge, "speak_canned", side_effect=speak),
             mock.patch.object(bridge, "ask_openclaw") as ask_openclaw,
             mock.patch.object(bridge, "_rollback_unconfirmed_recording") as rollback,
         ):
             bridge.handle_utterance("开始录制")
         execute.assert_called_once_with("recording_start")
-        speak.assert_called_once_with("recording_started")
+        self.assertEqual(
+            events,
+            [
+                ("speak", "recording_starting"),
+                ("execute", "recording_start"),
+                ("speak", "recording_started"),
+            ],
+        )
         ask_openclaw.assert_not_called()
         rollback.assert_not_called()
 
@@ -73,12 +90,50 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 bridge, "execute_local_command", return_value="recording_started"
             ),
             mock.patch.object(
-                bridge, "speak_canned", side_effect=RuntimeError("sink busy")
+                bridge,
+                "speak_canned",
+                side_effect=[True, RuntimeError("sink busy")],
             ),
             mock.patch.object(bridge, "_rollback_unconfirmed_recording") as rollback,
         ):
             bridge.handle_utterance("开始录制")
         rollback.assert_called_once_with()
+
+    def test_recording_is_not_started_without_immediate_feedback(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        with (
+            mock.patch.object(bridge, "speak_canned", return_value=False) as speak,
+            mock.patch.object(bridge, "execute_local_command") as execute,
+        ):
+            bridge.handle_utterance("开始录制")
+        speak.assert_called_once_with("recording_starting")
+        execute.assert_not_called()
+
+    def test_recording_stop_announces_before_waiting_for_finalization(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        events = []
+
+        def speak(key):
+            events.append(("speak", key))
+            return True
+
+        def execute(action):
+            events.append(("execute", action))
+            return "recording_stopped"
+
+        with (
+            mock.patch.object(bridge, "speak_canned", side_effect=speak),
+            mock.patch.object(bridge, "execute_local_command", side_effect=execute),
+        ):
+            bridge.handle_utterance("停止录制")
+        self.assertEqual(
+            events,
+            [
+                ("speak", "recording_stopping"),
+                ("execute", "recording_stop"),
+                ("speak", "recording_stopped"),
+            ],
+        )
 
     def test_non_recording_feedback_failure_does_not_crash_or_rollback(self):
         bridge = OpenClawVoiceBridge(SimpleNamespace())
@@ -377,6 +432,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(args.wake_feedback, "speech")
         self.assertEqual(args.playback_backend, "pulse")
         self.assertEqual(args.agent_thinking, "off")
+        self.assertEqual(args.dashboard_timeout_sec, 40.0)
 
 
 if __name__ == "__main__":

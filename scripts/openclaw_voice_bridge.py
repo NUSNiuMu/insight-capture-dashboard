@@ -71,7 +71,9 @@ LOCAL_COMMAND_REPLY_KEYS = {
     "capture_reference": "capture_reference_saved",
 }
 CANNED_REPLIES = {
+    "recording_starting": "正在开始录制。",
     "recording_started": "录制已经开始。",
+    "recording_stopping": "正在结束录制。",
     "recording_stopped": "录制已经结束。请将三台相机放回检测位，静止后说检查相机。",
     "calibration_started": "校准已经开始。",
     "calibration_completed": "校准完成。",
@@ -860,13 +862,18 @@ class OpenClawVoiceBridge:
     ) -> None:
         local_action = match_local_command(utterance) if allow_local_commands else None
         if local_action is not None:
-            if local_action == "capture_check":
+            immediate_feedback = {
+                "recording_start": "recording_starting",
+                "recording_stop": "recording_stopping",
+                "capture_check": "capture_check_started",
+            }.get(local_action)
+            if immediate_feedback is not None:
                 try:
-                    start_feedback_played = self.speak_canned("capture_check_started")
+                    start_feedback_played = self.speak_canned(immediate_feedback)
                 except Exception as exc:  # noqa: BLE001 - keep the listener alive
                     self._emit(
                         "error",
-                        stage="capture_check_start_feedback",
+                        stage=f"{local_action}_start_feedback",
                         message=str(exc),
                     )
                     start_feedback_played = False
@@ -1003,7 +1010,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--command-timeout-sec", type=float, default=15.0)
     parser.add_argument("--dashboard-url", default="http://127.0.0.1:8765")
-    parser.add_argument("--dashboard-timeout-sec", type=float, default=15.0)
+    parser.add_argument("--dashboard-timeout-sec", type=float, default=40.0)
     parser.add_argument("--calibration-monitor-timeout-sec", type=float, default=600.0)
     parser.add_argument("--acknowledgement", default="我在。")
     parser.add_argument(

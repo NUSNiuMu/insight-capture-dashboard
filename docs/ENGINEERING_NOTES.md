@@ -13,6 +13,8 @@
   Piper 离线播报；原始音频不能进入 ROS
   callback、Dashboard 或 OpenClaw。常驻监听中精确匹配的录制与在线校准短指令由语音桥
   直接访问 loopback Dashboard API，并播放服务启动时生成的缓存回复，不需要唤醒；
+  固定开始/停止录制在调用 API 前先播放缓存的处理中提示，DDS 订阅或 writer 排空完成后
+  再播放最终结果，不能让同步 HTTP 等待表现成语音无响应；
   “宸境”只打开 OpenClaw 模式，随后一句固定发送给 OpenClaw。自动停止接口只允许结束
   `looper_record_*`，避免误停网页、
   手势或其他控制器创建的录制。
