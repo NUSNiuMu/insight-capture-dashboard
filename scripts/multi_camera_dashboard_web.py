@@ -72,7 +72,6 @@ from dashboard_runtime import (
     PoseSample,
     PoseSpec,
     RecordingBridge,
-    VoiceRecordingController,
     WorkerSupervisor,
 )
 
@@ -218,7 +217,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
         self._configure_hand_overlay()
         self._gesture_recording_controller: Optional[GestureRecordingController] = None
-        self._voice_recording_controller: Optional[VoiceRecordingController] = None
         self._capture_check_manager: Optional[CaptureCheckManager] = None
         # NVJPEG is optional; call sites retain their cv2 fallback.
         self._hw_jpeg = HwJpegCodec.create(log=self.get_logger().info)
@@ -564,17 +562,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             controller.close()
             self._gesture_recording_controller = None
 
-    def configure_voice_recording(
-        self, recording_manager: RecordingManager, config: Dict[str, object]
-    ) -> None:
-        self.stop_voice_recording()
-        self._voice_recording_controller = VoiceRecordingController(
-            recording_manager,
-            config,
-            self.project_root,
-            self.get_logger().info,
-        )
-
     def configure_capture_check(
         self, config: Dict[str, object], results_root: Path
     ) -> None:
@@ -602,27 +589,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         if manager is None:
             return {"type": "capture_check_result", "state": "disabled"}
         return manager.check(bag_name=bag_name)
-
-    def voice_recording_status(
-        self, recording_status: Optional[Dict[str, object]] = None
-    ) -> Dict[str, object]:
-        controller = self._voice_recording_controller
-        if controller is None:
-            return {"enabled": False, "state": "disabled", "message": "Voice recording disabled"}
-        return controller.status(recording_status)
-
-    def set_voice_recording_enabled(self, enabled: bool) -> None:
-        controller = self._voice_recording_controller
-        if controller is None:
-            raise RuntimeError("Voice recording is not configured")
-        controller.set_enabled(enabled)
-
-    def stop_voice_recording(self) -> None:
-        controller = getattr(self, "_voice_recording_controller", None)
-        if controller is not None:
-            controller.close()
-            self._voice_recording_controller = None
-
 
     def _dispatch_hand_overlay(self, camera_name: str, version: int, jpeg_bytes: bytes, hands: list) -> None:
         self._worker_supervisor._dispatch_hand_overlay(camera_name, version, jpeg_bytes, hands)
@@ -895,10 +861,6 @@ def main() -> None:
         recording_manager,
         dict(post_processing_config.get("gesture_recording") or {}),
     )
-    node.configure_voice_recording(
-        recording_manager,
-        dict(post_processing_config.get("voice_recording") or {}),
-    )
     node.configure_capture_check(
         dict(post_processing_config.get("capture_check") or {}),
         results_root,
@@ -923,7 +885,6 @@ def main() -> None:
         server.stop()
         executor.shutdown()
         node.stop_gesture_recording()
-        node.stop_voice_recording()
         node.stop_webrtc_worker()
         node.stop_hand_overlay_worker()
         node.destroy_node()

@@ -90,18 +90,6 @@ function renderSettings(payload) {
       });
     }
   }
-  const voiceRow = document.getElementById("voice-recording-row");
-  const voiceToggle = document.getElementById("voice-recording-toggle");
-  if (voiceRow && voiceToggle) {
-    voiceRow.hidden = false;
-    voiceToggle.checked = Boolean(payload && payload.voice_recording_enabled);
-    if (!voiceToggle.dataset.bound) {
-      voiceToggle.dataset.bound = "1";
-      voiceToggle.addEventListener("change", () => {
-        void setVoiceRecordingEnabled(voiceToggle.checked);
-      });
-    }
-  }
   const poses = Array.isArray(payload && payload.poses) ? payload.poses : [];
   const models = Array.isArray(payload && payload.available_models) ? payload.available_models : [];
   settingsCameraList.innerHTML = poses.map((pose) => {
@@ -219,26 +207,6 @@ async function setGestureRecordingEnabled(enabled) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setSettingsStatus(`Failed to update gesture recording: ${message}`);
-  }
-}
-
-async function setVoiceRecordingEnabled(enabled) {
-  setSettingsStatus("Updating voice recording...");
-  try {
-    const response = await fetch("/api/settings/voice-recording", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled })
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to update voice recording.");
-    }
-    renderSettings(payload);
-    setSettingsStatus(`Voice recording ${enabled ? "enabled" : "disabled"}.`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setSettingsStatus(`Failed to update voice recording: ${message}`);
   }
 }
 

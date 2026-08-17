@@ -11,9 +11,6 @@
   "gesture_recording": {
     "enabled": false
   },
-  "voice_recording": {
-    "enabled": false
-  },
   "capture_check": {
     "enabled": true,
     "sample_window_sec": 1.2,

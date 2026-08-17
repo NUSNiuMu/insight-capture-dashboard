@@ -166,7 +166,7 @@ cd <部署目录>   # 首次安装时 update.sh 所在的那个目录
 | healthz 90 秒超时 | 后端容器起不来 | `docker compose logs -f`；常见于新版本引入的依赖没装全（对照 §1.5 发布前检查） |
 | 升级后配置/标定"消失" | 罕见——config/ 首次安装后不该被覆盖 | 确认没有手动删过 `config/` 目录；`ls config/` 核对文件还在 |
 | "a recording is in progress" | 有正在跑的录制 | 等它录完，或确认可以中断后加 `--force` |
-| Recording 页显示 `voice unavailable` | USB 麦克风未枚举或 `/dev/snd` 未映射 | `arecord -l` 与 `docker exec insight-dashboard arecord -l` 应同时看到麦克风；再查 `outputs/voice_control_worker.log` |
+| 宸境声控无响应 | 宿主机语音服务未运行或 USB 声卡未枚举 | 检查 `systemctl --user status looper-openclaw-voice.service`、`arecord -l` 和该服务日志 |
 
 ---
 

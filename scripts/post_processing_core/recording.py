@@ -186,6 +186,7 @@ class RecordingManager:
         self.merge_state: str = "idle"  # idle | finalizing | merging | done | error
         self.merge_error: Optional[str] = None
         self.merge_timings: Dict[str, object] = {}
+        self.start_timings: Dict[str, object] = {}
         self._last_topic_refresh_monotonic: float = 0.0
         self._recovery_service = RecordingRecovery(self)
 
@@ -309,10 +310,12 @@ class RecordingManager:
         topics: Optional[Sequence[str]] = None,
         bag_name: Optional[str] = None,
     ) -> Dict[str, object]:
+        start_started = time.perf_counter()
         selected_topics = self.default_topics if topics is None else _normalize_topics(topics)
         if not selected_topics:
             raise ValueError("No topics selected for recording.")
         with self._lock:
+            lock_acquired = time.perf_counter()
             self._cleanup_if_exited_unlocked()
             if self.processes or self._image_writer_active:
                 raise RuntimeError("Recording is already running.")
@@ -321,7 +324,9 @@ class RecordingManager:
                     f"Previous recording is still {self.merge_state} -- wait for it to finish."
                 )
             self._output_lines.clear()
+            storage_started = time.perf_counter()
             self._refresh_recording_storage_unlocked()
+            storage_finished = time.perf_counter()
 
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             if bag_name:
@@ -360,6 +365,7 @@ class RecordingManager:
             self._all_recorder_topics_subscribed.clear()
             self._last_recorder_subscription_monotonic = 0.0
             self._recorder_subscribed_topics = set()
+            setup_finished = time.perf_counter()
 
             def abort_started_processes() -> None:
                 for started_process in processes.values():
@@ -372,6 +378,7 @@ class RecordingManager:
                     with contextlib.suppress(OSError):
                         os.close(control_fd)
 
+            spawn_started = time.perf_counter()
             for group, group_topics in groups.items():
                 recorder_output = staging_dir if single_writer else staging_dir / group
                 cmd = [
@@ -421,10 +428,12 @@ class RecordingManager:
                 )
                 thread.start()
                 stdout_threads.append(thread)
+            spawn_finished = time.perf_counter()
 
             if single_writer and not self._recorder_ready.wait(timeout=10.0):
                 abort_started_processes()
                 raise RuntimeError("Native MCAP recorder did not become ready within 10 seconds.")
+            ready_finished = time.perf_counter()
             if single_writer:
                 # CycloneDDS discovers each camera participant in a burst. Wait
                 # until every selected dashboard stream has a subscription;
@@ -450,14 +459,18 @@ class RecordingManager:
                 else:
                     abort_started_processes()
                     raise RuntimeError("Native MCAP topic subscriptions did not settle.")
+            discovery_finished = time.perf_counter()
 
             network_snapshot_start = capture_network_snapshot()
+            network_snapshot_finished = time.perf_counter()
+            resume_requested = network_snapshot_finished
             if single_writer:
                 for control_fd in control_fds.values():
                     os.write(control_fd, b" ")
                 if not self._recorder_resumed.wait(timeout=5.0):
                     abort_started_processes()
                     raise RuntimeError("Native MCAP recorder did not resume from pause.")
+            resume_confirmed = time.perf_counter()
             if self._start_image_recording is not None and audit_topics:
                 try:
                     self._start_image_recording({
@@ -467,6 +480,7 @@ class RecordingManager:
                     abort_started_processes()
                     raise
                 image_writer_active = True
+            audit_finished = time.perf_counter()
 
             self.processes = processes
             self._process_exit_codes = {}
@@ -492,6 +506,32 @@ class RecordingManager:
             self.merge_state = "idle"
             self.merge_error = None
             self.merge_timings = {}
+            state_published = time.perf_counter()
+            self.start_timings = {
+                "lock_wait_sec": round(lock_acquired - start_started, 4),
+                "storage_check_sec": round(storage_finished - storage_started, 4),
+                "setup_sec": round(setup_finished - storage_finished, 4),
+                "recorder_spawn_sec": round(spawn_finished - spawn_started, 4),
+                "recorder_ready_wait_sec": round(ready_finished - spawn_finished, 4),
+                "recorder_ready_offset_sec": round(ready_finished - start_started, 4),
+                "dds_subscription_settle_sec": round(discovery_finished - ready_finished, 4),
+                "network_snapshot_sec": round(
+                    network_snapshot_finished - discovery_finished, 4
+                ),
+                "resume_wait_sec": round(resume_confirmed - resume_requested, 4),
+                "resume_requested_offset_sec": round(
+                    resume_requested - start_started, 4
+                ),
+                "resume_confirmed_offset_sec": round(
+                    resume_confirmed - start_started, 4
+                ),
+                "audit_enable_sec": round(audit_finished - resume_confirmed, 4),
+                "state_publish_sec": round(state_published - audit_finished, 4),
+                "total_sec": round(state_published - start_started, 4),
+            }
+            self._output_lines.append(
+                f"[startup] {json.dumps(self.start_timings, sort_keys=True)}"
+            )
         return self.status()
 
     def stop(self, timeout_sec: float = 30.0) -> Dict[str, object]:
@@ -883,5 +923,6 @@ class RecordingManager:
                 "merge_state": self.merge_state,
                 "merge_error": self.merge_error,
                 "merge_timings": dict(self.merge_timings),
+                "start_timings": dict(self.start_timings),
                 "storage": dict(self.storage_status),
             }

@@ -404,24 +404,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gir1.2-gst-plugins-bad-1.0 \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Offline Chinese voice control ───────────────────────────────────────────
-# The small Apache-2.0 model supports constrained grammar on Jetson-class
-# hardware. Keep this after the larger inference/browser layers so voice-only
-# dependency updates do not invalidate those expensive build caches.
-ARG VOSK_CN_MODEL_URL=https://alphacephei.com/vosk/models/vosk-model-small-cn-0.22.zip
-ARG VOSK_CN_MODEL_SHA256=3af8b0e7e0f835ae9d414ce5df580237a3cfb08d586c9fbbb0f7ff29ad5b14ba
-RUN apt-get update && apt-get install -y --no-install-recommends alsa-utils \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --no-cache-dir \
-        -i https://pypi.tuna.tsinghua.edu.cn/simple \
-        "vosk==0.3.45" \
-    && wget -q "${VOSK_CN_MODEL_URL}" -O /tmp/vosk-cn.zip \
-    && echo "${VOSK_CN_MODEL_SHA256}  /tmp/vosk-cn.zip" | sha256sum -c - \
-    && mkdir -p /opt/insight/models \
-    && python3 -m zipfile -e /tmp/vosk-cn.zip /opt/insight/models \
-    && mv /opt/insight/models/vosk-model-small-cn-0.22 /opt/insight/models/vosk-cn-small \
-    && rm /tmp/vosk-cn.zip
-
 # ── Interactive shells: source ROS2 for plain `docker exec -it ... bash` ────
 # docker_entrypoint.sh only wraps the container's own CMD; a `docker exec`
 # shell attaches directly to bash and skips it, so `ros2 ...` fails with

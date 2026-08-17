@@ -336,6 +336,8 @@ class OpenClawVoiceBridge:
         self._playback_lock = threading.Lock()
         self._calibration_monitor_generation = 0
         self._wake_candidates = 0
+        self._last_recognition_timing: dict[str, object] = {}
+        self._last_local_command_timing: dict[str, object] = {}
 
     @staticmethod
     def _emit(event: str, **payload: object) -> None:
@@ -479,6 +481,17 @@ class OpenClawVoiceBridge:
                             else None
                         )
                         if local_action is not None:
+                            self._last_recognition_timing.update(
+                                {
+                                    "vad_silence_sec": round(
+                                        self.args.wake_pause_sec, 4
+                                    ),
+                                    "capture_chunk_sec": round(
+                                        self.args.chunk_frames / self.args.sample_rate, 4
+                                    ),
+                                    "transcript": transcript,
+                                }
+                            )
                             self._emit(
                                 "direct_command",
                                 text=transcript,
@@ -534,13 +547,19 @@ class OpenClawVoiceBridge:
         stream.accept_waveform(self.args.sample_rate, samples)
         started = time.monotonic()
         self._sense_voice.decode_stream(stream)
+        decode_sec = time.monotonic() - started
         text = clean_utterance_transcript(stream.result.text)
+        self._last_recognition_timing = {
+            "mode": mode,
+            "audio_sec": round(len(samples) / self.args.sample_rate, 4),
+            "decode_sec": round(decode_sec, 4),
+        }
         self._emit(
             "recognition",
             engine="sensevoice",
             mode=mode,
-            audio_sec=round(len(samples) / self.args.sample_rate, 2),
-            decode_sec=round(time.monotonic() - started, 2),
+            audio_sec=round(len(samples) / self.args.sample_rate, 4),
+            decode_sec=round(decode_sec, 4),
         )
         return text
 
@@ -683,6 +702,7 @@ class OpenClawVoiceBridge:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        request_started = time.monotonic()
         try:
             with urllib.request.urlopen(
                 request, timeout=self.args.dashboard_timeout_sec
@@ -694,6 +714,7 @@ class OpenClawVoiceBridge:
             raise RuntimeError(f"Dashboard API returned HTTP {exc.code}") from exc
         if not isinstance(payload, dict):
             raise RuntimeError("Dashboard API returned a non-object payload")
+        request_sec = time.monotonic() - request_started
         if action == "recording_start" and not payload.get("recording"):
             raise RuntimeError("Dashboard did not start recording")
         if action == "recording_stop" and payload.get("recording"):
@@ -701,7 +722,22 @@ class OpenClawVoiceBridge:
         if action == "calibration_start" and not payload.get("ok"):
             message = payload.get("error") or "Dashboard did not reset calibration"
             raise RuntimeError(str(message))
-        self._emit("local_command", action=action, endpoint=endpoint, ok=True)
+        dashboard_start_timings = (
+            dict(payload.get("start_timings") or {})
+            if action == "recording_start"
+            else {}
+        )
+        self._last_local_command_timing = {
+            "dashboard_request_sec": round(request_sec, 4),
+            "dashboard_start_timings": dashboard_start_timings,
+        }
+        self._emit(
+            "local_command",
+            action=action,
+            endpoint=endpoint,
+            ok=True,
+            **self._last_local_command_timing,
+        )
         if action == "calibration_start":
             self._start_calibration_monitor()
         if action == "capture_check":
@@ -862,12 +898,16 @@ class OpenClawVoiceBridge:
     ) -> None:
         local_action = match_local_command(utterance) if allow_local_commands else None
         if local_action is not None:
+            interaction_started = time.monotonic()
+            self._last_local_command_timing = {}
+            immediate_feedback_sec = 0.0
             immediate_feedback = {
                 "recording_start": "recording_starting",
                 "recording_stop": "recording_stopping",
                 "capture_check": "capture_check_started",
             }.get(local_action)
             if immediate_feedback is not None:
+                immediate_feedback_started = time.monotonic()
                 try:
                     start_feedback_played = self.speak_canned(immediate_feedback)
                 except Exception as exc:  # noqa: BLE001 - keep the listener alive
@@ -877,15 +917,19 @@ class OpenClawVoiceBridge:
                         message=str(exc),
                     )
                     start_feedback_played = False
+                immediate_feedback_sec = time.monotonic() - immediate_feedback_started
                 if not start_feedback_played:
                     return
             command_succeeded = False
+            command_started = time.monotonic()
             try:
                 reply_key = self.execute_local_command(local_action)
                 command_succeeded = True
             except Exception as exc:  # noqa: BLE001 - keep voice control available
                 self._emit("error", stage="local_command", message=str(exc))
                 reply_key = "command_failed"
+            command_finished = time.monotonic()
+            final_feedback_started = command_finished
             try:
                 feedback_played = self.speak_canned(reply_key)
             except Exception as exc:  # noqa: BLE001 - do not crash after state change
@@ -896,6 +940,39 @@ class OpenClawVoiceBridge:
                     message=str(exc),
                 )
                 feedback_played = False
+            final_feedback_sec = time.monotonic() - final_feedback_started
+            command_details = dict(self._last_local_command_timing)
+            dashboard_timings = dict(
+                command_details.get("dashboard_start_timings") or {}
+            )
+            timing = {
+                "recognition": dict(self._last_recognition_timing),
+                "immediate_feedback_sec": round(immediate_feedback_sec, 4),
+                "command_dispatch_sec": round(command_finished - command_started, 4),
+                "dashboard_request_sec": command_details.get("dashboard_request_sec"),
+                "dashboard_start_timings": dashboard_timings,
+                "final_feedback_sec": round(final_feedback_sec, 4),
+                "post_recognition_total_sec": round(
+                    time.monotonic() - interaction_started, 4
+                ),
+            }
+            resume_requested = dashboard_timings.get("resume_requested_offset_sec")
+            resume_confirmed = dashboard_timings.get("resume_confirmed_offset_sec")
+            command_offset = command_started - interaction_started
+            if isinstance(resume_requested, (int, float)):
+                timing["recognition_to_resume_requested_sec"] = round(
+                    command_offset + resume_requested, 4
+                )
+            if isinstance(resume_confirmed, (int, float)):
+                timing["recognition_to_resume_confirmed_sec"] = round(
+                    command_offset + resume_confirmed, 4
+                )
+            self._emit(
+                "local_command_timing",
+                action=local_action,
+                ok=command_succeeded and feedback_played,
+                **timing,
+            )
             if (
                 local_action == "recording_start"
                 and command_succeeded

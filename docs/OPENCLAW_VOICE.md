@@ -71,6 +71,10 @@ OpenClaw 自然语言工具调用则在请求前后核对录制状态，必须�
 成功反馈时，语音桥都会持续调用受限停止接口，直到本轮新建的 `looper_record_*` 被停止。
 播放异常只记录为单次交互错误，不能再导致常驻监听服务退出，因此不允许出现无声音反馈却
 继续后台录制。人工、网页或手势创建的其他录制不会被该回滚逻辑停止。
+每次固定指令会向服务日志输出 `local_command_timing`；其中包含 VAD/识别参数、两段播报、
+Dashboard HTTP 总耗时及后端返回的 `start_timings`。`resume_requested_offset_sec` 与
+`resume_confirmed_offset_sec` 给出实际开始写入的时间上下界，不能用第一段处理中播报结束
+作为录制起点。
 “开始校准”调用 `/api/mapping/reset`，语义是清空 Insight9 地图和 Insight3 全局定位状态，
 立即开始新一轮在线校准，不是夹爪尺寸标定。语音桥随后在后台检查本机 mapping 状态；
 Insight3 A、B 在本次 reset 后首次同时进入 `localized=true` 时，播放一次预生成的
@@ -130,5 +134,4 @@ journalctl --user -u looper-openclaw-voice.service -f
 systemctl --user disable --now looper-openclaw-voice.service
 ```
 
-不要同时重新启用 Settings 中的旧 `voice_recording` worker；两个进程会争用同一个 USB
-麦克风。
+Dashboard 不再包含另一套麦克风 worker；所有声控入口统一由该宿主机服务提供。

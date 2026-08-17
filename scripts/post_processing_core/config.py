@@ -15,7 +15,6 @@ DEFAULT_POST_PROCESSING_CONFIG = {
     "recording_rmw_implementation": "rmw_cyclonedds_cpp",
     "record_topics": [],
     "gesture_recording": {"enabled": False},
-    "voice_recording": {"enabled": False},
     "capture_check": {"enabled": True},
 }
 

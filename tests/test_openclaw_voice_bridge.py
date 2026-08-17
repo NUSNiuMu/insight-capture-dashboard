@@ -253,7 +253,10 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             )
         )
         response = mock.MagicMock()
-        response.__enter__.return_value.read.return_value = b'{"recording": true}'
+        response.__enter__.return_value.read.return_value = (
+            b'{"recording": true, "start_timings": '
+            b'{"resume_requested_offset_sec": 2.5, "total_sec": 2.7}}'
+        )
         with mock.patch("urllib.request.urlopen", return_value=response) as urlopen:
             reply_key = bridge.execute_local_command("recording_start")
         self.assertEqual(reply_key, "recording_started")
@@ -264,6 +267,49 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         )
         self.assertEqual(request.method, "POST")
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 7.0)
+        self.assertGreaterEqual(
+            bridge._last_local_command_timing["dashboard_request_sec"], 0.0
+        )
+        self.assertEqual(
+            bridge._last_local_command_timing["dashboard_start_timings"]["total_sec"],
+            2.7,
+        )
+
+    def test_local_recording_emits_end_to_end_timing(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        bridge._last_recognition_timing = {
+            "vad_silence_sec": 0.5,
+            "decode_sec": 0.08,
+        }
+        bridge._last_local_command_timing = {}
+
+        def execute(_action):
+            bridge._last_local_command_timing = {
+                "dashboard_request_sec": 2.8,
+                "dashboard_start_timings": {
+                    "resume_requested_offset_sec": 2.4,
+                    "resume_confirmed_offset_sec": 2.6,
+                    "total_sec": 2.7,
+                },
+            }
+            return "recording_started"
+
+        with (
+            mock.patch.object(bridge, "speak_canned", return_value=True),
+            mock.patch.object(bridge, "execute_local_command", side_effect=execute),
+            mock.patch.object(bridge, "_emit") as emit,
+        ):
+            bridge.handle_utterance("开始录制")
+
+        timing_event = next(
+            call for call in emit.call_args_list
+            if call.args == ("local_command_timing",)
+        )
+        self.assertEqual(timing_event.kwargs["action"], "recording_start")
+        self.assertEqual(timing_event.kwargs["recognition"]["decode_sec"], 0.08)
+        self.assertGreaterEqual(
+            timing_event.kwargs["recognition_to_resume_confirmed_sec"], 2.6
+        )
 
     def test_calibration_command_calls_mapping_reset(self):
         bridge = OpenClawVoiceBridge(

@@ -9,7 +9,6 @@ from .payloads import PayloadBuilder
 from .recording_bridge import RecordingBridge
 from .watchdog import ParticipantWatchdog
 from .worker_supervisor import WorkerSupervisor
-from .voice_recording import VoiceRecordingController
 
 __all__ = [
     "CameraFrame",
@@ -24,5 +23,4 @@ __all__ = [
     "PoseSpec",
     "RecordingBridge",
     "WorkerSupervisor",
-    "VoiceRecordingController",
 ]

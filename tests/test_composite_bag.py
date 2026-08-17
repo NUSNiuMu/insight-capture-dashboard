@@ -118,7 +118,7 @@ class CompositeBagTest(unittest.TestCase):
             with mock.patch(
                 "post_processing_core.recording.subprocess.Popen", return_value=process
             ) as popen, mock.patch("post_processing_core.recording.os.write"):
-                manager.start(bag_name="single")
+                result = manager.start(bag_name="single")
 
             self.assertEqual(set(calls[0]), {"/camera"})
             self.assertEqual(len(set(calls[0].values())), 1)
@@ -132,6 +132,13 @@ class CompositeBagTest(unittest.TestCase):
                 popen.call_args.kwargs["env"]["RMW_IMPLEMENTATION"],
                 "rmw_cyclonedds_cpp",
             )
+            timings = result["start_timings"]
+            self.assertGreaterEqual(timings["total_sec"], 0.0)
+            self.assertLessEqual(
+                timings["resume_requested_offset_sec"],
+                timings["resume_confirmed_offset_sec"],
+            )
+            self.assertIn("dds_subscription_settle_sec", timings)
 
     def test_recording_waits_for_writer_finalization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

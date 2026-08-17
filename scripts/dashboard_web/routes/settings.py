@@ -41,15 +41,6 @@ class SettingsRoutes:
         self.context.node.set_gesture_recording_enabled(bool(payload.get("enabled")))
         return web.json_response(self.context.node.build_settings_payload())
 
-    async def _handle_settings_voice_recording(
-        self, request: web.Request
-    ) -> web.Response:
-        payload = await read_json_body(request)
-        if "enabled" not in payload:
-            raise ValueError("Field 'enabled' is required.")
-        self.context.node.set_voice_recording_enabled(bool(payload.get("enabled")))
-        return web.json_response(self.context.node.build_settings_payload())
-
     async def _handle_settings_get(self, _request: web.Request) -> web.Response:
         return web.json_response(self.context.node.build_settings_payload())
 

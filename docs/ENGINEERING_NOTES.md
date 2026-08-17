@@ -25,6 +25,14 @@
   完整播放后才算成功；OpenClaw 自然语言工具路径必须比较调用前后的录制状态。播放失败时
   仅对本轮新出现的 `looper_record_*` 通过受限 automation stop 持续回滚，不能停止网页、
   手势或其他控制器的录制，且播放异常不能使常驻语音进程退出。
+- 语音桥的 `local_command_timing` 事件和录制状态的 `start_timings` 是录制启动延迟的统一
+  观测面。2026-08-17 在 lite 三相机现场测得：0.5 秒 VAD 静音阈值之外，采集块最多再引入
+  0.25 秒量化；一段 0.24 秒现场回放音频的 SenseVoice 解码为 0.0861 秒。缓存的“初始化
+  录制中”播放 2.0280 秒，“录制已经开始”播放 1.4951 秒。两次真实 MCAP 启动分别为
+  3.7210 秒和 8.9435 秒，其中 DDS 订阅稳定分别占 3.2287 秒和 8.4516 秒，是主要波动源；
+  recorder ready 约 0.46–0.48 秒，resume 确认仅 0.0039–0.0045 秒。较慢样本从识别完成到
+  发出/确认 resume 为 10.9663/10.9702 秒，到最终确认播报结束共 12.4880 秒。测量 bag 的
+  三路 image header audit 和内核网络审计均无丢失。
 - 固定检测位质量门逐台比较全局 Pose 与 version 2 检测位基准，不再用两两相对位姿抵消
   公共坐标变化。Insight3 A/B 使用严格阈值，Insight9 稀疏地图 Pose 使用宽阈值；两路
   Insight3 必须在本轮地图中完成过全局定位，但允许检测时处于 `vio_only` 连续跟踪，不要求
@@ -103,10 +111,10 @@
 - 正常录制禁止合包重写：单个 MCAP 完成 metadata 后写入 `recording_manifest.json`，再将
   staging 目录原子改名为最终标准 rosbag。旧 composite/SQLite staging 的故障恢复仍可使用 reindex、salvage
   和官方 convert，但输出必须单独验证，不能把 convert 成功返回视作可信。
-- 旧的固定命令 Vosk worker 默认关闭，避免它与宸境同时独占 USB capture device。
-  宸境由 systemd user service 监管，缺少模型或声卡时按服务重启间隔恢复；不得把
+- Dashboard 不再内置麦克风识别 worker，避免与宸境争用 USB capture device。宸境由
+  systemd user service 监管，缺少模型或声卡时按服务重启间隔恢复；不得把
   SenseVoice 模型反复加载到每个命令周期，常驻进程只在启动时加载一次。服务启动应把
-  USB PCM 音量恢复到 40%，避免声卡重连后的硬件默认值覆盖用户体验。Piper ONNX 会话
+  USB PCM 音量恢复到 50%，避免声卡重连后的硬件默认值覆盖用户体验。Piper ONNX 会话
   也必须常驻复用；启动时生成“我在”可同时完成预热，回答阶段不得重新启动 Piper CLI。
 - 数据集连续性门发现坐标跳变时不得直接低通平滑。孤立、持久的刚体坐标重置只有在
   跳变前后各自稳定、切段后满足最短 episode 且双臂公共坐标关系可重新确认时，才能丢弃
