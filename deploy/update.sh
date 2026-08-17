@@ -107,7 +107,14 @@ fi
 
 # ── Record the previous version (for the rollback hint), switch, restart ────
 prev_version="$(sed -n 's/^INSIGHT_VERSION=//p' .env 2>/dev/null | head -1 || true)"
-echo "INSIGHT_VERSION=${version}" > .env
+env_next=".env.next.$$"
+if [[ -f .env ]]; then
+    grep -v '^INSIGHT_VERSION=' .env > "${env_next}" || true
+else
+    : > "${env_next}"
+fi
+printf 'INSIGHT_VERSION=%s\n' "${version}" >> "${env_next}"
+mv "${env_next}" .env
 
 log "Starting ${IMAGE_NAME}:${version} ..."
 docker compose up -d

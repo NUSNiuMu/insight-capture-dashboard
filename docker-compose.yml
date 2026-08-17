@@ -47,6 +47,9 @@ services:
       - TZ=Asia/Shanghai
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
+      - INSIGHT_ROSBAG_DIR=/mnt/insight-recordings
+      - INSIGHT_ROSBAG_REQUIRED_SOURCE=${INSIGHT_ROSBAG_REQUIRED_SOURCE:-}
+      - INSIGHT_ROSBAG_FALLBACK_DIR=/workspaces/insight_capture/rosbags
       # For `run_dashboard.sh --jetson` (docker exec ... open_web_3d_right.sh):
       # The kiosk browser is installed inside this image, so the kiosk window
       # runs via `docker exec`, which
@@ -65,6 +68,9 @@ services:
       # the host's own CUDA over it would shadow that with whatever happens
       # to be on this specific host, silently breaking on any other device.
       - .:/workspaces/insight_capture
+      # Point INSIGHT_ROSBAG_HOST_DIR at an ext4 USB directory to record
+      # directly to removable storage without an NVMe staging copy.
+      - ${INSIGHT_ROSBAG_HOST_DIR:-./rosbags}:/mnt/insight-recordings
       # Local IPC shared with the optional SuperGlue validation worker.
       - superglue-ipc:/run/superglue
 

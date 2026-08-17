@@ -7,7 +7,6 @@ import json
 import math
 import os
 import shutil
-import sqlite3
 import subprocess
 import threading
 import time
@@ -21,6 +20,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 from hand_tracking.extract_gripper import decode_color_image
+from .composite_bag import iter_messages, source_files, topic_types
+from .composite_bag import MANIFEST_NAME
 from .playback import _read_bag_topics
 
 
@@ -401,14 +402,13 @@ def _compose_review_frame(
 
 
 def _source_signature(bag_path: Path) -> list[dict[str, object]]:
-    files = [bag_path / "metadata.yaml", *sorted(bag_path.glob("*.db3"))]
     return [
         {
-            "name": item.name,
+            "name": str(item.relative_to(bag_path)),
             "size": item.stat().st_size,
             "mtime_ns": item.stat().st_mtime_ns,
         }
-        for item in files
+        for item in source_files(bag_path)
         if item.is_file()
     ]
 
@@ -447,77 +447,35 @@ def _select_recorded_streams(
     return selected_cameras, selected_poses
 
 
-def _sqlite_topic_stamps(
+def _bag_topic_stamps(
     bag_path: Path, topics: Iterable[str]
 ) -> dict[str, np.ndarray]:
-    """Read recorder timestamps without loading image payload BLOBs."""
+    """Read recorder timestamps from every storage part."""
     requested = [str(topic) for topic in topics]
     result: dict[str, list[int]] = {topic: [] for topic in requested}
-    for db_path in sorted(bag_path.glob("*.db3")):
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        try:
-            topic_ids = {
-                str(name): int(topic_id)
-                for topic_id, name in conn.execute("SELECT id, name FROM topics")
-                if str(name) in result
-            }
-            for topic, topic_id in topic_ids.items():
-                result[topic].extend(
-                    int(row[0])
-                    for row in conn.execute(
-                        "SELECT timestamp FROM messages WHERE topic_id = ?",
-                        (topic_id,),
-                    )
-                )
-        finally:
-            conn.close()
+    for topic, _raw, timestamp in iter_messages(bag_path, requested):
+        result[topic].append(timestamp)
     return {
         topic: np.asarray(sorted(stamps), dtype=np.int64)
         for topic, stamps in result.items()
     }
 
 
-def _sqlite_topic_types(bag_path: Path) -> dict[str, str]:
-    result: dict[str, str] = {}
-    for db_path in sorted(bag_path.glob("*.db3")):
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        try:
-            for name, message_type in conn.execute("SELECT name, type FROM topics"):
-                name = str(name)
-                message_type = str(message_type)
-                previous = result.setdefault(name, message_type)
-                if previous != message_type:
-                    raise ValueError(f"topic {name} changes type across bag files")
-        finally:
-            conn.close()
-    return result
+def _bag_topic_types(bag_path: Path) -> dict[str, str]:
+    return topic_types(bag_path)
 
 
-def _sqlite_topic_messages(
+def _bag_topic_messages(
     bag_path: Path, topics: Iterable[str]
 ) -> Iterable[tuple[str, bytes, int]]:
-    """Yield selected serialized messages without rosbag2 reader overhead."""
-    requested = {str(topic) for topic in topics}
-    for db_path in sorted(bag_path.glob("*.db3")):
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        try:
-            topic_ids = [
-                int(topic_id)
-                for topic_id, name in conn.execute("SELECT id, name FROM topics")
-                if str(name) in requested
-            ]
-            if not topic_ids:
-                continue
-            placeholders = ",".join("?" for _ in topic_ids)
-            for name, data, timestamp in conn.execute(
-                "SELECT t.name, m.data, m.timestamp FROM messages m "
-                "JOIN topics t ON t.id = m.topic_id "
-                f"WHERE m.topic_id IN ({placeholders}) ORDER BY m.timestamp, m.id",
-                topic_ids,
-            ):
-                yield str(name), bytes(data), int(timestamp)
-        finally:
-            conn.close()
+    yield from iter_messages(bag_path, topics)
+
+
+# Stable compatibility names retained for tests and downstream imports. The
+# implementations now support both SQLite and composite MCAP sessions.
+_sqlite_topic_stamps = _bag_topic_stamps
+_sqlite_topic_types = _bag_topic_types
+_sqlite_topic_messages = _bag_topic_messages
 
 
 def _decode_review_image(
@@ -697,7 +655,9 @@ class PreparedPlaybackManager:
 
     def enqueue_all(self) -> Dict[str, object]:
         for path in sorted(self.rosbag_root.iterdir(), key=lambda item: item.stat().st_mtime):
-            if path.is_dir() and (path / "metadata.yaml").is_file():
+            if path.is_dir() and (
+                (path / "metadata.yaml").is_file() or (path / MANIFEST_NAME).is_file()
+            ):
                 self.enqueue(path.name)
         return self.status()
 

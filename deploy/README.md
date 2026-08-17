@@ -71,6 +71,11 @@ LeRobot/UMI 数据集、轨迹评分、Hand pose、轨迹优化和设置。
 
 - 正在录制时会拒绝升级（避免打断录制）；确认要打断就加 `--force`。
 - `config/`、`rosbags/`、`outputs/`、`runs/` 都在宿主机上，升级不受影响。
+- 要直接写 ext4 U 盘，在 `.env` 增加
+  `INSIGHT_ROSBAG_HOST_DIR=/media/nvidia/INSIGHT_USB/rosbags` 并重新执行
+  `docker compose up -d insight-dashboard`；建议同时设置
+  `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`，U 盘未挂载时自动回退到本机 NVMe 的
+  `rosbags/`。录制状态会显示实际路径；`update.sh` 升级时会保留这些设置。
 
 ## 回滚
 
@@ -89,7 +94,7 @@ LeRobot/UMI 数据集、轨迹评分、Hand pose、轨迹优化和设置。
 
 | 路径                 | 内容                                   |
 | -------------------- | -------------------------------------- |
-| `.env`               | 当前运行的版本号（`update.sh` 维护）   |
+| `.env`               | 当前版本号及本机录制目录覆盖（升级保留） |
 | `config/`            | 相机/标定/后处理配置（升级保留）       |
 | `rosbags/`           | 录制数据（升级保留）                   |
 | `outputs/`, `runs/`  | 处理结果（升级保留）                   |

@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .composite_bag import MANIFEST_NAME, aggregate_metadata
+
 try:
     import yaml
 except Exception:  # pragma: no cover - metadata parsing degrades gracefully
@@ -68,10 +70,11 @@ def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object
     for bag_dir in sorted(rosbag_root.iterdir(), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True):
         if not bag_dir.is_dir():
             continue
-        metadata_path = bag_dir / "metadata.yaml"
-        if not metadata_path.exists():
+        if not (bag_dir / "metadata.yaml").exists() and not (bag_dir / MANIFEST_NAME).exists():
             continue
-        metadata = _read_bag_metadata(metadata_path)
+        metadata = aggregate_metadata(bag_dir) or _read_bag_metadata(bag_dir / "metadata.yaml")
+        if not metadata:
+            continue
         duration_ns = int((metadata.get("duration") or {}).get("nanoseconds", 0) or 0)
         message_count = int(metadata.get("message_count", 0) or 0)
         topics = metadata.get("topics_with_message_count") or []

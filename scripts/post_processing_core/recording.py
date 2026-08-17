@@ -1,4 +1,4 @@
-"""Recording lifecycle, crash recovery, and merge."""
+"""Recording lifecycle, crash recovery, and composite-session publishing."""
 
 import contextlib
 import json
@@ -16,6 +16,7 @@ from typing import Callable, Deque, Dict, List, Optional, Sequence, Set
 from post_processing_core.integrity import nominal_for
 from perf_tracker import track
 
+from .composite_bag import COMPOSITE_FORMAT, MANIFEST_NAME, read_metadata
 from .topic_catalog import (
     _normalize_topics,
     _topic_group,
@@ -108,8 +109,8 @@ def _trim_startup_skew(bag_dir: Path) -> Dict[str, object]:
 STORAGE_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "rosbag_storage_sqlite3.yaml"
 QOS_OVERRIDE_PATH = Path(__file__).resolve().parents[2] / "config" / "rosbag_qos_overrides.yaml"
 
-def _storage_config_args() -> List[str]:
-    if STORAGE_CONFIG_PATH.is_file():
+def _storage_config_args(storage_id: str) -> List[str]:
+    if storage_id == "sqlite3" and STORAGE_CONFIG_PATH.is_file():
         return ["--storage-config-file", str(STORAGE_CONFIG_PATH)]
     return []
 
@@ -132,12 +133,18 @@ class RecordingManager:
         image_topics: Optional[Sequence[str]] = None,
         start_image_recording: Optional[Callable[[Dict[str, str]], None]] = None,
         stop_image_recording: Optional[Callable[[], Dict[str, object]]] = None,
+        storage_id: str = "mcap",
+        storage_status: Optional[Dict[str, object]] = None,
     ) -> None:
         self.raw_config = raw_config
         self.ros_domain_id = int(ros_domain_id)
         self.rosbag_root = rosbag_root.resolve()
         self.rosbag_root.mkdir(parents=True, exist_ok=True)
         self.max_cache_size = int(max_cache_size)
+        self.storage_id = str(storage_id or "mcap")
+        self.storage_status = dict(storage_status or {
+            "active_path": str(self.rosbag_root), "using_fallback": False
+        })
         self.default_topics = _normalize_topics(default_topics)
         self.publisher_checker = publisher_checker
         # Reuse dashboard image subscriptions; tests may fall back to subprocesses.
@@ -149,8 +156,11 @@ class RecordingManager:
         self._network_snapshot_start: Optional[Dict[str, object]] = None
         self._network_audit: Optional[Dict[str, object]] = None
         self._recording_manifest: Optional[Dict[str, object]] = None
-        # Group recorder processes by camera namespace.
+        # Large dashboard image subscriptions are reused in-process. Every
+        # remaining topic shares one append-only recorder to minimize USB
+        # stream concurrency without adding duplicate image DDS readers.
         self.processes: Dict[str, subprocess.Popen] = {}
+        self._process_exit_codes: Dict[str, int] = {}
         self._staging_dir: Optional[Path] = None
         self.output_path: Optional[str] = None
         self.started_at: Optional[float] = None
@@ -161,7 +171,7 @@ class RecordingManager:
         self._lock = threading.Lock()
         self._merge_thread: Optional[threading.Thread] = None
         self._recording_completed_callbacks: List[Callable[[Path], None]] = []
-        self.merge_state: str = "idle"  # idle | merging | done | error
+        self.merge_state: str = "idle"  # idle | finalizing | merging | done | error
         self.merge_error: Optional[str] = None
         self.merge_timings: Dict[str, object] = {}
         self._last_topic_refresh_monotonic: float = 0.0
@@ -183,9 +193,14 @@ class RecordingManager:
 
 
     def _cleanup_if_exited_unlocked(self) -> None:
-        self.processes = {
-            group: process for group, process in self.processes.items() if process.poll() is None
-        }
+        running: Dict[str, subprocess.Popen] = {}
+        for group, process in self.processes.items():
+            return_code = process.poll()
+            if return_code is None:
+                running[group] = process
+            else:
+                self._process_exit_codes[group] = int(return_code)
+        self.processes = running
 
     def is_recording(self) -> bool:
         """Cheap hot-path status for image workers; avoids building API JSON."""
@@ -242,7 +257,7 @@ class RecordingManager:
             self._cleanup_if_exited_unlocked()
             if self.processes or self._image_writer_active:
                 raise RuntimeError("Recording is already running.")
-            if self.merge_state == "merging":
+            if self.merge_state in {"merging", "finalizing"}:
                 raise RuntimeError(
                     f"Previous recording is still {self.merge_state} -- wait for it to finish."
                 )
@@ -265,9 +280,7 @@ class RecordingManager:
                 image_topics = []
                 other_topics = list(selected_topics)
 
-            groups: Dict[str, List[str]] = {}
-            for topic in other_topics:
-                groups.setdefault(_topic_group(topic), []).append(topic)
+            groups: Dict[str, List[str]] = {"auxiliary": other_topics} if other_topics else {}
 
             image_writer_active = False
             if image_topics:
@@ -287,11 +300,13 @@ class RecordingManager:
                     "ros2",
                     "bag",
                     "record",
+                    "--storage",
+                    self.storage_id,
                     "--output",
                     str(staging_dir / group),
                     "--max-cache-size",
                     str(self.max_cache_size),
-                    *_storage_config_args(),
+                    *_storage_config_args(self.storage_id),
                     *_qos_override_args(),
                     *group_topics,
                 ]
@@ -314,6 +329,7 @@ class RecordingManager:
                 stdout_threads.append(thread)
 
             self.processes = processes
+            self._process_exit_codes = {}
             self._stdout_threads = stdout_threads
             self._staging_dir = staging_dir
             self._image_writer_active = image_writer_active
@@ -324,7 +340,9 @@ class RecordingManager:
             self.started_at = time.time()
             self.current_topics = list(selected_topics)
             self._recording_manifest = {
-                "version": 1,
+                "version": 2,
+                "format": COMPOSITE_FORMAT,
+                "storage_id": self.storage_id,
                 "bag_name": name,
                 "selected_topics": list(selected_topics),
                 "started_at_epoch_s": self.started_at,
@@ -335,19 +353,21 @@ class RecordingManager:
             self.merge_timings = {}
         return self.status()
 
-    def stop(self, timeout_sec: float = 8.0) -> Dict[str, object]:
+    def stop(self, timeout_sec: float = 30.0) -> Dict[str, object]:
         stop_started = time.perf_counter()
         with self._lock:
             self._cleanup_if_exited_unlocked()
             processes = dict(self.processes)
+            prior_exit_codes = dict(self._process_exit_codes)
             staging_dir = self._staging_dir
             output_path = self.output_path
             image_writer_active = self._image_writer_active
             network_snapshot_start = self._network_snapshot_start
             network_snapshot_end = capture_network_snapshot()
             self._image_writer_active = False
-            if not processes and not image_writer_active:
+            if not processes and not image_writer_active and not prior_exit_codes:
                 return self.status()
+            self.merge_state = "finalizing"
 
         if network_snapshot_start is not None:
             network_audit = compare_network_snapshots(
@@ -371,11 +391,13 @@ class RecordingManager:
             except ProcessLookupError:
                 pass
 
+        image_writer_error: Optional[str] = None
         if image_writer_active and self._stop_image_recording is not None:
             try:
                 result = self._stop_image_recording()
                 dropped = int(result.get("dropped", 0)) if result else 0
                 if dropped:
+                    image_writer_error = f"writer queues dropped {dropped} message(s)"
                     self._output_lines.append(f"[_images] WARNING: dropped {dropped} message(s) (writer queue full)")
                 self._image_header_audit = result.get("image_header_audit") if result else None
                 if self._image_header_audit:
@@ -388,7 +410,8 @@ class RecordingManager:
                         for topic, item in sorted(audit_topics.items())
                     )
                     self._output_lines.append(f"[_images] live header audit {verdict} -- {details}")
-            except Exception as exc:  # noqa: BLE001 - surfaced via output log, not fatal to stop()
+            except Exception as exc:  # noqa: BLE001 - finalization is rejected below
+                image_writer_error = str(exc)
                 self._output_lines.append(f"[_images] ERROR stopping writer: {exc}")
         deadline = time.monotonic() + max(float(timeout_sec), 0.1)
         still_running = []
@@ -408,25 +431,109 @@ class RecordingManager:
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=3.0)
 
+        exit_codes = dict(prior_exit_codes)
+        exit_codes.update({group: int(process.returncode) for group, process in processes.items()
+                           if process.returncode is not None})
+        failed_recorders = {
+            group: return_code for group, return_code in exit_codes.items() if return_code != 0
+        }
+
+        stop_sec = round(time.perf_counter() - stop_started, 3)
         with self._lock:
             self.processes = {}
-            self.merge_state = "merging"
+            self._process_exit_codes = exit_codes
             self.merge_error = None
-            self.merge_timings = {
-                "recorder_stop_sec": round(time.perf_counter() - stop_started, 3)
-            }
-        self._output_lines.append(
-            f"[stop] Recorder shutdown completed in {self.merge_timings['recorder_stop_sec']:.2f}s"
-        )
-
-        self._merge_thread = threading.Thread(
-            target=self._merge_worker,
-            args=(staging_dir, Path(output_path) if output_path else None),
-            daemon=True,
-            name="rosbag_merge",
-        )
-        self._merge_thread.start()
+            self.merge_timings = {"recorder_stop_sec": stop_sec}
+        self._output_lines.append(f"[stop] Recorder shutdown completed in {stop_sec:.2f}s")
+        try:
+            if still_running:
+                raise RuntimeError(
+                    f"recorder process(es) did not stop cleanly: {len(still_running)}"
+                )
+            if failed_recorders:
+                details = ", ".join(
+                    f"{group}={return_code}" for group, return_code in sorted(failed_recorders.items())
+                )
+                raise RuntimeError(f"recorder process failure(s): {details}")
+            if image_writer_error:
+                raise RuntimeError(f"image writer failure: {image_writer_error}")
+            self._publish_composite_session(
+                staging_dir, Path(output_path) if output_path else None
+            )
+        except Exception as exc:  # noqa: BLE001 - preserve staging for forensics
+            with self._lock:
+                self.merge_state = "error"
+                self.merge_error = str(exc)
+            self._output_lines.append(
+                f"[finalize] ERROR: {exc} (raw recorder parts kept at {staging_dir})"
+            )
         return self.status()
+
+    def _publish_composite_session(
+        self, staging_dir: Optional[Path], output_path: Optional[Path]
+    ) -> None:
+        """Atomically expose complete recorder parts without rewriting payloads."""
+        if staging_dir is None or output_path is None:
+            raise RuntimeError("Missing staging directory or output path.")
+        started = time.perf_counter()
+        part_bags = sorted(
+            p for p in staging_dir.iterdir() if p.is_dir() and (p / "metadata.yaml").is_file()
+        )
+        missing = sorted(
+            p.name for p in staging_dir.iterdir()
+            if p.is_dir() and not (p / "metadata.yaml").is_file()
+        )
+        if missing:
+            raise RuntimeError(f"recorder part(s) did not finalize: {', '.join(missing)}")
+        if not part_bags:
+            raise RuntimeError("No recorder part contains metadata.yaml")
+
+        parts = []
+        for part in part_bags:
+            info = read_metadata(part)
+            if not info:
+                raise RuntimeError(f"cannot read recorder metadata: {part.name}")
+            parts.append({
+                "name": part.name,
+                "path": part.name,
+                "storage_id": str(info.get("storage_identifier") or self.storage_id),
+                "message_count": int(info.get("message_count", 0) or 0),
+                "topic_count": len(info.get("topics_with_message_count") or []),
+                "starting_time_ns": int(
+                    (info.get("starting_time") or {}).get("nanoseconds_since_epoch", 0) or 0
+                ),
+                "duration_ns": int((info.get("duration") or {}).get("nanoseconds", 0) or 0),
+            })
+        if self._image_header_audit is not None:
+            (staging_dir / "image_header_audit.json").write_text(
+                json.dumps(self._image_header_audit, indent=2, sort_keys=True)
+            )
+        if self._network_audit is not None:
+            (staging_dir / "recording_network_audit.json").write_text(
+                json.dumps(self._network_audit, indent=2, sort_keys=True)
+            )
+        manifest = dict(self._recording_manifest or {})
+        manifest["parts"] = parts
+        manifest["published_at_epoch_s"] = time.time()
+        (staging_dir / MANIFEST_NAME).write_text(
+            json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        if output_path.exists():
+            raise RuntimeError(f"recording output already exists: {output_path}")
+        os.replace(staging_dir, output_path)
+        finalize_sec = round(time.perf_counter() - started, 3)
+        with self._lock:
+            self._staging_dir = None
+            self.merge_state = "done"
+            self.merge_timings.update({
+                "method": "composite_publish",
+                "part_count": len(parts),
+                "total_sec": finalize_sec,
+            })
+        self._output_lines.append(
+            f"[finalize] Published {len(parts)} MCAP part(s) in {finalize_sec:.2f}s: {output_path}"
+        )
+        self._notify_recording_completed(output_path)
 
     def _merge_worker(self, staging_dir: Optional[Path], output_path: Optional[Path]) -> None:
         try:
@@ -556,4 +663,5 @@ class RecordingManager:
                 "merge_state": self.merge_state,
                 "merge_error": self.merge_error,
                 "merge_timings": dict(self.merge_timings),
+                "storage": dict(self.storage_status),
             }

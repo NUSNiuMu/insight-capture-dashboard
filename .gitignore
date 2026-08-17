@@ -4,6 +4,7 @@ scripts/__pycache__/
 __pycache__/
 *.py[cod]
 node_modules/
+.env
 integrations/openclaw-workspace/openclaw-workspace-state.json
 
 # Runtime/recording data and release build artifacts -- never tracked, but

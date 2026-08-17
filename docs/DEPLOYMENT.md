@@ -138,6 +138,12 @@ cd <部署目录>   # 首次安装时 update.sh 所在的那个目录
 - **数据持久化**：`config/`、`rosbags/`、`outputs/`、`runs/` 都在宿主机上（不在镜像里），
   升级只换代码，不动这些目录。`config/` 只在**首次安装**（该目录不存在时）从镜像里播种一次，
   之后永远不会被镜像内容覆盖——本机的标定、机群配置都不会因为升级而丢失或被重置。
+- **ext4 U 盘直录**：在部署目录的 `.env` 增加
+  `INSIGHT_ROSBAG_HOST_DIR=/media/nvidia/INSIGHT_USB/rosbags`，确认该目录已挂载且可写后执行
+  `docker compose up -d insight-dashboard`。Compose 会把它绑定为容器录制根目录；
+  同时设置 `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`，挂载源不匹配时会自动回退到本机
+  NVMe 的 `rosbags/`。API 状态会报告实际路径和 `storage.using_fallback`；`update.sh` 更新
+  版本号时会保留这些本机设置。
 - **旧版本不会被自动清理**：`docker load` 过的镜像会一直留着，方便回滚；磁盘紧张时自己
   `docker image ls insight-dashboard` 查、`docker rmi insight-dashboard:<旧版本>` 清理不需要的。
 

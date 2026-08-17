@@ -90,7 +90,7 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 **声控录制**（`/settings` 页开关）：`jetson-nx` profile 默认开启。对 USB 麦克风说
 “开始录制”会按服务器默认 topics 创建一段 `voice_record_*`；说“结束录制”或
 “停止录制”会停止这段声控创建的录制。为避免误操作，声控不会停止网页或其他方式
-开始的录制，磁盘剩余低于 10%或上一段仍在合并时也不会自动开始。识别完全在设备
+开始的录制，磁盘剩余低于 10%或上一段仍在停止排空时也不会自动开始。识别完全在设备
 本地进行，不上传或保存麦克风音频；Recording 页顶部 `voice` 标签显示监听、录制或
 错误状态。Settings 开关即时生效，后端重启后恢复当前设备 profile 的默认值。
 
@@ -283,7 +283,7 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 也可以在 Insight9 画面内同时做双手点赞：两只手均保持“拇指向上、其余
 四指握拳”至少 0.8 秒会使用服务器默认 topics 开始录制。触发后先解除手势
 至少 2 秒，再次保持双手点赞 0.8 秒会停止该段录制。手势不会停止网页手动
-开始的录制；磁盘剩余低于 10% 或上一段仍在合并时也不会自动开始。Recording
+开始的录制；磁盘剩余低于 10% 或上一段仍在停止排空时也不会自动开始。Recording
 页顶部的 `gesture` 标签显示 armed、保持、释放和录制状态。
 
 已配置宸境语音助手的设备可以直接说“开始录制”“停止录制”或“开始校准”，无需先说
@@ -317,12 +317,12 @@ journalctl --user -u looper-openclaw-voice.service -n 100 --no-pager
 ```bash
 docker exec insight-dashboard python3 scripts/check_bag.py                # 最新一份就可以
 docker exec insight-dashboard python3 scripts/check_bag.py rosbags/<目录名>
-docker exec insight-dashboard python3 scripts/check_bag.py --fast rosbags/<目录名>  # SQLite COUNT/MIN/MAX 快速聚合；不读取 CDR payload
+docker exec insight-dashboard python3 scripts/check_bag.py --fast rosbags/<目录名>  # metadata/SQLite 快速聚合；不读取 CDR payload
 ```
 
-`--fast` 不再根据 `metadata.yaml` 的整包时长估算，而是直接对 SQLite 中每个 topic
-执行 `COUNT/MIN/MAX(timestamp)`；它适合快速盘点，不包含录制期间的图像 header
-连续性 live audit，不能替代停止录制时生成的最终完整性结论。
+`--fast` 对旧 SQLite bag 执行每 topic `COUNT/MIN/MAX(timestamp)`，对 MCAP 复合会话汇总
+各 part 的 metadata；它适合快速盘点，不包含录制期间的图像 header 连续性 live audit。
+默认深检会顺序读取 payload 并检查 header 间隔，速度较慢但结论更精确。
 
 `/bags` 的回放会先按 rosbag record timestamp 把已有图像与 Pose 预编码到统一 30 Hz
 时间轴，再从缓存播放。不能用原始 `header.stamp` 做跨相机同步：Insight3 可能发布
@@ -339,7 +339,20 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 ```
 
 删除：`/bags` 页面操作，或直接删除 `rosbags/` 下对应目录（确认已拷贝/不需要后）。
-删除是永久操作；`rosbags/_staging/` 是中断录制恢复区，不要在恢复/合包期间清理。
+删除是永久操作；`rosbags/_staging/` 是中断录制恢复区，不要在录制、排空或恢复期间清理。
+
+要直接录入 ext4 U 盘，在 Docker Compose 的 `.env` 设置：
+
+```bash
+INSIGHT_ROSBAG_HOST_DIR=/media/nvidia/INSIGHT_USB/rosbags
+INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1
+```
+
+然后重建 Dashboard 服务。启动录制前确认 `findmnt` 显示 U 盘为 `rw`，Recording 状态中的
+`disk_space.path` 指向 `/mnt/insight-recordings`。FAT32 单文件 4 GiB 限制不适合该数据量。
+`INSIGHT_ROSBAG_REQUIRED_SOURCE` 不匹配时会自动写入本机 NVMe 的 `rosbags/`；API 状态中的
+`storage.using_fallback=true`，并由 `storage.active_path` 给出实际路径。服务启动后存储目标固定，
+若之后插入或拔出 U 盘，应重启 Dashboard 再开始下一段录制。
 
 ---
 
@@ -480,7 +493,7 @@ du -sh rosbags/* | sort -h | tail    # 各录制占用
 - `Start` 无反应：点一次 `Refresh Topics` 再试（相机刚重启过时 topic 列表会过期）；
 - 声控无反应：先确认 Recording 页为 `voice listening`，再检查 `arecord -l` 是否含
   `YDPI4MIC`、容器是否能看到 `/dev/snd`，以及 `outputs/voice_control_worker.log`；
-- 声控识别成功但不开始：状态消息会说明是否因磁盘低于 10%、上一段合包未完成或
+- 声控识别成功但不开始：状态消息会说明是否因磁盘低于 10%、上一段仍在停止排空或
   已有其他录制而忽略；声控只会停止自己创建的 `voice_record_*`；
 - 注意：录制进行中**不要**执行 `docker restart`，会中断录制。
   `run_dashboard.sh` 已内置保护（检测到录制中不重启），手动 docker 命令没有。

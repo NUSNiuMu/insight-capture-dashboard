@@ -117,6 +117,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rosbag2 \
     ros-humble-rosbag2-py \
     ros-humble-rosbag2-storage-default-plugins \
+    ros-humble-rosbag2-storage-mcap \
     ros-humble-sensor-msgs \
     ros-humble-geometry-msgs \
     ros-humble-nav-msgs \

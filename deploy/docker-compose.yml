@@ -42,6 +42,9 @@ services:
       - TZ=Asia/Shanghai
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
+      - INSIGHT_ROSBAG_DIR=/mnt/insight-recordings
+      - INSIGHT_ROSBAG_REQUIRED_SOURCE=${INSIGHT_ROSBAG_REQUIRED_SOURCE:-}
+      - INSIGHT_ROSBAG_FALLBACK_DIR=/workspaces/insight_capture/rosbags
       # For the on-device kiosk window (run_dashboard.sh --jetson via docker exec)
       - DISPLAY=${DISPLAY:-:0}
       # Uncomment to override default port:
@@ -52,7 +55,12 @@ services:
       # These persist across image upgrades. update.sh seeds config/ from the
       # image on first install; the app writes calibration/settings back here.
       - ./config:/workspaces/insight_capture/config
+      # Keep the NVMe directory mounted independently so it remains the
+      # persistent fallback when the configured removable drive is absent.
       - ./rosbags:/workspaces/insight_capture/rosbags
+      # Set INSIGHT_ROSBAG_HOST_DIR in .env to an ext4 USB directory for
+      # direct recording. The local persistent directory remains the default.
+      - ${INSIGHT_ROSBAG_HOST_DIR:-./rosbags}:/mnt/insight-recordings
       - ./outputs:/workspaces/insight_capture/outputs
       - ./runs:/workspaces/insight_capture/runs
 

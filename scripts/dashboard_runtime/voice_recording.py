@@ -281,8 +281,8 @@ class VoiceRecordingController:
             return
         with self._lock:
             self._owned_output_path = None
-        if self.recording_manager.merge_state == "merging":
-            self._set_event("blocked_merge", "Previous recording is still merging", phrase)
+        if self.recording_manager.merge_state in {"merging", "finalizing"}:
+            self._set_event("blocked_merge", "Previous recording is still stopping", phrase)
             return
         free_ratio = self._free_ratio(self.recording_manager.rosbag_root)
         if free_ratio is None:

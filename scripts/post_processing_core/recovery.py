@@ -1,5 +1,6 @@
 """Power-loss staging recovery, reindex, salvage, and merge."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Sequence
 
 from .sqlite_merge import merge_sqlite_parts
+from .composite_bag import COMPOSITE_FORMAT, MANIFEST_NAME, read_metadata
 
 try:
     import yaml
@@ -37,7 +39,8 @@ class RecordingRecovery:
 
     def _recover_one_staging(self, staging_dir: Path) -> None:
         part_dirs = sorted(
-            p for p in staging_dir.iterdir() if p.is_dir() and list(p.glob("*.db3"))
+            p for p in staging_dir.iterdir()
+            if p.is_dir() and (list(p.glob("*.db3")) or list(p.glob("*.mcap")))
         )
         if not part_dirs:
             self.owner._recovery_log(f"{staging_dir.name}: no bag data at all, removing empty leftover")
@@ -49,7 +52,7 @@ class RecordingRecovery:
             if (part / "metadata.yaml").is_file() or self.owner._reindex_part(part):
                 good_parts.append(part)
                 continue
-            if self.owner._salvage_part(part) and self.owner._reindex_part(part):
+            if list(part.glob("*.db3")) and self.owner._salvage_part(part) and self.owner._reindex_part(part):
                 good_parts.append(part)
             else:
                 self.owner._recovery_log(f"{staging_dir.name}/{part.name}: unrecoverable, leaving for forensics")
@@ -59,6 +62,13 @@ class RecordingRecovery:
         output_path = self.owner.rosbag_root / staging_dir.name
         if output_path.exists():
             output_path = self.owner.rosbag_root / f"{staging_dir.name}_recovered_{time.strftime('%Y%m%d_%H%M%S')}"
+        if any(list(part.glob("*.mcap")) for part in good_parts):
+            self._publish_composite_recovery(staging_dir, good_parts, part_dirs, output_path)
+            self.owner._recovery_log(
+                f"{staging_dir.name}: recovered {len(good_parts)}/{len(part_dirs)} MCAP part bags -> {output_path.name}"
+            )
+            self.owner._notify_recording_completed(output_path)
+            return
         try:
             self._convert_merge(good_parts, output_path)
         except Exception:
@@ -99,11 +109,52 @@ class RecordingRecovery:
     def _reindex_part(self, part: Path) -> bool:
         env = os.environ.copy()
         env["ROS_DOMAIN_ID"] = str(self.owner.ros_domain_id)
+        storage_id = "mcap" if list(part.glob("*.mcap")) else "sqlite3"
         result = subprocess.run(
-            ["ros2", "bag", "reindex", "-s", "sqlite3", str(part)],
+            ["ros2", "bag", "reindex", "-s", storage_id, str(part)],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
         )
         return result.returncode == 0 and (part / "metadata.yaml").is_file()
+
+    def _publish_composite_recovery(
+        self, staging_dir: Path, good_parts: Sequence[Path],
+        all_parts: Sequence[Path], output_path: Path,
+    ) -> None:
+        parts = []
+        for part in good_parts:
+            info = read_metadata(part)
+            parts.append({
+                "name": part.name,
+                "path": part.name,
+                "storage_id": str(info.get("storage_identifier") or "mcap"),
+                "message_count": int(info.get("message_count", 0) or 0),
+                "topic_count": len(info.get("topics_with_message_count") or []),
+                "starting_time_ns": int(
+                    (info.get("starting_time") or {}).get("nanoseconds_since_epoch", 0) or 0
+                ),
+                "duration_ns": int((info.get("duration") or {}).get("nanoseconds", 0) or 0),
+            })
+        manifest = {
+            "version": 2,
+            "format": COMPOSITE_FORMAT,
+            "storage_id": "mcap",
+            "bag_name": output_path.name,
+            "recovered": True,
+            "parts": parts,
+        }
+        if len(good_parts) == len(all_parts):
+            (staging_dir / MANIFEST_NAME).write_text(
+                json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+            )
+            os.replace(staging_dir, output_path)
+            return
+        output_path.mkdir(parents=True)
+        for part in good_parts:
+            os.replace(part, output_path / part.name)
+        (output_path / MANIFEST_NAME).write_text(
+            json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        staging_dir.rename(staging_dir.with_name(f"{staging_dir.name}.leftover"))
 
     def _salvage_part(self, part: Path) -> bool:
         """Stream readable SQLite pages into a validated replacement database."""

@@ -6,7 +6,6 @@ from typing import Dict
 
 from post_processing_core.integrity import nominal_for
 from inprocess_bag_writer import InProcessBagWriter
-from post_processing import STORAGE_CONFIG_PATH
 
 
 class RecordingBridge:
@@ -26,8 +25,8 @@ class RecordingBridge:
                     # Depth 512 covers measured transient SQLite/writeback stalls.
                     writer = InProcessBagWriter(
                         output_path,
+                        storage_id="mcap",
                         max_queue=512,
-                        storage_config_uri=str(STORAGE_CONFIG_PATH) if STORAGE_CONFIG_PATH.is_file() else "",
                     )
                     writers_by_path[output_path] = writer
                 writer_by_topic[topic] = writer

@@ -56,6 +56,7 @@ from post_processing import (
     build_default_topics,
     load_post_processing_config,
 )
+from post_processing_core.config import resolve_recording_root
 from dashboard_web import WebDashboardServer, bagplay_topic
 
 from dashboard_runtime import (
@@ -799,6 +800,7 @@ def main() -> None:
     rosbag_root = Path(rosbag_dir_value)
     if not rosbag_root.is_absolute():
         rosbag_root = (project_root / rosbag_root).resolve()
+    rosbag_root, recording_storage_status = resolve_recording_root(rosbag_root, project_root)
     results_root = Path(results_dir_value)
     if not results_root.is_absolute():
         results_root = (project_root / results_root).resolve()
@@ -817,6 +819,12 @@ def main() -> None:
         webrtc_port=args.webrtc_port,
     )
     node.get_logger().info(f"View mode={args.view_mode}")
+    if recording_storage_status["using_fallback"]:
+        node.get_logger().warning(
+            "Configured recording drive is unavailable "
+            f"({recording_storage_status['mounted_source'] or 'not mounted'}); "
+            f"falling back to NVMe at {rosbag_root}"
+        )
 
     recording_manager = RecordingManager(
         raw_config=raw_config,
@@ -828,6 +836,8 @@ def main() -> None:
         image_topics=[camera.topic for camera in node.cameras],
         start_image_recording=node.start_image_recording,
         stop_image_recording=node.stop_image_recording,
+        storage_id=str(post_processing_config.get("recording_storage_id", "mcap")),
+        storage_status=recording_storage_status,
     )
     # Adopt recordings orphaned in rosbags/_staging/ by a power cut or crash
     # (reindex/salvage + merge into a normal bag, in the background).

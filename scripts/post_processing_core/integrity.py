@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .composite_bag import iter_messages, read_metadata, session_parts
+
 DEFAULT_MAX_LOSS_PCT = 0.5
 # New bags are startup-trimmed; --warmup remains for legacy recordings.
 DEFAULT_WARMUP_S = 0.0
@@ -39,6 +41,10 @@ def nominal_for(topic: str) -> Optional[float]:
         if any(fragment in topic for fragment in ("/image_raw", "/image_rect_raw", "camera_info", "vio_image")):
             return 30.0
     if topic.startswith("/insight9_"):
+        if "/depth/" in topic:
+            # Measured Insight9 depth cadence is approximately 12.85 Hz even
+            # though its infrared and VIO image streams run at 20 Hz.
+            return 12.85
         if "/color/" in topic:
             return 30.0 if any(
                 fragment in topic for fragment in ("/image_raw", "/image_rect_raw", "camera_info")
@@ -96,33 +102,55 @@ def gap_stats(ts, nominal_hz):
 
 def _read_topic_windows(bag_dir: Path) -> Dict[str, Dict[str, int]]:
     """Aggregate topic counts and recorder windows without reading payloads."""
-    db3_files = sorted(glob.glob(str(bag_dir / "*.db3")))
-    if not db3_files:
-        raise ValueError(f"no .db3 file in {bag_dir}")
+    parts = session_parts(bag_dir)
+    if not parts:
+        raise ValueError(f"no readable rosbag2 parts in {bag_dir}")
     windows: Dict[str, Dict[str, int]] = {}
-    for db3 in db3_files:
-        try:
-            conn = sqlite3.connect(f"file:{db3}?mode=ro", uri=True)
-            with conn:
-                rows = conn.execute(
-                    "SELECT topics.name, COUNT(messages.id), MIN(messages.timestamp), MAX(messages.timestamp) "
-                    "FROM topics LEFT JOIN messages ON messages.topic_id = topics.id "
-                    "GROUP BY topics.id"
-                ).fetchall()
-            conn.close()
-        except sqlite3.Error as exc:
-            raise ValueError(f"cannot read {db3}: {exc}") from exc
-        for name, count, first_ns, last_ns in rows:
-            if first_ns is None or last_ns is None:
-                windows.setdefault(name, {"msgs": 0, "first_ns": 0, "last_ns": 0})
-                continue
-            item = windows.get(name)
-            if item is None or item["msgs"] == 0:
-                item = {"msgs": 0, "first_ns": first_ns, "last_ns": last_ns}
-                windows[name] = item
-            item["msgs"] += int(count)
-            item["first_ns"] = min(item["first_ns"], int(first_ns))
-            item["last_ns"] = max(item["last_ns"], int(last_ns))
+    for part in parts:
+        db3_files = sorted(glob.glob(str(part / "*.db3")))
+        if not db3_files:
+            info = read_metadata(part)
+            first_ns = int(
+                (info.get("starting_time") or {}).get("nanoseconds_since_epoch", 0) or 0
+            )
+            duration_ns = int((info.get("duration") or {}).get("nanoseconds", 0) or 0)
+            last_ns = first_ns + max(duration_ns, 0)
+            for entry in info.get("topics_with_message_count") or []:
+                name = str((entry.get("topic_metadata") or {}).get("name") or "")
+                if not name:
+                    continue
+                count = int(entry.get("message_count", 0) or 0)
+                item = windows.setdefault(
+                    name, {"msgs": 0, "first_ns": first_ns, "last_ns": last_ns}
+                )
+                item["msgs"] += count
+                if count:
+                    item["first_ns"] = min(item["first_ns"], first_ns)
+                    item["last_ns"] = max(item["last_ns"], last_ns)
+            continue
+        for db3 in db3_files:
+            try:
+                conn = sqlite3.connect(f"file:{db3}?mode=ro", uri=True)
+                with conn:
+                    rows = conn.execute(
+                        "SELECT topics.name, COUNT(messages.id), MIN(messages.timestamp), MAX(messages.timestamp) "
+                        "FROM topics LEFT JOIN messages ON messages.topic_id = topics.id "
+                        "GROUP BY topics.id"
+                    ).fetchall()
+                conn.close()
+            except sqlite3.Error as exc:
+                raise ValueError(f"cannot read {db3}: {exc}") from exc
+            for name, count, first_ns, last_ns in rows:
+                if first_ns is None or last_ns is None:
+                    windows.setdefault(name, {"msgs": 0, "first_ns": 0, "last_ns": 0})
+                    continue
+                item = windows.get(name)
+                if item is None or item["msgs"] == 0:
+                    item = {"msgs": 0, "first_ns": first_ns, "last_ns": last_ns}
+                    windows[name] = item
+                item["msgs"] += int(count)
+                item["first_ns"] = min(item["first_ns"], int(first_ns))
+                item["last_ns"] = max(item["last_ns"], int(last_ns))
     return windows
 
 
@@ -225,6 +253,9 @@ def _analyze_deep(
     bag_dir: Path, max_loss_pct: float, warmup_s: float,
 ) -> List[Dict[str, object]]:
     """Original per-message stamp-gap scan (slow: reads the whole table)."""
+    parts = session_parts(bag_dir)
+    if len(parts) != 1 or parts[0] != bag_dir or not list(parts[0].glob("*.db3")):
+        return _analyze_deep_storage(bag_dir, max_loss_pct, warmup_s)
     db3 = sorted(glob.glob(str(bag_dir / "*.db3")))
     if not db3:
         raise ValueError(f"no .db3 file in {bag_dir}")
@@ -291,6 +322,73 @@ def _analyze_deep(
                 "gap_events": events,
                 "worst_gaps": worst,
             })
+    _add_missing_selected_topics(bag_dir, topics)
+    return topics
+
+
+def _analyze_deep_storage(
+    bag_dir: Path, max_loss_pct: float, warmup_s: float,
+) -> List[Dict[str, object]]:
+    """Scan composite/MCAP parts through the rosbag2 storage API."""
+    windows = _read_topic_windows(bag_dir)
+    names = sorted(windows)
+    counts = {name: 0 for name in names}
+    stamps = {name: [] for name in names if nominal_for(name) is not None}
+    for name, raw, record_stamp in iter_messages(bag_dir, names):
+        counts[name] = counts.get(name, 0) + 1
+        if name in stamps:
+            try:
+                stamp = header_stamp_ns(raw)
+            except (struct.error, TypeError):
+                stamp = int(record_stamp)
+            stamps[name].append(stamp)
+
+    topics: List[Dict[str, object]] = []
+    for name in names:
+        msgs = counts.get(name, 0)
+        if is_latched_static_topic(name):
+            topics.append(latched_static_result(name, msgs))
+            continue
+        nominal = nominal_for(name)
+        if nominal is None:
+            topics.append({
+                "name": name,
+                "ok": True,
+                "msgs": msgs,
+                "avg_hz": 0.0,
+                "audit": "unconfigured_rate_presence" if msgs > 0 else "source_silent",
+                "error": (
+                    "recorded; event/unknown-rate topic checked for presence only"
+                    if msgs > 0 else "conditional/event topic was silent; loss cannot be calculated"
+                ),
+            })
+            continue
+        values = stamps.get(name, [])
+        if len(values) < 2:
+            topics.append({
+                "name": name, "ok": False, "msgs": len(values),
+                "error": f"only {len(values)} message(s)",
+            })
+            continue
+        values.sort()
+        cutoff = values[0] + int(warmup_s * 1e9)
+        settled = [stamp for stamp in values if stamp >= cutoff] or values
+        source_span = (settled[-1] - settled[0]) / 1e9
+        avg_hz = (len(settled) - 1) / source_span if source_span > 0 else 0.0
+        missing, events, worst = gap_stats(settled, nominal)
+        loss_pct = missing / (len(settled) + missing) * 100 if missing else 0.0
+        topics.append({
+            "name": name,
+            "ok": loss_pct <= max_loss_pct,
+            "audit": "header_stamp_gaps",
+            "msgs": msgs,
+            "avg_hz": round(avg_hz, 2),
+            "nominal_hz": nominal,
+            "missing": missing,
+            "loss_pct": round(loss_pct, 2),
+            "gap_events": events,
+            "worst_gaps": worst,
+        })
     _add_missing_selected_topics(bag_dir, topics)
     return topics
 

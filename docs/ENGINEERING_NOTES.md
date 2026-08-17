@@ -54,7 +54,9 @@
 
 ## rosbag 可靠性
 
-- SQLite 存储配置使用 WAL 和 `synchronous=OFF`。这是吞吐、断电恢复和数据完整性之间经过实机验证的折中，不能改回 `NORMAL` 或 `FULL`。
+- 新录制使用 MCAP：三路 dashboard 主图各有一个进程外 writer，其余 topic 共用一个
+  `ros2 bag record`。停止时只排空并原子发布四个 part，不复制 payload。SQLite 的 WAL +
+  `synchronous=OFF` 仅保留给旧 bag 与恢复兼容，不能改回 `NORMAL` 或 `FULL`。
 - 图像 header timestamp 通过录制开始时的固定偏移映射到 recorder timeline，并在录制期间持续审计帧间隔。
 - Prepared playback 必须使用 rosbag record timestamp 对齐图像与 Pose。不同相机的
   `header.stamp` 可能分别来自 Unix/NTP 和设备启动时钟，只能用于各 topic 内的节拍审计，
@@ -62,10 +64,11 @@
 - 人工质检使用每个 rosbag 自带的 `review/` 派生包：三路图像只扫描一次并拼成一个
   1280×720、30 Hz H.264 视频，Pose 保持固定 30 Hz 清单。浏览器只解码一个视频并以
   `video.currentTime` 驱动 3D，禁止重新引入三路 `<video>` 的独立时钟和变速追赶。
-- 回放准备直接从 SQLite 读取时间戳和所需 topic，不能在时间轴扫描阶段加载图像 BLOB；
+- 回放准备通过统一的 composite reader 从 SQLite/MCAP 读取时间戳和所需 topic，时间轴
+  扫描阶段不能反序列化图像 payload；
   大于输出需求的 JPEG 使用解码器原生半尺寸解码。Jetson 编码路径向 `nvvidconv` 提交
   BGRx，避免整帧 CPU 色彩转换。`manifest.json` 保留各阶段耗时，便于发现性能回退。
-- 审阅包在录制合包完成后排队预生成，录制或合包开始时必须暂停；不能从图像 callback
+- 审阅包在复合会话发布后排队预生成，录制开始时必须暂停；不能从图像 callback
   生成，也不能让质检缓存继续占用 `outputs/` 所在的系统盘。历史包通过 3D 页的
   `Prepare all` 或 `scripts/build_review_bundles.py --all` 补建。
 - 2026-08-12 实机验收使用 15.03 秒三相机 bag：NVENC 生成 451 帧 30/1 fps 的
@@ -80,9 +83,9 @@
 - 全局 Pose 与各自相机小消息共用 recorder；完整 Path 是 Pose 可重建的冗余
   调试数据，不默认录制。不要为全局 namespace 再增加两个 recorder 进程。
 - staging 恢复中的 reindex、salvage、convert 和输出验证是一个完整流程；`ros2 bag convert` 成功返回不代表输出一定可信。
-- 正常录制合包优先按 topic ID 重映射批量复制 SQLite BLOB，并在插入时完成启动裁剪；
-  输出通过消息数、时间边界与 `quick_check` 后才原子发布。布局不兼容或验证失败必须自动
-  回退到 `ros2 bag convert`；损坏 staging 的恢复探测始终使用官方 convert，不走快速路径。
+- 正常录制禁止合包重写：各 MCAP part 完成 metadata 后写入 `recording_manifest.json`，再将
+  staging 目录原子改名为最终会话。旧 SQLite staging 的故障恢复仍可使用 reindex、salvage
+  和官方 convert，但输出必须单独验证，不能把 convert 成功返回视作可信。
 - 旧的固定命令 Vosk worker 默认关闭，避免它与宸境同时独占 USB capture device。
   宸境由 systemd user service 监管，缺少模型或声卡时按服务重启间隔恢复；不得把
   SenseVoice 模型反复加载到每个命令周期，常驻进程只在启动时加载一次。服务启动应把

@@ -138,16 +138,21 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，
 支持整组勾选），`Start` 只录勾选的 topic。三路 dashboard 图像复用现有 DDS reader，
-直接交给每路 `InProcessBagWriter`；IMU、VIO 等小消息仍由独立 `ros2 bag record`
-子进程写入。`Stop` 会依次结束 writer、合包并生成 live header/network audit；
-合包优先使用经过消息数、时间边界和 SQLite 完整性验证的批量数据库复制，输入布局不兼容
-或验证失败时自动回退到 `ros2 bag convert`。合包完成前不能开始下一段。默认选择同时包含原始
+直接交给三路 MCAP `InProcessBagWriter`；其余勾选消息共用一个 MCAP `ros2 bag record`
+子进程。`Stop` 排空四个 append-only part 后，以 `recording_manifest.json` 原子发布为一个
+复合 rosbag 会话，同时保存 live header/network audit；不会重写 payload 或等待合包，发布后
+即可开始下一段。Bags、完整性检查和准备式回放都直接识别该复合会话。默认选择同时包含原始
 `vio_100hz` 和配置的全局 pose，供单臂/双臂数据集导出使用。
 
 手势录制默认关闭，可在 Settings 开启；Insight9 同时检测到双手“拇指向上、四指
 握拳”持续 0.8 秒时，会用服务器默认 topics 开始录制，解除 2 秒后再次保持同一
 手势可停止，且不会停止网页手动开始的录制。输出目录优先级：CLI `--rosbag-dir` >
 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
+Docker 宿主机目录由 `INSIGHT_ROSBAG_HOST_DIR` 控制；例如在 `.env` 写入
+`INSIGHT_ROSBAG_HOST_DIR=/media/nvidia/INSIGHT_USB/rosbags`，即可将容器录制根目录
+直接绑定到 ext4 U 盘。还可设置 `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`；挂载源不匹配
+时后端自动回退到本机 NVMe 的 `rosbags/`。录制状态的 `storage.active_path` 和
+`storage.using_fallback` 会显示实际写入位置。U 盘直录前应确认其已稳定挂载且可写。
 
 `jetson-nx` profile 的旧固定命令 Vosk worker 默认关闭。需要自然语言声控时使用宿主机
 上的 [宸境 OpenClaw 语音助手](docs/OPENCLAW_VOICE.md)：同一个 SenseVoice INT8 中文模型在本地
