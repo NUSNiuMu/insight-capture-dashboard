@@ -152,9 +152,11 @@ staging 目录原子发布，同时保存 live header/network audit；不分 par
 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
 Docker 宿主机目录由 `INSIGHT_ROSBAG_HOST_DIR` 控制；例如在 `.env` 写入
 `INSIGHT_ROSBAG_HOST_DIR=/media/nvidia/INSIGHT_USB/rosbags`，即可将容器录制根目录
-直接绑定到 ext4 U 盘。还可设置 `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`；挂载源不匹配
-时后端自动回退到本机 NVMe 的 `rosbags/`。录制状态的 `storage.active_path` 和
-`storage.using_fallback` 会显示实际写入位置。U 盘直录前应确认其已稳定挂载且可写。
+直接绑定到 ext4 U 盘。还可设置 `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`；后端启动时及
+每次开始录制前都会核对挂载源，并在 `_staging` 做一次写入/`fsync` 探测。挂载不匹配或
+探测失败时自动回退到本机 NVMe 的 `rosbags/`，本进程随后固定使用 NVMe，避免 U 盘抖动
+导致录制根目录来回切换。录制状态的 `storage.active_path`、`storage.using_fallback` 和
+`storage.fallback_reason` 会显示实际写入位置与回退原因。
 
 `jetson-nx` profile 的旧固定命令 Vosk worker 默认关闭。需要自然语言声控时使用宿主机
 上的 [宸境 OpenClaw 语音助手](docs/OPENCLAW_VOICE.md)：同一个 SenseVoice INT8 中文模型在本地

@@ -23,7 +23,10 @@ from post_processing_core.composite_bag import (  # noqa: E402
     recorded_topics,
     session_parts,
 )
-from post_processing_core.config import resolve_recording_root  # noqa: E402
+from post_processing_core.config import (  # noqa: E402
+    probe_recording_root,
+    resolve_recording_root,
+)
 from post_processing_core.playback import PlaybackManager  # noqa: E402
 from post_processing_core.recording import RecordingManager  # noqa: E402
 from dashboard_runtime.recording_bridge import RecordingBridge  # noqa: E402
@@ -174,6 +177,87 @@ class CompositeBagTest(unittest.TestCase):
 
             self.assertEqual(active, primary.resolve())
             self.assertFalse(status["using_fallback"])
+
+    def test_recording_falls_back_when_matching_mount_returns_io_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_root = Path(directory)
+            primary = project_root / "usb"
+            fallback = project_root / "nvme_bags"
+            primary.mkdir()
+            findmnt = mock.Mock(stdout="/dev/sda1[/rosbags]\n")
+
+            def probe(path: Path):
+                return "OSError: input/output error" if path == primary else None
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "INSIGHT_ROSBAG_REQUIRED_SOURCE": "/dev/sda1",
+                    "INSIGHT_ROSBAG_FALLBACK_DIR": str(fallback),
+                },
+            ), mock.patch(
+                "post_processing_core.config.subprocess.run", return_value=findmnt
+            ), mock.patch(
+                "post_processing_core.config.probe_recording_root", side_effect=probe
+            ):
+                active, status = resolve_recording_root(primary, project_root)
+
+            self.assertEqual(active, fallback.resolve())
+            self.assertTrue(status["using_fallback"])
+            self.assertIn("input/output error", status["fallback_reason"])
+
+    def test_storage_probe_writes_and_removes_sentinel(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            self.assertIsNone(probe_recording_root(root))
+            self.assertEqual(list((root / "_staging").iterdir()), [])
+
+    def test_recording_refreshes_storage_before_start(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project_root = Path(directory)
+            primary = project_root / "usb"
+            fallback = project_root / "nvme"
+            primary.mkdir()
+            fallback.mkdir()
+            status = {
+                "configured_path": str(primary),
+                "active_path": str(fallback),
+                "required_source": "/dev/sda1",
+                "mounted_source": "/dev/sda1[/rosbags]",
+                "using_fallback": True,
+                "fallback_reason": "primary storage probe failed: EIO",
+            }
+            changed = []
+            manager = RecordingManager(
+                {}, 20, primary, 1024, ["/camera"],
+                storage_status={"active_path": str(primary), "using_fallback": False},
+                storage_resolver=lambda: (fallback, status),
+            )
+            manager.add_storage_changed_callback(changed.append)
+            process = mock.Mock(stdout=io.StringIO(
+                "Waiting for recording: Press SPACE to start.\n"
+                "Subscribed to topic '/camera'\n"
+                "All requested topics are subscribed. Stopping discovery...\n"
+                "Resuming recording.\n"
+            ))
+            process.poll.return_value = None
+
+            with mock.patch(
+                "post_processing_core.recording.subprocess.Popen", return_value=process
+            ) as popen, mock.patch("post_processing_core.recording.os.write"):
+                result = manager.start(bag_name="fallback")
+
+            self.assertEqual(manager.rosbag_root, fallback.resolve())
+            self.assertEqual(changed, [fallback.resolve()])
+            self.assertTrue(result["storage"]["using_fallback"])
+            command = popen.call_args.args[0]
+            recorder_output = Path(command[command.index("--output") + 1])
+            self.assertTrue(recorder_output.is_relative_to(fallback.resolve()))
+            self.assertEqual(
+                Path(manager.output_path or "").parent,
+                fallback.resolve(),
+            )
 
     def test_aggregates_parts_and_catalogs_session(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

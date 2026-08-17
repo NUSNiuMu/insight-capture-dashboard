@@ -141,9 +141,11 @@ cd <部署目录>   # 首次安装时 update.sh 所在的那个目录
 - **ext4 U 盘直录**：在部署目录的 `.env` 增加
   `INSIGHT_ROSBAG_HOST_DIR=/media/nvidia/INSIGHT_USB/rosbags`，确认该目录已挂载且可写后执行
   `docker compose up -d insight-dashboard`。Compose 会把它绑定为容器录制根目录；
-  同时设置 `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`，挂载源不匹配时会自动回退到本机
-  NVMe 的 `rosbags/`。API 状态会报告实际路径和 `storage.using_fallback`；`update.sh` 更新
-  版本号时会保留这些本机设置。
+  同时设置 `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`。服务启动时及每次开始录制前会核对
+  挂载源，并在 `_staging` 执行写入/`fsync` 探测；挂载不匹配或出现 I/O 错误时自动回退到
+  本机 NVMe 的 `rosbags/`，本进程不再自动切回 U 盘。API 状态会报告实际路径、
+  `storage.using_fallback` 和 `storage.fallback_reason`；`update.sh` 更新版本号时会保留这些
+  本机设置。
 - **旧版本不会被自动清理**：`docker load` 过的镜像会一直留着，方便回滚；磁盘紧张时自己
   `docker image ls insight-dashboard` 查、`docker rmi insight-dashboard:<旧版本>` 清理不需要的。
 

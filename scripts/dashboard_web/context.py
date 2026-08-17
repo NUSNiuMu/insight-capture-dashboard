@@ -72,6 +72,16 @@ class DashboardContext:
             project_root=self.project_root,
             rosbag_root=self.recording_manager.rosbag_root,
         )
+        self.recording_manager.add_storage_changed_callback(self._set_rosbag_root)
+
+    def _set_rosbag_root(self, rosbag_root: Path) -> None:
+        """Keep bag consumers aligned after recording storage failover."""
+        root = rosbag_root.resolve()
+        self.scoring_manager.rosbag_root = root
+        self.prepared_playback_manager.rosbag_root = root
+        self.handpose_manager.rosbag_root = root
+        self.gripper_extraction_manager.rosbag_root = root
+        self.umi_export_manager.rosbag_root = root
 
     def playback_configuration(
         self,

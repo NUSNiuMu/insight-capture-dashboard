@@ -137,6 +137,7 @@ class RecordingManager:
         storage_id: str = "mcap",
         recording_rmw_implementation: str = "rmw_cyclonedds_cpp",
         storage_status: Optional[Dict[str, object]] = None,
+        storage_resolver: Optional[Callable[[], tuple[Path, Dict[str, object]]]] = None,
     ) -> None:
         self.raw_config = raw_config
         self.ros_domain_id = int(ros_domain_id)
@@ -148,6 +149,8 @@ class RecordingManager:
         self.storage_status = dict(storage_status or {
             "active_path": str(self.rosbag_root), "using_fallback": False
         })
+        self._storage_resolver = storage_resolver
+        self._storage_changed_callbacks: List[Callable[[Path], None]] = []
         self.default_topics = _normalize_topics(default_topics)
         self.publisher_checker = publisher_checker
         # Reuse dashboard image subscriptions; tests may fall back to subprocesses.
@@ -190,6 +193,35 @@ class RecordingManager:
         """Register lightweight work to enqueue after a merged bag is durable."""
         with self._lock:
             self._recording_completed_callbacks.append(callback)
+
+    def add_storage_changed_callback(self, callback: Callable[[Path], None]) -> None:
+        """Update consumers that resolve bags relative to the active root."""
+        with self._lock:
+            self._storage_changed_callbacks.append(callback)
+
+    def _refresh_recording_storage_unlocked(self) -> None:
+        # Once failover occurs, remain on NVMe until restart. Switching roots
+        # back and forth would make just-recorded bags disappear from the UI.
+        if self._storage_resolver is None or self.storage_status.get("using_fallback"):
+            return
+        active, status = self._storage_resolver()
+        active = active.resolve()
+        changed = active != self.rosbag_root
+        self.rosbag_root = active
+        self.storage_status = dict(status)
+        if not changed:
+            return
+        self._output_lines.append(
+            f"[storage] switched recording root to {active}: "
+            f"{self.storage_status.get('fallback_reason') or 'storage selection changed'}"
+        )
+        for callback in list(self._storage_changed_callbacks):
+            try:
+                callback(active)
+            except Exception as exc:  # noqa: BLE001 - capture remains the priority
+                self._output_lines.append(
+                    f"[storage] WARNING: root-change callback failed: {exc}"
+                )
 
     def _notify_recording_completed(self, output_path: Path) -> None:
         with self._lock:
@@ -288,6 +320,8 @@ class RecordingManager:
                 raise RuntimeError(
                     f"Previous recording is still {self.merge_state} -- wait for it to finish."
                 )
+            self._output_lines.clear()
+            self._refresh_recording_storage_unlocked()
 
             timestamp = time.strftime("%Y%m%d_%H%M%S")
             if bag_name:
@@ -320,7 +354,6 @@ class RecordingManager:
             processes: Dict[str, subprocess.Popen] = {}
             stdout_threads: List[threading.Thread] = []
             control_fds: Dict[str, int] = {}
-            self._output_lines.clear()
             self._recorder_loss_lines = []
             self._recorder_ready.clear()
             self._recorder_resumed.clear()

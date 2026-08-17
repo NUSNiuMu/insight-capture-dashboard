@@ -830,10 +830,12 @@ def main() -> None:
         or "rosbags"
     )
     results_dir_value = post_processing_config.get("results_dir", "outputs/results")
-    rosbag_root = Path(rosbag_dir_value)
-    if not rosbag_root.is_absolute():
-        rosbag_root = (project_root / rosbag_root).resolve()
-    rosbag_root, recording_storage_status = resolve_recording_root(rosbag_root, project_root)
+    configured_rosbag_root = Path(rosbag_dir_value)
+    if not configured_rosbag_root.is_absolute():
+        configured_rosbag_root = (project_root / configured_rosbag_root).resolve()
+    rosbag_root, recording_storage_status = resolve_recording_root(
+        configured_rosbag_root, project_root
+    )
     results_root = Path(results_dir_value)
     if not results_root.is_absolute():
         results_root = (project_root / results_root).resolve()
@@ -853,9 +855,14 @@ def main() -> None:
     )
     node.get_logger().info(f"View mode={args.view_mode}")
     if recording_storage_status["using_fallback"]:
+        storage_failure = (
+            recording_storage_status.get("fallback_reason")
+            or recording_storage_status["mounted_source"]
+            or "not mounted"
+        )
         node.get_logger().warning(
             "Configured recording drive is unavailable "
-            f"({recording_storage_status['mounted_source'] or 'not mounted'}); "
+            f"({storage_failure}); "
             f"falling back to NVMe at {rosbag_root}"
         )
 
@@ -876,6 +883,9 @@ def main() -> None:
             )
         ),
         storage_status=recording_storage_status,
+        storage_resolver=lambda: resolve_recording_root(
+            configured_rosbag_root, project_root
+        ),
     )
     # Adopt recordings orphaned in rosbags/_staging/ by a power cut or crash
     # (reindex/salvage + merge into a normal bag, in the background).
