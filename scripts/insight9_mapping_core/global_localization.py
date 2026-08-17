@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from collections import deque
 from typing import Optional
 
 import cv2
@@ -24,6 +25,7 @@ class GlobalLocalizationConfig:
     max_reprojection_error_px: float = 3.0
     min_grid_cells: int = 4
     confirmation_frames: int = 3
+    confirmation_window: int = 5
     confirmation_translation_m: float = 0.20
     confirmation_rotation_deg: float = 12.0
 
@@ -159,6 +161,51 @@ def localize_features(
 
     image_points = np.asarray(query_keypoints, dtype=np.float32)[query_indices]
     object_points = np.asarray(map_points, dtype=np.float32)[map_indices]
+    return localize_correspondences(
+        image_points,
+        object_points,
+        camera_matrix,
+        odom_to_camera,
+        image_shape,
+        config,
+        diagnostics=diagnostics,
+    )
+
+
+def localize_correspondences(
+    image_points: np.ndarray,
+    object_points: np.ndarray,
+    camera_matrix: np.ndarray,
+    odom_to_camera: np.ndarray,
+    image_shape: tuple[int, int],
+    config: GlobalLocalizationConfig,
+    *,
+    diagnostics: Optional[dict[str, object]] = None,
+) -> tuple[Optional[LocalizationCandidate], dict[str, object]]:
+    """Geometrically validate known 2D-to-3D correspondences with PnP."""
+
+    image_points = np.asarray(image_points, dtype=np.float32).reshape(-1, 2)
+    object_points = np.asarray(object_points, dtype=np.float32).reshape(-1, 3)
+    if len(image_points) != len(object_points):
+        raise ValueError("image and object points must have matching rows")
+    if diagnostics is None:
+        diagnostics = {
+            "query_features": int(len(image_points)),
+            "map_features": int(len(object_points)),
+            "descriptor_matches": int(len(image_points)),
+            "descriptor_match_ms": 0.0,
+            "median_similarity": None,
+            "inliers": 0,
+            "inlier_ratio": 0.0,
+            "median_reprojection_error_px": None,
+            "grid_cells": 0,
+            "accepted": False,
+            "rejection": None,
+        }
+    if len(image_points) < config.min_matches:
+        diagnostics["rejection"] = "insufficient_correspondences"
+        return None, diagnostics
+
     ok, rvec, tvec, inlier_payload = cv2.solvePnPRansac(
         object_points,
         image_points,
@@ -231,7 +278,7 @@ def localize_features(
     return LocalizationCandidate(
         map_to_camera=map_to_camera,
         map_to_odom=map_to_odom,
-        matches=len(query_indices),
+        matches=len(image_points),
         inliers=inlier_count,
         inlier_ratio=inlier_ratio,
         median_reprojection_error_px=median_error,
@@ -239,40 +286,111 @@ def localize_features(
     ), diagnostics
 
 
+def associate_reference_points(
+    query_points: np.ndarray,
+    matched_reference_points: np.ndarray,
+    reference_points: np.ndarray,
+    reference_object_points: np.ndarray,
+    *,
+    max_distance_px: float = 0.75,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map direct image matches back to a reference keyframe's 3D points."""
+
+    query = np.asarray(query_points, dtype=np.float32).reshape(-1, 2)
+    matched_reference = np.asarray(
+        matched_reference_points, dtype=np.float32
+    ).reshape(-1, 2)
+    reference = np.asarray(reference_points, dtype=np.float32).reshape(-1, 2)
+    objects = np.asarray(reference_object_points, dtype=np.float32).reshape(-1, 3)
+    if len(query) != len(matched_reference):
+        raise ValueError("direct match point arrays must have matching rows")
+    if len(reference) != len(objects):
+        raise ValueError("reference image and object points must have matching rows")
+    if max_distance_px <= 0.0:
+        raise ValueError("reference association distance must be positive")
+    if not len(query) or not len(reference):
+        return (
+            np.empty((0, 2), dtype=np.float32),
+            np.empty((0, 3), dtype=np.float32),
+        )
+
+    distances_sq = np.sum(
+        (matched_reference[:, None, :] - reference[None, :, :]) ** 2,
+        axis=2,
+    )
+    nearest = np.argmin(distances_sq, axis=1)
+    nearest_distance_sq = distances_sq[np.arange(len(query)), nearest]
+    within = nearest_distance_sq <= float(max_distance_px) ** 2
+
+    # SuperGlue normally returns unique reference keypoints. Retain only the
+    # closest match if numerical association maps two results onto one point.
+    selected: dict[int, int] = {}
+    for match_index in np.flatnonzero(within):
+        reference_index = int(nearest[match_index])
+        previous = selected.get(reference_index)
+        if (
+            previous is None
+            or nearest_distance_sq[match_index] < nearest_distance_sq[previous]
+        ):
+            selected[reference_index] = int(match_index)
+    match_indices = np.asarray(sorted(selected.values()), dtype=np.int64)
+    if not len(match_indices):
+        return (
+            np.empty((0, 2), dtype=np.float32),
+            np.empty((0, 3), dtype=np.float32),
+        )
+    return query[match_indices], objects[nearest[match_indices]]
+
+
 class LocalizationConsensus:
-    """Accept a global correction only after consecutive consistent candidates."""
+    """Accept a correction from a consistent quorum in a bounded attempt window."""
 
     def __init__(self, config: GlobalLocalizationConfig) -> None:
         self.config = config
         self.correction: Optional[np.ndarray] = None
-        self._pending: list[LocalizationCandidate] = []
+        if config.confirmation_frames <= 0:
+            raise ValueError("confirmation frames must be positive")
+        if config.confirmation_window < config.confirmation_frames:
+            raise ValueError("confirmation window must cover required frames")
+        self._window: deque[Optional[LocalizationCandidate]] = deque(
+            maxlen=config.confirmation_window
+        )
 
     def observe(self, candidate: Optional[LocalizationCandidate]) -> dict[str, object]:
-        if candidate is None:
-            self._pending.clear()
-        else:
-            if self._pending:
-                previous = self._pending[-1].map_to_odom
+        self._window.append(candidate)
+        available = [item for item in self._window if item is not None]
+        best_cluster: list[LocalizationCandidate] = []
+        for reference in available:
+            cluster = []
+            for item in available:
                 translation = float(
-                    np.linalg.norm(previous[:3, 3] - candidate.map_to_odom[:3, 3])
+                    np.linalg.norm(
+                        reference.map_to_odom[:3, 3] - item.map_to_odom[:3, 3]
+                    )
                 )
-                rotation = rotation_distance_deg(previous, candidate.map_to_odom)
+                rotation = rotation_distance_deg(
+                    reference.map_to_odom, item.map_to_odom
+                )
                 if (
-                    translation > self.config.confirmation_translation_m
-                    or rotation > self.config.confirmation_rotation_deg
+                    translation <= self.config.confirmation_translation_m
+                    and rotation <= self.config.confirmation_rotation_deg
                 ):
-                    self._pending.clear()
-            self._pending.append(candidate)
-            if len(self._pending) >= self.config.confirmation_frames:
-                translations = np.asarray(
-                    [item.map_to_odom[:3, 3] for item in self._pending]
-                )
-                accepted = self._pending[-1].map_to_odom.copy()
-                accepted[:3, 3] = np.median(translations, axis=0)
-                self.correction = accepted
-                self._pending.clear()
+                    cluster.append(item)
+            if len(cluster) >= len(best_cluster):
+                best_cluster = cluster
+        progress = len(best_cluster)
+        if progress >= self.config.confirmation_frames:
+            translations = np.asarray(
+                [item.map_to_odom[:3, 3] for item in best_cluster]
+            )
+            accepted = best_cluster[-1].map_to_odom.copy()
+            accepted[:3, 3] = np.median(translations, axis=0)
+            self.correction = accepted
+            self._window.clear()
+            progress = 0
         return {
             "localized": self.correction is not None,
-            "confirmation_progress": len(self._pending),
+            "confirmation_progress": progress,
             "confirmation_required": self.config.confirmation_frames,
+            "confirmation_window": self.config.confirmation_window,
         }

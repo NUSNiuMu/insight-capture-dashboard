@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Localize both Insight3 cameras in the Insight9 SuperPoint map."""
+"""Localize both Insight3 cameras from Insight9 keyframes and the sparse map."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -31,9 +32,11 @@ from insight9_mapping_core import (  # noqa: E402
     RelocalizationEkfConfig,
     VioContinuityConfig,
     VioContinuityStitcher,
+    associate_reference_points,
     compose_transform,
     left_to_stereo_center,
     load_tcp_frame_calibrations,
+    localize_correspondences,
     localize_features,
     matrix_from_pose,
     matrix_from_transform,
@@ -52,7 +55,12 @@ try:
     from nav_msgs.msg import Path as PathMsg
     from rclpy.duration import Duration
     from rclpy.node import Node
-    from rclpy.qos import qos_profile_sensor_data
+    from rclpy.qos import (
+        DurabilityPolicy,
+        QoSProfile,
+        ReliabilityPolicy,
+        qos_profile_sensor_data,
+    )
     from rclpy.time import Time
     from sensor_msgs.msg import CameraInfo, Image, PointCloud2
     from std_msgs.msg import String
@@ -201,6 +209,58 @@ def parse_feature_cloud(message: PointCloud2) -> tuple[np.ndarray, np.ndarray]:
     return packed[:, :3], packed[:, 3:]
 
 
+def parse_calibration_keyframe_cloud(
+    message: PointCloud2,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Decode map XYZ and reference-image UV from a calibration keyframe."""
+
+    fields = {field.name: field for field in message.fields}
+    required = ("x", "y", "z", "u", "v")
+    if any(name not in fields for name in required):
+        raise ValueError("calibration keyframe cloud is missing XYZ or UV fields")
+    if (
+        tuple(fields[name].offset for name in required) != (0, 4, 8, 12, 16)
+        or any(fields[name].count != 1 for name in required)
+        or message.point_step != 20
+    ):
+        raise ValueError("calibration keyframe cloud layout is incompatible")
+    count = int(message.width) * int(message.height)
+    expected = count * int(message.point_step)
+    if len(message.data) < expected:
+        raise ValueError("calibration keyframe cloud payload is truncated")
+    dtype = ">f4" if message.is_bigendian else "<f4"
+    packed = np.frombuffer(message.data, dtype=dtype, count=count * 5)
+    packed = packed.reshape(count, 5).astype(np.float32, copy=True)
+    return packed[:, 3:5], packed[:, :3]
+
+
+def static_gripper_image_mask(
+    image_shape: tuple[int, int], mask_height_ratio: float
+) -> np.ndarray:
+    """Return a pixel mask for the static bottom gripper strip."""
+
+    height, width = int(image_shape[0]), int(image_shape[1])
+    if height <= 0 or width <= 0:
+        raise ValueError("image shape must be positive")
+    ratio = float(mask_height_ratio)
+    if not 0.0 <= ratio < 1.0:
+        raise ValueError("gripper mask height ratio must be in [0, 1)")
+    mask = np.zeros((height, width), dtype=bool)
+    if ratio > 0.0:
+        mask[int(height * (1.0 - ratio)) :, :] = True
+    return mask
+
+
+@dataclass(frozen=True)
+class CalibrationReference:
+    """A paired Insight9 image and its triangulated map points."""
+
+    stamp_ns: int
+    image: np.ndarray
+    pixels: np.ndarray
+    map_points: np.ndarray
+
+
 class CameraState:
     def __init__(
         self,
@@ -252,6 +312,10 @@ class Insight3GlobalLocalizer(Node):
         super().__init__("insight3_global_localizer")
         self._args = args
         self._map_frame = args.map_frame
+        if args.calibration_keyframe_association_px <= 0.0:
+            raise ValueError(
+                "calibration keyframe association distance must be positive"
+            )
         self._gripper_mask_height_ratio = validate_gripper_mask_height_ratio(
             args.gripper_mask_height_ratio
         )
@@ -267,6 +331,7 @@ class Insight3GlobalLocalizer(Node):
             max_reprojection_error_px=args.max_reprojection_error_px,
             min_grid_cells=args.min_grid_cells,
             confirmation_frames=args.confirmation_frames,
+            confirmation_window=args.confirmation_window,
             confirmation_translation_m=args.confirmation_translation_m,
             confirmation_rotation_deg=args.confirmation_rotation_deg,
         )
@@ -290,6 +355,10 @@ class Insight3GlobalLocalizer(Node):
         self._map_lock = threading.Lock()
         self._map_points = np.empty((0, 3), dtype=np.float32)
         self._normalized_map_descriptors = np.empty((0, 256), dtype=np.float32)
+        self._calibration_reference_lock = threading.Lock()
+        self._calibration_images: dict[int, np.ndarray] = {}
+        self._calibration_points: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        self._calibration_reference: Optional[CalibrationReference] = None
         self._cameras = {
             name: CameraState(
                 name,
@@ -339,6 +408,23 @@ class Insight3GlobalLocalizer(Node):
             args.feature_map_topic,
             self._on_feature_map,
             1,
+        )
+        calibration_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(
+            Image,
+            args.calibration_keyframe_image_topic,
+            self._on_calibration_keyframe_image,
+            calibration_qos,
+        )
+        self.create_subscription(
+            PointCloud2,
+            args.calibration_keyframe_points_topic,
+            self._on_calibration_keyframe_points,
+            calibration_qos,
         )
         self._camera_subscriptions = []
         for name in CAMERAS:
@@ -422,6 +508,10 @@ class Insight3GlobalLocalizer(Node):
             self._normalized_map_descriptors = np.empty(
                 (0, 256), dtype=np.float32
             )
+        with self._calibration_reference_lock:
+            self._calibration_images.clear()
+            self._calibration_points.clear()
+            self._calibration_reference = None
         for state in self._cameras.values():
             with state.lock:
                 state.history.clear()
@@ -477,6 +567,56 @@ class Insight3GlobalLocalizer(Node):
         with self._map_lock:
             self._map_points = points
             self._normalized_map_descriptors = normalized_descriptors
+
+    def _on_calibration_keyframe_image(self, message: Image) -> None:
+        stamp_ns = stamp_to_ns(message.header.stamp)
+        try:
+            image = grayscale_image(message)
+        except ValueError as exc:
+            self.get_logger().error(f"rejected calibration keyframe image: {exc}")
+            return
+        with self._calibration_reference_lock:
+            self._calibration_images[stamp_ns] = image
+            self._assemble_calibration_reference(stamp_ns)
+
+    def _on_calibration_keyframe_points(self, message: PointCloud2) -> None:
+        stamp_ns = stamp_to_ns(message.header.stamp)
+        try:
+            pixels, map_points = parse_calibration_keyframe_cloud(message)
+        except ValueError as exc:
+            self.get_logger().error(f"rejected calibration keyframe points: {exc}")
+            return
+        with self._calibration_reference_lock:
+            if not len(map_points):
+                self._calibration_images.clear()
+                self._calibration_points.clear()
+                self._calibration_reference = None
+                return
+            self._calibration_points[stamp_ns] = (pixels, map_points)
+            self._assemble_calibration_reference(stamp_ns)
+
+    def _assemble_calibration_reference(self, stamp_ns: int) -> None:
+        """Pair image and geometry callbacks while holding the reference lock."""
+
+        image = self._calibration_images.get(stamp_ns)
+        geometry = self._calibration_points.get(stamp_ns)
+        if image is None or geometry is None:
+            self._trim_calibration_parts()
+            return
+        pixels, map_points = geometry
+        self._calibration_reference = CalibrationReference(
+            stamp_ns=stamp_ns,
+            image=image,
+            pixels=pixels,
+            map_points=map_points,
+        )
+        self._calibration_images.clear()
+        self._calibration_points.clear()
+
+    def _trim_calibration_parts(self) -> None:
+        for cache in (self._calibration_images, self._calibration_points):
+            while len(cache) > 3:
+                del cache[min(cache)]
 
     def _image_callback(self, name: str):
         def callback(message: Image) -> None:
@@ -704,6 +844,8 @@ class Insight3GlobalLocalizer(Node):
                 # references remain immutable for this localization pass.
                 map_points = self._map_points
                 map_descriptors = self._normalized_map_descriptors
+            with self._calibration_reference_lock:
+                calibration_reference = self._calibration_reference
             for name, state in self._cameras.items():
                 now = time.monotonic()
                 with state.lock:
@@ -723,12 +865,23 @@ class Insight3GlobalLocalizer(Node):
                         if state.imu_to_center is None
                         else state.imu_to_center.copy()
                     )
+                    localized_before = state.pose_filter.initialized
+                descriptor_map_ready = (
+                    len(map_points) >= self._args.min_map_features
+                )
+                calibration_reference_ready = (
+                    calibration_reference is not None
+                    and len(calibration_reference.map_points)
+                    >= self._args.min_matches
+                )
                 if (
                     message is None
                     or camera_matrix is None
                     or imu_to_left is None
                     or imu_to_center is None
-                    or len(map_points) < self._args.min_map_features
+                    or not (
+                        descriptor_map_ready or calibration_reference_ready
+                    )
                 ):
                     with state.lock:
                         localized = state.pose_filter.initialized
@@ -747,6 +900,14 @@ class Insight3GlobalLocalizer(Node):
                             "center_extrinsic_ready": imu_to_center is not None,
                             "map_features": len(map_points),
                             "need_map_features": self._args.min_map_features,
+                            "calibration_keyframe_ready": (
+                                calibration_reference_ready
+                            ),
+                            "calibration_keyframe_points": (
+                                len(calibration_reference.map_points)
+                                if calibration_reference is not None
+                                else 0
+                            ),
                         }
                         state.next_process_monotonic = now + 0.5
                     continue
@@ -763,33 +924,152 @@ class Insight3GlobalLocalizer(Node):
                 started = time.perf_counter()
                 try:
                     image = grayscale_image(message)
-                    features = self._matcher.extract(image)
-                    feature_keep = static_gripper_feature_keep_mask(
-                        features.keypoints,
-                        image.shape,
-                        self._gripper_mask_height_ratio,
-                    )
-                    query_keypoints = features.keypoints[feature_keep]
-                    query_descriptors = features.descriptors[feature_keep]
-                    masked_query_features = int(
-                        len(features.keypoints) - len(query_keypoints)
-                    )
                     odom_to_left = compose_transform(
                         matrix_from_pose(pose), imu_to_left
                     )
-                    candidate, diagnostics = localize_features(
-                        query_keypoints,
-                        query_descriptors,
-                        map_points,
-                        map_descriptors,
-                        camera_matrix,
-                        odom_to_left,
-                        image.shape,
-                        localization_config,
-                        map_descriptors_normalized=True,
+                    candidate = None
+                    diagnostics: dict[str, object] = {}
+                    inference_ms: Optional[float] = None
+                    direct_summary: dict[str, object] = {}
+                    if (
+                        not localized_before
+                        and calibration_reference_ready
+                        and calibration_reference is not None
+                    ):
+                        if image.shape == calibration_reference.image.shape:
+                            direct_matches = self._matcher.match(
+                                image,
+                                calibration_reference.image,
+                                left_mask=static_gripper_image_mask(
+                                    image.shape,
+                                    self._gripper_mask_height_ratio,
+                                ),
+                            )
+                            direct_image_points, direct_object_points = (
+                                associate_reference_points(
+                                    direct_matches.left_points,
+                                    direct_matches.right_points,
+                                    calibration_reference.pixels,
+                                    calibration_reference.map_points,
+                                    max_distance_px=(
+                                        self._args.calibration_keyframe_association_px
+                                    ),
+                                )
+                            )
+                            inference_ms = direct_matches.backend_inference_ms
+                            diagnostics = {
+                                "query_features": direct_matches.detected_left,
+                                "map_features": len(
+                                    calibration_reference.map_points
+                                ),
+                                "descriptor_matches": len(direct_image_points),
+                                "descriptor_match_ms": (
+                                    direct_matches.backend_inference_ms
+                                ),
+                                "median_similarity": (
+                                    round(float(np.median(direct_matches.scores)), 4)
+                                    if len(direct_matches.scores)
+                                    else None
+                                ),
+                                "inliers": 0,
+                                "inlier_ratio": 0.0,
+                                "median_reprojection_error_px": None,
+                                "grid_cells": 0,
+                                "accepted": False,
+                                "rejection": None,
+                                "localization_method": "superglue_keyframe",
+                                "direct_superglue_matches": len(
+                                    direct_matches.left_points
+                                ),
+                                "direct_3d_matches": len(direct_image_points),
+                                "calibration_keyframe_stamp_ns": (
+                                    calibration_reference.stamp_ns
+                                ),
+                            }
+                            candidate, diagnostics = localize_correspondences(
+                                direct_image_points,
+                                direct_object_points,
+                                camera_matrix,
+                                odom_to_left,
+                                image.shape,
+                                localization_config,
+                                diagnostics=diagnostics,
+                            )
+                            direct_summary = {
+                                "direct_accepted": diagnostics["accepted"],
+                                "direct_rejection": diagnostics["rejection"],
+                                "direct_superglue_matches": diagnostics[
+                                    "direct_superglue_matches"
+                                ],
+                                "direct_3d_matches": diagnostics[
+                                    "direct_3d_matches"
+                                ],
+                                "direct_inliers": diagnostics["inliers"],
+                                "direct_inlier_ratio": diagnostics[
+                                    "inlier_ratio"
+                                ],
+                                "direct_grid_cells": diagnostics["grid_cells"],
+                            }
+                        else:
+                            direct_summary = {
+                                "direct_accepted": False,
+                                "direct_rejection": "image_shape_mismatch",
+                            }
+                    if candidate is None and descriptor_map_ready:
+                        features = self._matcher.extract(image)
+                        inference_ms = features.backend_inference_ms
+                        feature_keep = static_gripper_feature_keep_mask(
+                            features.keypoints,
+                            image.shape,
+                            self._gripper_mask_height_ratio,
+                        )
+                        query_keypoints = features.keypoints[feature_keep]
+                        query_descriptors = features.descriptors[feature_keep]
+                        masked_query_features = int(
+                            len(features.keypoints) - len(query_keypoints)
+                        )
+                        candidate, diagnostics = localize_features(
+                            query_keypoints,
+                            query_descriptors,
+                            map_points,
+                            map_descriptors,
+                            camera_matrix,
+                            odom_to_left,
+                            image.shape,
+                            localization_config,
+                            map_descriptors_normalized=True,
+                        )
+                        diagnostics["raw_query_features"] = int(
+                            len(features.keypoints)
+                        )
+                        diagnostics["masked_query_features"] = (
+                            masked_query_features
+                        )
+                        diagnostics["localization_method"] = "descriptor_map"
+                        diagnostics.update(direct_summary)
+                    elif not diagnostics:
+                        diagnostics = {
+                            "accepted": False,
+                            "rejection": (
+                                "descriptor_map_not_ready"
+                                if localized_before
+                                and calibration_reference_ready
+                                else "calibration_keyframe_unavailable"
+                            ),
+                            "localization_method": (
+                                "vio_only"
+                                if localized_before
+                                else "none"
+                            ),
+                        }
+                    diagnostics["calibration_keyframe_ready"] = (
+                        calibration_reference_ready
                     )
-                    diagnostics["raw_query_features"] = int(len(features.keypoints))
-                    diagnostics["masked_query_features"] = masked_query_features
+                    diagnostics["calibration_keyframe_points"] = (
+                        len(calibration_reference.map_points)
+                        if calibration_reference is not None
+                        else 0
+                    )
                     diagnostics["gripper_mask_height_ratio"] = (
                         self._gripper_mask_height_ratio
                     )
@@ -866,7 +1146,7 @@ class Insight3GlobalLocalizer(Node):
                                 )
                             ),
                             "map_features": len(map_points),
-                            "extract_ms": features.backend_inference_ms,
+                            "extract_ms": inference_ms,
                             "total_ms": round(
                                 (time.perf_counter() - started) * 1000.0, 1
                             ),
@@ -1073,6 +1353,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--feature-map-topic", default="/insight9_sparse_map/features"
     )
     parser.add_argument(
+        "--calibration-keyframe-image-topic",
+        default="/insight9_sparse_map/calibration_keyframe/image",
+    )
+    parser.add_argument(
+        "--calibration-keyframe-points-topic",
+        default="/insight9_sparse_map/calibration_keyframe/points",
+    )
+    parser.add_argument(
+        "--calibration-keyframe-association-px", type=float, default=0.75
+    )
+    parser.add_argument(
         "--image-topic-template",
         default="/insight_mapping/{name}/infra1/image_rect_raw",
     )
@@ -1094,6 +1385,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-reprojection-error-px", type=float, default=3.0)
     parser.add_argument("--min-grid-cells", type=int, default=4)
     parser.add_argument("--confirmation-frames", type=int, default=3)
+    parser.add_argument("--confirmation-window", type=int, default=5)
     parser.add_argument("--confirmation-translation-m", type=float, default=0.20)
     parser.add_argument("--confirmation-rotation-deg", type=float, default=12.0)
     parser.add_argument("--path-points", type=int, default=200)

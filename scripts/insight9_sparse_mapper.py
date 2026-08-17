@@ -61,7 +61,12 @@ try:
     from rclpy.duration import Duration
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.node import Node
-    from rclpy.qos import qos_profile_sensor_data
+    from rclpy.qos import (
+        DurabilityPolicy,
+        QoSProfile,
+        ReliabilityPolicy,
+        qos_profile_sensor_data,
+    )
     from rclpy.time import Time
     from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
     from sensor_msgs_py import point_cloud2
@@ -74,6 +79,7 @@ except ImportError as exc:  # pragma: no cover - exercised inside the ROS image
 
 POINTCLOUD_MIN_PUBLISH_INTERVAL_SEC = 1.0
 POINTCLOUD_REFRESH_INTERVAL_SEC = 10.0
+CALIBRATION_KEYFRAME_PUBLISH_INTERVAL_SEC = 0.5
 
 
 def stamp_to_ns(stamp: TimeMsg) -> int:
@@ -198,6 +204,51 @@ def descriptor_cloud(
     return message
 
 
+def calibration_keyframe_cloud(
+    header: Header, pixels: np.ndarray, points: np.ndarray
+) -> PointCloud2:
+    """Pack reference-image UV and corresponding map XYZ into PointCloud2."""
+
+    uv = np.asarray(pixels, dtype=np.float32).reshape(-1, 2)
+    xyz = np.asarray(points, dtype=np.float32).reshape(-1, 3)
+    if len(uv) != len(xyz):
+        raise ValueError("calibration keyframe arrays must have matching rows")
+    packed = np.concatenate((xyz, uv), axis=1)
+    message = PointCloud2()
+    message.header = header
+    message.height = 1
+    message.width = len(packed)
+    message.fields = [
+        PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
+        PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
+        PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+        PointField(name="u", offset=12, datatype=PointField.FLOAT32, count=1),
+        PointField(name="v", offset=16, datatype=PointField.FLOAT32, count=1),
+    ]
+    message.is_bigendian = False
+    message.point_step = 20
+    message.row_step = int(message.point_step * message.width)
+    message.data = packed.tobytes()
+    message.is_dense = True
+    return message
+
+
+def mono_image_message(header: Header, image: np.ndarray) -> Image:
+    """Build a tightly packed mono8 image for a calibration keyframe."""
+
+    gray = np.ascontiguousarray(image, dtype=np.uint8)
+    if gray.ndim != 2:
+        raise ValueError("calibration keyframe image must be grayscale")
+    message = Image()
+    message.header = header
+    message.height, message.width = gray.shape
+    message.encoding = "mono8"
+    message.is_bigendian = False
+    message.step = int(message.width)
+    message.data = gray.tobytes()
+    return message
+
+
 @dataclass(frozen=True)
 class MappingKeyframe:
     """Compact stereo observations retained for map rebuilding after loops."""
@@ -208,6 +259,17 @@ class MappingKeyframe:
     points_left: np.ndarray
     descriptors: np.ndarray
     scores: np.ndarray
+
+
+@dataclass(frozen=True)
+class CalibrationKeyframe:
+    """One low-rate Insight9 image with triangulated points for direct matching."""
+
+    keyframe_id: int
+    stamp_ns: int
+    image: np.ndarray
+    pixels: np.ndarray
+    map_points: np.ndarray
 
 
 class Insight9SparseMapper(Node):
@@ -228,6 +290,8 @@ class Insight9SparseMapper(Node):
             for value in pose_graph_runtime_limits
         ):
             raise ValueError("pose graph scheduling thresholds must be positive")
+        if args.calibration_keyframe_min_points < 4:
+            raise ValueError("calibration keyframes require at least four points")
         self._pose_buffer = PoseBuffer(max_bracket_gap_ns=50_000_000)
         self._stereo_sync: StereoPairSynchronizer[Image] = StereoPairSynchronizer(
             tolerance_ns=int(args.stereo_tolerance_ms * 1_000_000)
@@ -269,6 +333,7 @@ class Insight9SparseMapper(Node):
             max_reprojection_error_px=args.loop_max_reprojection_error_px,
             min_grid_cells=args.loop_min_grid_cells,
             confirmation_frames=args.loop_confirmation_frames,
+            confirmation_window=args.loop_confirmation_window,
             confirmation_translation_m=args.loop_confirmation_translation_m,
             confirmation_rotation_deg=args.loop_confirmation_rotation_deg,
         )
@@ -342,6 +407,26 @@ class Insight9SparseMapper(Node):
         self._feature_map_publisher = self.create_publisher(
             PointCloud2, "insight9_sparse_map/features", 1
         )
+        calibration_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._calibration_image_publisher = self.create_publisher(
+            Image,
+            "insight9_sparse_map/calibration_keyframe/image",
+            calibration_qos,
+        )
+        self._calibration_points_publisher = self.create_publisher(
+            PointCloud2,
+            "insight9_sparse_map/calibration_keyframe/points",
+            calibration_qos,
+        )
+        self._calibration_keyframe_lock = threading.Lock()
+        self._calibration_keyframe: Optional[CalibrationKeyframe] = None
+        self._calibration_keyframe_dirty = False
+        self._calibration_keyframe_clear_dirty = False
+        self._last_calibration_keyframe_publish_monotonic = float("-inf")
         self._path_publisher = (
             self.create_publisher(PathMsg, "insight9_sparse_map/path", 1)
             if args.publish_debug_topics
@@ -433,6 +518,11 @@ class Insight9SparseMapper(Node):
                 self._last_loop_measurement = None
                 self._loop_closure_count = 0
                 self._last_vio_stamp_ns = 0
+            with self._calibration_keyframe_lock:
+                self._calibration_keyframe = None
+                self._calibration_keyframe_dirty = False
+                self._calibration_keyframe_clear_dirty = True
+                self._last_calibration_keyframe_publish_monotonic = float("-inf")
 
     def _map_to_odom(self, *, smoothed: bool = True) -> np.ndarray:
         with self._loop_lock:
@@ -795,6 +885,32 @@ class Insight9SparseMapper(Node):
                             )
                             self._pointcloud_dirty = True
                             self._feature_map_dirty = True
+                    anchor_map_to_left = (
+                        self._pose_graph.pose(next_keyframe_id)
+                        if graph_target_id is not None and graph_optimized
+                        else map_to_left
+                    )
+                    anchor_map_points = transform_points(
+                        anchor_map_to_left, triangulated.points_left
+                    )
+                    if (
+                        len(anchor_map_points)
+                        >= self._args.calibration_keyframe_min_points
+                    ):
+                        with self._calibration_keyframe_lock:
+                            self._calibration_keyframe = CalibrationKeyframe(
+                                keyframe_id=next_keyframe_id,
+                                stamp_ns=pair.stamp_ns,
+                                image=left.copy(),
+                                pixels=np.asarray(
+                                    matches.left_points[source], dtype=np.float32
+                                ).copy(),
+                                map_points=np.asarray(
+                                    anchor_map_points, dtype=np.float32
+                                ).copy(),
+                            )
+                            self._calibration_keyframe_dirty = True
+                            self._calibration_keyframe_clear_dirty = False
                 self._last_keyframe_transform = odom_to_left
                 self._latest_stats = {
                     "state": "mapping",
@@ -834,6 +950,13 @@ class Insight9SparseMapper(Node):
                     "inference_and_geometry_ms": round(
                         (time.perf_counter() - started) * 1000.0, 1
                     ),
+                    "calibration_keyframe": (
+                        next_keyframe_id
+                        if len(anchor_map_points)
+                        >= self._args.calibration_keyframe_min_points
+                        else None
+                    ),
+                    "calibration_keyframe_points": int(len(anchor_map_points)),
                     **loop_diagnostics,
                 }
             except Exception as exc:
@@ -1135,6 +1258,7 @@ class Insight9SparseMapper(Node):
                 descriptor_cloud(header, feature_points, descriptors)
             )
             self._last_feature_publish_monotonic = now
+        self._publish_calibration_keyframe(now)
         status = String()
         status_payload = dict(self._latest_stats)
         status_payload["map_point_count"] = point_count
@@ -1142,6 +1266,49 @@ class Insight9SparseMapper(Node):
         status_payload["pose_frame"] = self._camera_frame
         status.data = json.dumps(status_payload, separators=(",", ":"))
         self._status_publisher.publish(status)
+
+    def _publish_calibration_keyframe(self, now: float) -> None:
+        with self._calibration_keyframe_lock:
+            keyframe = self._calibration_keyframe
+            keyframe_due = (
+                self._calibration_keyframe_dirty
+                and keyframe is not None
+                and now - self._last_calibration_keyframe_publish_monotonic
+                >= CALIBRATION_KEYFRAME_PUBLISH_INTERVAL_SEC
+            )
+            clear_due = self._calibration_keyframe_clear_dirty and keyframe is None
+            if not keyframe_due and not clear_due:
+                return
+            self._calibration_keyframe_dirty = False
+            self._calibration_keyframe_clear_dirty = False
+            self._last_calibration_keyframe_publish_monotonic = now
+        if keyframe is None:
+            header = Header()
+            header.stamp = self.get_clock().now().to_msg()
+            header.frame_id = self._map_frame
+            self._calibration_points_publisher.publish(
+                calibration_keyframe_cloud(
+                    header,
+                    np.empty((0, 2), dtype=np.float32),
+                    np.empty((0, 3), dtype=np.float32),
+                )
+            )
+            return
+        header = Header()
+        header.stamp = ns_to_stamp(keyframe.stamp_ns)
+        header.frame_id = self._map_frame
+        self._calibration_image_publisher.publish(
+            mono_image_message(header, keyframe.image)
+        )
+        self._calibration_points_publisher.publish(
+            calibration_keyframe_cloud(
+                header, keyframe.pixels, keyframe.map_points
+            )
+        )
+        self._latest_stats["calibration_keyframe"] = keyframe.keyframe_id
+        self._latest_stats["calibration_keyframe_points"] = len(
+            keyframe.map_points
+        )
 
     def _publish_path(self) -> None:
         if self._path_publisher is None:
@@ -1237,6 +1404,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-depth-m", type=float, default=0.2)
     parser.add_argument("--max-depth-m", type=float, default=8.0)
     parser.add_argument("--max-reprojection-error-px", type=float, default=1.5)
+    parser.add_argument("--calibration-keyframe-min-points", type=int, default=40)
     parser.add_argument("--keyframe-translation-m", type=float, default=0.05)
     parser.add_argument("--keyframe-rotation-deg", type=float, default=3.0)
     parser.add_argument("--voxel-size-m", type=float, default=0.04)
@@ -1269,6 +1437,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loop-max-reprojection-error-px", type=float, default=2.5)
     parser.add_argument("--loop-min-grid-cells", type=int, default=5)
     parser.add_argument("--loop-confirmation-frames", type=int, default=3)
+    parser.add_argument("--loop-confirmation-window", type=int, default=5)
     parser.add_argument("--loop-confirmation-translation-m", type=float, default=0.20)
     parser.add_argument("--loop-confirmation-rotation-deg", type=float, default=10.0)
     parser.add_argument("--loop-process-translation-std", type=float, default=0.02)

@@ -39,6 +39,8 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图；两路 Insight3 �
   -> T_map_odom * T_odom_imu * T_imu_left
   -> 世界坐标体素确认或重建
   -> features PointCloud2 + Pose + TF
+  -> 低频校准关键帧图像 + 已三角化 UV/XYZ
+  -> Insight3 与关键帧直接 SuperGlue 匹配 + PnP
   -> 可选的调试 points PointCloud2 + Path
 ```
 
@@ -107,8 +109,15 @@ Web API、前端控制和 WebSocket payload 已停用，建图重定位是唯一
 
 Dashboard 复用两路 Insight3 现有图像 reader，以 2 Hz 中继到
 `/insight_mapping/<name>/infra1/image_rect_raw`；localizer 不再增加全速图像 DDS
-reader。查询特征与 Insight9 的 3D 描述子地图匹配，通过 PnP-RANSAC 与连续三帧
-共识后得到 `T_map_odom`，再以 30 Hz 原始 VIO 外推全局 Pose。
+reader。Insight9 mapper 最多以 2 Hz 发布最新校准关键帧的左红外图，以及该帧
+经过双目三角化的 UV/XYZ 对应。尚未完成首次定位时，Insight3 优先与该帧做
+SuperGlue 直接匹配，再以匹配到的三维点运行 PnP-RANSAC；关键帧尚未就绪或直接
+匹配未通过时，回退到原有的 3D 描述子地图匹配。这样首个高质量双目关键帧即可
+启动校准，不必等待三个关键帧先形成确认地图。
+
+PnP 候选不再要求连续三次全部成功，而是在最近五次尝试中取得三个相互一致的
+候选；单次图像模糊或遮挡不会清空已有进度。确认后得到 `T_map_odom`，再以
+30 Hz 原始 VIO 外推全局 Pose。
 
 - 首次定位直接初始化；小于 `0.15 m / 10°` 的修正由误差状态 EKF 平滑吸收；达到
   任一阈值的可靠重定位立即跳回并从当前位置重建 Path。
@@ -120,7 +129,7 @@ reader。查询特征与 Insight9 的 3D 描述子地图匹配，通过 PnP-RANS
   输出。普通 `TRACKING` 运动期间只记录候选而不自动改坐标，因为仅凭位姿流无法
   区分真实快速运动和坐标重置。超过 50 ms 的跟踪空洞同样不会自动拼接；缓慢累计
   漂移仍由地图重定位校正。
-- Insight3 图像底部夹爪 mask 默认为 `0`（关闭），可在 Settings 按现场遮挡比例热
+- Insight3 图像底部夹爪 mask 当前 profile 默认为 `0.2`，可在 Settings 按现场遮挡比例热
   更新；不能假设固定 20%。
 - Jetson NX profile 发布 `insight3_a_global_camera_center -> right_tcp` 与
   `insight3_b_global_camera_center -> left_tcp` 静态 TF；未标定 profile 不发布占位变换。
