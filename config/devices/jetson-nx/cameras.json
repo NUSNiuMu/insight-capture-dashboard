@@ -21,6 +21,7 @@
       "dashboard_rotation_deg": 0,
       "teleop_role": "right_hand",
       "tcp_frame_id": "right_tcp",
+      "avatar_model": "assets/models/vis_assembly.glb",
       "camera_center_to_tcp": {
         "translation_m": [0.0, 0.08, 0.18],
         "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]
@@ -38,6 +39,7 @@
       "dashboard_rotation_deg": 0,
       "teleop_role": "left_hand",
       "tcp_frame_id": "left_tcp",
+      "avatar_model": "assets/models/vis_assembly.glb",
       "camera_center_to_tcp": {
         "translation_m": [0.0, 0.08, 0.18],
         "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]
@@ -55,6 +57,7 @@
       "dashboard_pose_stream": "/insight9_sparse_map/pose",
       "dashboard_rotation_deg": 0,
       "teleop_role": "head",
+      "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",
       "dashboard_row": 0,
       "dashboard_column": 1
     }

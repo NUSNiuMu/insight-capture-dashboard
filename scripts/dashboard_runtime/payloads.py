@@ -93,6 +93,14 @@ class PayloadBuilder:
                         "drop_before_seq": int(first_trace_sequence),
                         "points": trace_points,
                     },
+                    "avatar_model": pose.avatar_model,
+                    "avatar_scale": pose.avatar_scale,
+                    "avatar_rotation_deg_xyz": [
+                        float(value) for value in pose.avatar_rotation_deg_xyz
+                    ],
+                    "avatar_offset_xyz": [
+                        float(value) for value in pose.avatar_offset_xyz
+                    ],
                     "gripper_opening": self.owner.gripper_opening_percent(pose.name),
                 }
                 poses.append(entry)
@@ -194,6 +202,16 @@ class PayloadBuilder:
     def latest_camera_frame(self, camera_name: str) -> Optional[CameraFrame]:
         with self.owner.camera_frame_lock:
             return self.owner.latest_camera_frames.get(camera_name)
+
+    def model_asset_url(self, avatar_model: Optional[str]) -> Optional[str]:
+        if not avatar_model:
+            return None
+        asset_path = (self.owner.project_root / avatar_model).resolve()
+        try:
+            version = asset_path.stat().st_mtime_ns
+        except OSError:
+            version = 0
+        return f"/asset?path={quote(avatar_model, safe='')}&v={version}"
 
     def build_settings_payload(self) -> Dict[str, object]:
         hand_cameras = {

@@ -15,6 +15,7 @@ from dashboard_runtime.active_qc import ActiveQcMonitor, VoiceAlertQueue
 from dashboard_runtime.image_pipeline import ImagePipeline
 from dashboard_runtime.preflight import CapturePreflight
 from dashboard_runtime.preview_manager import PreviewManager
+from dashboard_runtime.payloads import PayloadBuilder
 from dashboard_runtime.session_take import SessionTakeStore
 
 
@@ -36,6 +37,47 @@ class _Manager:
 
 
 class CaptureRuntimeTest(unittest.TestCase):
+    def test_pose_payload_keeps_configured_3d_model(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / "assets" / "models" / "hand.glb"
+            model.parent.mkdir(parents=True)
+            model.write_bytes(b"glTF")
+            pose = SimpleNamespace(
+                name="cam",
+                teleop_role="right_hand",
+                avatar_model="assets/models/hand.glb",
+                avatar_scale=3.0,
+                avatar_rotation_deg_xyz=(0.0, 90.0, 0.0),
+                avatar_offset_xyz=(0.0, 0.0, 0.0),
+            )
+            owner = SimpleNamespace(
+                project_root=root,
+                poses=[pose],
+                pose_lock=threading.Lock(),
+                trace_generation=1,
+                latest_pose_sample={"cam": None},
+                last_pose_received_time={"cam": 0.0},
+                fake_pose=True,
+                pose_timeout_sec=2.0,
+                raw_traces={"cam": deque()},
+                raw_trace_sequences={"cam": deque()},
+                trace_sequences={"cam": 0},
+                display_fps_limit=30.0,
+                max_points=100,
+                gripper_opening_percent=lambda _name: None,
+            )
+            builder = PayloadBuilder(owner)
+
+            payload = builder.build_pose_payload()
+
+            self.assertEqual(payload["poses"][0]["avatar_model"], pose.avatar_model)
+            self.assertEqual(payload["poses"][0]["avatar_scale"], 3.0)
+            self.assertIn(
+                "/asset?path=assets%2Fmodels%2Fhand.glb",
+                builder.model_asset_url(pose.avatar_model),
+            )
+
     def test_capture_callback_skips_display_until_viewer(self):
         event = threading.Event()
         owner = SimpleNamespace(

@@ -686,6 +686,9 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
     def latest_camera_frame(self, camera_name: str) -> Optional[CameraFrame]:
         return self._payload_builder.latest_camera_frame(camera_name)
 
+    def model_asset_url(self, avatar_model: Optional[str]) -> Optional[str]:
+        return self._payload_builder.model_asset_url(avatar_model)
+
 
     def build_settings_payload(self) -> Dict[str, object]:
         return self._payload_builder.build_settings_payload()
