@@ -1184,7 +1184,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--playback-volume",
         type=int,
-        default=int(os.environ.get("LOOPER_PLAYBACK_VOLUME", "50")),
+        default=int(os.environ.get("LOOPER_PLAYBACK_VOLUME", "40")),
         help="Playback volume percentage restored whenever the service starts.",
     )
     parser.add_argument("--sample-rate", type=int, default=16000)

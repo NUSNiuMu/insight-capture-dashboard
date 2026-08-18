@@ -140,16 +140,16 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
     def test_playback_volume_helpers_target_expected_controls(self):
         success = SimpleNamespace(returncode=0, stdout="")
         with mock.patch("subprocess.run", return_value=success) as run:
-            self.assertTrue(set_pulse_sink_volume("alsa_output.usb-E3", 50))
-            self.assertTrue(set_alsa_playback_volume("E3", 50))
+            self.assertTrue(set_pulse_sink_volume("alsa_output.usb-E3", 40))
+            self.assertTrue(set_alsa_playback_volume("E3", 40))
 
         self.assertEqual(
             run.call_args_list[0].args[0],
-            ["pactl", "set-sink-volume", "alsa_output.usb-E3", "50%"],
+            ["pactl", "set-sink-volume", "alsa_output.usb-E3", "40%"],
         )
         self.assertEqual(
             run.call_args_list[1].args[0],
-            ["amixer", "-q", "-c", "E3", "sset", "PCM", "50%", "unmute"],
+            ["amixer", "-q", "-c", "E3", "sset", "PCM", "40%", "unmute"],
         )
 
     def test_missing_openclaw_only_disables_optional_requests(self):
@@ -686,7 +686,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(args.wake_feedback, "speech")
         self.assertEqual(args.playback_backend, "pulse")
         self.assertEqual(args.pulse_sink, "auto")
-        self.assertEqual(args.playback_volume, 50)
+        self.assertEqual(args.playback_volume, 40)
         self.assertEqual(args.agent_thinking, "off")
         self.assertEqual(args.dashboard_timeout_sec, 40.0)
 
