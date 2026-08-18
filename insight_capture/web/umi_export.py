@@ -66,13 +66,9 @@ class _UmiExportJob:
 class UmiExportManager:
     """Export each selected rosbag to an independent training dataset."""
 
-    _UMI_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "umi_dataset_export.py"
-    _LEROBOT_SCRIPT = (
-        Path(__file__).resolve().parents[2] / "scripts" / "lerobot_dataset_export.py"
-    )
-    _EGO_LEROBOT_SCRIPT = (
-        Path(__file__).resolve().parents[2] / "scripts" / "ego_lerobot_export.py"
-    )
+    _UMI_MODULE = "insight_capture.legacy.umi_zarr"
+    _LEROBOT_MODULE = "insight_capture.postprocess.datasets.lerobot"
+    _EGO_LEROBOT_MODULE = "insight_capture.postprocess.datasets.ego_lerobot.cli"
 
     def __init__(self, project_root: Path, rosbag_root: Path) -> None:
         self.project_root = project_root.resolve()
@@ -283,7 +279,7 @@ class UmiExportManager:
         self, job: _UmiExportJob, item: _UmiExportItem, completed_frames: int
     ) -> Dict[str, object]:
         temporary_spec: Optional[tempfile.TemporaryDirectory[str]] = None
-        script = self._UMI_SCRIPT
+        module = self._UMI_MODULE
         if item.export_format == "lerobot":
             with self._lock:
                 job.stage = "detect_route"
@@ -297,14 +293,14 @@ class UmiExportManager:
             item.route = str(diagnostics["route"])
             item.route_diagnostics = diagnostics
             if item.route == "umi_gripper":
-                script = self._LEROBOT_SCRIPT
+                module = self._LEROBOT_MODULE
             else:
-                script = self._EGO_LEROBOT_SCRIPT
+                module = self._EGO_LEROBOT_MODULE
         elif item.export_format == "umi":
             item.route = "umi_gripper"
         command = [
             "/usr/bin/python3",
-            str(script),
+            "-m", module,
             str(item.bag_path),
             "--output",
             str(item.output_path),

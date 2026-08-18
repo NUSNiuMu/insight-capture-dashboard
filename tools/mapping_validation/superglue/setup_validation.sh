@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPOSITORY_URL="https://github.com/magicleap/SuperGluePretrainedNetwork.git"
 PINNED_COMMIT="ddcf11f42e7e0732a0c4607648f9448ea8d73590"
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TARGET_DIR="${PROJECT_ROOT}/data/models/SuperGluePretrainedNetwork"
 
 ACCEPTED=false

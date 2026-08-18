@@ -9,7 +9,7 @@ After=network.target insight-camera-reboot.service
 Type=oneshot
 WorkingDirectory=/home/nvidia/insight-capture-dashboard
 Environment=INSIGHT_NETWORK_TUNING_TIMEOUT=180
-ExecStart=/home/nvidia/insight-capture-dashboard/scripts/configure_camera_network.sh
+ExecStart=/home/nvidia/insight-capture-dashboard/deploy/configure_camera_network.sh
 TimeoutStartSec=240
 RemainAfterExit=yes
 

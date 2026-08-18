@@ -24,7 +24,7 @@ class _ScoringJob:
 
 
 class ScoringManager:
-    _TRAJ_SCORE = Path(__file__).resolve().parents[2] / "scripts" / "traj_score.py"
+    _TRAJ_SCORE_MODULE = "insight_capture.postprocess.quality.trajectory_score"
 
     def __init__(self, rosbag_root: Path, results_root: Path) -> None:
         self.rosbag_root = rosbag_root
@@ -93,7 +93,7 @@ class ScoringManager:
 
                 cmd = [
                     "/usr/bin/python3",
-                    str(self._TRAJ_SCORE),
+                    "-m", self._TRAJ_SCORE_MODULE,
                     job.bag_path,
                     "--topic", topic,
                     "--json", str(output_json),
@@ -131,7 +131,10 @@ class ScoringManager:
 
     def _find_cov_topics(self, bag_path: str) -> List[str]:
         """Scan bag topics and return all PoseWithCovarianceStamped topics."""
-        cmd = ["/usr/bin/python3", str(self._TRAJ_SCORE), bag_path, "--list-topics"]
+        cmd = [
+            "/usr/bin/python3", "-m", self._TRAJ_SCORE_MODULE,
+            bag_path, "--list-topics",
+        ]
         found = []
         try:
             proc = subprocess.run(

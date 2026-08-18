@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build the customer image tarball and first-install deployment bundle.
-# Usage: ./scripts/build_release.sh v1.2.0
+# Usage: ./deploy/build_release.sh v1.2.0
 
 set -euo pipefail
 
@@ -42,47 +42,52 @@ log "Assembling deploy bundle..."
 # Keep the installed directory stable; only artifacts and image tags vary.
 bundle_dir="release/${IMAGE_NAME}-deploy"
 rm -rf "${bundle_dir}"
-mkdir -p "${bundle_dir}/scripts" "${bundle_dir}/deploy/systemd" "${bundle_dir}/insight_capture" "${bundle_dir}/tools"
+mkdir -p \
+    "${bundle_dir}/scripts" \
+    "${bundle_dir}/deploy/systemd" \
+    "${bundle_dir}/deploy/udev" \
+    "${bundle_dir}/insight_capture" \
+    "${bundle_dir}/tools/diagnostics"
 cp deploy/docker-compose.yml deploy/update.sh deploy/README.md "${bundle_dir}/"
-# run_dashboard.sh resolves the compose project root as its parent dir, so it
-# keeps working from <bundle>/scripts/ exactly like from the repo.
-cp scripts/run_dashboard.sh "${bundle_dir}/scripts/"
-cp scripts/openclaw_voice_bridge.py "${bundle_dir}/scripts/"
-cp scripts/_bootstrap.py "${bundle_dir}/scripts/"
+cp deploy/run_dashboard.sh \
+    deploy/host_setup.sh \
+    deploy/configure_camera_network.sh \
+    deploy/install_voice_control_service.sh \
+    "${bundle_dir}/deploy/"
+cp deploy/udev/99-insight-camera-rps.rules "${bundle_dir}/deploy/udev/"
+cp scripts/run_dashboard.sh \
+    scripts/run_voice.sh \
+    scripts/select_device.sh \
+    scripts/reboot_cameras.sh \
+    scripts/sync_camera_restart.py \
+    scripts/check_bag.py \
+    scripts/export_lerobot.py \
+    "${bundle_dir}/scripts/"
 cp insight_capture/__init__.py "${bundle_dir}/insight_capture/"
 cp -r insight_capture/voice "${bundle_dir}/insight_capture/"
-cp scripts/run_voice_control.sh "${bundle_dir}/scripts/"
-cp scripts/run_voice.sh "${bundle_dir}/scripts/"
-cp scripts/run_openclaw_voice.sh "${bundle_dir}/scripts/"
-cp scripts/install_voice_control_service.sh "${bundle_dir}/scripts/"
-cp scripts/install_openclaw_voice_service.sh "${bundle_dir}/scripts/"
 cp deploy/systemd/insight-voice-control.service.in "${bundle_dir}/deploy/systemd/"
-cp deploy/systemd/openclaw-voice.service.in "${bundle_dir}/deploy/systemd/"
 cp deploy/systemd/insight-capture.service "${bundle_dir}/deploy/systemd/"
 chmod +x "${bundle_dir}/update.sh" \
+    "${bundle_dir}/deploy/run_dashboard.sh" \
+    "${bundle_dir}/deploy/host_setup.sh" \
+    "${bundle_dir}/deploy/configure_camera_network.sh" \
+    "${bundle_dir}/deploy/install_voice_control_service.sh" \
     "${bundle_dir}/scripts/run_dashboard.sh" \
-    "${bundle_dir}/scripts/run_voice_control.sh" \
     "${bundle_dir}/scripts/run_voice.sh" \
-    "${bundle_dir}/scripts/run_openclaw_voice.sh" \
-    "${bundle_dir}/scripts/install_voice_control_service.sh" \
-    "${bundle_dir}/scripts/install_openclaw_voice_service.sh"
+    "${bundle_dir}/scripts/select_device.sh" \
+    "${bundle_dir}/scripts/reboot_cameras.sh" \
+    "${bundle_dir}/scripts/sync_camera_restart.py" \
+    "${bundle_dir}/scripts/check_bag.py" \
+    "${bundle_dir}/scripts/export_lerobot.py"
 
 # Bundle the same host tuning used by source-checkout installations.
-cp scripts/host_setup.sh "${bundle_dir}/scripts/"
-cp scripts/configure_camera_network.sh "${bundle_dir}/scripts/"
-cp scripts/reboot_cameras.sh "${bundle_dir}/scripts/"
-cp scripts/sync_camera_restart.py "${bundle_dir}/scripts/"
-cp scripts/README.md "${bundle_dir}/scripts/"
 cp deploy/systemd/insight-camera-network.service "${bundle_dir}/deploy/systemd/"
-mkdir -p "${bundle_dir}/scripts/udev"
-cp scripts/udev/99-insight-camera-rps.rules "${bundle_dir}/scripts/udev/"
 cp deploy/systemd/insight-camera-reboot.service "${bundle_dir}/deploy/systemd/"
 cp -r tools/device_cli "${bundle_dir}/tools/"
+cp tools/diagnostics/sync_camera_restart.py "${bundle_dir}/tools/diagnostics/"
 find "${bundle_dir}/tools/device_cli" -name '__pycache__' -type d -exec rm -rf {} +
-chmod +x "${bundle_dir}/scripts/host_setup.sh" \
-    "${bundle_dir}/scripts/configure_camera_network.sh" \
-    "${bundle_dir}/scripts/reboot_cameras.sh" \
-    "${bundle_dir}/scripts/sync_camera_restart.py"
+chmod +x "${bundle_dir}/tools/device_cli/reboot_cameras.sh" \
+    "${bundle_dir}/tools/diagnostics/sync_camera_restart.py"
 
 bundle_tarball="release/${IMAGE_NAME}-deploy-${version}.tar.gz"
 tar -C release -czf "${bundle_tarball}" "${IMAGE_NAME}-deploy"

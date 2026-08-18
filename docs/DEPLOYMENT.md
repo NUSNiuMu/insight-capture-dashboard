@@ -4,9 +4,9 @@
 
 | 谁 | 做什么 | 用哪个脚本 |
 |---|---|---|
-| 开发者 | 把当前分支的代码编译成一个可分发的镜像包 | `scripts/build_release.sh` |
+| 开发者 | 把当前分支的代码编译成一个可分发的镜像包 | `deploy/build_release.sh` |
 | 使用者 | 拿到镜像包，给已经在跑的设备升级/回滚 | `deploy/update.sh` |
-| 任何人 | 全新 Jetson 首次部署 | `scripts/setup_host.sh`（开发者路径）或 `deploy/update.sh`（使用者路径，见下） |
+| 任何人 | 全新 Jetson 首次部署 | `deploy/setup_host.sh`（开发者路径）或 `deploy/update.sh`（使用者路径，见下） |
 
 三者的关系：`build_release.sh` 在开发机上跑，产出 Dashboard 镜像、稳定的 SuperGlue
 依赖镜像和部署包三个压缩文件。后两者只在**首次安装**时需要；之后每次升级只需要发
@@ -61,7 +61,7 @@ Dockerfile 自 `v2.0.2` 起拆成 `runtime`/`dev` 两个 target：`dev`（`runti
 ### 1.3 打包
 
 ```bash
-./scripts/build_release.sh v2.0.5
+./deploy/build_release.sh v2.0.5
 ```
 
 版本号必须形如 `vX.Y.Z`（可带 `-rc1` 之类后缀），脚本会校验格式。产出：
@@ -79,13 +79,13 @@ Magic Leap 官方 SuperPoint/SuperGlue TensorRT 推理，商用分发已确认�
 `docs/INSIGHT9_SPARSE_MAPPING.md`）。它现在单独保存为稳定依赖包，避免每个
 Dashboard 日常升级包都重复携带同一份 TensorRT/CUDA 内容。
 部署包里打包了 `deploy/docker-compose.yml`、`update.sh`、`README.md`、
-`scripts/run_dashboard.sh`，以及宿主机一次性调优用的 `scripts/host_setup.sh`
-+ `scripts/configure_camera_network.sh` + `scripts/reboot_cameras.sh`
+`scripts/run_dashboard.sh`，以及宿主机一次性调优用的 `deploy/host_setup.sh`
++ `deploy/configure_camera_network.sh` + `scripts/reboot_cameras.sh`
 + `scripts/sync_camera_restart.py`
 + `deploy/systemd/{insight-camera-network,insight-camera-reboot}.service`
 + `tools/device_cli/`。这些文件本身不大，但**它们的内容来自当前
 分支的 `deploy/`、`scripts/`、`tools/device_cli/` 目录**，改过 `deploy/docker-compose.yml`
-（比如调 shm_size）或 `scripts/host_setup.sh` 一定要在改动落地之后的这个分支上
+（比如调 shm_size）或 `deploy/host_setup.sh` 一定要在改动落地之后的这个分支上
 重新跑一次 `build_release.sh`，不能沿用旧的部署包。
 
 ### 1.4 版本号约定
@@ -179,7 +179,7 @@ cd <部署目录>   # 首次安装时 update.sh 所在的那个目录
 ```bash
 git clone git@github.com:NUSNiuMu/insight-capture-dashboard.git insight_capture
 cd insight_capture
-./scripts/setup_host.sh --device jetson-nx
+./deploy/setup_host.sh --device jetson-nx
 ```
 
 `main` 现在是唯一的代码分支，三台设备（`jetson-nx`/`lite`/`lite-779`）的差异只体现在
@@ -191,7 +191,7 @@ cd insight_capture
 
 1. 选定/校验设备 profile（见上）；
 2. 检查 docker + NVIDIA container runtime 是否就绪（硬件 JPEG/H.264 编解码依赖它注入 GStreamer 插件）；
-3. 调用 `scripts/host_setup.sh`（与使用者路径共用，见 §3.2）：写 `/etc/sysctl.d/99-dds-rx-buffers.conf`
+3. 调用 `deploy/host_setup.sh`（与使用者路径共用，见 §3.2）：写 `/etc/sysctl.d/99-dds-rx-buffers.conf`
    （含 `ipfrag_max_dist=4096`）、安装相机 USB 网卡 RPS 与开机相机恢复的 systemd unit、
    检查 CPU 是否满核在线；jetson-nx profile 的恢复流程同时校正相机为 CycloneDDS；
 4. `docker compose build`（首次在设备上编译 COLMAP，约 20-40 分钟，只支持 Orin NX，不支持 Nano）；
@@ -265,7 +265,7 @@ cd insight-dashboard-deploy
 还没有自己的机群配置/标定），此后这个 `config/` 就是本机独有的、不受镜像升级影响。
 
 **装完 update.sh 之后，还有一步不能漏**：跑一次部署包自带的宿主机调优脚本
-（`scripts/host_setup.sh` 由 `build_release.sh` 一起打进部署包，跟开发者路径
+（`deploy/host_setup.sh` 由 `build_release.sh` 一起打进部署包，跟开发者路径
 `setup_host.sh` 用的是同一份逻辑）——它会写内核 UDP 接收缓冲与 IP 分片调优、为相机
 USB 网卡启用 RPS（把集中在 CPU0 的协议处理分散到其余核心），通过 udev 在 USB
 重连、netdev 重建后自动恢复 RPS，并装好开机自动
@@ -278,7 +278,7 @@ CycloneDDS；FastDDS 的约 65 KB UDP 报文会在多路大图订阅时触发分
 单独跑一次（脚本按需调用 `sudo`）：
 
 ```bash
-./scripts/host_setup.sh
+./deploy/host_setup.sh
 ```
 
 首次安装完成后，如果这台设备接的是跟别的 jetson-nx 设备不同的相机机群，

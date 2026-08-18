@@ -5,15 +5,15 @@
 # camera's DDS participant enumerates network interfaces only at startup, so
 # it comes up advertising locators on a link that isn't there yet and never
 # recovers on its own (the exact mirror of the host-side stale-participant
-# problem documented in multi_camera_dashboard_web.py's watchdog). Rebooting
+# problem handled by the runtime camera watchdog). Rebooting
 # the cameras once the Jetson's links are up puts them in a clean state.
 #
 # After the cameras come back, the dashboard container is restarted too, so
 # its own DDS participant rebinds with cameras already reachable -- live data
 # flows immediately instead of waiting for the in-process 60s watchdog.
 #
-# Install (done automatically by scripts/host_setup.sh, called by both
-# scripts/setup_host.sh and the deploy bundle's own copy -- see
+# Install (done automatically by deploy/host_setup.sh, called by both
+# deploy/setup_host.sh and the deploy bundle's own copy -- see
 # docs/DEPLOYMENT.md §3.2): WorkingDirectory/ExecStart below are placeholders,
 # rewritten to wherever this checkout actually lives at install time, since
 # that differs between a dev clone and a deploy bundle directory.

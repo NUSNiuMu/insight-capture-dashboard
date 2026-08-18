@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Compatibility command for rosbag integrity analysis."""
+"""Thin field entry point for rosbag integrity analysis."""
 
-from _bootstrap import PROJECT_ROOT
+from pathlib import Path
+import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from insight_capture.postprocess.bags.integrity import *  # noqa: F401,F403
 
 

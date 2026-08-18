@@ -35,7 +35,7 @@ class _GripperJob:
 class GripperExtractionManager:
     """Run at most one gripper extractor and expose its current state."""
 
-    _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "gripper_extract.py"
+    _MODULE = "insight_capture.postprocess.gripper.extraction"
 
     def __init__(self, project_root: Path, rosbag_root: Path) -> None:
         self.project_root = project_root.resolve()
@@ -130,7 +130,7 @@ class GripperExtractionManager:
     ) -> None:
         command = [
             "/usr/bin/python3",
-            str(self._SCRIPT),
+            "-m", self._MODULE,
             str(bag_path),
             "--camera", job.camera_name,
             "--output", str(job.output_path),

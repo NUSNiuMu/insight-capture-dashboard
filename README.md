@@ -12,11 +12,12 @@ QC 为核心；采后才打开本机 Firefox/Kiosk 或 Web Dashboard 查看三�
 >
 > **叠杯批量采集、每单元检测位复核和异常重录规则见 [docs/CUP_STACKING_DATA_COLLECTION_SOP.md](docs/CUP_STACKING_DATA_COLLECTION_SOP.md)**
 > （开发者打包手册 + 使用者升级手册 + 全新 Jetson 首次部署，两条路径）。
-> 内部装机用 `./scripts/setup_host.sh`（幂等：runtime 检查 + CycloneDDS/分片/RPS 调优 +
+> 内部装机用 `./deploy/setup_host.sh`（幂等：runtime 检查 + CycloneDDS/分片/RPS 调优 +
 > 构建 + 启动）；录制后数据完整性检查用 `scripts/check_bag.py`。
 > 本 README 侧重功能与配置参考。
 
-当前 dashboard 使用 **Web 版**（`multi_camera_dashboard_web.py`）：ROS2/VIO 处理在后端，前端是 Babylon.js 浏览器 GPU 渲染，可以本机接显示器看，也可以远程浏览器连。
+当前 dashboard 使用 **Web 版**（`python3 -m insight_capture.runtime.app`）：ROS2/VIO
+处理在后端，前端是 Babylon.js 浏览器 GPU 渲染，可以本机接显示器看，也可以远程浏览器连。
 
 `ROS_DOMAIN_ID` 从当前未跟踪的 `config/cameras.json` 读取；jetson-nx profile
 默认值为 20。
@@ -48,7 +49,7 @@ ssh -L 8765:localhost:8765 <user>@<jetson-ip>
 ```bash
 cd web_dashboard && npm run build   # 改过前端代码才需要重新 build
 cd ..
-python3 scripts/multi_camera_dashboard_web.py
+python3 -m insight_capture.runtime.app
 ```
 
 宿主机和容器内命令完全一样，只是工作目录不同（宿主机通常是 `/home/seeed/workspaces/insight_capture`，容器内 `docker exec` 进去是 `/workspaces/insight_capture`）。
@@ -56,7 +57,7 @@ python3 scripts/multi_camera_dashboard_web.py
 没有 ROS2 硬件时可以用 demo 模式：
 
 ```bash
-python3 scripts/multi_camera_dashboard_web.py --fake-pose
+python3 -m insight_capture.runtime.app --fake-pose
 ```
 
 浏览器打开 `http://localhost:8765/`，能看到几个 pose 节点随假数据运动。
@@ -64,8 +65,8 @@ python3 scripts/multi_camera_dashboard_web.py --fake-pose
 容器内如果还想在本机同时拉起右侧 3D 窗口（不通过 `run_dashboard.sh` 的话）：
 
 ```bash
-python3 scripts/multi_camera_dashboard_web.py &
-./scripts/open_web_3d_right.sh
+python3 -m insight_capture.runtime.app &
+./deploy/kiosk/open_web_3d_right.sh
 ```
 
 ## 单一配置入口：config/cameras.json
@@ -92,7 +93,9 @@ python3 scripts/multi_camera_dashboard_web.py &
 | `dashboard_pose_stream` | 全局建图/重定位 pose 流 | `/insight_global/insight3_a/pose` |
 | `teleop_role` | 决定 3D 场景里用哪个位置/朝向预设 | `head` / `left_hand` / `right_hand` |
 
-`dashboard_image_stream` 的可选值定义在 [camera_setup.py](scripts/camera_setup.py#L9-L15) 的 `IMAGE_STREAMS` 里：`infra1`、`infra2`、`depth`、`color`、`color_compressed`。
+`dashboard_image_stream` 的可选值定义在
+[config.py](insight_capture/common/config.py) 的 `IMAGE_STREAMS` 里：`infra1`、
+`infra2`、`depth`、`color`、`color_compressed`。
 
 ### 当前命名约定
 
@@ -168,29 +171,28 @@ VAD 与 Piper 在本地完成“开始/停止录制、开始校准、检查相�
 Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、message/topic 数量，
 并从 `outputs/results/{integrity,scores}` 读取完整性与评分状态。
 
-## 保留的脚本
+## 入口与实现位置
 
-| 脚本 | 作用 |
+| 入口/模块 | 作用 |
 |---|---|
 | `scripts/run_dashboard.sh` | 统一启动入口，`docker compose up -d` + 健康检查，`--jetson` 额外拉起本机 kiosk 窗口 |
-| `scripts/run_voice_control.sh` / `openclaw_voice_bridge.py` | 离线固定命令、本地 STT/TTS 与可选 OpenClaw adapter |
-| `scripts/multi_camera_dashboard_web.py` | Web dashboard 稳定进程入口与 ROS 生命周期组合 |
+| `scripts/run_voice.sh` | 离线固定命令、本地 STT/TTS 与可选 OpenClaw adapter |
+| `insight_capture.runtime.app` | Web dashboard 稳定进程入口与 ROS 生命周期组合 |
 | `insight_capture/runtime/` / `web/` | 现场运行时、Web API 与 WebSocket 实现 |
 | `insight_capture/media/` | viewer 按需启用的 JPEG、preview 与 WebRTC |
-| `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
-| `scripts/post_processing.py` | 录制与后处理公共导入的稳定兼容 facade |
+| `deploy/kiosk/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
 | `insight_capture/postprocess/` | 完整性、评分、回放、同步、WiLoR、LeRobot 与优化实现 |
 | `insight_capture/runtime/mapping/` | Insight9 sparse mapping、Insight3 localization 与 SuperGlue |
 | `tools/mapping_validation/` | Dense Mapping 与 RViz 工程验证入口 |
 | `insight_capture/legacy/` | 历史 SQLite/composite bag 与 UMI Zarr 读取兼容 |
 | `Dockerfile.superglue-validation` | 客户发布与开发共用的 NVIDIA Jetson TensorRT/SuperGlue GPU 镜像 |
-| `scripts/camera_setup.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |
+| `insight_capture/common/config.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |
 | `scripts/reboot_cameras.sh` | 扫描 `169.254.x.x` 网段并批量重启相机 |
 | `scripts/sync_camera_restart.py` | 三相机共同定时重启采集服务并测量图像时间戳差 |
-| `scripts/gripper_tracking.py` / `gripper_calibrate.py` / `gripper_extract.py` | 夹爪张合度识别、标定与 rosbag 离线提取 |
-| `scripts/lerobot_dataset_export.py` / `umi_dataset_export.py` | LeRobot v3 标准归档与 Legacy UMI 数据集导出 |
-| `scripts/ego_lerobot_export.py` / `insight_capture/postprocess/datasets/ego_lerobot/` | 三视角、仅头部手姿的缓存式 Ego LeRobot 交付流水线 |
-| `scripts/traj_score.py` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
+| `insight_capture/postprocess/gripper/` | 夹爪张合度识别、标定与 rosbag 离线提取 |
+| `insight_capture.postprocess.datasets.lerobot` / `insight_capture.legacy.umi_zarr` | LeRobot v3 标准归档与 Legacy UMI 数据集导出 |
+| `insight_capture.postprocess.datasets.ego_lerobot.cli` / `insight_capture/postprocess/datasets/ego_lerobot/` | 三视角、仅头部手姿的缓存式 Ego LeRobot 交付流水线 |
+| `insight_capture.postprocess.quality.trajectory_score` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
 | `web_dashboard/` | Babylon.js Web 前端源码，`npm run build` 生成 `dist/` 静态页面 |
 | `config/runtime.json` | 录制、Preflight、Session/Take 和主动 QC 配置 |
 

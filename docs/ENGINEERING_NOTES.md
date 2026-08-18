@@ -93,7 +93,7 @@
   BGRx，避免整帧 CPU 色彩转换。`manifest.json` 保留各阶段耗时，便于发现性能回退。
 - 审阅包在 rosbag 发布后排队预生成，录制开始时必须暂停；不能从图像 callback
   生成，也不能让质检缓存继续占用 `outputs/` 所在的系统盘。历史包通过 3D 页的
-  `Prepare all` 或 `scripts/build_review_bundles.py --all` 补建。
+  `Prepare all` 或 `tools/diagnostics/build_review_bundles.py --all` 补建。
 - 2026-08-12 实机验收使用 15.03 秒三相机 bag：NVENC 生成 451 帧 30/1 fps 的
   1280×720 单视频，三路重复帧均为零，成品 11.3 MB；旧三视频缓存合计约 25.3 MB。
   Firefox 原生媒体计数为 451 总帧、1 丢帧（约 29.93 fps）。Firefox 会节流

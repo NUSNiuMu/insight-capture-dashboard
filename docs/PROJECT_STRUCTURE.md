@@ -27,11 +27,17 @@ web_dashboard/src/
   advanced/{handpose,trajectory,optimization,system}/
   shared/
 
+scripts/
+  run_dashboard.sh run_voice.sh select_device.sh
+  reboot_cameras.sh sync_camera_restart.py
+  check_bag.py export_lerobot.py
+
 tools/
   device_cli/ mapping_validation/ diagnostics/
 
 deploy/
-  docker-compose.yml update.sh systemd/
+  docker-compose.yml update.sh systemd/ kiosk/
+  build_release.sh setup_host.sh host_setup.sh
 
 tests/
   runtime/ voice/ postprocess/ web/ legacy/
@@ -40,12 +46,11 @@ tests/
 依赖方向固定为“入口 → 领域包 → 小型 adapter”。Web route 可以调用 manager，
 manager 不反向导入 route；worker 可以调用媒体或感知实现，实现模块不启动 worker。
 
-## 稳定兼容面
+## 稳定入口与兼容面
 
-- `scripts/multi_camera_dashboard_web.py`、`camera_setup.py`、`post_processing.py`
-  仍供 Docker、维护命令和历史 import 使用，但只做 bootstrap/re-export。
-- `scripts/lerobot_dataset_export.py`、`umi_dataset_export.py`、
-  `openclaw_voice_bridge.py` 是旧命令名兼容入口，真实实现位于 `insight_capture/`。
+- `scripts/` 固定只保留上面列出的七个薄入口；业务实现不得放回该目录。
+- Dashboard、语音、后处理和工程工具直接通过 `python3 -m insight_capture...` 或
+  `tools/...` 调用，不再保留同名 Python facade。
 - 旧 SQLite/composite bag 和 UMI Zarr 仍需读取历史数据，因此集中在 `legacy/`，
   不能在没有数据迁移策略时删除。
 - `config/runtime.json` 是新 live 配置；启动代码临时接受旧

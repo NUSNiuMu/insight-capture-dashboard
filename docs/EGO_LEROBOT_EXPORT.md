@@ -1,13 +1,13 @@
 # Ego 三视角 LeRobot 交付流水线
 
-`scripts/ego_lerobot_export.py` 将一条三相机 rosbag 转换为当前 Ego 交付格式：三路图像全部交付，但手部检测与 3D 手姿只来自头部 RGB；左右腕部图像不运行手势模型。相机角色以 `config/cameras.json` 的 `teleop_role` 为准，当前映射是 `insight3_b → left_hand`、`insight3_a → right_hand`。
+`insight_capture.postprocess.datasets.ego_lerobot.cli` 将一条三相机 rosbag 转换为当前 Ego 交付格式：三路图像全部交付，但手部检测与 3D 手姿只来自头部 RGB；左右腕部图像不运行手势模型。相机角色以 `config/cameras.json` 的 `teleop_role` 为准，当前映射是 `insight3_b → left_hand`、`insight3_a → right_hand`。
 
 ## 使用
 
 动作裁剪与多段标注保存在版本化 JSON，而不是写死在转换脚本中：
 
 ```bash
-docker exec insight-dashboard python3 scripts/ego_lerobot_export.py \
+docker exec insight-dashboard python3 -m insight_capture.postprocess.datasets.ego_lerobot.cli \
   rosbags/insight_record_20260807_144636 \
   outputs/lerobot_datasets/ego_hand/shirt_folding_20260807_144636_ego_lerobot_v2 \
   --spec config/dataset_schemas/ego_shirt_folding_20260807_144636.json
@@ -18,7 +18,7 @@ docker exec insight-dashboard python3 scripts/ego_lerobot_export.py \
 已经人工验收的最终数据可以只在迁移期用于建立可信缓存：
 
 ```bash
-docker exec insight-dashboard python3 scripts/ego_lerobot_export.py \
+docker exec insight-dashboard python3 -m insight_capture.postprocess.datasets.ego_lerobot.cli \
   rosbags/insight_record_20260807_144636 outputs/lerobot_datasets/ego_hand/<new_name> \
   --spec config/dataset_schemas/ego_shirt_folding_20260807_144636.json \
   --reuse-dataset outputs/lerobot_datasets/ego_hand/<accepted_dataset> \

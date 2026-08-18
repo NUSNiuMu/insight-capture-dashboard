@@ -1,6 +1,6 @@
 # Customer deployment compose file — runs the code BAKED INTO the image
 # (no git checkout, no source mount). Ships to customers inside the deploy
-# bundle produced by scripts/build_release.sh; upgrades are delivered as
+# bundle produced by deploy/build_release.sh; upgrades are delivered as
 # `docker save` image tarballs applied with ./update.sh.
 #
 # INSIGHT_VERSION comes from the .env file next to this compose file, which
@@ -84,7 +84,7 @@ services:
     # Assumes all 6 Orin NX cores are online -- nvpmodel can leave a freshly
     # flashed unit in a lower-power mode (e.g. 15W = only 4 cores), which
     # makes docker refuse to even create the container ("range of CPUs is
-    # from 0.01 to 4.00"), not just run it slower. scripts/host_setup.sh
+    # from 0.01 to 4.00"), not just run it slower. deploy/host_setup.sh
     # checks this and tells you how to fix it (confirmed 2026-07-12).
     deploy:
       resources:

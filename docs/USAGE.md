@@ -213,17 +213,17 @@ at pauses**。每一小节结束后保持 TCP 和夹爪静止约 1 秒；检测�
 对齐到重置时刻，重置前后的小节都可保留。没有检测到足够长停顿时，整条长录制仍作为
 一个 episode；因此采集时应有意停稳约 1 秒。
 
-**单路离线夹爪诊断**：底层 `gripper_extract.py` 仍可单独运行，用于检查某一路
+**单路离线夹爪诊断**：底层 gripper extraction 模块可单独运行，用于检查某一路
 Insight3 图像中的二维码检测质量。
 
-底层 `gripper_extract.py` 直接读取 rosbag 图像，逐帧检测 UMI 夹爪的 ArUco ID 1/0。
+底层模块直接读取 rosbag 图像，逐帧检测 UMI 夹爪的 ArUco ID 1/0。
 结果默认保存到
 `outputs/gripper/<bag 名>/<相机名>.json`，包含 recorder/header 纳秒时间戳、
 左右 marker 中心、像素距离和归一化开合度（`0=闭合，1=张开`）。例如：
 
 ```bash
 docker exec -w /workspaces/insight_capture insight-dashboard \
-  /entrypoint.sh python3 scripts/gripper_extract.py \
+  /entrypoint.sh python3 -m insight_capture.postprocess.gripper.extraction \
   rosbags/insight3_a_left_20260803_115721 --camera insight3_a
 ```
 
@@ -246,12 +246,14 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 ```
 
 不要直接把归一化开合比例乘以最大宽度；如果机械结构或成像关系不是线性的，应增加中间
-实测点。`gripper_calibrate.py` 可通过 `--closed-width-m` 和 `--open-width-m` 写入端点，
+实测点。`python3 -m insight_capture.postprocess.gripper.calibration` 可通过
+`--closed-width-m` 和 `--open-width-m` 写入端点，
 中间点可在标定 JSON 中补充。
 尚未标定时仍会输出 marker 中心和 `distance_px`，但 `opening` 为 `null`；需要强制
 要求开合度时加 `--require-calibration`。也可用
 `--open-px <值> --closed-px <值>` 临时覆盖标定。多图像 topic 的 bag 应显式传
-`--topic`，具体参数见 `scripts/gripper_extract.py --help`。
+`--topic`，具体参数见
+`python3 -m insight_capture.postprocess.gripper.extraction --help`。
 
 
 ### 3.1 无屏语音采集流程
@@ -458,10 +460,10 @@ U 盘后重启 Dashboard，才会重新选择 U 盘。录制过程中断盘无�
    for f in /sys/class/net/enx*/queues/rx-0/rps_cpus; do echo "$f: $(cat "$f")"; done
                                         # 相机 cdc_ncm 网卡不能是 00；6 核 Jetson 应为 3e
    ```
-   恢复（`scripts/host_setup.sh` 会同时持久化 sysctl，安装并立即运行
+   恢复（`deploy/host_setup.sh` 会同时持久化 sysctl，安装并立即运行
    `insight-camera-network.service` 和相机 USB 重连时恢复 RPS 的 udev 规则）：
    ```bash
-   sudo ./scripts/host_setup.sh
+   sudo ./deploy/host_setup.sh
    ```
    然后重录一段用 `check_bag.py` 复验；
 3. **softnet/网卡/UDP 都不丢，但多路 raw image 仍缺帧** → 检查 DDS 模式与 IP 分片重组：
@@ -474,7 +476,7 @@ U 盘后重启 Dashboard，才会重新选择 U 盘。录制过程中断盘无�
    `recording_manifest.json` 则保存当时实际选择的 topic。`IpReasmFails` 大量增长说明
    大图 UDP 包已到主机、但在 DDS 之前重组失败。jetson-nx 应使用
    `config/cameras.json` 的 `camera_dds_type=cyclonedds`；开机恢复流程会幂等校正设备，
-   `sudo ./scripts/host_setup.sh` 会持久化内核阈值。不要通过换 SSD 或提高 SQLite
+   `sudo ./deploy/host_setup.sh` 会持久化内核阈值。不要通过换 SSD 或提高 SQLite
    同步级别处理。保留失败 bag 与这两个 JSON 后报障；
 4. **所有 topic 在同一时间段一起断** → 录制期间设备被其他任务抢占，
    `docker stats insight-dashboard` 观察 CPU；录制时避免同时跑评分/优化任务；

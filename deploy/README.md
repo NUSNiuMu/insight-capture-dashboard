@@ -21,8 +21,8 @@ Insight3 全局重定位服务；稠密建图和 RViz 验证服务不进入客�
 tar xzf insight-dashboard-deploy-vX.Y.Z.tar.gz
 cd insight-dashboard-deploy        # 解压出的目录不带版本号——它是常驻安装目录，名字跨版本不变
 ./update.sh /path/to/insight-dashboard-vX.Y.Z.tar.gz
-sudo ./scripts/host_setup.sh       # 一次性调优：CycloneDDS/UDP 分片、RPS + 开机相机恢复
-./scripts/install_voice_control_service.sh  # 安装宿主机离线语音主控
+sudo ./deploy/host_setup.sh       # 一次性调优：CycloneDDS/UDP 分片、RPS + 开机相机恢复
+./deploy/install_voice_control_service.sh  # 安装宿主机离线语音主控
 ```
 
 `update.sh` 会加载 Dashboard 镜像；如果本机还没有
@@ -48,7 +48,7 @@ header timestamp 差，可在部署目录执行：
 
 该模式交互式读取一次相机 SSH 密码，也支持 `INSIGHT_CAMERA_SSH_PASSWORD` 或
 `INSIGHT_CAMERA_SSH_IDENTITY`。开机自动流程的无人值守配置见部署包内
-`scripts/README.md`；宿主机缺少 Paramiko 时先执行
+`tools/device_cli/README_cn.md`；宿主机缺少 Paramiko 时先执行
 `sudo apt-get install python3-paramiko`。
 
 首次安装或大版本升级后，建图/重定位用的 TensorRT 推理服务需要现场编译一次

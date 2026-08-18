@@ -10,11 +10,14 @@ import json
 import platform
 import shutil
 from pathlib import Path
+import sys
 
-try:
-    from _bootstrap import PROJECT_ROOT
-except ModuleNotFoundError:  # isolated SuperGlue runtime image
-    PROJECT_ROOT = None
+PROJECT_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "insight_capture").is_dir()),
+    None,
+)
+if PROJECT_ROOT is not None:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import tensorrt
 

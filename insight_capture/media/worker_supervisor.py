@@ -24,6 +24,9 @@ from insight_capture.common.models import CameraFrame
 
 
 class WorkerSupervisor:
+    _WEBRTC_MODULE = "insight_capture.media.webrtc_worker"
+    _HAND_OVERLAY_MODULE = "insight_capture.media.hand_overlay_worker"
+
     def __init__(self, owner) -> None:
         self.owner = owner
 
@@ -84,7 +87,6 @@ class WorkerSupervisor:
         )
 
     def _start_webrtc_worker(self) -> "subprocess.Popen":
-        script_path = Path(__file__).resolve().with_name("webrtc_worker.py")
         env = dict(os.environ)
         env["INSIGHT_WEBRTC_AUTHKEY"] = self.owner._webrtc_authkey.hex()
         # Preload JetPack multimedia dependencies before GStreamer starts.
@@ -103,7 +105,8 @@ class WorkerSupervisor:
         proc = subprocess.Popen(
             [
                 sys.executable,
-                str(script_path),
+                "-m",
+                self._WEBRTC_MODULE,
                 "--config",
                 str(self.owner.config_path),
                 "--webrtc-port",
@@ -111,6 +114,7 @@ class WorkerSupervisor:
                 "--ipc-socket",
                 self.owner._webrtc_ipc_path,
             ],
+            cwd=str(self.owner.project_root),
             env=env,
             stdout=log_file,
             stderr=subprocess.STDOUT,
@@ -145,7 +149,6 @@ class WorkerSupervisor:
             self.owner._pending_webrtc_frames.clear()
 
     def _start_hand_overlay_worker(self) -> "subprocess.Popen":
-        script_path = Path(__file__).resolve().with_name("hand_overlay_worker.py")
         env = dict(os.environ)
         env["INSIGHT_HANDOVERLAY_AUTHKEY"] = self.owner._hand_overlay_authkey.hex()
         log_path = self.owner.project_root / "outputs" / "hand_overlay_worker.log"
@@ -154,10 +157,12 @@ class WorkerSupervisor:
         proc = subprocess.Popen(
             [
                 sys.executable,
-                str(script_path),
+                "-m",
+                self._HAND_OVERLAY_MODULE,
                 "--ipc-socket",
                 self.owner._hand_overlay_ipc_path,
             ],
+            cwd=str(self.owner.project_root),
             env=env,
             stdout=log_file,
             stderr=subprocess.STDOUT,

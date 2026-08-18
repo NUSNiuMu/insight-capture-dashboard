@@ -18,6 +18,7 @@ Post-capture
   playback / integrity / WiLoR / Ego LeRobot / UMI / LeRobot export
 ```
 
-`multi_camera_dashboard_web.py` 与 `post_processing.py` 继续作为稳定 facade。现场状态位于
-`insight_capture/runtime/`，显示管线位于 `insight_capture/media/`，HTTP 接口位于
-`insight_capture/web/routes/`。SQLite/composite 只保留历史数据兼容，新录制不得依赖它们。
+正式入口直接使用 `insight_capture.runtime.app` 与各领域模块，不再经由 `scripts/`
+中的 Python facade。现场状态位于 `insight_capture/runtime/`，显示管线位于
+`insight_capture/media/`，HTTP 接口位于 `insight_capture/web/routes/`。
+SQLite/composite 只保留历史数据兼容，新录制不得依赖它们。

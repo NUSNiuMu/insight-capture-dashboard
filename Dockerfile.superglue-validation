@@ -23,7 +23,7 @@ RUN git clone --filter=blob:none https://github.com/magicleap/SuperGluePretraine
         | sha256sum -c -
 
 COPY insight_capture/runtime/mapping/superglue_tensorrt.py /opt/insight/superglue_tensorrt.py
-COPY scripts/export_superglue_onnx.py /opt/insight/export_superglue_onnx.py
+COPY tools/mapping_validation/superglue/export_onnx.py /opt/insight/export_superglue_onnx.py
 RUN cd /opt/insight && python3 export_superglue_onnx.py
 
 FROM nvcr.io/nvidia/tensorrt@sha256:cb601071a1fda9248bbad591829f65943bd8dd23d5fe81b7c41f5390d0e1b03e AS tensorrt-source
@@ -83,8 +83,8 @@ COPY --from=onnx-builder /opt/insight/onnx /opt/insight/onnx
 COPY insight_capture/runtime/mapping/superglue_ipc.py /opt/insight/superglue_ipc.py
 COPY insight_capture/runtime/mapping/superglue_worker.py /opt/insight/superglue_inference_worker.py
 COPY insight_capture/runtime/mapping/superglue_tensorrt_runtime.py /opt/insight/superglue_tensorrt_runtime.py
-COPY scripts/prepare_superglue_tensorrt.py /opt/insight/prepare_superglue_tensorrt.py
-COPY scripts/start_superglue_inference.sh /opt/insight/start_superglue_inference.sh
+COPY tools/mapping_validation/superglue/prepare_tensorrt.py /opt/insight/prepare_superglue_tensorrt.py
+COPY tools/mapping_validation/superglue/start_inference.sh /opt/insight/start_superglue_inference.sh
 RUN chmod +x /opt/insight/start_superglue_inference.sh
 
 WORKDIR /opt/insight

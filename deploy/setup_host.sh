@@ -2,7 +2,7 @@
 # Configure a Jetson host, build the image, and optionally start the dashboard.
 #
 # Usage:
-#   ./scripts/setup_host.sh [--device jetson-nx] [--no-start]
+#   ./deploy/setup_host.sh [--device jetson-nx] [--no-start]
 
 set -euo pipefail
 
@@ -26,7 +26,7 @@ done
 
 # ── 0. device config profile ─────────────────────────────────────────────────
 if [[ -n "${device}" ]]; then
-    "${SCRIPT_DIR}/select_device.sh" "${device}"
+    "${ROOT_DIR}/scripts/select_device.sh" "${device}"
 elif [[ ! -f "${ROOT_DIR}/config/.device" ]]; then
     fail "no device profile selected yet -- run ./scripts/select_device.sh <name> first (or pass --device <name> here)."
 fi
@@ -63,4 +63,4 @@ if [[ "${no_start}" == "true" ]]; then
     exit 0
 fi
 log "setup complete -- starting the dashboard..."
-exec "${SCRIPT_DIR}/run_dashboard.sh"
+exec "${ROOT_DIR}/scripts/run_dashboard.sh"

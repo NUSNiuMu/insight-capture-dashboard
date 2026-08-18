@@ -1,4 +1,4 @@
-// Firefox kiosk profile prefs (scripts/open_web_3d_right.sh). Suppresses
+// Firefox kiosk profile prefs (deploy/kiosk/open_web_3d_right.sh). Suppresses
 // first-run dialogs (Welcome tour, "restore previous session" banner,
 // telemetry prompt) that would otherwise sit on top of the dashboard --
 // there's no one at the keyboard on a kiosk to dismiss them.

@@ -76,7 +76,7 @@ SE(3) 位姿图。优化结果沿整段轨迹分配校正，并用所有保留�
 docker compose build superglue-inference
 ```
 
-建图已接入开发版 dashboard，也已纳入 `scripts/build_release.sh` 的客户发布打包。
+建图已接入开发版 dashboard，也已纳入 `deploy/build_release.sh` 的客户发布打包。
 本地开发时，正常启动 dashboard 即会通过依赖关系同时启动
 TensorRT 推理、Insight9 mapper 和 Insight3 localizer：
 
@@ -149,7 +149,7 @@ PnP 候选不再要求连续三次全部成功，而是在最近五次尝试中�
 
 构建阶段会校验三份权重的 SHA-256；任一内容不一致即失败。该镜像名为
 `insight-superglue-validation:25.04`（沿用历史命名，未随发布状态改名），
-由 `scripts/build_release.sh` 一并构建并单独保存为首次安装依赖 tar；Dashboard
+由 `deploy/build_release.sh` 一并构建并单独保存为首次安装依赖 tar；Dashboard
 日常升级包不再重复携带该固定镜像。
 
 ONNX 在镜像构建阶段一次性导出。首次启动只在当前 Jetson 上编译

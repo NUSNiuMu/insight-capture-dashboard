@@ -10,7 +10,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=LOOPER_VOICE_ROOT=@VOICE_ROOT@
 Environment=LOOPER_CAPTURE_DEVICE=auto
 Environment=LOOPER_PLAYBACK_DEVICE=auto
-ExecStart=@PROJECT_ROOT@/scripts/run_voice_control.sh
+ExecStart=@PROJECT_ROOT@/scripts/run_voice.sh
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=10

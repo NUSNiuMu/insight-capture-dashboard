@@ -492,7 +492,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(json.loads(json.dumps(command)), command)
 
     def test_voice_defaults_use_two_stage_fast_interaction(self):
-        with mock.patch.object(sys, "argv", ["openclaw_voice_bridge.py"]):
+        with mock.patch.object(sys, "argv", ["voice.service"]):
             args = parse_args()
         self.assertEqual(args.wake_pause_sec, 0.5)
         self.assertEqual(args.wake_phrase, ["宸境"])

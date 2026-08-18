@@ -6,13 +6,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import threading
 import time
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from _bootstrap import PROJECT_ROOT
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from insight_capture.common.config import build_dashboard_config, load_setup
 from insight_capture.postprocess.bags.synchronization import PreparedPlaybackManager

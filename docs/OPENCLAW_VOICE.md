@@ -50,10 +50,10 @@ export LOOPER_PLAYBACK_BACKEND=alsa   # 默认 pulse
 以下测试完全离线：
 
 ```bash
-scripts/run_voice_control.sh --speak-text '数采语音播报正常。'
-scripts/run_voice_control.sh --wake-only
-scripts/run_voice_control.sh --transcribe-once
-scripts/run_voice_control.sh --echo-once
+scripts/run_voice.sh --speak-text '数采语音播报正常。'
+scripts/run_voice.sh --wake-only
+scripts/run_voice.sh --transcribe-once
+scripts/run_voice.sh --echo-once
 ```
 
 ## 安装与日志
@@ -61,14 +61,14 @@ scripts/run_voice_control.sh --echo-once
 发布部署包已包含语音入口、安装器和 systemd unit。准备上述模型后执行：
 
 ```bash
-scripts/install_voice_control_service.sh
+deploy/install_voice_control_service.sh
 systemctl --user status insight-voice-control.service
 journalctl --user -u insight-voice-control.service -f
 ```
 
 安装器不要求 OpenClaw 存在，也不会把 voice unit 依赖到 network-online 或
-openclaw-gateway。旧的 `run_openclaw_voice.sh`、`install_openclaw_voice_service.sh` 和
-`openclaw-voice.service.in` 只作为兼容入口转到新的离线主服务。
+openclaw-gateway。旧的 OpenClaw 专用启动脚本和 unit 已移除；可选能力由同一个离线
+语音服务中的 adapter 提供。
 
 ## 隐私边界
 

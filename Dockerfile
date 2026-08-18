@@ -65,7 +65,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # targets Orin NX's Ampere sm_87, so there's no reason to pay for compiling
 # and shipping kernels for every other architecture. GUI_ENABLED=OFF: this
 # dashboard only ever shells out to `colmap feature_extractor` /
-# `sequential_matcher` / `mapper` (see scripts/post_processing.py), so the
+# `sequential_matcher` / `mapper` (see postprocess/optimization), so the
 # Qt GUI binary is dead weight -- skipping it cuts real build time.
 RUN git clone --branch 3.9.1 --depth 1 https://github.com/colmap/colmap.git /colmap-src \
     && mkdir /colmap-src/build \
@@ -96,7 +96,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # terminals and spawned processes, but NOT PATH, and postCreateCommand only
 # patches ~/.bashrc (which non-interactive/subprocess contexts don't source).
 # Without this, any code that shells out to `ros2` (e.g.
-# post_processing.py's topic discovery and `ros2 bag record`) silently
+# runtime topic discovery and `ros2 bag record`) silently
 # fails with FileNotFoundError when launched from a VS Code terminal/task,
 # even though rclpy imports (PYTHONPATH-based) keep working fine.
 ENV PATH="/opt/ros/humble/bin:${PATH}"
@@ -148,7 +148,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Utilities
     curl \
     ffmpeg \
-    # iproute2 (`ip`) & iputils-ping (`ping`): needed by scripts/reboot_cameras.sh
+    # iproute2 (`ip`) & iputils-ping (`ping`): needed by the camera reboot tool
     # to discover cameras on 169.254.x.x links and wait for them after reboot.
     # Absent from the ros base image, so these commands silently fail (exit 127)
     # if run inside the container without this.
@@ -182,7 +182,7 @@ COPY --from=colmap-builder /colmap-install/share/colmap /usr/local/share/colmap
 
 # ── looper-vio-colmap-handoff: the optimization pipeline COLMAP feeds into ──
 # Sibling of /workspaces/insight_capture, not a subdirectory -- that's the
-# path scripts/multi_camera_dashboard_web.py expects (Path(__file__)
+# path insight_capture.runtime.app expects
 # .resolve().parents[2] / "looper-vio-colmap-handoff") and it's outside this
 # repo's own git history, so cloning it here (pinned to a commit for
 # reproducibility) rather than vendoring it as tracked files.
@@ -224,7 +224,7 @@ RUN cd /workspaces/looper-vio-colmap-handoff && \
 # nothing here calls cv2.imshow/highgui.
 # matplotlib: only looper-vio-colmap-handoff's plot_trajectories.py needs it
 # (run_pipeline_from_rosbag.py's --make-plots, currently always "false" from
-# post_processing.py -- installed anyway so flipping that flag doesn't
+# postprocess optimization -- installed anyway so flipping that flag doesn't
 # surface an ImportError from a separate subprocess).
 # rosbags provides offline Hand pose input. WiLoR's minimal inference runtime
 # and pinned weights are added separately below.
@@ -326,7 +326,7 @@ RUN pip3 install --no-cache-dir \
     && pip3 install --no-cache-dir --no-deps \
         "git+https://github.com/mattloper/chumpy.git@580566eafc9ac68b2614b64d6f7aaa84eebb70da"
 
-# ── Kiosk browser (scripts/open_web_3d_right.sh): official Firefox ─────────
+# ── Kiosk browser (deploy/kiosk/open_web_3d_right.sh): official Firefox ─────
 # The on-device kiosk previously used PyQt5's QWebEngineView, which bundles
 # Chromium 87 (Nov 2020, frozen since). That old build's GPU compositor has
 # a bug on this Tegra GPU/driver combo: under high-frequency, large texture
@@ -358,12 +358,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && tar xf /tmp/firefox.tar.xz -C /opt \
     && rm /tmp/firefox.tar.xz
 
-# Kiosk profile (see scripts/firefox-kiosk-user.js for what/why). Root's
+# Kiosk profile (see deploy/kiosk/firefox-kiosk-user.js for what/why). Root's
 # real profile dir is used (not /tmp) so it survives container restarts.
-COPY scripts/firefox-kiosk-user.js /opt/firefox-kiosk-profile/user.js
+COPY deploy/kiosk/firefox-kiosk-user.js /opt/firefox-kiosk-profile/user.js
 
 # Non-root account to actually run the kiosk Firefox process (see the `su`
-# in scripts/open_web_3d_right.sh). Firefox refuses to enable its content
+# in deploy/kiosk/open_web_3d_right.sh). Firefox refuses to enable its content
 # sandbox for uid 0 and instead shows a permanent "security sandbox is
 # disabled, unsupported and less secure" bar -- Mozilla hardcodes this
 # warning with no pref/policy to suppress it (sandboxing root is
@@ -371,7 +371,7 @@ COPY scripts/firefox-kiosk-user.js /opt/firefox-kiosk-profile/user.js
 # mirrors this host's desktop user (nvidia) on purpose: the X server
 # authorizes by the *kernel* uid of the connecting process (this Docker
 # setup has no userns-remap, so container uid 1000 IS host uid 1000), and
-# scripts/run_dashboard.sh's `xhost +SI:localuser:$(id -un)` grant is keyed
+# run_dashboard.sh's `xhost +SI:localuser:$(id -un)` grant is keyed
 # off that same uid -- the container-local username below doesn't need to
 # match anything. GID 104 is "render" on the host (/dev/dri/renderD128)
 # but collides with systemd-resolve's GID inside this image; joining it by
@@ -391,7 +391,7 @@ RUN useradd -m -u 1000 -G video,104 -s /bin/bash kiosk \
 # plugins-bad (webrtcbin/dtls/srtp/h264parse) + nice (ICE) serve the WebRTC
 # camera streams in insight_capture/media/webrtc.py; the H.264 encoder itself is the
 # host-injected nvv4l2h264enc. sqlite3 (the CLI) is the .recover salvage tool
-# for power-cut-corrupted recordings (post_processing.py orphan recovery).
+# for power-cut-corrupted recordings (recording recovery).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     sqlite3 \
     gstreamer1.0-tools \
@@ -414,7 +414,7 @@ RUN echo 'source /opt/ros/humble/setup.bash' >> /root/.bashrc \
     && echo 'export LD_LIBRARY_PATH=/lib:/lib/aarch64-linux-gnu:/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> /root/.bashrc
 
 # ── Entrypoint: sources ROS2 and sets library paths ─────────────────────────
-COPY scripts/docker_entrypoint.sh /entrypoint.sh
+COPY deploy/docker_entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # ── Application code (baked in for image-tarball releases) ──────────────────
@@ -432,14 +432,14 @@ WORKDIR /workspaces/insight_capture
 EXPOSE 8765
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "-u", "scripts/multi_camera_dashboard_web.py"]
+CMD ["python3", "-u", "-m", "insight_capture.runtime.app"]
 
 # ── Dev-only: headless Chromium for page verification ──────────────────────
 # Vendored via Playwright rather than the host's snap/apt chromium-browser:
 # both route through snap-confine, which was found broken (missing file
 # capabilities) on at least one deployed Jetson -- vendoring sidesteps the
 # host package manager and keeps the browser version pinned and reproducible.
-# Not part of the customer release: scripts/build_release.sh builds the
+# Not part of the customer release: deploy/build_release.sh builds the
 # "runtime" stage above with --target; only the dev compose (docker-compose.yml)
 # targets this stage, for the headless console-error/screenshot checks
 # described in CLAUDE.md. This is never the on-device kiosk -- see the

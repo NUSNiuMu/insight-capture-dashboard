@@ -6,11 +6,14 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 
-try:
-    from _bootstrap import PROJECT_ROOT
-except ModuleNotFoundError:  # isolated SuperGlue builder image
-    PROJECT_ROOT = None
+PROJECT_ROOT = next(
+    (parent for parent in Path(__file__).resolve().parents if (parent / "insight_capture").is_dir()),
+    None,
+)
+if PROJECT_ROOT is not None:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
     from insight_capture.runtime.mapping.superglue_tensorrt import export_onnx

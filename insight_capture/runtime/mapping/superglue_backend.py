@@ -63,7 +63,7 @@ class OfficialSuperGlueBackend:
         if not matching_file.is_file() or any(not path.is_file() for path in required_weights):
             raise RuntimeError(
                 "official SuperGlue checkout is incomplete; run "
-                "scripts/setup_superglue_validation.sh --accept-license"
+                "tools/mapping_validation/superglue/setup_validation.sh --accept-license"
             )
         try:
             import torch
