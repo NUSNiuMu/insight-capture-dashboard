@@ -5,6 +5,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from handpose import HandPoseManager
+from dashboard_runtime import (
+    ActiveQcMonitor,
+    CapturePreflight,
+    SessionTakeStore,
+    VoiceAlertQueue,
+)
 from post_processing import (
     OptimizationManager,
     PreparedPlaybackManager,
@@ -30,11 +36,33 @@ class DashboardContext:
     gripper_extraction_manager: GripperExtractionManager = field(init=False)
     umi_export_manager: UmiExportManager = field(init=False)
     _image_capabilities_cache: Optional[Dict[str, object]] = field(default=None, init=False)
+    take_store: SessionTakeStore = field(init=False)
+    capture_preflight: CapturePreflight = field(init=False)
+    voice_alerts: VoiceAlertQueue = field(init=False)
+    active_qc: ActiveQcMonitor = field(init=False)
 
     def __post_init__(self) -> None:
         self.web_root = self.web_root.resolve() if self.web_root else None
         self.project_root = self.project_root.resolve()
         self.results_root = self.results_root.resolve()
+        runtime_config = dict(getattr(self.node, "post_processing_config", {}) or {})
+        self.take_store = SessionTakeStore(
+            self.results_root, runtime_config.get("capture_session")
+        )
+        self.capture_preflight = CapturePreflight(
+            self.node,
+            self.recording_manager,
+            runtime_config.get("preflight"),
+        )
+        self.voice_alerts = VoiceAlertQueue()
+        self.active_qc = ActiveQcMonitor(
+            self.node,
+            self.recording_manager,
+            self.take_store,
+            self.voice_alerts,
+            runtime_config.get("active_qc"),
+        )
+        self.active_qc.start()
         self.scoring_manager = ScoringManager(
             rosbag_root=self.recording_manager.rosbag_root,
             results_root=self.results_root,

@@ -1,0 +1,6 @@
+{
+  "id": "ego_hands",
+  "station_check_after_take": false,
+  "postprocess_route": "ego_lerobot_wilor",
+  "quick_qc": ["camera_continuity", "localization", "storage", "recorder"]
+}

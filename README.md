@@ -1,7 +1,8 @@
 # Insight Capture Dashboard
 
-面向机器人学习数据采集的多相机工作站：实时查看多路相机图像和统一世界系轨迹，
-录制并校验 rosbag，离线提取 Hand pose、夹爪状态，并导出 LeRobot/UMI 训练数据。
+面向机器人学习数据采集的无屏数采背包：现场以离线语音控制、MCAP 录制、定位和主动
+QC 为核心；采后才打开本机 Firefox/Kiosk 或 Web Dashboard 查看三路图像、回放、质检、
+处理并导出 LeRobot/UMI 训练数据。
 在线空间基准由 Insight9 稀疏建图与 Insight3 全局重定位提供；旧 AprilTag 在线对齐
 链路已经移除。
 
@@ -90,7 +91,6 @@ python3 scripts/multi_camera_dashboard_web.py &
 | `dashboard_image_stream` | dashboard 显示用哪路图像流 | `infra1` / `color_compressed` |
 | `dashboard_pose_stream` | 全局建图/重定位 pose 流 | `/insight_global/insight3_a/pose` |
 | `teleop_role` | 决定 3D 场景里用哪个位置/朝向预设 | `head` / `left_hand` / `right_hand` |
-| `avatar_model` | 3D 场景里这个相机用的模型，见下方"Web avatar 模型配置" | `assets/models/vis_assembly.glb` |
 
 `dashboard_image_stream` 的可选值定义在 [camera_setup.py](scripts/camera_setup.py#L9-L15) 的 `IMAGE_STREAMS` 里：`infra1`、`infra2`、`depth`、`color`、`color_compressed`。
 
@@ -127,14 +127,15 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 页面入口：
 
-- `/` 或 `/3d`：实时画面与全局建图/重定位轨迹的 Babylon.js GPU 场景
-- `/recording`：rosbag 录制页，topic 发现、勾选、录制与停止
+- `/`：Session / Take 采后列表、quick QC、人工决定与异常摘要
+- `/3d`：三路画面与全局建图/重定位轨迹的 Babylon.js GPU 场景，viewer 打开后才启动媒体链路
+- `/recording`：维护用 rosbag 录制页；现场主流程使用离线语音
 - `/bags`：本地 rosbag 列表页，大小/时长/消息/topic 数、完整性与评分状态
 - `/umi-dataset`：LeRobot v3 标准数据集与 Legacy UMI Zarr 导出
 - `/scoring`：录制完整性验证与轨迹评分
 - `/handpose`：从已有 rosbag 离线提取并查看 WiLoR 3D 手部关键点
 - `/optimization`：COLMAP 轨迹优化（`jetson-nx` 镜像内置 CUDA sm_87 的 COLMAP 3.9.1）
-- `/settings`：手势录制、Stick figure、夹爪/手部叠加、Insight3 mask 与 Avatar 设置
+- `/settings`：夹爪/手部叠加与 Insight3 mask 等高级设置
 
 Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic（按相机分组，
 支持整组勾选），`Start` 只录勾选的 topic。全部勾选消息由一个原生 C++
@@ -149,9 +150,7 @@ staging 目录原子发布，同时保存 live header/network audit；不分 par
 选择前会执行一次写入/`fsync` 探测，录制中或停止排空期间不能切换。网页不会枚举整台设备，
 也不能选择操作者电脑上未挂载进 Dashboard 容器的目录。
 
-手势录制默认关闭，可在 Settings 开启；Insight9 同时检测到双手“拇指向上、四指
-握拳”持续 0.8 秒时，会用服务器默认 topics 开始录制，解除 2 秒后再次保持同一
-手势可停止，且不会停止网页手动开始的录制。输出目录优先级：CLI `--rosbag-dir` >
+输出目录优先级：CLI `--rosbag-dir` >
 环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
 Docker 宿主机目录由 `INSIGHT_ROSBAG_HOST_DIR` 控制；例如在 `.env` 写入
 `INSIGHT_ROSBAG_HOST_DIR=/media/nvidia/INSIGHT_USB/rosbags`，即可将容器录制根目录
@@ -161,48 +160,27 @@ Docker 宿主机目录由 `INSIGHT_ROSBAG_HOST_DIR` 控制；例如在 `.env` �
 导致录制根目录来回切换。录制状态的 `storage.active_path`、`storage.using_fallback` 和
 `storage.fallback_reason` 会显示实际写入位置与回退原因。
 
-声控统一使用宿主机上的 [宸境 OpenClaw 语音助手](docs/OPENCLAW_VOICE.md)：同一个 SenseVoice INT8 中文模型在本地
-识别常驻固定指令和唤醒后的自然语言；直接说录制、校准或“检查相机”会连接本机 Dashboard 并
-播放启动时预生成的回复，不需要唤醒。单独说“宸境”并停顿 0.5 秒后会先听到“我在”，
-随后那句话才交给 OpenClaw；服务启动会把
-USB PCM 音量恢复到 50%。自动化只能停止自己创建的 `looper_record_*`，不能停止网页
-或手势开始的录制。
+声控统一使用宿主机上的 [Insight 离线语音控制](docs/OPENCLAW_VOICE.md)。SenseVoice、
+VAD 与 Piper 在本地完成“开始/停止录制、开始校准、检查相机、系统状态、本条作废”等
+固定命令；开始前自动执行 Preflight，不满足时拒绝并播报原因。OpenClaw 只处理唤醒词
+后的非固定自然语言，未安装或断网不影响固定命令。
 
 Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、message/topic 数量，
 并从 `outputs/results/{integrity,scores}` 读取完整性与评分状态。
-
-### Web avatar 模型配置
-
-每个 camera 条目支持：
-
-- `avatar_model`：相对项目根目录的 `.glb`/`.gltf` 路径（不支持 `.obj`，会回退到 primitive；模型缺失/加载失败也会回退，不会崩溃）
-- `avatar_scale`：默认 `1.0`
-- `avatar_rotation_deg_xyz`：相对 VIO pose 的本地旋转（度）
-- `avatar_offset_xyz`：相对 VIO pose 原点的本地平移，`[forward, right, up]`
-
-```json
-{
-  "name": "insight9_a",
-  "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",
-  "avatar_scale": 0.5
-}
-```
-
-模型文件走 `/asset?path=...` 接口提供，带版本化长缓存。3D 页面会先让场景就绪，再依次启动相机、轨迹和模型；模型加载期间不会显示占位物。优化后的头盔模型为 2.7MB，旧配置会自动迁移。
 
 ## 保留的脚本
 
 | 脚本 | 作用 |
 |---|---|
 | `scripts/run_dashboard.sh` | 统一启动入口，`docker compose up -d` + 健康检查，`--jetson` 额外拉起本机 kiosk 窗口 |
-| `scripts/openclaw_voice_bridge.py` | 宸境唤醒、本地中文 STT、OpenClaw 对话与本地 TTS 桥接 |
+| `scripts/run_voice_control.sh` / `openclaw_voice_bridge.py` | 离线固定命令、本地 STT/TTS 与可选 OpenClaw adapter |
 | `scripts/multi_camera_dashboard_web.py` | Web dashboard 稳定进程入口与 ROS 生命周期组合 |
 | `scripts/dashboard_web/` / `dashboard_runtime/` | Web API、WebSocket 与 Dashboard 运行时领域实现 |
 | `scripts/dashboard_media/` | 硬件 JPEG 编解码与 WebRTC 流实现 |
 | `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
 | `scripts/post_processing.py` | 录制与后处理公共导入的稳定兼容 facade |
 | `scripts/post_processing_core/` | 完整性、评分、录制、恢复、回放、同步、bag catalog 与优化实现 |
-| `scripts/hand_tracking/` | 实时手部 landmark、双手手势识别和夹爪跟踪 |
+| `scripts/hand_tracking/` | 按 viewer 启用的实时手部 landmark 与夹爪跟踪 |
 | `scripts/handpose/` | 从已有 rosbag 离线提取并管理 Hand pose 结果 |
 | `scripts/webrtc_worker.py` / `hand_overlay_worker.py` | 独立进程中的 WebRTC 编码/信令与 JPEG 手部叠加 |
 | `scripts/insight9_sparse_mapper.py` | Insight9 SuperPoint/SuperGlue 在线稀疏建图与位姿图入口 |

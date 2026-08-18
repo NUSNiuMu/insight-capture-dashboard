@@ -18,6 +18,7 @@ from openclaw_voice_bridge import (  # noqa: E402
     calibration_is_complete,
     capture_check_reply_key,
     clean_utterance_transcript,
+    discover_alsa_device,
     extract_openclaw_reply,
     match_local_command,
     normalize_transcript,
@@ -54,9 +55,26 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(match_local_command("帮我重新校准一下"), "calibration_start")
         self.assertEqual(match_local_command("检查相机"), "capture_check")
         self.assertEqual(match_local_command("请设置检测位"), "capture_reference")
+        self.assertEqual(match_local_command("系统状态"), "system_status")
+        self.assertEqual(match_local_command("请本条作废"), "take_reject")
         self.assertIsNone(match_local_command("设置批次基准"))
         self.assertIsNone(match_local_command("开始录制前先检查磁盘"))
         self.assertIsNone(match_local_command("现在是否正在录制"))
+
+    def test_audio_auto_discovery_prefers_stable_card_name(self):
+        completed = SimpleNamespace(
+            stdout="default\nplughw:CARD=Other,DEV=0\nplughw:CARD=E3,DEV=0\n"
+        )
+        with mock.patch("subprocess.run", return_value=completed):
+            self.assertEqual(
+                discover_alsa_device("capture", "E3"),
+                "plughw:CARD=E3,DEV=0",
+            )
+
+    def test_missing_openclaw_only_disables_optional_requests(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace(openclaw_bin=Path("/missing/openclaw")))
+        with self.assertRaisesRegex(RuntimeError, "optional assistant"):
+            bridge.ask_openclaw("今天采了多少条")
 
     def test_local_command_bypasses_openclaw(self):
         bridge = OpenClawVoiceBridge(SimpleNamespace())

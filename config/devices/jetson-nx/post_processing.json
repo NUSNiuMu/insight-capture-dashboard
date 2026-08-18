@@ -8,15 +8,23 @@
   "insight3_global_localizer": {
     "gripper_mask_height_ratio": 0.2
   },
-  "gesture_recording": {
-    "enabled": false,
-    "camera": "insight9_a",
-    "hold_sec": 0.8,
-    "hold_gap_sec": 0.15,
-    "release_sec": 2.0,
-    "snapshot_timeout_sec": 0.35,
-    "min_keypoint_score": 0.35,
-    "min_free_ratio": 0.1
+  "capture_session": {
+    "task": "unspecified",
+    "operator": "unknown",
+    "station_check_after_take": false
+  },
+  "preflight": {
+    "camera_stale_sec": 2.0,
+    "pose_stale_sec": 2.0,
+    "minimum_free_gb": 5.0,
+    "require_primary_storage": true,
+    "require_mapping": true,
+    "require_localization": true
+  },
+  "active_qc": {
+    "sustain_sec": 3.0,
+    "camera_stale_sec": 2.0,
+    "minimum_free_gb": 2.0
   },
   "capture_check": {
     "enabled": true,

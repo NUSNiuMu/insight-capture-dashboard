@@ -15,8 +15,9 @@ class ParticipantWatchdog:
         self.owner = owner
 
     def _any_ros_data_received(self) -> bool:
-        # GIL-atomic reads are sufficient for this boolean probe.
-        return any(frame is not None for frame in self.owner.latest_camera_frames.values()) or any(
+        # Capture Mode intentionally leaves latest_camera_frames empty. Probe
+        # the raw image-reader timestamps that exist before preview encoding.
+        return any(self.owner.camera_input_times.get(name) for name in self.owner.camera_input_times) or any(
             t > 0.0 for t in self.owner.last_pose_received_time.values()
         )
 
@@ -108,8 +109,8 @@ class ParticipantWatchdog:
                 continue
 
             for camera in self.owner.cameras:
-                frame_times = self.owner.camera_frame_times[camera.name]
-                if not frame_times or now - frame_times[-1] <= camera_stall_grace_sec:
+                input_times = self.owner.camera_input_times[camera.name]
+                if not input_times or now - input_times[-1] <= camera_stall_grace_sec:
                     continue
                 self.owner._restart_for_stale_participant(
                     f"Camera '{camera.name}' produced no frames for over "

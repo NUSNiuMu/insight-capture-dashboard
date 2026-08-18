@@ -55,6 +55,8 @@ LOCAL_COMMAND_ALIASES = {
     "calibration_start": ("开始校准", "重新校准", "重置校准"),
     "capture_check": ("检查相机", "开始检测", "位置检测", "检测相机"),
     "capture_reference": ("设置检测位", "记录检测位", "保存检测位"),
+    "system_status": ("系统状态", "检查系统", "数采状态"),
+    "take_reject": ("本条作废", "这条作废", "作废本条"),
 }
 LOCAL_COMMAND_ENDPOINTS = {
     "recording_start": "/api/automation/recording/start",
@@ -62,6 +64,8 @@ LOCAL_COMMAND_ENDPOINTS = {
     "calibration_start": "/api/mapping/reset",
     "capture_check": "/api/capture-check/run",
     "capture_reference": "/api/capture-check/reference",
+    "system_status": "/api/system/status",
+    "take_reject": "/api/takes/current/reject",
 }
 LOCAL_COMMAND_REPLY_KEYS = {
     "recording_start": "recording_started",
@@ -69,7 +73,17 @@ LOCAL_COMMAND_REPLY_KEYS = {
     "calibration_start": "calibration_started",
     "capture_check": "capture_check_not_ready",
     "capture_reference": "capture_reference_saved",
+    "system_status": "dynamic_reply",
+    "take_reject": "dynamic_reply",
 }
+
+
+class LocalCommandFailure(RuntimeError):
+    """A deterministic command failure with operator-facing speech."""
+
+    def __init__(self, message: str, speech: Optional[str] = None) -> None:
+        super().__init__(message)
+        self.speech = str(speech or "").strip()
 CANNED_REPLIES = {
     "recording_starting": "初始化录制中，请稍等。",
     "recording_started": "录制已经开始。",
@@ -276,6 +290,25 @@ def build_agent_command(
     ]
 
 
+def discover_alsa_device(kind: str, preferred: str = "E3") -> str:
+    """Resolve a stable ALSA CARD identifier, falling back to the default."""
+    binary = "arecord" if kind == "capture" else "aplay"
+    try:
+        completed = subprocess.run(
+            [binary, "-L"], check=False, capture_output=True, text=True, timeout=3.0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "default"
+    candidates = [line.strip() for line in completed.stdout.splitlines() if line and not line[0].isspace()]
+    stable = [name for name in candidates if name.startswith("plughw:CARD=")]
+    hint = str(preferred or "").casefold()
+    if hint:
+        for name in stable:
+            if hint in name.casefold():
+                return name
+    return stable[0] if stable else "default"
+
+
 class AlsaCapture:
     def __init__(self, device: str, sample_rate: int, chunk_frames: int) -> None:
         self.device = device
@@ -338,6 +371,8 @@ class OpenClawVoiceBridge:
         self._wake_candidates = 0
         self._last_recognition_timing: dict[str, object] = {}
         self._last_local_command_timing: dict[str, object] = {}
+        self._pending_spoken_reply = ""
+        self._alert_cursor: Optional[int] = None
 
     @staticmethod
     def _emit(event: str, **payload: object) -> None:
@@ -673,6 +708,8 @@ class OpenClawVoiceBridge:
             ) from exc
 
     def ask_openclaw(self, utterance: str) -> str:
+        if not self.args.openclaw_bin.is_file():
+            raise RuntimeError("OpenClaw optional assistant is not installed")
         command = build_agent_command(
             self.args.openclaw_bin,
             self.args.session_key,
@@ -711,7 +748,14 @@ class OpenClawVoiceBridge:
         except urllib.error.HTTPError as exc:
             if action == "recording_start" and exc.code == 409:
                 return "recording_already_active"
-            raise RuntimeError(f"Dashboard API returned HTTP {exc.code}") from exc
+            try:
+                error_payload = json.loads(exc.read())
+            except (ValueError, OSError):
+                error_payload = {}
+            speech = error_payload.get("speech") if isinstance(error_payload, dict) else None
+            raise LocalCommandFailure(
+                f"Dashboard API returned HTTP {exc.code}", speech
+            ) from exc
         if not isinstance(payload, dict):
             raise RuntimeError("Dashboard API returned a non-object payload")
         request_sec = time.monotonic() - request_started
@@ -744,7 +788,41 @@ class OpenClawVoiceBridge:
             return capture_check_reply_key(payload)
         if action == "capture_reference":
             return capture_check_reply_key(payload, reference=True)
+        if action in {"system_status", "take_reject"}:
+            self._pending_spoken_reply = str(payload.get("speech") or "").strip()
+            if not self._pending_spoken_reply:
+                raise RuntimeError("Dashboard returned no spoken status")
+            return "dynamic_reply"
         return LOCAL_COMMAND_REPLY_KEYS[action]
+
+    def _start_alert_monitor(self) -> None:
+        threading.Thread(
+            target=self._monitor_voice_alerts,
+            daemon=True,
+            name="voice_active_qc_alerts",
+        ).start()
+
+    def _monitor_voice_alerts(self) -> None:
+        while True:
+            cursor = 0 if self._alert_cursor is None else self._alert_cursor
+            request = urllib.request.Request(
+                f"{self.args.dashboard_url.rstrip('/')}/api/voice/alerts?cursor={cursor}",
+                method="GET",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self.args.dashboard_timeout_sec) as response:
+                    payload = json.loads(response.read())
+                alerts = payload.get("alerts") if isinstance(payload, dict) else []
+                latest = int(payload.get("cursor", cursor)) if isinstance(payload, dict) else cursor
+                if self._alert_cursor is not None:
+                    for alert in alerts or []:
+                        text = str(alert.get("text") or "").strip()
+                        if text:
+                            self.speak(text)
+                self._alert_cursor = latest
+            except Exception as exc:  # noqa: BLE001 - fixed commands remain available
+                self._emit("error", stage="active_qc_alerts", message=str(exc))
+            time.sleep(1.0)
 
     def _recording_status(self) -> dict[str, object]:
         request = urllib.request.Request(
@@ -775,7 +853,11 @@ class OpenClawVoiceBridge:
         if after is None or not after.get("recording"):
             return False
         output_path = Path(str(after.get("output_path") or ""))
-        if not output_path.name.startswith("looper_record_"):
+        take = after.get("current_take") if isinstance(after.get("current_take"), dict) else {}
+        if not (
+            output_path.name.startswith("looper_record_")
+            or take.get("trigger") == "voice"
+        ):
             return False
         self._emit(
             "recording_feedback_rollback",
@@ -925,13 +1007,20 @@ class OpenClawVoiceBridge:
             try:
                 reply_key = self.execute_local_command(local_action)
                 command_succeeded = True
+            except LocalCommandFailure as exc:
+                self._emit("error", stage="local_command", message=str(exc))
+                reply_key = "dynamic_failure"
+                self._pending_spoken_reply = exc.speech or "指令执行失败，请检查数采服务。"
             except Exception as exc:  # noqa: BLE001 - keep voice control available
                 self._emit("error", stage="local_command", message=str(exc))
                 reply_key = "command_failed"
             command_finished = time.monotonic()
             final_feedback_started = command_finished
             try:
-                feedback_played = self.speak_canned(reply_key)
+                if reply_key in {"dynamic_reply", "dynamic_failure"}:
+                    feedback_played = self.speak(self._pending_spoken_reply)
+                else:
+                    feedback_played = self.speak_canned(reply_key)
             except Exception as exc:  # noqa: BLE001 - do not crash after state change
                 self._emit(
                     "error",
@@ -1003,6 +1092,7 @@ class OpenClawVoiceBridge:
 
     def run_forever(self) -> None:
         self.load_models()
+        self._start_alert_monitor()
         self._emit(
             "ready",
             device=self.args.device,
@@ -1033,8 +1123,13 @@ class OpenClawVoiceBridge:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--device", default="plughw:E3,0")
-    parser.add_argument("--playback-device", default="plughw:E3,0")
+    parser.add_argument("--device", default=os.environ.get("LOOPER_CAPTURE_DEVICE", "auto"))
+    parser.add_argument("--playback-device", default=os.environ.get("LOOPER_PLAYBACK_DEVICE", "auto"))
+    parser.add_argument(
+        "--audio-device-hint",
+        default=os.environ.get("LOOPER_AUDIO_DEVICE_HINT", "E3"),
+        help="Preferred stable ALSA CARD name when a device is set to auto.",
+    )
     parser.add_argument(
         "--playback-backend",
         choices=("pulse", "alsa"),
@@ -1157,8 +1252,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if not args.openclaw_bin.is_file():
-        raise FileNotFoundError(f"OpenClaw executable not found: {args.openclaw_bin}")
+    if args.device == "auto":
+        args.device = discover_alsa_device("capture", args.audio_device_hint)
+    if args.playback_device == "auto":
+        args.playback_device = discover_alsa_device("playback", args.audio_device_hint)
     bridge = OpenClawVoiceBridge(args)
     try:
         if args.speak_text is not None:

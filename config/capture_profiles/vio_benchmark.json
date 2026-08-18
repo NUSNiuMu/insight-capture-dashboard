@@ -1,0 +1,6 @@
+{
+  "id": "vio_benchmark",
+  "station_check_after_take": false,
+  "postprocess_route": "trajectory_quality",
+  "quick_qc": ["camera_continuity", "localization", "storage", "recorder"]
+}

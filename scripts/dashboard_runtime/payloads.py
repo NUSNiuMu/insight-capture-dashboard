@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import quote
 
 from insight3_localization_settings import load_gripper_mask_height_ratio
 
 import numpy as np
-
-from camera_setup import AVAILABLE_AVATAR_MODELS
 
 from .models import CameraFrame
 
@@ -96,23 +93,13 @@ class PayloadBuilder:
                         "drop_before_seq": int(first_trace_sequence),
                         "points": trace_points,
                     },
-                    "avatar_model": pose.avatar_model,
-                    "avatar_scale": pose.avatar_scale,
-                    "avatar_rotation_deg_xyz": [float(value) for value in pose.avatar_rotation_deg_xyz],
-                    "avatar_offset_xyz": [float(value) for value in pose.avatar_offset_xyz],
                     "gripper_opening": self.owner.gripper_opening_percent(pose.name),
                 }
                 poses.append(entry)
                 if raw_sample is not None and visible and pose.teleop_role in ("left_hand", "right_hand"):
                     hand_entries.append(entry)
-        # Stick-figure extra: the latest normalized 21-point hand shape (see
-        # hand_landmarks_for_role; None until a HandEngine camera has
-        # detected that hand), same dashboard frame as `position`.
-        for entry in hand_entries:
-            entry["hand_landmarks"] = self.owner.hand_landmarks_for_role(entry["role"])
         return {
             "type": "pose_update",
-            "stick_figure_mode": bool(self.owner.stick_figure_mode),
             "display_fps_limit": self.owner.display_fps_limit,
             "trace_capacity": self.owner.max_points,
             "trace_generation": trace_generation,
@@ -161,7 +148,8 @@ class PayloadBuilder:
                 if len(recent_times) >= 2:
                     span = max(recent_times[-1] - recent_times[0], 1e-6)
                     fps = (len(recent_times) - 1) / span
-                stale = frame is None or (now - frame.received_monotonic) > self.owner.camera_stale_timeout_sec
+                input_age = None if not input_times else now - input_times[-1]
+                stale = input_age is None or input_age > self.owner.camera_stale_timeout_sec
                 browser = browser_stats.get(camera.name, {})
                 browser_age_sec = now - float(
                     browser.pop("updated_monotonic", 0.0)
@@ -177,6 +165,7 @@ class PayloadBuilder:
                         "topic": camera.topic,
                         "visible": frame is not None,
                         "stale": stale,
+                        "input_age_sec": input_age,
                         "fps": fps,
                         "webrtc_stats": {
                             "input_fps": input_fps,
@@ -198,22 +187,13 @@ class PayloadBuilder:
                 )
         return {
             "type": "camera_update",
+            "runtime": self.owner.preview_status(),
             "cameras": cameras,
         }
 
     def latest_camera_frame(self, camera_name: str) -> Optional[CameraFrame]:
         with self.owner.camera_frame_lock:
             return self.owner.latest_camera_frames.get(camera_name)
-
-    def model_asset_url(self, avatar_model: Optional[str]) -> Optional[str]:
-        if not avatar_model:
-            return None
-        asset_path = (self.owner.project_root / avatar_model).resolve()
-        try:
-            version = asset_path.stat().st_mtime_ns
-        except OSError:
-            version = 0
-        return f"/asset?path={quote(avatar_model, safe='')}&v={version}"
 
     def build_settings_payload(self) -> Dict[str, object]:
         hand_cameras = {
@@ -225,11 +205,9 @@ class PayloadBuilder:
         }
         poses = []
         for pose in self.owner.poses:
-            model_name = Path(pose.avatar_model).name if pose.avatar_model else None
             entry = {
                 "name": pose.name,
                 "role": pose.teleop_role,
-                "avatar_model": model_name,
             }
             if pose.name in hand_cameras:
                 entry["gripper_tracking_available"] = True
@@ -240,11 +218,6 @@ class PayloadBuilder:
             poses.append(entry)
         return {
             "poses": poses,
-            "available_models": AVAILABLE_AVATAR_MODELS,
-            "stick_figure_mode": bool(self.owner.stick_figure_mode),
-            "gesture_recording_enabled": bool(
-                self.owner.gesture_recording_status().get("enabled", False)
-            ),
             "insight3_gripper_mask_height_ratio": load_gripper_mask_height_ratio(
                 self.owner.post_processing_config_path
             ),

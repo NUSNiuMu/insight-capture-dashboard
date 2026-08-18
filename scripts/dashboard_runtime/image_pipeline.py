@@ -44,6 +44,10 @@ class ImagePipeline:
             if not self.owner._playback_mode:
                 self.owner._feed_recording_writer(camera_topic, msg)
                 self._maybe_relay_localization_image(camera_name, msg)
+            # Capture mode keeps the DDS reader, header audit and localization
+            # relay alive, but does no display decode/encode until a viewer asks.
+            if not self.owner.preview_requested():
+                return
             self.owner._pending_frames[camera_name] = msg
             event.set()
 
@@ -71,6 +75,8 @@ class ImagePipeline:
             event.clear()
             msg = self.owner._pending_frames.pop(camera_name, None)
             if msg is None:
+                continue
+            if not self.owner.preview_requested():
                 continue
             try:
                 # Throttle WebRTC previews before allowing capture backpressure.

@@ -1,0 +1,19 @@
+[Unit]
+Description=Insight offline voice control
+After=sound.target docker.service
+Wants=sound.target
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_ROOT@
+Environment=PYTHONUNBUFFERED=1
+Environment=LOOPER_VOICE_ROOT=@VOICE_ROOT@
+Environment=LOOPER_CAPTURE_DEVICE=auto
+Environment=LOOPER_PLAYBACK_DEVICE=auto
+ExecStart=@PROJECT_ROOT@/scripts/run_voice_control.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+
+[Install]
+WantedBy=default.target

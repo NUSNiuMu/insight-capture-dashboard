@@ -1,4 +1,4 @@
-"""Fast, validated merging for single-file SQLite rosbag parts."""
+"""Legacy SQLite rosbag compatibility; new captures use one native MCAP."""
 
 from __future__ import annotations
 

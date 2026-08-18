@@ -6,8 +6,8 @@
   <body data-dashboard-view="settings">
     <div class="app-shell">
       <aside class="app-sidebar">
-        <a class="app-brand" href="/3d"><span class="brand-mark">I</span><span>INSIGHT<small>Capture Studio</small></span></a><div class="workspace-card"><span><i></i> Active workspace</span><strong>Jetson NX</strong><small>ROS 2 · Domain 20</small></div>
-        <nav class="side-nav" aria-label="Dashboard pages"><p>Monitor</p><a href="/3d"><b>01</b><span>Spatial view</span></a><p>Capture</p><a href="/recording"><b>02</b><span>Recording</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/umi-dataset"><b>04</b><span>Datasets</span></a><a href="/scoring"><b>05</b><span>Scoring</span></a><a href="/handpose"><b>06</b><span>Hand pose</span></a><a href="/optimization"><b>07</b><span>Optimization</span></a><p>System</p><a href="/settings" class="is-active"><b>08</b><span>Settings</span></a></nav><div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
+        <a class="app-brand" href="/"><span class="brand-mark">I</span><span>INSIGHT<small>Capture Studio</small></span></a><div class="workspace-card"><span><i></i> Active workspace</span><strong>Jetson NX</strong><small>ROS 2 · Domain 20</small></div>
+        <nav class="side-nav" aria-label="Dashboard pages"><p>Review</p><a href="/"><b>01</b><span>Sessions</span></a><a href="/3d"><b>02</b><span>Spatial review</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/umi-dataset"><b>04</b><span>Datasets</span></a><a href="/scoring"><b>05</b><span>Scoring</span></a><p>Advanced</p><a href="/handpose"><b>06</b><span>Hand pose</span></a><p>Engineering</p><a href="/optimization"><b>07</b><span>Optimization</span></a><p>Maintenance</p><a href="/recording"><b>08</b><span>Recorder</span></a><a href="/settings" class="is-active"><b>09</b><span>Settings</span></a></nav><div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
       </aside>
       <section class="app-main"><header class="app-topbar"><span>System / <strong>Settings</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
         <main class="page-content"><header class="content-heading"><div><p class="section-kicker">System configuration</p><h1>Workspace settings</h1><p>Configure camera representation and tracking services.</p></div><div class="heading-stat"><strong>Local</strong><span>configuration</span></div></header>
@@ -17,8 +17,6 @@
               <label class="settings-form-field" for="insight3-mask-ratio"><span>Insight3 gripper mask height ratio</span><input id="insight3-mask-ratio" type="number" min="0" max="0.99" step="0.01" inputmode="decimal" required><small>Default 0.2 masks the bottom 20% of both Insight3 images; set 0 to disable the mask.</small></label>
               <button type="submit" class="quiet-button">Save</button>
             </form>
-            <label class="settings-toggle-row" id="stick-figure-row" hidden><input type="checkbox" id="stick-figure-toggle"><span>Stick-figure mode &mdash; render poses as large colored dots instead of loading the 3D avatar models</span></label>
-            <label class="settings-toggle-row" id="gesture-recording-row" hidden><input type="checkbox" id="gesture-recording-toggle"><span>Gesture recording &mdash; use a held double thumbs-up gesture to start or stop recording</span></label>
             <div id="settings-camera-list" class="settings-camera-list"></div></section>
         </main>
       </section>

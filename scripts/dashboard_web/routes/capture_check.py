@@ -1,6 +1,5 @@
 """Episode-boundary camera quality-check routes."""
 
-import asyncio
 from pathlib import Path
 
 from aiohttp import web
@@ -34,13 +33,15 @@ class CaptureCheckRoutes:
         guarded = self._recording_guard()
         if guarded is not None:
             return web.json_response(guarded)
-        result = await asyncio.to_thread(self.context.node.set_capture_check_reference)
+        result = self.context.node.set_capture_check_reference()
         return web.json_response(result)
 
     async def _handle_run(self, _request: web.Request) -> web.Response:
         guarded = self._recording_guard()
         if guarded is not None:
             return web.json_response(guarded)
-        return web.json_response(
-            self.context.node.run_capture_check(bag_name=self._latest_bag_name())
-        )
+        result = self.context.node.run_capture_check(bag_name=self._latest_bag_name())
+        take_store = getattr(self.context, "take_store", None)
+        if take_store is not None:
+            take_store.record_station_check(result)
+        return web.json_response(result)

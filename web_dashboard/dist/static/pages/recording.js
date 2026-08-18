@@ -2,7 +2,6 @@ import { escapeHtml } from "../shared/format.js";
 
 const recordingPanel = document.getElementById("recording-panel");
 const recordingStatus = document.getElementById("recording-status");
-const gestureRecordingPill = document.getElementById("gesture-recording-pill");
 const storageSpacePill = document.getElementById("storage-space-pill");
 const startRecordingButton = document.getElementById("start-recording-button");
 const stopRecordingButton = document.getElementById("stop-recording-button");
@@ -465,7 +464,6 @@ function renderRecordingStatus(status) {
   if (status && status.topic_catalog && !recordTopicsInitialized) {
     renderTopicCatalog(status.topic_catalog, { resetSelection: true });
   }
-  renderGestureRecording(status && status.gesture_recording);
   renderDiskSpace(status && status.disk_space);
   renderRecordingStorage(status && status.storage);
   setRecordingBusy(recordingBusy, { active, finalizing });
@@ -484,52 +482,6 @@ function renderRecordingStorage(storage) {
     recordingDirectory.textContent = path || "Unavailable";
     recordingDirectory.title = path || "Recording folder unavailable";
   }
-}
-
-function renderGestureRecording(gesture) {
-  if (!gestureRecordingPill) {
-    return;
-  }
-  if (!gesture || !gesture.enabled) {
-    gestureRecordingPill.textContent = "gesture off";
-    gestureRecordingPill.className = "gesture-recording-pill";
-    gestureRecordingPill.title = (gesture && gesture.message) || "Gesture recording is disabled.";
-    return;
-  }
-  const state = gesture.state || "armed";
-  let text = "gesture armed";
-  let level = "ok";
-  if (state === "holding") {
-    text = `hold thumbs ${Math.round((gesture.hold_progress || 0) * 100)}%`;
-    level = "warning";
-  } else if (state === "release_required") {
-    const remaining = Math.max(0, (gesture.release_sec || 2) * (1 - (gesture.release_progress || 0)));
-    text = `release hands ${remaining.toFixed(1)}s`;
-    level = "warning";
-  } else if (state === "recording") {
-    if (gesture.gesture_phase === "release_required") {
-      const remaining = Math.max(0, (gesture.release_sec || 2) * (1 - (gesture.release_progress || 0)));
-      text = `release hands ${remaining.toFixed(1)}s`;
-      level = "warning";
-    } else if (gesture.gesture_phase === "holding") {
-      text = `hold to stop ${Math.round((gesture.hold_progress || 0) * 100)}%`;
-      level = "warning";
-    } else {
-      text = "gesture recording · armed";
-      level = "critical";
-    }
-  } else if (state === "manual_recording") {
-    text = "manual recording";
-  } else if (state === "working") {
-    text = "gesture working";
-    level = "warning";
-  } else if (state.startsWith("blocked") || state === "error") {
-    text = "gesture blocked";
-    level = "critical";
-  }
-  gestureRecordingPill.textContent = text;
-  gestureRecordingPill.className = `gesture-recording-pill gesture-recording-${level}`;
-  gestureRecordingPill.title = gesture.message || "Double thumbs-up recording control";
 }
 
 function renderDiskSpace(space) {

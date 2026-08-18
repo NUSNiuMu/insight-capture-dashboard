@@ -1,0 +1,190 @@
+import json
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from collections import deque
+from pathlib import Path
+from types import SimpleNamespace
+
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+from dashboard_runtime.active_qc import ActiveQcMonitor, VoiceAlertQueue
+from dashboard_runtime.image_pipeline import ImagePipeline
+from dashboard_runtime.preflight import CapturePreflight
+from dashboard_runtime.preview_manager import PreviewManager
+from dashboard_runtime.session_take import SessionTakeStore
+
+
+class _Manager:
+    def __init__(self, root: Path):
+        self.rosbag_root = root
+        self.default_topics = ["/cam/a", "/cam/b", "/cam/c", "/tf_static"]
+        self.storage_status = {"using_fallback": False, "active_path": str(root)}
+        self.recording = False
+
+    def current_topic_catalog(self, refresh=True):
+        return {"topics": list(self.default_topics)}
+
+    def is_recording(self):
+        return self.recording
+
+    def status(self):
+        return {"recording": self.recording, "storage": self.storage_status, "recent_output": []}
+
+
+class CaptureRuntimeTest(unittest.TestCase):
+    def test_capture_callback_skips_display_until_viewer(self):
+        event = threading.Event()
+        owner = SimpleNamespace(
+            cameras=[SimpleNamespace(name="cam", topic="/cam/a")],
+            _pending_frame_events={"cam": event},
+            _playback_mode=False,
+            camera_input_lock=threading.Lock(),
+            camera_input_times={"cam": deque(maxlen=10)},
+            _pending_frames={},
+            _localization_image_publishers={},
+            viewer=False,
+        )
+        fed = []
+        owner._feed_recording_writer = lambda topic, msg: fed.append((topic, msg))
+        owner.preview_requested = lambda: owner.viewer
+        msg = SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace(sec=1, nanosec=0)))
+        callback = ImagePipeline(owner)._make_dashboard_image_callback("cam", "image")
+
+        callback(msg)
+        self.assertEqual(fed, [("/cam/a", msg)])
+        self.assertFalse(event.is_set())
+        self.assertNotIn("cam", owner._pending_frames)
+
+        owner.viewer = True
+        callback(msg)
+        self.assertTrue(event.is_set())
+        self.assertIs(owner._pending_frames["cam"], msg)
+
+    def test_viewer_activity_lazy_starts_worker(self):
+        calls = []
+        owner = SimpleNamespace(
+            _webrtc_has_sessions={},
+            _webrtc_proc=None,
+            _worker_supervisor=SimpleNamespace(
+                ensure_webrtc_worker=lambda: calls.append("start")
+            ),
+            stop_webrtc_worker=lambda: calls.append("stop"),
+        )
+        manager = PreviewManager(owner, lease_sec=1.0, idle_stop_sec=1.0)
+        try:
+            self.assertFalse(manager.requested())
+            manager.activity()
+            self.assertEqual(calls, ["start"])
+            self.assertTrue(manager.requested())
+        finally:
+            manager.close()
+
+    def test_preflight_checks_camera_mapping_storage_and_topics(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            now = time.monotonic()
+            cameras = [
+                SimpleNamespace(name=name, label=name, topic=f"/cam/{name}")
+                for name in ("a", "b", "c")
+            ]
+            poses = [
+                SimpleNamespace(name=name, topic=f"/pose/{name}")
+                for name in ("a", "b", "c")
+            ]
+            node = SimpleNamespace(
+                fake_pose=False,
+                cameras=cameras,
+                poses=poses,
+                camera_input_lock=threading.Lock(),
+                camera_input_times={name: deque([now - 0.1, now], maxlen=10) for name in ("a", "b", "c")},
+                last_pose_received_time={name: now for name in ("a", "b", "c")},
+                build_mapping_payload=lambda: {
+                    "statuses": {
+                        "insight9": {"online": True, "state": "tracking"},
+                        "insight3_a": {"online": True, "localized": True},
+                        "insight3_b": {"online": True, "localized": True},
+                    }
+                },
+            )
+            manager = _Manager(Path(temporary))
+            manager.default_topics = [
+                "/cam/a", "/cam/b", "/cam/c",
+                "/pose/a", "/pose/b", "/pose/c", "/tf_static",
+            ]
+            report = CapturePreflight(
+                node, manager, {"minimum_free_gb": 0}
+            ).evaluate()
+            self.assertTrue(report["ok"], report)
+            manager.storage_status = {
+                "using_fallback": True,
+                "active_path": str(manager.rosbag_root),
+                "fallback_reason": "capture disk is absent",
+            }
+            report = CapturePreflight(
+                node, manager, {"minimum_free_gb": 0}
+            ).evaluate()
+            self.assertFalse(report["ok"])
+            self.assertIn("storage_fallback", {item["code"] for item in report["failures"]})
+            manager.storage_status["using_fallback"] = False
+            node.camera_input_times["c"].clear()
+            report = CapturePreflight(
+                node, manager, {"minimum_free_gb": 0}
+            ).evaluate()
+            self.assertFalse(report["ok"])
+            self.assertIn("camera_stale", {item["code"] for item in report["failures"]})
+
+    def test_reject_take_preserves_raw_bag(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = SessionTakeStore(root, {"session_id": "s1", "task": "fold"})
+            take = store.reserve_take()
+            bag = root / "bags" / take["bag_name"]
+            bag.mkdir(parents=True)
+            (bag / "data.mcap").write_bytes(b"raw")
+            store.mark_recording(bag)
+            rejected = store.reject_current("operator_rejected")
+            self.assertFalse(rejected["operator_valid"])
+            self.assertTrue((bag / "data.mcap").is_file())
+
+    def test_sustained_camera_fault_records_anomaly_and_voice_alert(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = SessionTakeStore(root, {"session_id": "s1"})
+            store.reserve_take()
+            store.mark_recording(root / "bag")
+            manager = _Manager(root)
+            manager.recording = True
+            now = time.monotonic()
+            node = SimpleNamespace(
+                cameras=[SimpleNamespace(name="a", label="A camera")],
+                camera_input_lock=threading.Lock(),
+                camera_input_times={"a": deque([], maxlen=10)},
+                build_mapping_payload=lambda: {
+                    "statuses": {
+                        "insight9": {"online": True},
+                        "insight3_a": {"online": True, "localized": True},
+                        "insight3_b": {"online": True, "localized": True},
+                    }
+                },
+                _recording_bridge=SimpleNamespace(
+                    snapshot_image_header_audit=lambda: {"topics": {}}
+                ),
+            )
+            alerts = VoiceAlertQueue()
+            monitor = ActiveQcMonitor(
+                node, manager, store, alerts,
+                {"sustain_sec": 0.5, "minimum_free_gb": 0},
+            )
+            monitor.poll()
+            monitor._pending_since["camera_stale:a"] = now - 1.0
+            monitor.poll()
+            self.assertEqual(alerts.since(0)[0]["code"], "camera_stale:a")
+            timeline = store.current()["anomaly_timeline"]
+            self.assertEqual(timeline[0]["code"], "camera_stale:a")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -47,7 +47,21 @@ cp deploy/docker-compose.yml deploy/update.sh deploy/README.md "${bundle_dir}/"
 # run_dashboard.sh resolves the compose project root as its parent dir, so it
 # keeps working from <bundle>/scripts/ exactly like from the repo.
 cp scripts/run_dashboard.sh "${bundle_dir}/scripts/"
-chmod +x "${bundle_dir}/update.sh" "${bundle_dir}/scripts/run_dashboard.sh"
+cp scripts/openclaw_voice_bridge.py "${bundle_dir}/scripts/"
+cp scripts/run_voice_control.sh "${bundle_dir}/scripts/"
+cp scripts/run_openclaw_voice.sh "${bundle_dir}/scripts/"
+cp scripts/install_voice_control_service.sh "${bundle_dir}/scripts/"
+cp scripts/install_openclaw_voice_service.sh "${bundle_dir}/scripts/"
+cp deploy/insight-voice-control.service.in "${bundle_dir}/deploy-insight-voice-control.service.in"
+mkdir -p "${bundle_dir}/deploy"
+mv "${bundle_dir}/deploy-insight-voice-control.service.in" \
+    "${bundle_dir}/deploy/insight-voice-control.service.in"
+chmod +x "${bundle_dir}/update.sh" \
+    "${bundle_dir}/scripts/run_dashboard.sh" \
+    "${bundle_dir}/scripts/run_voice_control.sh" \
+    "${bundle_dir}/scripts/run_openclaw_voice.sh" \
+    "${bundle_dir}/scripts/install_voice_control_service.sh" \
+    "${bundle_dir}/scripts/install_openclaw_voice_service.sh"
 
 # Bundle the same host tuning used by source-checkout installations.
 cp scripts/host_setup.sh "${bundle_dir}/scripts/"

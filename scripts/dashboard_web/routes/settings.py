@@ -25,32 +25,7 @@ class SettingsRoutes:
         self.context.node.set_hand_overlay_enabled(name, bool(payload.get("enabled")))
         return web.json_response(self.context.node.build_settings_payload())
 
-    async def _handle_settings_stick_figure(self, request: web.Request) -> web.Response:
-        payload = await read_json_body(request)
-        if "enabled" not in payload:
-            raise ValueError("Field 'enabled' is required.")
-        self.context.node.stick_figure_mode = bool(payload.get("enabled"))
-        return web.json_response(self.context.node.build_settings_payload())
-
-    async def _handle_settings_gesture_recording(
-        self, request: web.Request
-    ) -> web.Response:
-        payload = await read_json_body(request)
-        if "enabled" not in payload:
-            raise ValueError("Field 'enabled' is required.")
-        self.context.node.set_gesture_recording_enabled(bool(payload.get("enabled")))
-        return web.json_response(self.context.node.build_settings_payload())
-
     async def _handle_settings_get(self, _request: web.Request) -> web.Response:
-        return web.json_response(self.context.node.build_settings_payload())
-
-    async def _handle_settings_avatar_model(self, request: web.Request) -> web.Response:
-        payload = await read_json_body(request)
-        name = str(payload.get("name", "")).strip()
-        model = str(payload.get("model", "")).strip()
-        if not name or not model:
-            raise ValueError("Fields 'name' and 'model' are required.")
-        self.context.node.set_pose_avatar_model(name, model)
         return web.json_response(self.context.node.build_settings_payload())
 
     async def _handle_settings_gripper_tracking(self, request: web.Request) -> web.Response:

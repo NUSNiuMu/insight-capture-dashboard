@@ -7,15 +7,15 @@
   <body data-dashboard-view="recording">
     <div class="app-shell">
       <aside class="app-sidebar">
-        <a class="app-brand" href="/3d"><span class="brand-mark">I</span><span>INSIGHT<small>Capture Studio</small></span></a>
+        <a class="app-brand" href="/"><span class="brand-mark">I</span><span>INSIGHT<small>Capture Studio</small></span></a>
         <div class="workspace-card"><span><i></i> Active workspace</span><strong>Jetson NX</strong><small>ROS 2 · Domain 20</small></div>
-        <nav class="side-nav" aria-label="Dashboard pages"><p>Monitor</p><a href="/3d"><b>01</b><span>Spatial view</span></a><p>Capture</p><a href="/recording" class="is-active"><b>02</b><span>Recording</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/umi-dataset"><b>04</b><span>Datasets</span></a><a href="/scoring"><b>05</b><span>Scoring</span></a><a href="/handpose"><b>06</b><span>Hand pose</span></a><a href="/optimization"><b>07</b><span>Optimization</span></a><p>System</p><a href="/settings"><b>08</b><span>Settings</span></a></nav>
+        <nav class="side-nav" aria-label="Dashboard pages"><p>Review</p><a href="/"><b>01</b><span>Sessions</span></a><a href="/3d"><b>02</b><span>Spatial review</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/umi-dataset"><b>04</b><span>Datasets</span></a><a href="/scoring"><b>05</b><span>Scoring</span></a><p>Advanced</p><a href="/handpose"><b>06</b><span>Hand pose</span></a><p>Engineering</p><a href="/optimization"><b>07</b><span>Optimization</span></a><p>Maintenance</p><a href="/recording" class="is-active"><b>08</b><span>Recorder</span></a><a href="/settings"><b>09</b><span>Settings</span></a></nav>
         <div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
       </aside>
       <section class="app-main">
         <header class="app-topbar"><span>Capture / <strong>Recording</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
         <main class="page-content recording-workspace">
-          <header class="content-heading"><div><p class="section-kicker">Capture session</p><h1>New recording</h1><p>Name the session, select ROS topics and begin capture.</p></div><div class="heading-statuses"><span id="gesture-recording-pill" class="gesture-recording-pill" title="Double thumbs-up gesture recording status">gesture: loading</span><span id="storage-space-pill" class="storage-space-pill" title="Free space on the recording filesystem">disk: unknown</span></div></header>
+          <header class="content-heading"><div><p class="section-kicker">Capture session</p><h1>New recording</h1><p>Field capture is voice-first; this page is the local review and maintenance control.</p></div><div class="heading-statuses"><span id="storage-space-pill" class="storage-space-pill" title="Free space on the recording filesystem">disk: unknown</span></div></header>
           <section class="record-hero recording-panel" id="recording-panel">
             <div class="record-state"><span class="record-orb"></span><div><p class="section-kicker">Recorder status</p><h2 id="recording-status">Recording idle</h2><p id="record-topic-status">Waiting for topic catalog...</p></div></div>
             <div class="record-actions">

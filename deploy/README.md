@@ -22,6 +22,7 @@ tar xzf insight-dashboard-deploy-vX.Y.Z.tar.gz
 cd insight-dashboard-deploy        # 解压出的目录不带版本号——它是常驻安装目录，名字跨版本不变
 ./update.sh /path/to/insight-dashboard-vX.Y.Z.tar.gz
 sudo ./scripts/host_setup.sh       # 一次性调优：CycloneDDS/UDP 分片、RPS + 开机相机恢复
+./scripts/install_voice_control_service.sh  # 安装宿主机离线语音主控
 ```
 
 `update.sh` 会加载 Dashboard 镜像；如果本机还没有
@@ -31,6 +32,12 @@ sudo ./scripts/host_setup.sh       # 一次性调优：CycloneDDS/UDP 分片、R
 jetson-nx profile 会在下一次开机相机恢复流程中把相机 DDS 模式校正为 CycloneDDS。
 安装的 `insight-camera-network.service` 负责网卡参数，
 `insight-camera-reboot.service` 在冷启动后恢复相机并校验 DDS 配置。
+
+语音服务作为发布包正式组件运行在宿主机，直接使用宿主机声卡；Dashboard 容器不再
+挂载 `/dev/snd`。安装脚本默认自动发现稳定的 ALSA `CARD` 名称，不依赖 card index。
+SenseVoice、Silero VAD 和 Piper 固定命令完全离线；没有安装 OpenClaw 或 Gateway
+不可用时，只会禁用非固定自然语言问答，不影响开始/停止录制、校准、相机检查、
+系统状态和本条作废。
 
 手动整机重启三台相机后，如需统一校时、共同重启采集服务并直接测量三路图像
 header timestamp 差，可在部署目录执行：

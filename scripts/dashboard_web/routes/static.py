@@ -14,6 +14,9 @@ class StaticRoutes:
         self.context = context
 
     async def _handle_index(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.context.web_root / "sessions.html")
+
+    async def _handle_spatial_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.context.web_root / "3d.html")
 
     async def _handle_recording_page(self, _request: web.Request) -> web.FileResponse:

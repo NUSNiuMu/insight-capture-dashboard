@@ -44,17 +44,16 @@ scripts/
   *_worker.py / *_mapper.py         稳定进程入口；只做参数、I/O 和生命周期
   multi_camera_dashboard_web.py     Dashboard ROS 组合入口兼容面
   post_processing.py                离线处理公共导入兼容面
-  inprocess_bag_writer.py           图像消息进程内 SQLite rosbag 写入
   lerobot_dataset_export.py         LeRobot v3（HiFi-UMI profile）导出
   umi_dataset_export.py             旧 UMI Zarr 训练栈兼容导出
   webrtc_worker.py                  独立 WebRTC 信令与硬件 H.264 worker
   hand_overlay_worker.py            按需启动的手部叠加 worker
   dashboard_web/                    HTTP app、context、middleware、routes、WebSocket
-  dashboard_runtime/                Dashboard 图像、录制桥接、worker 监管与状态
+  dashboard_runtime/                Capture Mode、Preflight、Session/Take、主动 QC、媒体监管
   dashboard_media/                  硬件 JPEG 和 WebRTC 流实现
-  hand_tracking/                    实时手部关键点、手势识别与夹爪跟踪
+  hand_tracking/                    viewer 按需手部关键点与夹爪跟踪
   handpose/                         离线 WiLoR Hand pose 提取与任务管理
-  post_processing_core/             bag 完整性、评分、录制、恢复、回放、同步、优化
+  post_processing_core/             bag 完整性、评分、录制、恢复、回放、同步、优化与 legacy 兼容
   insight9_mapping_core/            稀疏/稠密建图、位姿图和全局定位算法
 web_dashboard/
   src/                              前端源码，按领域和页面分包
@@ -121,6 +120,9 @@ small infrastructure adapter
   稳定 facade，不应重新承载业务实现。
 - Insight9 稀疏建图、位姿图和 Insight3 全局重定位共享
   `insight9_mapping_core/`；稠密建图仍是内部验证能力。
+- 现场默认 Capture Mode；viewer lease 才启用 JPEG/WebRTC/hand display，空闲后回收 worker。
+- 语音固定命令、Preflight、Session/Take 和 anomaly timeline 是正式采集控制面；OpenClaw
+  只作为可选自然语言增强。
 
 后续整理应按功能小步提交，并验证兼容 import、稳定命令、真实 API/ROS 路径
 和相关页面。只有关键路径具备足够自动化覆盖后，才评估引入

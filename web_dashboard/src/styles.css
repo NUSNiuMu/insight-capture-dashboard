@@ -187,6 +187,19 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .camera-panel.is-stale .camera-overlay { color: #ff9d96; border-color: rgba(194, 69, 62, 0.55); }
 
 /* Bags */
+.session-summary { display: grid; margin-bottom: 18px; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 10px; }
+.session-summary article { display: flex; min-width: 0; padding: 15px 16px; border: 1px solid var(--line); border-radius: 10px; flex-direction: column; gap: 6px; background: var(--surface); box-shadow: var(--shadow-sm); }
+.session-summary span, .take-row span { color: var(--muted-light); font-family: var(--mono); font-size: 8px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+.session-summary strong { overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.take-list { display: grid; gap: 8px; }
+.take-row { display: grid; min-height: 88px; padding: 14px 16px; grid-template-columns: minmax(260px,1.3fr) repeat(2,minmax(150px,.7fr)); align-items: center; gap: 20px; border: 1px solid var(--line); border-left: 4px solid var(--line-dark); border-radius: 10px; background: var(--surface); }
+.take-row > div { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.take-row strong, .take-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.take-row strong { font-size: 13px; }
+.take-row small { color: var(--muted); font-size: 10px; }
+.take-row.take-pass { border-left-color: var(--green); }
+.take-row.take-suspect, .take-row.take-pending { border-left-color: var(--accent); }
+.take-row.take-rejected, .take-row.take-fail { border-left-color: var(--red); }
 .bag-list { display: grid; gap: 8px; }
 .bag-row { display: grid; grid-template-columns: minmax(330px,1.2fr) minmax(340px,.9fr) auto auto; min-height: 92px; padding: 15px 16px; align-items: center; gap: 20px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); transition: transform 140ms, border-color 140ms, box-shadow 140ms; }
 .bag-row:hover { z-index: 1; border-color: var(--line-dark); box-shadow: 0 12px 30px rgba(74, 60, 30, 0.12); transform: translateY(-2px); }
@@ -270,13 +283,10 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .directory-empty.directory-error { color: var(--red); }
 .recording-directory-dialog > .field-help { display: block; min-height: 18px; margin: 10px 22px 0; }
 .recording-directory-footer { display: flex; padding: 13px 22px 20px; justify-content: flex-end; gap: 8px; }
-.load-chip, .storage-space-pill, .gesture-recording-pill { display: inline-flex; min-height: 31px; padding: 0 11px; align-items: center; border: 1px solid var(--line-dark); border-radius: 6px; color: var(--muted); background: var(--surface); font-family: var(--mono); font-size: 9px; }
+.load-chip, .storage-space-pill { display: inline-flex; min-height: 31px; padding: 0 11px; align-items: center; border: 1px solid var(--line-dark); border-radius: 6px; color: var(--muted); background: var(--surface); font-family: var(--mono); font-size: 9px; }
 .storage-space-ok { border-color: rgba(31, 138, 85, 0.4); color: var(--green); }
 .storage-space-warning { border-color: rgba(184, 119, 0, 0.45); color: var(--accent); }
 .storage-space-critical { border-color: rgba(194, 69, 62, 0.5); color: var(--red); background: rgba(194, 69, 62, 0.07); }
-.gesture-recording-ok { border-color: rgba(31, 138, 85, 0.4); color: var(--green); }
-.gesture-recording-warning { border-color: rgba(184, 119, 0, 0.45); color: var(--accent); }
-.gesture-recording-critical { border-color: rgba(194, 69, 62, 0.5); color: var(--red); background: rgba(194, 69, 62, 0.07); }
 .recording-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, .65fr); align-items: start; gap: 18px; }
 .topic-surface { min-width: 0; }
 .console-surface { min-width: 0; align-self: start; }
@@ -523,6 +533,7 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .bag-row { grid-template-columns: minmax(260px,1fr) minmax(310px,.9fr); }
   .bag-badges, .bag-row-actions { justify-content: flex-start; }
   .umi-workspace { grid-template-columns: 1fr; }
+  .session-summary { grid-template-columns: repeat(3,minmax(0,1fr)); }
 }
 
 @media (max-width: 820px) {
@@ -569,6 +580,7 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .playback-prepare-progress { width: 100%; min-width: 0; }
   .record-hero { padding: 20px; }
   .bag-row { grid-template-columns: 1fr; }
+  .session-summary, .take-row { grid-template-columns: 1fr; }
   .umi-schema-grid, .umi-result { grid-template-columns: 1fr; }
   .umi-result-item { grid-template-columns: 1fr; }
   .bag-row-stats, .bag-row-badges, .bag-badges, .bag-row-actions { grid-column: auto; justify-content: flex-start; }
@@ -615,7 +627,7 @@ body { font-size: 15px; }
 .bag-row-stats small { font-size: 10px; }
 .bag-row-stats strong { font-size: 13px; }
 .bag-badges, .bag-row-actions, .bag-badge { font-size: 11px; }
-.empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner { font-size: 13px; }
+.empty-state, .load-chip, .storage-space-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner { font-size: 13px; }
 .record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend { font-size: 12px; }
 .record-topic-summary-meta, .record-topic-copy span, .recording-output, .opt-log, .result-placeholder small, .settings-role-pill { font-size: 11px; }
 .record-topic-copy strong, .settings-camera-head h3 { font-size: 13px; }
@@ -632,7 +644,7 @@ body { font-size: 15px; }
   body, .app-brand { font-size: 16px; }
   .app-brand small, .workspace-card > span, .workspace-card small, .side-nav p, .side-nav a b, .sidebar-foot small, .topbar-clock, .section-heading > span, .section-heading > p, .control-number, .step-label > span, .camera-title span, .camera-overlay, .bag-badges, .bag-row-actions, .bag-badge, .record-topic-summary-meta, .result-placeholder small, .settings-role-pill, .legend-row, .trail-toggle { font-size: 12px; }
   .workspace-card strong, .content-heading > div:first-child > p:last-child, .bag-row-main strong { font-size: 17px; }
-  .side-nav a, .sidebar-foot span, .app-topbar, .section-kicker, .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .nav-button, .field-label, .field-help, .control-strip-copy strong, .step-label strong, .camera-title strong, .bag-row-stats strong, .empty-state, .load-chip, .storage-space-pill, .gesture-recording-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner, .record-topic-copy strong, .settings-camera-head h3 { font-size: 14px; }
+  .side-nav a, .sidebar-foot span, .app-topbar, .section-kicker, .primary-button, .quiet-button, .danger-button, .bag-delete-button, .recording-button, .nav-button, .field-label, .field-help, .control-strip-copy strong, .step-label strong, .camera-title strong, .bag-row-stats strong, .empty-state, .load-chip, .storage-space-pill, .record-topic-summary-main strong, .result-placeholder strong, #integrity-result-body, #scoring-result-body, .restart-banner, .record-topic-copy strong, .settings-camera-head h3 { font-size: 14px; }
   .field-control, .bag-select, .field-input, .settings-text-input, .settings-model-select, .recording-bag-name-input { font-size: 15px; }
   .record-state #record-topic-status, .record-topic-item, .record-topic-select-all, .settings-toggle-row, .settings-field, .settings-form-field, .opt-radio-item, .plot-legend, .control-strip-copy small, .step-label small, .legend-row strong { font-size: 13px; }
   .camera-wall-heading h2 { font-size: 19px; }

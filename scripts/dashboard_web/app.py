@@ -12,6 +12,7 @@ from .routes.mapping import MappingRoutes
 from .routes.optimization import OptimizationRoutes
 from .routes.playback import PlaybackRoutes
 from .routes.recording import RecordingRoutes
+from .routes.runtime import RuntimeRoutes
 from .routes.settings import SettingsRoutes
 from .routes.static import StaticRoutes
 from .routes.umi_export import UmiExportRoutes
@@ -32,6 +33,7 @@ def create_app(context: DashboardContext) -> web.Application:
     handpose = HandPoseRoutes(context)
     mapping = MappingRoutes(context)
     recording = RecordingRoutes(context)
+    runtime = RuntimeRoutes(context)
     playback = PlaybackRoutes(context)
     optimization = OptimizationRoutes(context)
     settings = SettingsRoutes(context)
@@ -40,6 +42,9 @@ def create_app(context: DashboardContext) -> web.Application:
 
     async def handle_health(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "fake_pose": context.node.fake_pose})
+
+    async def stop_active_qc(_app: web.Application) -> None:
+        context.active_qc.stop()
 
     app.router.add_get("/ws", websocket._handle_ws)
     app.router.add_get("/healthz", handle_health)
@@ -56,6 +61,12 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/cameras/{camera_name}/frame", cameras._handle_camera_frame)
     app.router.add_get("/api/images/capabilities", cameras._handle_image_capabilities)
     app.router.add_get("/api/recording/status", recording._handle_recording_status)
+    app.router.add_get("/api/preflight", runtime._handle_preflight)
+    app.router.add_get("/api/system/status", runtime._handle_system_status)
+    app.router.add_post("/api/system/status", runtime._handle_system_status)
+    app.router.add_get("/api/sessions", runtime._handle_sessions)
+    app.router.add_post("/api/takes/current/reject", runtime._handle_reject_current)
+    app.router.add_get("/api/voice/alerts", runtime._handle_voice_alerts)
     app.router.add_get("/api/recording/topics", recording._handle_recording_topics)
     app.router.add_get(
         "/api/recording/storage/directories",
@@ -111,7 +122,6 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/optimization/trajectories", optimization._handle_optimization_trajectories)
     app.router.add_get("/api/optimization/runs", optimization._handle_optimization_runs)
     app.router.add_get("/api/settings", settings._handle_settings_get)
-    app.router.add_post("/api/settings/avatar-model", settings._handle_settings_avatar_model)
     app.router.add_post("/api/settings/gripper-tracking", settings._handle_settings_gripper_tracking)
     app.router.add_post(
         "/api/settings/insight3-gripper-mask",
@@ -119,16 +129,12 @@ def create_app(context: DashboardContext) -> web.Application:
     )
     app.router.add_post("/api/settings/restart-backend", settings._handle_settings_restart)
     app.router.add_post("/api/settings/hand-overlay", settings._handle_settings_hand_overlay)
-    app.router.add_post("/api/settings/stick-figure", settings._handle_settings_stick_figure)
-    app.router.add_post(
-        "/api/settings/gesture-recording",
-        settings._handle_settings_gesture_recording,
-    )
     app.router.add_get("/asset", static._handle_asset)
 
     if context.web_root and context.web_root.exists():
         app.router.add_get("/", static._handle_index)
-        app.router.add_get("/3d", static._handle_index)
+        app.router.add_get("/sessions", static._handle_index)
+        app.router.add_get("/3d", static._handle_spatial_page)
         app.router.add_get("/images", static._handle_images_page)
         app.router.add_get("/bags", static._handle_bags_page)
         app.router.add_get("/umi-dataset", static._handle_umi_dataset_page)
@@ -149,5 +155,6 @@ def create_app(context: DashboardContext) -> web.Application:
     app.on_shutdown.append(umi_export._on_shutdown)
     app.on_shutdown.append(handpose._on_shutdown)
     app.on_shutdown.append(playback._on_shutdown)
+    app.on_shutdown.append(stop_active_qc)
     app.on_shutdown.append(websocket._on_shutdown)
     return app

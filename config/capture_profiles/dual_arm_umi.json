@@ -1,0 +1,6 @@
+{
+  "id": "dual_arm_umi",
+  "station_check_after_take": true,
+  "postprocess_route": "umi",
+  "quick_qc": ["camera_continuity", "localization", "storage", "recorder"]
+}

@@ -36,8 +36,6 @@ class PoseWebSocketService:
                 for pose in payload["poses"]
             },
         }
-        for pose in payload["poses"]:
-            pose["asset_url"] = self.context.node.model_asset_url(pose.get("avatar_model"))
         return json.dumps(payload)
 
     async def _broadcast_loop(self) -> None:
@@ -68,11 +66,13 @@ class PoseWebSocketService:
         ws = web.WebSocketResponse(heartbeat=20.0)
         await ws.prepare(request)
         self.clients.add(ws)
+        self.context.node.viewer_connected()
         snapshot = self.context.node.build_pose_payload()
-        for pose in snapshot["poses"]:
-            pose["asset_url"] = self.context.node.model_asset_url(pose.get("avatar_model"))
         await ws.send_json(snapshot)
-        async for _message in ws:
-            pass
-        self.clients.discard(ws)
+        try:
+            async for _message in ws:
+                pass
+        finally:
+            self.clients.discard(ws)
+            self.context.node.viewer_disconnected()
         return ws

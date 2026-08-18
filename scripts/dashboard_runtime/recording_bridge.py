@@ -84,6 +84,13 @@ class RecordingBridge:
             "ok": bool(topics) and all(item["ok"] for item in topics.values()),
         }
 
+    def snapshot_image_header_audit(self) -> Dict[str, object]:
+        """Return an in-flight copy for active QC without stopping capture."""
+        with self.owner._recording_writer_lock:
+            if not self.owner._recording_header_audit:
+                return {"method": "live_image_header_audit", "topics": {}, "ok": True}
+            return self._finalize_image_header_audit()
+
     def _feed_recording_writer(self, topic: str, msg: object) -> None:
         if topic not in self.owner._recording_writer_by_topic:
             return

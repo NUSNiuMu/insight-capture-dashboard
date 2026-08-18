@@ -1056,6 +1056,7 @@ class RecordingManager:
                 "topic_catalog": catalog,
                 "recent_output": output_lines,
                 "network_audit": self._network_audit,
+                "image_header_audit": self._image_header_audit,
                 "merge_state": self.merge_state,
                 "merge_error": self.merge_error,
                 "merge_timings": dict(self.merge_timings),

@@ -27,10 +27,6 @@ services:
     # ── NVIDIA Container Runtime for CUDA acceleration ───────────────────────
     runtime: nvidia
 
-    # USB microphone used by the isolated offline voice-control worker.
-    devices:
-      - /dev/snd:/dev/snd
-
     # Docker's 64MB default /dev/shm is too small for the kiosk browser's
     # media and compositor processes — see the dev compose for the full story.
     shm_size: '2gb'
@@ -45,6 +41,7 @@ services:
       - INSIGHT_ROSBAG_DIR=/mnt/insight-recordings
       - INSIGHT_ROSBAG_REQUIRED_SOURCE=${INSIGHT_ROSBAG_REQUIRED_SOURCE:-}
       - INSIGHT_ROSBAG_FALLBACK_DIR=/workspaces/insight_capture/rosbags
+      - INSIGHT_MODE=capture
       # For the on-device kiosk window (run_dashboard.sh --jetson via docker exec)
       - DISPLAY=${DISPLAY:-:0}
       # Uncomment to override default port:

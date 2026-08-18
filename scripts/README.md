@@ -22,7 +22,6 @@
 | 文件 | 职责 |
 |---|---|
 | `multi_camera_dashboard_web.py` | ROS 生命周期与领域服务组合 facade |
-| `inprocess_bag_writer.py` | 复用 Dashboard 图像 reader 写入 SQLite rosbag |
 | `webrtc_worker.py` | 独立 WebRTC 信令与硬件 H.264 编码进程 |
 | `hand_overlay_worker.py` | 按需启动的手部叠加进程 |
 | `insight9_sparse_mapper.py` | 在线稀疏建图入口 |

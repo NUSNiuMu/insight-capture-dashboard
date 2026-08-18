@@ -54,10 +54,6 @@ function setSettingsStatus(message) {
   }
 }
 
-// Avatar-model switching in the Settings UI; flip to true to re-lock the
-// dropdown (the backend API stays available either way).
-const AVATAR_MODEL_SWITCHING_LOCKED = false;
-
 function renderSettings(payload) {
   if (!settingsCameraList) {
     return;
@@ -66,38 +62,9 @@ function renderSettings(payload) {
     insight3MaskForm.hidden = false;
     insight3MaskRatio.value = String(payload.insight3_gripper_mask_height_ratio ?? 0.2);
   }
-  const stickRow = document.getElementById("stick-figure-row");
-  const stickToggle = document.getElementById("stick-figure-toggle");
-  if (stickRow && stickToggle) {
-    stickRow.hidden = false;
-    stickToggle.checked = Boolean(payload && payload.stick_figure_mode);
-    if (!stickToggle.dataset.bound) {
-      stickToggle.dataset.bound = "1";
-      stickToggle.addEventListener("change", () => {
-        void setStickFigureMode(stickToggle.checked);
-      });
-    }
-  }
-  const gestureRow = document.getElementById("gesture-recording-row");
-  const gestureToggle = document.getElementById("gesture-recording-toggle");
-  if (gestureRow && gestureToggle) {
-    gestureRow.hidden = false;
-    gestureToggle.checked = Boolean(payload && payload.gesture_recording_enabled);
-    if (!gestureToggle.dataset.bound) {
-      gestureToggle.dataset.bound = "1";
-      gestureToggle.addEventListener("change", () => {
-        void setGestureRecordingEnabled(gestureToggle.checked);
-      });
-    }
-  }
   const poses = Array.isArray(payload && payload.poses) ? payload.poses : [];
-  const models = Array.isArray(payload && payload.available_models) ? payload.available_models : [];
   settingsCameraList.innerHTML = poses.map((pose) => {
     const roleLabel = (ROLE_STYLE[pose.role] && ROLE_STYLE[pose.role].label) || pose.role;
-    const modelOptions = models.map((model) => {
-      const selected = model.file === pose.avatar_model ? " selected" : "";
-      return `<option value="${escapeHtml(model.file)}"${selected}>${escapeHtml(model.label)}</option>`;
-    }).join("");
     const gripperRow = pose.gripper_tracking_available ? `
       <label class="settings-toggle-row">
         <input type="checkbox" class="settings-gripper-toggle" data-camera="${escapeHtml(pose.name)}" ${pose.gripper_tracking_enabled ? "checked" : ""}>
@@ -116,23 +83,12 @@ function renderSettings(payload) {
           <h3>${escapeHtml(pose.name)}</h3>
           <span class="settings-role-pill">${escapeHtml(roleLabel)}</span>
         </div>
-        <label class="settings-field">
-          <span>Avatar model${AVATAR_MODEL_SWITCHING_LOCKED ? ' <span style="color:var(--muted);font-weight:400">(locked)</span>' : ""}</span>
-          <select class="settings-model-select" data-camera="${escapeHtml(pose.name)}"${AVATAR_MODEL_SWITCHING_LOCKED ? " disabled" : ""}>${modelOptions}</select>
-        </label>
         ${gripperRow}
         ${handOverlayRow}
       </article>
     `;
   }).join("");
 
-  if (!AVATAR_MODEL_SWITCHING_LOCKED) {
-    settingsCameraList.querySelectorAll(".settings-model-select").forEach((select) => {
-      select.addEventListener("change", () => {
-        void setPoseAvatarModel(select.dataset.camera, select.value);
-      });
-    });
-  }
   settingsCameraList.querySelectorAll(".settings-gripper-toggle").forEach((toggle) => {
     toggle.addEventListener("change", () => {
       void setGripperTrackingEnabled(toggle.dataset.camera, toggle.checked);
@@ -170,46 +126,6 @@ async function setInsight3GripperMaskRatio(rawValue) {
   }
 }
 
-async function setStickFigureMode(enabled) {
-  setSettingsStatus("Updating stick-figure mode...");
-  try {
-    const response = await fetch("/api/settings/stick-figure", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled })
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to update stick-figure mode.");
-    }
-    renderSettings(payload);
-    setSettingsStatus(`Stick-figure mode ${enabled ? "enabled" : "disabled"}.`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setSettingsStatus(`Failed to update stick-figure mode: ${message}`);
-  }
-}
-
-async function setGestureRecordingEnabled(enabled) {
-  setSettingsStatus("Updating gesture recording...");
-  try {
-    const response = await fetch("/api/settings/gesture-recording", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ enabled })
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to update gesture recording.");
-    }
-    renderSettings(payload);
-    setSettingsStatus(`Gesture recording ${enabled ? "enabled" : "disabled"}.`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setSettingsStatus(`Failed to update gesture recording: ${message}`);
-  }
-}
-
 async function setHandOverlayEnabled(name, enabled) {
   setSettingsStatus(`Updating ${name}...`);
   try {
@@ -224,26 +140,6 @@ async function setHandOverlayEnabled(name, enabled) {
     }
     renderSettings(payload);
     setSettingsStatus(`${name}: hand overlay ${enabled ? "enabled" : "disabled"}.`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    setSettingsStatus(`Failed to update ${name}: ${message}`);
-  }
-}
-
-async function setPoseAvatarModel(name, model) {
-  setSettingsStatus(`Updating ${name}...`);
-  try {
-    const response = await fetch("/api/settings/avatar-model", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, model })
-    });
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.error || "Failed to update avatar model.");
-    }
-    renderSettings(payload);
-    setSettingsStatus(`${name}: avatar model updated.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setSettingsStatus(`Failed to update ${name}: ${message}`);

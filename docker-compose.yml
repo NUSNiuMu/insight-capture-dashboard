@@ -25,10 +25,6 @@ services:
     # ── NVIDIA Container Runtime for CUDA acceleration ───────────────────────
     runtime: nvidia
 
-    # USB microphone used by the isolated offline voice-control worker.
-    devices:
-      - /dev/snd:/dev/snd
-
     # A small /dev/shm breaks the kiosk browser's GPU process
     # (open_web_3d_right.sh): its
     # command-buffer ring allocation fails silently and the WebGL canvas
@@ -50,6 +46,7 @@ services:
       - INSIGHT_ROSBAG_DIR=/mnt/insight-recordings
       - INSIGHT_ROSBAG_REQUIRED_SOURCE=${INSIGHT_ROSBAG_REQUIRED_SOURCE:-}
       - INSIGHT_ROSBAG_FALLBACK_DIR=/workspaces/insight_capture/rosbags
+      - INSIGHT_MODE=capture
       # For `run_dashboard.sh --jetson` (docker exec ... open_web_3d_right.sh):
       # The kiosk browser is installed inside this image, so the kiosk window
       # runs via `docker exec`, which

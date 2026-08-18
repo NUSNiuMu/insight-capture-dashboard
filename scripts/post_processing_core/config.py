@@ -14,8 +14,24 @@ DEFAULT_POST_PROCESSING_CONFIG = {
     "recording_storage_id": "mcap",
     "recording_rmw_implementation": "rmw_cyclonedds_cpp",
     "record_topics": [],
-    "gesture_recording": {"enabled": False},
     "capture_check": {"enabled": True},
+    "capture_session": {
+        "task": "unspecified",
+        "operator": "unknown",
+        "station_check_after_take": False,
+    },
+    "preflight": {
+        "camera_stale_sec": 2.0,
+        "pose_stale_sec": 2.0,
+        "minimum_free_gb": 5.0,
+        "require_mapping": True,
+        "require_localization": True,
+    },
+    "active_qc": {
+        "sustain_sec": 3.0,
+        "camera_stale_sec": 2.0,
+        "minimum_free_gb": 2.0,
+    },
 }
 
 

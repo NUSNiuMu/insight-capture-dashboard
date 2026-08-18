@@ -20,7 +20,6 @@
       "dashboard_rotation_deg": 0,
       "teleop_role": "right_hand",
       "tcp_frame_id": "right_tcp",
-      "avatar_model": "assets/models/vis_assembly.glb",
       "dashboard_row": 0,
       "dashboard_column": 0
     },
@@ -34,7 +33,6 @@
       "dashboard_rotation_deg": 0,
       "teleop_role": "left_hand",
       "tcp_frame_id": "left_tcp",
-      "avatar_model": "assets/models/vis_assembly.glb",
       "dashboard_row": 1,
       "dashboard_column": 0
     },
@@ -48,7 +46,6 @@
       "dashboard_pose_stream": "vio_100hz",
       "dashboard_rotation_deg": 0,
       "teleop_role": "head",
-      "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",
       "dashboard_row": 0,
       "dashboard_column": 1
     }

@@ -1,4 +1,4 @@
-"""Discover and summarize single or composite rosbag2 sessions."""
+"""Legacy composite rosbag compatibility; new captures use one native MCAP."""
 
 from __future__ import annotations
 

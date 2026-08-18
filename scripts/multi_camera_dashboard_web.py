@@ -5,6 +5,7 @@ import contextlib
 import math
 import os
 import secrets
+import subprocess
 import tempfile
 import threading
 import time
@@ -43,8 +44,6 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     Detection2DArray = None
 
 from camera_setup import (
-    AVAILABLE_AVATAR_MODELS,
-    avatar_model_defaults,
     build_dashboard_config,
     load_setup,
 )
@@ -64,13 +63,13 @@ from dashboard_runtime import (
     CameraFrame,
     CameraSpec,
     CaptureCheckManager,
-    GestureRecordingController,
     ImagePipeline,
     MappingStream,
     ParticipantWatchdog,
     PayloadBuilder,
     PoseSample,
     PoseSpec,
+    PreviewManager,
     RecordingBridge,
     WorkerSupervisor,
 )
@@ -173,8 +172,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         # Wired by main() after RecordingManager is constructed.
         self.recording_manager: Optional[RecordingManager] = None
         self._playback_mode: bool = False
-        # In-memory settings toggle for primitive pose rendering.
-        self.stick_figure_mode: bool = False
+        self.runtime_mode = os.environ.get("INSIGHT_MODE", "capture").strip().lower() or "capture"
         # Bounded deques avoid per-message trace slicing.
         self.raw_traces: Dict[str, Deque[Tuple[float, float, float]]] = {
             pose.name: deque(maxlen=self.max_points) for pose in self.poses
@@ -216,7 +214,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._last_localization_image_relay_ns: Dict[str, int] = {}
         self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
         self._configure_hand_overlay()
-        self._gesture_recording_controller: Optional[GestureRecordingController] = None
         self._capture_check_manager: Optional[CaptureCheckManager] = None
         # NVJPEG is optional; call sites retain their cv2 fallback.
         self._hw_jpeg = HwJpegCodec.create(log=self.get_logger().info)
@@ -248,7 +245,13 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._webrtc_browser_stats: Dict[str, Dict[str, object]] = {}
         self._last_webrtc_fallback_jpeg_at: Dict[str, float] = {}
         self._last_recording_preview_at: Dict[str, float] = {}
-        self._webrtc_proc = self._start_webrtc_worker()
+        self._webrtc_worker_lock = threading.Lock()
+        self._webrtc_proc: Optional[subprocess.Popen] = None
+        self._preview_manager = PreviewManager(
+            self,
+            lease_sec=float(os.environ.get("INSIGHT_PREVIEW_LEASE_SEC", "5")),
+            idle_stop_sec=float(os.environ.get("INSIGHT_WEBRTC_IDLE_STOP_SEC", "45")),
+        )
         threading.Thread(target=self._webrtc_ipc_loop, daemon=True, name="webrtc_ipc").start()
         threading.Thread(target=self._webrtc_healthz_loop, daemon=True, name="webrtc_healthz").start()
         # Hand-overlay JPEG compositing also runs out of process.
@@ -511,6 +514,21 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
     def _start_webrtc_worker(self) -> "subprocess.Popen":
         return self._worker_supervisor._start_webrtc_worker()
 
+    def note_viewer_activity(self) -> None:
+        self._preview_manager.activity()
+
+    def viewer_connected(self) -> None:
+        self._preview_manager.viewer_connected()
+
+    def viewer_disconnected(self) -> None:
+        self._preview_manager.viewer_disconnected()
+
+    def preview_requested(self) -> bool:
+        return self._preview_manager.requested()
+
+    def preview_status(self) -> Dict[str, object]:
+        return {"configured_mode": self.runtime_mode, **self._preview_manager.status()}
+
 
     def stop_webrtc_worker(self) -> None:
         self._worker_supervisor.stop_webrtc_worker()
@@ -524,43 +542,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
 
     def stop_hand_overlay_worker(self) -> None:
         self._worker_supervisor.stop_hand_overlay_worker()
-
-    def configure_gesture_recording(
-        self, recording_manager: RecordingManager, config: Dict[str, object]
-    ) -> None:
-        self.stop_gesture_recording()
-        self._gesture_recording_controller = GestureRecordingController(
-            recording_manager,
-            config,
-            self.get_logger().info,
-        )
-
-    def _handle_hand_gesture_snapshot(
-        self, camera_name: str, hands: List[Dict[str, object]], *, is_live: bool
-    ) -> None:
-        controller = self._gesture_recording_controller
-        if controller is not None:
-            controller.handle_snapshot(camera_name, hands, is_live=is_live)
-
-    def gesture_recording_status(
-        self, recording_status: Optional[Dict[str, object]] = None
-    ) -> Dict[str, object]:
-        controller = self._gesture_recording_controller
-        if controller is None:
-            return {"enabled": False, "state": "disabled", "message": "Gesture recording disabled"}
-        return controller.status(recording_status)
-
-    def set_gesture_recording_enabled(self, enabled: bool) -> None:
-        controller = self._gesture_recording_controller
-        if controller is None:
-            raise RuntimeError("Gesture recording is not configured")
-        controller.set_enabled(enabled)
-
-    def stop_gesture_recording(self) -> None:
-        controller = getattr(self, "_gesture_recording_controller", None)
-        if controller is not None:
-            controller.close()
-            self._gesture_recording_controller = None
 
     def configure_capture_check(
         self, config: Dict[str, object], results_root: Path
@@ -706,30 +687,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         return self._payload_builder.latest_camera_frame(camera_name)
 
 
-    def model_asset_url(self, avatar_model: Optional[str]) -> Optional[str]:
-        return self._payload_builder.model_asset_url(avatar_model)
-
-
     def build_settings_payload(self) -> Dict[str, object]:
         return self._payload_builder.build_settings_payload()
-
-
-    def set_pose_avatar_model(self, pose_name: str, model_file: str) -> PoseSpec:
-        pose = next((p for p in self.poses if p.name == pose_name), None)
-        if pose is None:
-            raise ValueError(f"Unknown camera/pose '{pose_name}'")
-        allowed = {entry["file"] for entry in AVAILABLE_AVATAR_MODELS}
-        if model_file not in allowed:
-            raise ValueError(f"'{model_file}' is not one of the available models")
-        defaults = avatar_model_defaults(model_file)
-        # In-memory only, like the rest of Settings -- resets to cameras.json's
-        # configured value on the next process restart rather than persisting,
-        # since nothing else here writes back to the JSON config files.
-        pose.avatar_model = f"assets/models/{model_file}"
-        pose.avatar_scale = float(defaults.get("avatar_scale", 1.0))
-        pose.avatar_rotation_deg_xyz = tuple(defaults.get("avatar_rotation_deg_xyz", [0.0, 0.0, 0.0]))
-        pose.avatar_offset_xyz = (0.0, 0.0, 0.0)
-        return pose
 
     @staticmethod
     def _stamp_to_ns(stamp) -> int:
@@ -838,6 +797,7 @@ def main() -> None:
         pose_publish_hz=args.pose_publish_hz,
         webrtc_port=args.webrtc_port,
     )
+    node.post_processing_config = post_processing_config
     node.get_logger().info(f"View mode={args.view_mode}")
     if recording_storage_status["using_fallback"]:
         storage_failure = (
@@ -877,10 +837,6 @@ def main() -> None:
     # (reindex/salvage + merge into a normal bag, in the background).
     recording_manager.start_orphan_recovery()
     node.recording_manager = recording_manager
-    node.configure_gesture_recording(
-        recording_manager,
-        dict(post_processing_config.get("gesture_recording") or {}),
-    )
     node.configure_capture_check(
         dict(post_processing_config.get("capture_check") or {}),
         results_root,
@@ -904,7 +860,7 @@ def main() -> None:
     finally:
         server.stop()
         executor.shutdown()
-        node.stop_gesture_recording()
+        node._preview_manager.close()
         node.stop_webrtc_worker()
         node.stop_hand_overlay_worker()
         node.destroy_node()

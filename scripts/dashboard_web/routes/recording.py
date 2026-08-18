@@ -25,7 +25,8 @@ class RecordingRoutes:
         payload = self.context.recording_manager.status()
         payload["system_load"] = read_system_load()
         payload["disk_space"] = read_disk_space(self.context.recording_manager.rosbag_root)
-        payload["gesture_recording"] = self.context.node.gesture_recording_status(payload)
+        take_store = getattr(self.context, "take_store", None)
+        payload["current_take"] = take_store.current() if take_store is not None else None
         return web.json_response(payload)
 
     async def _handle_recording_topics(self, _request: web.Request) -> web.Response:
@@ -68,11 +69,58 @@ class RecordingRoutes:
         if "topics" in payload and not isinstance(topics, list):
             return web.json_response({"error": "Field 'topics' must be a list."}, status=400)
         bag_name = str(payload.get("bag_name", "")).strip() or None
-        status = self.context.recording_manager.start(topics=topics, bag_name=bag_name)
-        return web.json_response(status)
+        return await self._start_with_preflight(topics=topics, bag_name=bag_name, automation=False)
 
     async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
-        return web.json_response(self.context.recording_manager.stop())
+        status = self.context.recording_manager.stop()
+        take_store = getattr(self.context, "take_store", None)
+        take = take_store.complete_current(status) if take_store is not None else None
+        return web.json_response({**status, "take": take})
+
+    async def _start_with_preflight(self, *, topics, bag_name, automation: bool) -> web.Response:
+        preflight_service = getattr(self.context, "capture_preflight", None)
+        if preflight_service is not None:
+            report = await asyncio.to_thread(
+                preflight_service.evaluate, topics, refresh_topics=True
+            )
+            if not report.get("ok"):
+                speech = preflight_service.speech(report)
+                return web.json_response(
+                    {"error": "Recording preflight failed.", "speech": speech, "preflight": report},
+                    status=422,
+                )
+        else:
+            report = None
+        take_store = getattr(self.context, "take_store", None)
+        take = (
+            take_store.reserve_take(
+                bag_name, trigger="voice" if automation else "web"
+            )
+            if take_store is not None
+            else None
+        )
+        actual_name = take["bag_name"] if take is not None else bag_name
+        if automation and not actual_name:
+            actual_name = time.strftime("looper_record_%Y%m%d_%H%M%S")
+        try:
+            status = await asyncio.to_thread(
+                self.context.recording_manager.start,
+                topics=topics,
+                bag_name=actual_name,
+            )
+            if take_store is not None:
+                take = take_store.mark_recording(status.get("output_path"))
+        except Exception as exc:
+            if take_store is not None:
+                take_store.fail_start(exc)
+            raise
+        return web.json_response({
+            **status,
+            "automation": "openclaw" if automation else None,
+            "trigger": "voice" if automation else "web",
+            "preflight": report,
+            "take": take,
+        })
 
     async def _handle_automation_recording_start(
         self, _request: web.Request
@@ -88,9 +136,11 @@ class RecordingRoutes:
                 },
                 status=409,
             )
-        bag_name = time.strftime("looper_record_%Y%m%d_%H%M%S")
-        status = self.context.recording_manager.start(topics=None, bag_name=bag_name)
-        return web.json_response({"automation": "openclaw", **status})
+        return await self._start_with_preflight(
+            topics=None,
+            bag_name=None,
+            automation=True,
+        )
 
     async def _handle_automation_recording_stop(
         self, _request: web.Request
@@ -100,17 +150,25 @@ class RecordingRoutes:
         if not current.get("recording"):
             return web.json_response({"automation": "openclaw", **current})
         output_path = str(current.get("output_path") or "")
-        if not Path(output_path).name.startswith("looper_record_"):
+        take_store = getattr(self.context, "take_store", None)
+        current_take = take_store.current() if take_store is not None else None
+        voice_owned = (
+            isinstance(current_take, dict)
+            and current_take.get("trigger") == "voice"
+            and Path(str(current_take.get("bag_path") or "")).name == Path(output_path).name
+        )
+        if not voice_owned and not Path(output_path).name.startswith("looper_record_"):
             return web.json_response(
                 {
-                    "error": "A manual or non-OpenClaw recording is active; automation stop refused.",
+                    "error": "A manual recording is active; voice stop refused.",
                     "recording": True,
                     "output_path": output_path,
                 },
                 status=409,
             )
         status = self.context.recording_manager.stop()
-        return web.json_response({"automation": "openclaw", **status})
+        take = take_store.complete_current(status) if take_store is not None else None
+        return web.json_response({"automation": "openclaw", "trigger": "voice", **status, "take": take})
 
     async def _handle_rosbag_list(self, _request: web.Request) -> web.Response:
         loop = asyncio.get_event_loop()

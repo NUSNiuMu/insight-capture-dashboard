@@ -70,14 +70,15 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 
 | 路径 | 用途 |
 |---|---|
-| `/` 或 `/3d` | 三路相机实时画面 + 3D 全局建图/重定位轨迹（同一页，2026-07 起合并） |
-| `/recording` | rosbag 录制：topic 发现、勾选、开始/停止 |
+| `/` | Session / Take 列表、quick QC、人工接收/作废结果与异常摘要 |
+| `/3d` | 采后三路相机回放 + 3D 全局建图/重定位轨迹；打开后才按需启用实时预览 |
+| `/recording` | 维护用 rosbag 录制页；现场主流程使用离线语音命令 |
 | `/bags` | 本地录制列表：大小/时长/消息与 topic 数、完整性/评分状态，可删除 |
 | `/umi-dataset` | 标准 LeRobot v3 或 Legacy UMI Zarr 训练数据导出 |
 | `/scoring` | 轨迹评分 + 录制完整性验证 |
 | `/handpose` | 从已有 rosbag 离线提取手部 3D 关键点并按时间轴查看 |
 | `/optimization` | COLMAP 轨迹优化：对录制的彩色图像做三维重建并与 VIO 轨迹对齐 |
-| `/settings` | 手势录制、Stick-figure 模式全局开关；逐相机开关手部叠加和有效校准的夹爪追踪；Avatar 模型选择 |
+| `/settings` | 逐相机手部叠加、夹爪追踪及 Insight3 mask 等高级设置 |
 
 Recording 页的 **Recording folder → Browse...** 可在录制空闲时切换保存目录。弹窗只显示
 Dashboard 容器已经挂载的录制盘与 NVMe fallback 范围，不会暴露整台设备文件系统；浏览器所在
@@ -88,10 +89,6 @@ Dashboard 容器已经挂载的录制盘与 NVMe fallback 范围，不会暴露�
 > 旧地址 `/images` 现在会自动跳转到 `/3d`（画面已合并进 Spatial 视图，收藏的旧链接不用改）。
 
 > 进入 `/3d` 后场景会先就绪，随后依次接通三路画面、轨迹和模型；模型加载期间不会显示占位物。
-
-**Stick-figure 模式**（`/settings` 页开关）：开启后 3D 场景不再加载相机模型，改用三个角色配色的大圆点表示头/双手位置，同时叠加手臂骨骼与手部关键点骨架线（手部形状来自手部检测，手臂由固定臂长的 IK 解算合成，是合理近似而非真实追踪）。适合需要直观看操作者身体姿态（手臂弯曲、手指开合）的场景；开关状态影响所有观看者，翻转后下个刷新周期自动生效，无需刷新页面。
-
-**手势录制**（`/settings` 页开关）：默认关闭。开启后双手点赞保持动作可以开始或停止由手势创建的录制；关闭会立即停止识别新的手势，但不会停止已经进行中的网页手动录制或录制任务。该开关与其他 Settings 开关一样在当前后端进程内即时生效，后端重启后恢复设备 profile 的默认关闭状态。
 
 **Hand pose**（`/handpose` 页）：在页面内选择 `rosbags/` 中已有的录制，点击
 **Extract hand pose**。任务使用 WiLoR 直接读取原录制，不会把 bag 复制到功能
@@ -257,11 +254,12 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 `--topic`，具体参数见 `scripts/gripper_extract.py --help`。
 
 
-### 3.1 标准采集流程
+### 3.1 无屏语音采集流程
 
-1. 打开 `/3d`，确认三路画面都在动（面板无 stale 灰标）；
-2. `/recording` → `Refresh Topics` → 勾选要录的 topic（支持按相机整组勾选）→ `Start`；
-3. 采集完成 → `Stop`,等待录包流程结束；
+1. 说“系统状态”，确认三相机、定位、存储和必要录制数据流通过 Preflight；
+2. 说“开始录制”；系统分配 Session/Take 并在 recorder 真正开始后播报确认；
+3. 采集完成后说“停止录制”，等待 quick QC 播报；操作失败时说“本条作废”，只标记
+   invalid，不删除原始 MCAP；
 4. `/umi-dataset` 选择一条或多条完整示教；默认导出 LeRobot v3，只有兼容旧
    Diffusion Policy 训练栈时才选择 Legacy UMI Zarr；
 5. **校验数据完整性并打分**：打开 `/scoring` 页，选中刚录的 bag，点
@@ -279,14 +277,9 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
      bag 带上 `scored` 徽章（未跑过显示 `unscored`）。评分具体如何计算
      不对外说明，仅看结果即可。
 
-也可以在 Insight9 画面内同时做双手点赞：两只手均保持“拇指向上、其余
-四指握拳”至少 0.8 秒会使用服务器默认 topics 开始录制。触发后先解除手势
-至少 2 秒，再次保持双手点赞 0.8 秒会停止该段录制。手势不会停止网页手动
-开始的录制；磁盘剩余低于 10% 或上一段仍在停止排空时也不会自动开始。Recording
-页顶部的 `gesture` 标签显示 armed、保持、释放和录制状态。
-
-已配置宸境语音助手的设备可以直接说“开始录制”“停止录制”或“开始校准”，无需先说
-唤醒词；这些固定短指令调用本机 Dashboard 并播放预生成确认语音，不等待 OpenClaw。
+设备可以直接说“开始录制”“停止录制”“开始校准”“检查相机”“系统状态”或
+“本条作废”，无需先说唤醒词；这些固定短指令调用本机 Dashboard 并播放本地确认语音，
+不依赖 OpenClaw、Gateway 或网络。
 开始/停止录制在识别后会立即播报“初始化录制中，请稍等”/“正在结束录制”，待 rosbag 真正就绪或
 排空后再播报最终结果。
 需要自然语言操作时，单独说“宸境”并停顿 0.5 秒，听到“我在”后再说下一句话；这句话
@@ -299,17 +292,16 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 治具或开始新地图 session 时，由标定负责人确认校准正确后说“设置检测位”。详见
 [叠杯批量数据采集标准作业规范](CUP_STACKING_DATA_COLLECTION_SOP.md)。
 回复会从 USB 音响播出；服务
-每次启动会把 USB PCM 音量恢复到 50%。开始/停止属于有
-副作用的操作，必须明确说出；自动化只能停止自己创建的 `looper_record_*`，不会停止
-网页或手势录制。Dashboard 本身不占用麦克风，声控状态通过上述宿主机服务检查。
+开始/停止属于有副作用的操作，必须明确说出；Dashboard 本身不占用麦克风，声卡只由
+宿主机 voice service 使用。完整现场流程见 [CAPTURE_SOP.md](CAPTURE_SOP.md)。
 
 检查宸境服务和 USB 声卡：
 
 ```bash
 arecord -l
 aplay -l
-systemctl --user status looper-openclaw-voice.service
-journalctl --user -u looper-openclaw-voice.service -n 100 --no-pager
+systemctl --user status insight-voice-control.service
+journalctl --user -u insight-voice-control.service -n 100 --no-pager
 ```
 
 完整安装、隐私边界和离线测试见 [OPENCLAW_VOICE.md](OPENCLAW_VOICE.md)。
@@ -496,10 +488,10 @@ U 盘后重启 Dashboard，才会重新选择 U 盘。录制过程中断盘无�
 
 - 先看状态：`curl -s localhost:8765/api/recording/status`；
 - `Start` 无反应：点一次 `Refresh Topics` 再试（相机刚重启过时 topic 列表会过期）；
-- 声控无反应：检查 `systemctl --user status looper-openclaw-voice.service`、宿主机
-  `arecord -l` 与 `journalctl --user -u looper-openclaw-voice.service -n 100 --no-pager`；
-- 声控识别成功但不开始：检查 Dashboard 录制状态、默认 topics 和存储状态；声控只会
-  停止自己创建的 `looper_record_*`；
+- 声控无反应：检查 `systemctl --user status insight-voice-control.service`、宿主机
+  `arecord -L` 与 `journalctl --user -u insight-voice-control.service -n 100 --no-pager`；
+- 声控识别成功但不开始：读取 `/api/preflight`；系统会拒绝相机 stale、定位未就绪、
+  存储不可写/空间不足或必要 topics 缺失的录制；
 - 注意：录制进行中**不要**执行 `docker restart`，会中断录制。
   `run_dashboard.sh` 已内置保护（检测到录制中不重启），手动 docker 命令没有。
 
@@ -539,7 +531,7 @@ curl -s localhost:8765/api/images/capabilities | python3 -m json.tool
 
 - **2D 图像叠加**（画面里的手部关键点线）：已做时间戳同步窗口门控，关键点帧
   与图像帧差距过大时直接跳过绘制而不是画错位骨架，正常情况下不应有明显闪烁；
-- **3D 场景骨架**（Stick-figure 模式或普通模式下的手臂/手部骨架线）：手部检测
+- **3D 场景手部骨架**：手部检测
   本身逐帧偶有漏检，已加入"连续命中几次才出现、短暂断检保持上一姿态"的
   防抖逻辑，大幅减少闪烁，但检测持续丢失较长时间时骨架仍会消失（预期行为，
   不是 bug）；

@@ -119,16 +119,30 @@ class WorkerSupervisor:
         self.owner.get_logger().info(f"webrtc: spawned webrtc_worker.py pid={proc.pid} port={self.owner.webrtc_port}")
         return proc
 
+    def ensure_webrtc_worker(self) -> None:
+        """Start WebRTC only after the first viewer lease is acquired."""
+        with self.owner._webrtc_worker_lock:
+            proc = getattr(self.owner, "_webrtc_proc", None)
+            if proc is not None and proc.poll() is None:
+                return
+            self.owner._webrtc_proc = self._start_webrtc_worker()
+
     def stop_webrtc_worker(self) -> None:
-        proc = getattr(self.owner, "_webrtc_proc", None)
-        if proc is None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=3.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=3.0)
+        with self.owner._webrtc_worker_lock:
+            proc = getattr(self.owner, "_webrtc_proc", None)
+            if proc is None:
+                return
+            self.owner._webrtc_proc = None
+            proc.terminate()
+            try:
+                proc.wait(timeout=3.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=3.0)
+            self.owner._webrtc_available_cached = False
+            self.owner._webrtc_has_sessions.clear()
+            self.owner._webrtc_session_fps.clear()
+            self.owner._pending_webrtc_frames.clear()
 
     def _start_hand_overlay_worker(self) -> "subprocess.Popen":
         script_path = Path(__file__).resolve().parents[1] / "hand_overlay_worker.py"
@@ -284,6 +298,11 @@ class WorkerSupervisor:
         while rclpy is not None and rclpy.ok():
             available = False
             worker_stats = {}
+            proc = getattr(self.owner, "_webrtc_proc", None)
+            if proc is None or proc.poll() is not None:
+                self.owner._webrtc_available_cached = False
+                time.sleep(1.0)
+                continue
             try:
                 conn = http.client.HTTPConnection("127.0.0.1", self.owner.webrtc_port, timeout=2.0)
                 try:

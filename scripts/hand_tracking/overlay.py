@@ -242,11 +242,15 @@ class HandOverlayMixin:
         # Gate separate live and /bagplay subscriptions by playback mode.
         if is_live == self._playback_mode:
             return
+        if not self.preview_requested():
+            return
         self.hand_overlay_available.add(camera_name)
         self._hand_latest_boxes[camera_name] = msg
 
     def _on_hand_keypoints(self, camera_name: str, msg, is_live: bool = True) -> None:
         if is_live == self._playback_mode:
+            return
+        if not self.preview_requested():
             return
         self.hand_overlay_available.add(camera_name)
         # Always parse because snapshots also feed the 3D skeleton.
