@@ -9,10 +9,11 @@ from typing import Dict
 
 try:
     from std_msgs.msg import String
-    from std_srvs.srv import Empty
+    from std_srvs.srv import Empty, Trigger
 except ImportError:  # pragma: no cover - only fake/non-ROS imports use this path
     String = None
     Empty = None
+    Trigger = None
 
 
 STATUS_TOPICS = {
@@ -36,9 +37,10 @@ class MappingStream:
         self._subscriptions = []
         self._mapper_reset_client = None
         self._localizer_reset_client = None
+        self._capture_reference_client = None
 
     def start(self) -> None:
-        if String is None or Empty is None:
+        if String is None or Empty is None or Trigger is None:
             return
         kwargs = {
             "callback_group": self.owner.ros_callback_group,
@@ -55,6 +57,11 @@ class MappingStream:
         )
         self._localizer_reset_client = self.owner.create_client(
             Empty, "/insight_global/reset", callback_group=self.owner.ros_callback_group
+        )
+        self._capture_reference_client = self.owner.create_client(
+            Trigger,
+            "/insight9_sparse_map/freeze_capture_reference",
+            callback_group=self.owner.ros_callback_group,
         )
         self.owner.dashboard_subscriptions.extend(self._subscriptions)
         self.owner.get_logger().info(
@@ -122,3 +129,35 @@ class MappingStream:
             "unavailable": unavailable,
             "mapping": self.snapshot(),
         }
+
+    def freeze_capture_reference(self, timeout_sec: float = 3.0) -> Dict[str, object]:
+        """Ask the mapper to pin a natural-feature map for batch validation."""
+
+        client = self._capture_reference_client
+        if client is None or not client.service_is_ready():
+            return {
+                "ok": False,
+                "reason": "Insight9 capture-reference service is unavailable",
+            }
+        future = client.call_async(Trigger.Request())
+        deadline = time.monotonic() + max(0.1, float(timeout_sec))
+        while not future.done() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        if not future.done():
+            return {"ok": False, "reason": "Insight9 capture-reference request timed out"}
+        try:
+            response = future.result()
+        except Exception as exc:  # pragma: no cover - depends on rclpy transport
+            return {"ok": False, "reason": f"Insight9 capture-reference failed: {exc}"}
+        if response is None:
+            return {"ok": False, "reason": "Insight9 capture-reference returned no response"}
+        try:
+            payload = json.loads(response.message or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        if not response.success:
+            reason = str(payload.get("reason") or response.message or "reference rejected")
+            return {"ok": False, "reason": reason, "details": payload}
+        return {"ok": True, "reference": payload}

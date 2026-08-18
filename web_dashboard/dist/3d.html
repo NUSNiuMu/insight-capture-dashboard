@@ -66,13 +66,13 @@
                 <p id="mapping-meta" class="mapping-meta">Waiting for the TensorRT mapping services</p>
                 <div class="mapping-camera-states" id="mapping-camera-states"></div>
                 <div class="capture-check-line" id="capture-check-line" data-state="not_ready">
-                  <strong id="capture-check-status">Station check loading</strong>
-                  <span id="capture-check-meta">Return all three cameras to the fixed station after each unit.</span>
+                  <strong id="capture-check-status">Episode check loading</strong>
+                  <span id="capture-check-meta">Dock both hand cameras and look around the mapped workspace after each unit.</span>
                 </div>
               </div>
               <div class="mapping-actions">
-                <button type="button" id="capture-check-button" class="quiet-button">Check rig</button>
-                <button type="button" id="capture-reference-button" class="quiet-button" title="Save the current stable three-camera geometry as the fixed-station baseline">Set station</button>
+                <button type="button" id="capture-check-button" class="quiet-button">Check episode</button>
+                <button type="button" id="capture-reference-button" class="quiet-button" title="Freeze the current Insight9 natural map and save both hand-camera station poses">Set station</button>
                 <button type="button" id="clear-trajectory-button" class="quiet-button">Clear trail</button>
                 <button type="button" id="keep-trajectory-toggle" class="quiet-button" aria-pressed="false">Keep trail</button>
                 <button type="button" id="obs-mode-toggle" class="quiet-button" aria-pressed="false" title="Reduce preview and 3D rendering load while OBS is recording">OBS mode</button>
@@ -89,6 +89,6 @@
         </section>
       </main>
     </div>
-    <script type="module" src="/static/pages/spatial.js?v=20260814-global-pose-check"></script>
+    <script type="module" src="/static/pages/spatial.js?v=20260817-natural-map-episode-check"></script>
   </body>
 </html>

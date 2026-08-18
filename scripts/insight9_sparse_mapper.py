@@ -10,6 +10,7 @@ import queue
 import sys
 import threading
 import time
+import uuid
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -71,7 +72,7 @@ try:
     from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
     from sensor_msgs_py import point_cloud2
     from std_msgs.msg import Header, String
-    from std_srvs.srv import Empty
+    from std_srvs.srv import Empty, Trigger
     from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 except ImportError as exc:  # pragma: no cover - exercised inside the ROS image
     raise SystemExit(f"ROS 2 Python dependencies are unavailable: {exc}") from exc
@@ -323,7 +324,16 @@ class Insight9SparseMapper(Node):
         self._pose_graph_optimization_count = 0
         self._last_pose_graph_optimization_monotonic = float("-inf")
         self._keyframe_storage_bytes = 0
+        self._session_id = uuid.uuid4().hex
         self._session_generation = 0
+        self._capture_reference_keyframe: Optional[int] = None
+        self._capture_reference_points: Optional[np.ndarray] = None
+        self._capture_reference_descriptors: Optional[np.ndarray] = None
+        self._capture_reference_id = 0
+        self._capture_validation_count = 0
+        self._last_capture_validation: Optional[dict[str, object]] = None
+        self._last_capture_validation_monotonic = 0.0
+        self._recent_capture_validations: deque[dict[str, object]] = deque(maxlen=64)
         self._loop_config = GlobalLocalizationConfig(
             ratio_test=args.loop_ratio_test,
             min_similarity=args.loop_min_similarity,
@@ -441,6 +451,11 @@ class Insight9SparseMapper(Node):
         self._reset_service = self.create_service(
             Empty, "insight9_sparse_map/reset", self._on_reset
         )
+        self._capture_reference_service = self.create_service(
+            Trigger,
+            "insight9_sparse_map/freeze_capture_reference",
+            self._on_freeze_capture_reference,
+        )
         self.create_subscription(
             PoseStamped,
             args.vio_topic,
@@ -501,6 +516,57 @@ class Insight9SparseMapper(Node):
         self.get_logger().info("Started a new web-requested sparse mapping session")
         return response
 
+    def _on_freeze_capture_reference(
+        self, _request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        """Freeze the current natural-feature map for episode drift validation."""
+
+        with self._graph_lock:
+            reference_keyframe = int(self._keyframe_id)
+            with self._map_lock:
+                reference_points, reference_descriptors = self._landmarks.descriptors(
+                    max_source_keyframe=reference_keyframe
+                )
+            if len(reference_points) < self._args.loop_min_map_features:
+                response.success = False
+                response.message = json.dumps(
+                    {
+                        "reason": "insufficient_reference_features",
+                        "reference_features": int(len(reference_points)),
+                        "minimum_features": int(self._args.loop_min_map_features),
+                    },
+                    separators=(",", ":"),
+                )
+                return response
+            maximum_features = max(1, int(self._args.capture_reference_max_features))
+            if len(reference_points) > maximum_features:
+                indices = np.linspace(
+                    0, len(reference_points) - 1, maximum_features, dtype=np.int64
+                )
+                reference_points = reference_points[indices]
+                reference_descriptors = reference_descriptors[indices]
+            self._capture_reference_keyframe = reference_keyframe
+            self._capture_reference_points = reference_points.copy()
+            self._capture_reference_descriptors = reference_descriptors.copy()
+            self._capture_reference_id += 1
+            self._capture_validation_count = 0
+            self._last_capture_validation = None
+            self._last_capture_validation_monotonic = 0.0
+            self._recent_capture_validations.clear()
+            payload = self._capture_validation_status_unlocked()
+        response.success = True
+        response.message = json.dumps(payload, separators=(",", ":"))
+        self._publish_map()
+        self.get_logger().info(
+            "Froze capture validation reference %d at keyframe %d with %d features"
+            % (
+                self._capture_reference_id,
+                reference_keyframe,
+                len(reference_points),
+            )
+        )
+        return response
+
     def _reset_loop_closure(self) -> None:
         with self._graph_lock:
             self._pose_graph.clear()
@@ -511,6 +577,14 @@ class Insight9SparseMapper(Node):
             self._last_pose_graph_optimization_monotonic = float("-inf")
             self._keyframe_storage_bytes = 0
             self._session_generation += 1
+            self._capture_reference_keyframe = None
+            self._capture_reference_points = None
+            self._capture_reference_descriptors = None
+            self._capture_reference_id += 1
+            self._capture_validation_count = 0
+            self._last_capture_validation = None
+            self._last_capture_validation_monotonic = 0.0
+            self._recent_capture_validations.clear()
             with self._loop_lock:
                 self._loop_consensus = LocalizationConsensus(self._loop_config)
                 self._loop_pose_filter.reset()
@@ -858,6 +932,7 @@ class Insight9SparseMapper(Node):
                     self._keyframe_id = next_keyframe_id
                     loop_diagnostics, graph_optimized = self._detect_loop_closure(
                         next_keyframe_id,
+                        pair.stamp_ns,
                         matches.left_points,
                         matches.descriptors,
                         calibration,
@@ -966,6 +1041,7 @@ class Insight9SparseMapper(Node):
     def _detect_loop_closure(
         self,
         keyframe_id: int,
+        stamp_ns: int,
         keypoints: np.ndarray,
         descriptors: np.ndarray,
         calibration: StereoCalibration,
@@ -1011,10 +1087,21 @@ class Insight9SparseMapper(Node):
             return diagnostics, False
 
         historical_cutoff = keyframe_id - self._args.loop_exclude_recent_keyframes
-        with self._map_lock:
-            map_points, map_descriptors = self._landmarks.descriptors(
-                max_source_keyframe=historical_cutoff
-            )
+        capture_reference_keyframe = self._capture_reference_keyframe
+        if capture_reference_keyframe is not None:
+            historical_cutoff = min(historical_cutoff, capture_reference_keyframe)
+        if (
+            capture_reference_keyframe is not None
+            and self._capture_reference_points is not None
+            and self._capture_reference_descriptors is not None
+        ):
+            map_points = self._capture_reference_points
+            map_descriptors = self._capture_reference_descriptors
+        else:
+            with self._map_lock:
+                map_points, map_descriptors = self._landmarks.descriptors(
+                    max_source_keyframe=historical_cutoff
+                )
         diagnostics.update(
             {
                 "loop_checked": True,
@@ -1056,6 +1143,22 @@ class Insight9SparseMapper(Node):
                 self._last_loop_measurement = measurement.copy()
                 self._loop_closure_count += 1
             loop_count = self._loop_closure_count
+
+        validation_translation = 0.0
+        validation_rotation = 0.0
+        if measurement is not None:
+            with self._loop_lock:
+                previous_measurement = self._loop_pose_filter.estimate
+            if previous_measurement is None:
+                previous_measurement = np.eye(4, dtype=np.float64)
+            validation_translation = float(
+                np.linalg.norm(
+                    measurement[:3, 3] - previous_measurement[:3, 3]
+                )
+            )
+            validation_rotation = rotation_distance_deg(
+                previous_measurement, measurement
+            )
 
         graph_optimized = False
         applied_measurement = measurement
@@ -1139,6 +1242,30 @@ class Insight9SparseMapper(Node):
                     correction_rotation,
                     "optimized" if graph_optimized else "pending",
                 )
+            )
+        if measurement_changed and capture_reference_keyframe is not None:
+            self._capture_validation_count += 1
+            self._last_capture_validation_monotonic = time.monotonic()
+            self._last_capture_validation = {
+                "sequence": self._capture_validation_count,
+                "keyframe": int(keyframe_id),
+                "stamp_ns": int(stamp_ns),
+                "translation_error_m": round(validation_translation, 4),
+                "rotation_error_deg": round(validation_rotation, 3),
+                "descriptor_matches": int(localization.get("descriptor_matches", 0) or 0),
+                "inliers": int(localization.get("inliers", 0) or 0),
+                "inlier_ratio": float(localization.get("inlier_ratio", 0.0) or 0.0),
+                "median_reprojection_error_px": localization.get(
+                    "median_reprojection_error_px"
+                ),
+                "grid_cells": int(localization.get("grid_cells", 0) or 0),
+            }
+            self._recent_capture_validations.append(
+                {
+                    "sequence": self._capture_validation_count,
+                    "translation_error_m": round(validation_translation, 4),
+                    "rotation_error_deg": round(validation_rotation, 3),
+                }
             )
         payload = {
             **diagnostics,
@@ -1264,8 +1391,39 @@ class Insight9SparseMapper(Node):
         status_payload["map_point_count"] = point_count
         status_payload["center_extrinsic_ready"] = self._imu_to_center is not None
         status_payload["pose_frame"] = self._camera_frame
+        with self._graph_lock:
+            status_payload["capture_validation"] = (
+                self._capture_validation_status_unlocked()
+            )
         status.data = json.dumps(status_payload, separators=(",", ":"))
         self._status_publisher.publish(status)
+
+    def _capture_validation_status_unlocked(self) -> dict[str, object]:
+        last_validation = (
+            dict(self._last_capture_validation)
+            if self._last_capture_validation is not None
+            else None
+        )
+        if last_validation is not None:
+            last_validation["age_sec"] = round(
+                max(0.0, time.monotonic() - self._last_capture_validation_monotonic),
+                3,
+            )
+        return {
+            "session_id": self._session_id,
+            "session_generation": self._session_generation,
+            "reference_active": self._capture_reference_keyframe is not None,
+            "reference_id": self._capture_reference_id,
+            "reference_keyframe": self._capture_reference_keyframe,
+            "reference_features": (
+                int(len(self._capture_reference_points))
+                if self._capture_reference_points is not None
+                else 0
+            ),
+            "validation_count": self._capture_validation_count,
+            "last_validation": last_validation,
+            "recent_validations": list(self._recent_capture_validations),
+        }
 
     def _publish_calibration_keyframe(self, now: float) -> None:
         with self._calibration_keyframe_lock:
@@ -1429,6 +1587,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loop-check-interval-keyframes", type=int, default=2)
     parser.add_argument("--loop-exclude-recent-keyframes", type=int, default=30)
     parser.add_argument("--loop-min-map-features", type=int, default=80)
+    parser.add_argument("--capture-reference-max-features", type=int, default=20_000)
     parser.add_argument("--loop-ratio-test", type=float, default=0.78)
     parser.add_argument("--loop-min-similarity", type=float, default=0.70)
     parser.add_argument("--loop-min-matches", type=int, default=20)
