@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from insight_capture.web.routes.recording import RecordingRoutes  # noqa: E402
+from insight_capture.api.routes.recording import RecordingRoutes  # noqa: E402
 
 
 class _RecordingManager:
@@ -52,7 +52,7 @@ class OpenClawAutomationRoutesTest(unittest.IsolatedAsyncioTestCase):
             return function(*args, **kwargs)
 
         patcher = mock.patch(
-            "insight_capture.web.routes.recording.asyncio.to_thread",
+            "insight_capture.api.routes.recording.asyncio.to_thread",
             side_effect=direct,
         )
         patcher.start()

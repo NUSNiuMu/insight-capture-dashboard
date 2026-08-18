@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from insight_capture.web.websocket import PoseWebSocketService
+from insight_capture.api.websocket import PoseWebSocketService
 
 
 class _Node:

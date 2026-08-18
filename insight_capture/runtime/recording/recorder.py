@@ -4,7 +4,7 @@ import os
 import subprocess
 from typing import Callable, Dict, List, Optional, Sequence, Set
 
-from insight_capture.common.config import camera_base, camera_info_topic, enabled_cameras, image_topic
+from insight_capture.core.config import camera_base, camera_info_topic, enabled_cameras, image_topic
 
 def _normalize_topic_name(topic: str) -> str:
     value = str(topic or "").strip()

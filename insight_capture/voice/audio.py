@@ -18,7 +18,10 @@ def wake_tone_wav(sample_rate: int, duration_ms: int, frequency_hz: int, volume:
         pcm.extend(struct.pack("<h", sample))
     output = io.BytesIO()
     with wave.open(output, "wb") as wav:
-        wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(sample_rate); wav.writeframes(pcm)
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(pcm)
     return output.getvalue()
 
 
@@ -59,4 +62,5 @@ class AlsaCapture:
         try:
             self.process.wait(timeout=2.0)
         except subprocess.TimeoutExpired:
-            self.process.kill(); self.process.wait(timeout=2.0)
+            self.process.kill()
+            self.process.wait(timeout=2.0)

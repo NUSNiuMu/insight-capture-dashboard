@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Dict
 
 from insight_capture.postprocess.gripper.extraction import decode_image
-from insight_capture.postprocess.gripper.tracking import GripperMarkerDetector
+from insight_capture.perception.gripper.tracking import GripperMarkerDetector
 
 
 DEFAULT_SAMPLE_STRIDE = 10

@@ -1,7 +1,11 @@
-"""Hand landmark and gripper tracking domain."""
+"""Offline gripper processing with perception compatibility exports."""
 
-from .tracking import GripperMarkerDetector, GripperTrackingMixin
-from .overlay import HandOverlayMixin, draw_hands_on_frame
+from insight_capture.perception.gripper import (
+    GripperMarkerDetector,
+    GripperTrackingMixin,
+    HandOverlayMixin,
+    draw_hands_on_frame,
+)
 
 __all__ = [
     "GripperMarkerDetector",

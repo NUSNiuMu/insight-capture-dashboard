@@ -1,1 +1,1 @@
-"""Domain-specific dashboard HTTP route groups."""
+"""Compatibility namespace for the former Web route package."""

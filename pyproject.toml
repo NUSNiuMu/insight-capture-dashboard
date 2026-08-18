@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "insight-capture-dashboard"
+version = "2.0.6"
+description = "Field capture, review, quality-control, and dataset export for robot learning."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "aiohttp>=3.13,<4",
+    "matplotlib>=3.5",
+    "numpy>=1.26,<2",
+    "opencv-contrib-python-headless>=4.11,<5",
+    "pyarrow>=17,<18",
+    "PyYAML>=6,<7",
+    "rosbags>=0.11,<0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.11",
+    "pytest>=8",
+    "ruff>=0.9",
+]
+
+[project.scripts]
+insight-capture = "insight_capture.runtime.app:main"
+insight-voice = "insight_capture.voice.service:main"
+insight-check-bag = "insight_capture.postprocess.bags.integrity:main"
+insight-export-lerobot = "insight_capture.postprocess.datasets.lerobot:main"
+insight-export-ego-lerobot = "insight_capture.postprocess.datasets.ego_lerobot.cli:main"
+insight-extract-gripper = "insight_capture.postprocess.gripper.extraction:main"
+insight-calibrate-gripper = "insight_capture.perception.gripper.calibration:main"
+
+[tool.setuptools.packages.find]
+include = ["insight_capture*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+extend-exclude = ["data", "gesture", "outputs", "release", "rosbags", "runs"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+"insight_capture/voice/service.py" = ["E402", "F811"]
+"tests/**/*.py" = ["E402"]
+"tools/diagnostics/build_review_bundles.py" = ["E402"]
+"tools/mapping_validation/superglue/prepare_tensorrt.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["insight_capture"]
+ignore_missing_imports = true
+check_untyped_defs = true
+exclude = "(^|/)(data|gesture|outputs|release|rosbags|runs)/"
+
+[tool.pyright]
+include = ["insight_capture", "scripts", "tests", "tools"]
+exclude = ["data", "gesture", "outputs", "release", "rosbags", "runs"]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"

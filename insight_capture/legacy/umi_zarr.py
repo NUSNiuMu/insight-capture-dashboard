@@ -20,13 +20,13 @@ import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
-from insight_capture.common.config import IMAGE_STREAMS, image_topic, load_setup
+from insight_capture.core.config import IMAGE_STREAMS, image_topic, load_setup
 from insight_capture.postprocess.gripper.extraction import (
     decode_color_image,
     decode_image,
     load_calibration,
 )
-from insight_capture.postprocess.gripper.tracking import GripperMarkerDetector
+from insight_capture.perception.gripper.tracking import GripperMarkerDetector
 
 
 IMAGE_TYPES = {"sensor_msgs/msg/Image", "sensor_msgs/msg/CompressedImage"}

@@ -6,11 +6,11 @@ import time
 from typing import Dict, Optional
 from urllib.parse import quote
 
-from insight_capture.common.localization_settings import load_gripper_mask_height_ratio
+from insight_capture.core.localization_settings import load_gripper_mask_height_ratio
 
 import numpy as np
 
-from insight_capture.common.models import CameraFrame
+from insight_capture.core.models import CameraFrame
 
 
 class PayloadBuilder:

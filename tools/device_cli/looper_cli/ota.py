@@ -9,7 +9,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
-from looper_cli import DEFAULT_PER_PAGE, PB_BASE_URL, PRODUCT_NAME, UPLOAD_CHUNK_SIZE
+from looper_cli import DEFAULT_PER_PAGE, PRODUCT_NAME, UPLOAD_CHUNK_SIZE
 from looper_cli.device import DeviceSession, get_device_version
 from looper_cli.device_logs import DeviceLogStreamer
 from looper_cli.errors import LooperCliError

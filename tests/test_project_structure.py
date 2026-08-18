@@ -19,11 +19,11 @@ class ProjectStructureTest(unittest.TestCase):
         actual = {path.name for path in (ROOT / "scripts").iterdir() if path.is_file()}
         self.assertEqual(actual, expected)
 
-    def test_web_workers_use_package_modules(self) -> None:
+    def test_application_services_use_package_modules(self) -> None:
         from insight_capture.media.worker_supervisor import WorkerSupervisor
-        from insight_capture.web.gripper_extraction import GripperExtractionManager
-        from insight_capture.web.scoring import ScoringManager
-        from insight_capture.web.umi_export import UmiExportManager
+        from insight_capture.services.dataset_export import UmiExportManager
+        from insight_capture.services.gripper_extraction import GripperExtractionManager
+        from insight_capture.services.scoring import ScoringManager
 
         self.assertEqual(
             GripperExtractionManager._MODULE,
@@ -44,6 +44,72 @@ class ProjectStructureTest(unittest.TestCase):
             WorkerSupervisor._HAND_OVERLAY_MODULE,
             "insight_capture.media.hand_overlay_worker",
         )
+
+    def test_compatibility_imports_resolve_to_canonical_objects(self) -> None:
+        from insight_capture.api import WebDashboardServer
+        from insight_capture.core.models import PoseSample
+        from insight_capture.perception.gripper import GripperMarkerDetector
+        from insight_capture.services import UmiExportManager
+        from insight_capture.common.models import PoseSample as LegacyPoseSample
+        from insight_capture.postprocess.gripper import (
+            GripperMarkerDetector as LegacyGripperMarkerDetector,
+        )
+        from insight_capture.web import WebDashboardServer as LegacyWebDashboardServer
+        from insight_capture.web.umi_export import (
+            UmiExportManager as LegacyUmiExportManager,
+        )
+
+        self.assertIs(LegacyPoseSample, PoseSample)
+        self.assertIs(LegacyGripperMarkerDetector, GripperMarkerDetector)
+        self.assertIs(LegacyWebDashboardServer, WebDashboardServer)
+        self.assertIs(LegacyUmiExportManager, UmiExportManager)
+
+    def test_production_code_uses_canonical_package_boundaries(self) -> None:
+        compatibility_files = {
+            ROOT / "insight_capture" / "postprocess" / "gripper" / "calibration.py",
+            ROOT / "insight_capture" / "postprocess" / "gripper" / "overlay.py",
+            ROOT / "insight_capture" / "postprocess" / "gripper" / "tracking.py",
+            ROOT / "insight_capture" / "postprocess" / "quality" / "station_check.py",
+        }
+        forbidden_imports = (
+            "insight_capture.common",
+            "insight_capture.web",
+            "insight_capture.postprocess.gripper.calibration",
+            "insight_capture.postprocess.gripper.overlay",
+            "insight_capture.postprocess.gripper.tracking",
+            "insight_capture.postprocess.quality.station_check",
+        )
+        violations = []
+        package_root = ROOT / "insight_capture"
+        for path in package_root.rglob("*.py"):
+            if (
+                path in compatibility_files
+                or package_root / "common" in path.parents
+                or package_root / "web" in path.parents
+            ):
+                continue
+            source = path.read_text(encoding="utf-8")
+            for forbidden in forbidden_imports:
+                if forbidden in source:
+                    violations.append(f"{path.relative_to(ROOT)}: {forbidden}")
+        self.assertEqual(violations, [])
+
+    def test_runtime_package_does_not_reexport_other_layers(self) -> None:
+        source = (ROOT / "insight_capture" / "runtime" / "__init__.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("from insight_capture.", source)
+
+    def test_runtime_app_is_wiring_only(self) -> None:
+        import ast
+
+        path = ROOT / "insight_capture" / "runtime" / "app.py"
+        source = path.read_text(encoding="utf-8")
+        module = ast.parse(source)
+        self.assertFalse(
+            [node.name for node in module.body if isinstance(node, ast.ClassDef)]
+        )
+        self.assertLessEqual(len(source.splitlines()), 200)
 
 
 if __name__ == "__main__":

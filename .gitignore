@@ -5,6 +5,8 @@ logs/
 scripts/__pycache__/
 __pycache__/
 *.py[cod]
+build/
+*.egg-info/
 node_modules/
 .env
 integrations/openclaw-workspace/openclaw-workspace-state.json

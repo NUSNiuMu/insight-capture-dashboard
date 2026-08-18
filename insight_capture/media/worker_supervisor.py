@@ -20,7 +20,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
 from insight_capture.media.jpeg import HwJpegCodec
 from insight_capture.media.rate import select_frame
 
-from insight_capture.common.models import CameraFrame
+from insight_capture.core.models import CameraFrame
 
 
 class WorkerSupervisor:

@@ -20,5 +20,12 @@ Post-capture
 
 正式入口直接使用 `insight_capture.runtime.app` 与各领域模块，不再经由 `scripts/`
 中的 Python facade。现场状态位于 `insight_capture/runtime/`，显示管线位于
-`insight_capture/media/`，HTTP 接口位于 `insight_capture/web/routes/`。
+`insight_capture/media/`，HTTP 接口位于 `insight_capture/api/routes/`，后台任务
+编排位于 `insight_capture/services/`。API route 只做协议转换，不持有线程、
+subprocess 或数据集路由逻辑。
 SQLite/composite 只保留历史数据兼容，新录制不得依赖它们。
+
+`runtime/app.py` 只负责解析启动参数、组装 node/recorder/API 和关闭生命周期；
+`runtime/bootstrap.py` 解析现场路径并创建 recorder，ROS node 实现在
+`runtime/ros/node.py`。图像、录制、mapping、payload 和 worker 的具体工作继续委托给
+各自模块，不能重新堆回入口。

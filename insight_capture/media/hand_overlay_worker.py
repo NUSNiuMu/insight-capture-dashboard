@@ -14,7 +14,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-from insight_capture.postprocess.gripper.overlay import draw_hands_on_frame
+from insight_capture.perception.gripper.overlay import draw_hands_on_frame
 from insight_capture.media.jpeg import HwJpegCodec
 
 _AUTHKEY_ENV = "INSIGHT_HANDOVERLAY_AUTHKEY"

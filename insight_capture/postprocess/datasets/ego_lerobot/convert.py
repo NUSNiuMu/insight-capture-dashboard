@@ -215,7 +215,6 @@ def convert_bag(bag: Path, output: Path, spec: DeliverySpec, camera_config: Path
     head_pose, origin = _relative_poses(poses["head"], pose_valid["head"])
     origin_p = np.asarray(origin["position_m"])
     origin_inv = Rotation.from_quat(origin["rotation_xyzw"]).inv()
-    map_pose = poses["head"].copy()
     wrist_pose = np.zeros((len(timeline.target_stamps), 2, 7), np.float64)
     wrist_valid = np.stack((pose_valid["left_hand"], pose_valid["right_hand"]), axis=1)
     for hand, role in enumerate(("left_hand", "right_hand")):

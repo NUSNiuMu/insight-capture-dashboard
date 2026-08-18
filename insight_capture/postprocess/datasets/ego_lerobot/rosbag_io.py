@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
-from insight_capture.common.config import IMAGE_STREAMS, image_topic, load_setup
+from insight_capture.core.config import IMAGE_STREAMS, image_topic, load_setup
 from insight_capture.postprocess.gripper.extraction import decode_color_image
 
 

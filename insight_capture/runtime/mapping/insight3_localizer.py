@@ -44,7 +44,7 @@ from insight_capture.runtime.mapping import (  # noqa: E402
     normalize_descriptors,
     select_timestamp,
 )
-from insight_capture.common.localization_settings import (  # noqa: E402
+from insight_capture.core.localization_settings import (  # noqa: E402
     DEFAULT_GRIPPER_MASK_HEIGHT_RATIO,
     load_gripper_mask_height_ratio,
     validate_gripper_mask_height_ratio,

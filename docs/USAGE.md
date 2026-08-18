@@ -246,7 +246,7 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 ```
 
 不要直接把归一化开合比例乘以最大宽度；如果机械结构或成像关系不是线性的，应增加中间
-实测点。`python3 -m insight_capture.postprocess.gripper.calibration` 可通过
+实测点。`python3 -m insight_capture.perception.gripper.calibration` 可通过
 `--closed-width-m` 和 `--open-width-m` 写入端点，
 中间点可在标定 JSON 中补充。
 尚未标定时仍会输出 marker 中心和 `distance_px`，但 `opening` 为 `null`；需要强制

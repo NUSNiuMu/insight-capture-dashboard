@@ -14,7 +14,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from insight_capture.postprocess.gripper.tracking import (
+from insight_capture.perception.gripper.tracking import (
     DEFAULT_CALIBRATION_PATH,
     GripperCalibration,
     GripperMarkerDetector,

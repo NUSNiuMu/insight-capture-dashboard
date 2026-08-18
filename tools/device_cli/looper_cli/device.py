@@ -6,18 +6,16 @@ import statistics
 import time
 from typing import Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
 from looper_cli import DEFAULT_DEVICE_BASE_URLS, DEVICE_DETECTION_TIMEOUT, PRODUCT_NAME
 from looper_cli.device_logs import DeviceLogStreamer
 from looper_cli.errors import LooperCliError
 from looper_cli.http import (
-    DEFAULT_HEADERS,
     build_headers,
     http_get_bytes,
     http_json,
-    http_post_bytes,
 )
 from looper_cli.output import log
 

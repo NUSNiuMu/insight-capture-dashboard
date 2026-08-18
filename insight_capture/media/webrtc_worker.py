@@ -16,7 +16,7 @@ from typing import Dict, Iterable, Optional
 from aiohttp import web
 from multiprocessing.connection import Listener
 
-from insight_capture.common.config import build_dashboard_config, load_setup
+from insight_capture.core.config import build_dashboard_config, load_setup
 from insight_capture.media.webrtc import WebRtcStreams
 
 _AUTHKEY_ENV = "INSIGHT_WEBRTC_AUTHKEY"

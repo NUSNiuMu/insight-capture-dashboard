@@ -16,7 +16,7 @@ from urllib.request import urlopen
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from insight_capture.common.config import build_dashboard_config, load_setup
+from insight_capture.core.config import build_dashboard_config, load_setup
 from insight_capture.postprocess.bags.synchronization import PreparedPlaybackManager
 
 

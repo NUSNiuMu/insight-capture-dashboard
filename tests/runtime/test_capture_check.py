@@ -8,11 +8,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from insight_capture.postprocess.quality.station_check import (  # noqa: E402
+from insight_capture.quality.capture_check import (  # noqa: E402
     CaptureCheckManager,
     FIXED_STATION_ROLES,
 )
-from insight_capture.common.models import PoseSample  # noqa: E402
+from insight_capture.core.models import PoseSample  # noqa: E402
 
 
 POSES = {

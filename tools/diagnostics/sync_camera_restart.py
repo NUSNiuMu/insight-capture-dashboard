@@ -14,7 +14,6 @@ import os
 from pathlib import Path
 import re
 import shlex
-import statistics
 import subprocess
 import sys
 import time

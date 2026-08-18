@@ -15,9 +15,9 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     rclpy = None
     RosImage = None
 
-from insight_capture.common.performance import track
+from insight_capture.core.performance import track
 
-from insight_capture.common.models import CameraFrame
+from insight_capture.core.models import CameraFrame
 
 WEBRTC_JPEG_FALLBACK_INTERVAL_SEC = 0.5
 RECORDING_WEBRTC_PREVIEW_FPS = 10.0

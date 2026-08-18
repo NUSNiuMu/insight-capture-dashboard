@@ -94,7 +94,7 @@ python3 -m insight_capture.runtime.app &
 | `teleop_role` | 决定 3D 场景里用哪个位置/朝向预设 | `head` / `left_hand` / `right_hand` |
 
 `dashboard_image_stream` 的可选值定义在
-[config.py](insight_capture/common/config.py) 的 `IMAGE_STREAMS` 里：`infra1`、
+[config.py](insight_capture/core/config.py) 的 `IMAGE_STREAMS` 里：`infra1`、
 `infra2`、`depth`、`color`、`color_compressed`。
 
 ### 当前命名约定
@@ -178,7 +178,7 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 | `scripts/run_dashboard.sh` | 统一启动入口，`docker compose up -d` + 健康检查，`--jetson` 额外拉起本机 kiosk 窗口 |
 | `scripts/run_voice.sh` | 离线固定命令、本地 STT/TTS 与可选 OpenClaw adapter |
 | `insight_capture.runtime.app` | Web dashboard 稳定进程入口与 ROS 生命周期组合 |
-| `insight_capture/runtime/` / `web/` | 现场运行时、Web API 与 WebSocket 实现 |
+| `insight_capture/runtime/` / `api/` | 现场运行时、HTTP API 与 WebSocket 实现 |
 | `insight_capture/media/` | viewer 按需启用的 JPEG、preview 与 WebRTC |
 | `deploy/kiosk/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
 | `insight_capture/postprocess/` | 完整性、评分、回放、同步、WiLoR、LeRobot 与优化实现 |
@@ -186,10 +186,11 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 | `tools/mapping_validation/` | Dense Mapping 与 RViz 工程验证入口 |
 | `insight_capture/legacy/` | 历史 SQLite/composite bag 与 UMI Zarr 读取兼容 |
 | `Dockerfile.superglue-validation` | 客户发布与开发共用的 NVIDIA Jetson TensorRT/SuperGlue GPU 镜像 |
-| `insight_capture/common/config.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |
+| `insight_capture/core/config.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |
 | `scripts/reboot_cameras.sh` | 扫描 `169.254.x.x` 网段并批量重启相机 |
 | `scripts/sync_camera_restart.py` | 三相机共同定时重启采集服务并测量图像时间戳差 |
-| `insight_capture/postprocess/gripper/` | 夹爪张合度识别、标定与 rosbag 离线提取 |
+| `insight_capture/perception/gripper/` | 在线/离线共用的夹爪识别、手部叠加与标定 |
+| `insight_capture/postprocess/gripper/` | rosbag 夹爪离线提取与旧 import 兼容入口 |
 | `insight_capture.postprocess.datasets.lerobot` / `insight_capture.legacy.umi_zarr` | LeRobot v3 标准归档与 Legacy UMI 数据集导出 |
 | `insight_capture.postprocess.datasets.ego_lerobot.cli` / `insight_capture/postprocess/datasets/ego_lerobot/` | 三视角、仅头部手姿的缓存式 Ego LeRobot 交付流水线 |
 | `insight_capture.postprocess.quality.trajectory_score` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
