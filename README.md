@@ -161,8 +161,9 @@ Docker 宿主机目录由 `INSIGHT_ROSBAG_HOST_DIR` 控制；例如在 `.env` �
 直接绑定到 ext4 U 盘。还可设置 `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`；后端启动时及
 每次开始录制前都会核对挂载源，并在 `_staging` 做一次写入/`fsync` 探测。挂载不匹配或
 探测失败时自动回退到本机 NVMe 的 `rosbags/`，本进程随后固定使用 NVMe，避免 U 盘抖动
-导致录制根目录来回切换。录制状态的 `storage.active_path`、`storage.using_fallback` 和
-`storage.fallback_reason` 会显示实际写入位置与回退原因。
+导致录制根目录来回切换。可写且空间充足的 fallback 只产生 Preflight warning，不会阻止
+录制；目录不可写或空间不足仍会拒绝开始。录制状态的 `storage.active_path`、
+`storage.using_fallback` 和 `storage.fallback_reason` 会显示实际写入位置与回退原因。
 
 声控统一使用宿主机上的 [Insight 离线语音控制](docs/OPENCLAW_VOICE.md)。SenseVoice、
 VAD 与 Piper 在本地完成“开始任务叠杯子、当前任务多少条、结束当前任务、开始/停止录制、

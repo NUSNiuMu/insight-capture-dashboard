@@ -24,6 +24,7 @@ DEFAULT_POST_PROCESSING_CONFIG = {
         "camera_stale_sec": 2.0,
         "pose_stale_sec": 2.0,
         "minimum_free_gb": 5.0,
+        "require_primary_storage": False,
         "require_mapping": True,
         "require_localization": True,
     },

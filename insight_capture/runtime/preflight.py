@@ -19,7 +19,7 @@ class CapturePreflight:
         self.camera_stale_sec = max(0.2, float(settings.get("camera_stale_sec", 2.0)))
         self.pose_stale_sec = max(0.2, float(settings.get("pose_stale_sec", 2.0)))
         self.minimum_free_gb = max(0.0, float(settings.get("minimum_free_gb", 5.0)))
-        self.require_primary_storage = bool(settings.get("require_primary_storage", True))
+        self.require_primary_storage = bool(settings.get("require_primary_storage", False))
         self.require_mapping = bool(settings.get("require_mapping", True))
         self.require_localization = bool(settings.get("require_localization", True))
 
@@ -30,6 +30,7 @@ class CapturePreflight:
     def evaluate(self, topics: Optional[Sequence[str]] = None, *, refresh_topics: bool = True) -> Dict:
         now = time.monotonic()
         failures = []
+        warnings = []
         camera_health = {}
         if getattr(self.node, "fake_pose", False):
             return {
@@ -37,6 +38,7 @@ class CapturePreflight:
                 "ok": True,
                 "checked_at_epoch_s": time.time(),
                 "failures": [],
+                "warnings": [],
                 "camera_health": {},
                 "mapping": {},
                 "storage": {},
@@ -92,12 +94,16 @@ class CapturePreflight:
         }
         if storage_error:
             failures.append(self._failure("storage_unwritable", f"录制存储不可写：{storage_error}"))
-        if self.require_primary_storage and storage.get("using_fallback"):
-            failures.append(self._failure(
+        if storage.get("using_fallback"):
+            fallback_issue = self._failure(
                 "storage_fallback",
                 "录制盘未正确挂载，当前正在使用备用存储",
                 reason=storage.get("fallback_reason"),
-            ))
+            )
+            if self.require_primary_storage:
+                failures.append(fallback_issue)
+            else:
+                warnings.append(fallback_issue)
         if free_bytes < self.minimum_free_gb * 1024**3:
             failures.append(self._failure(
                 "storage_low", f"录制存储剩余空间不足{self.minimum_free_gb:g}GB", free_bytes=free_bytes
@@ -133,6 +139,7 @@ class CapturePreflight:
             "ok": not failures,
             "checked_at_epoch_s": time.time(),
             "failures": failures,
+            "warnings": warnings,
             "camera_health": camera_health,
             "mapping": mapping,
             "storage": storage,
@@ -150,6 +157,8 @@ class CapturePreflight:
         if not failures:
             storage = report.get("storage") or {}
             free_gb = float(storage.get("free_bytes", 0)) / 1024**3
+            if storage.get("using_fallback"):
+                return f"当前使用备用存储，剩余空间{free_gb:.0f}GB，可以开始采集。"
             return f"三台相机、定位和录制数据流正常，剩余空间{free_gb:.0f}GB，可以开始采集。"
         messages = [str(item.get("message") or "未知异常") for item in failures[:3]]
         return "无法开始录制，" + "；".join(messages) + "。"

@@ -355,8 +355,10 @@ INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1
 `disk_space.path` 指向 `/mnt/insight-recordings`。FAT32 单文件 4 GiB 限制不适合该数据量。
 服务启动时及每次开始录制前都会核对 `INSIGHT_ROSBAG_REQUIRED_SOURCE`，并在 `_staging`
 执行一次写入/`fsync` 探测。挂载不匹配、只读或发生 I/O 错误时会自动写入本机 NVMe 的
-`rosbags/`；API 状态中的 `storage.using_fallback=true`，并由 `storage.active_path` 和
-`storage.fallback_reason` 给出实际路径与原因。一次回退后本进程固定使用 NVMe；修复或更换
+`rosbags/`；只要 fallback 可写且空间充足，Preflight 会报告 warning 但允许录制。API 状态中的
+`storage.using_fallback=true`，并由 `storage.active_path` 和 `storage.fallback_reason` 给出实际
+路径与原因。需要严格禁止 fallback 的部署可将 `preflight.require_primary_storage` 设为
+`true`。一次回退后本进程固定使用 NVMe；修复或更换
 U 盘后重启 Dashboard，才会重新选择 U 盘。录制过程中断盘无法迁移已经写出的同一段数据，
 应停止该段并在下一段录制前确认状态已回退。
 

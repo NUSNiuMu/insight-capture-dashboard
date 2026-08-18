@@ -17,7 +17,7 @@
     "camera_stale_sec": 2.0,
     "pose_stale_sec": 2.0,
     "minimum_free_gb": 5.0,
-    "require_primary_storage": true,
+    "require_primary_storage": false,
     "require_mapping": true,
     "require_localization": true
   },

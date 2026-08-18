@@ -185,8 +185,19 @@ class CaptureRuntimeTest(unittest.TestCase):
             report = CapturePreflight(
                 node, manager, {"minimum_free_gb": 0}
             ).evaluate()
-            self.assertFalse(report["ok"])
-            self.assertIn("storage_fallback", {item["code"] for item in report["failures"]})
+            self.assertTrue(report["ok"], report)
+            self.assertIn("storage_fallback", {item["code"] for item in report["warnings"]})
+            self.assertIn("备用存储", CapturePreflight.speech(report))
+            strict_report = CapturePreflight(
+                node,
+                manager,
+                {"minimum_free_gb": 0, "require_primary_storage": True},
+            ).evaluate()
+            self.assertFalse(strict_report["ok"])
+            self.assertIn(
+                "storage_fallback",
+                {item["code"] for item in strict_report["failures"]},
+            )
             manager.storage_status["using_fallback"] = False
             node.camera_input_times["c"].clear()
             report = CapturePreflight(
