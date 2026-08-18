@@ -11,6 +11,7 @@ Environment=LOOPER_VOICE_ROOT=@VOICE_ROOT@
 Environment=LOOPER_CAPTURE_DEVICE=auto
 Environment=LOOPER_PLAYBACK_DEVICE=auto
 Environment=LOOPER_PULSE_SINK=auto
+Environment=LOOPER_PLAYBACK_VOLUME=50
 ExecStart=@PROJECT_ROOT@/scripts/run_voice.sh
 Restart=on-failure
 RestartSec=5

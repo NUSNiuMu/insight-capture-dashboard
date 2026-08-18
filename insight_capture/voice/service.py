@@ -361,8 +361,11 @@ class AlsaCapture:
 # the legacy module-level names so existing callers keep a stable facade.
 from insight_capture.voice.audio import (
     AlsaCapture,
+    configure_pulse_card_volume,
     discover_alsa_device,
     discover_pulse_sink,
+    set_alsa_playback_volume,
+    set_pulse_sink_volume,
     wake_tone_wav,
 )
 from insight_capture.voice.commands import (
@@ -1178,6 +1181,12 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("LOOPER_PULSE_SINK", "auto"),
         help="PulseAudio sink name; auto prefers the stable audio-device hint.",
     )
+    parser.add_argument(
+        "--playback-volume",
+        type=int,
+        default=int(os.environ.get("LOOPER_PLAYBACK_VOLUME", "50")),
+        help="Playback volume percentage restored whenever the service starts.",
+    )
     parser.add_argument("--sample-rate", type=int, default=16000)
     parser.add_argument("--chunk-frames", type=int, default=4000)
     parser.add_argument(
@@ -1286,6 +1295,7 @@ def parse_args() -> argparse.Namespace:
     args.wake_tone_ms = max(50, min(1000, args.wake_tone_ms))
     args.wake_tone_frequency = max(100, min(4000, args.wake_tone_frequency))
     args.wake_tone_volume = max(0.05, min(1.0, args.wake_tone_volume))
+    args.playback_volume = max(0, min(100, args.playback_volume))
     args.piper_length_scale = max(0.5, min(2.0, args.piper_length_scale))
     args.piper_noise_scale = max(0.0, min(1.5, args.piper_noise_scale))
     args.piper_noise_w_scale = max(0.0, min(1.5, args.piper_noise_w_scale))
@@ -1301,9 +1311,27 @@ def main() -> int:
         args.device = discover_alsa_device("capture", args.audio_device_hint)
     if args.playback_device == "auto":
         args.playback_device = discover_alsa_device("playback", args.audio_device_hint)
-    if args.playback_backend == "pulse" and args.pulse_sink == "auto":
-        args.pulse_sink = discover_pulse_sink(args.audio_device_hint)
+    audio_setup_ok = False
+    if args.playback_backend == "pulse":
+        pulse_card_ok = configure_pulse_card_volume(args.audio_device_hint)
+        if args.pulse_sink == "auto":
+            args.pulse_sink = discover_pulse_sink(args.audio_device_hint)
+        audio_setup_ok = pulse_card_ok and set_pulse_sink_volume(
+            args.pulse_sink,
+            args.playback_volume,
+        )
+    else:
+        audio_setup_ok = set_alsa_playback_volume(
+            args.audio_device_hint,
+            args.playback_volume,
+        )
     bridge = VoiceService(args)
+    bridge._emit(
+        "audio_setup",
+        backend=args.playback_backend,
+        volume_percent=args.playback_volume,
+        ok=audio_setup_ok,
+    )
     try:
         if args.speak_text is not None:
             bridge.speak(args.speak_text)

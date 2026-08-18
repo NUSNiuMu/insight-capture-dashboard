@@ -1,5 +1,6 @@
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -20,12 +21,15 @@ from insight_capture.voice.service import (  # noqa: E402
     capture_check_reply_key,
     capture_check_speech,
     clean_utterance_transcript,
+    configure_pulse_card_volume,
     discover_alsa_device,
     discover_pulse_sink,
     extract_openclaw_reply,
     match_local_command,
     normalize_transcript,
     speech_text,
+    set_alsa_playback_volume,
+    set_pulse_sink_volume,
     strip_wake_prefix,
     wake_tone_wav,
     wake_word_detected,
@@ -93,6 +97,60 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 discover_pulse_sink("E3"),
                 "alsa_output.usb-CF-IC_CF001_E3_2025.analog-stereo",
             )
+
+    def test_pulse_card_ignores_invalid_db_metadata(self):
+        modules = SimpleNamespace(
+            stdout=(
+                '8\tmodule-alsa-card\tdevice_id="0" name="usb-CF-IC_CF001_E3" '
+                "ignore_dB=no deferred_volume=yes\n"
+            )
+        )
+        success = SimpleNamespace(returncode=0, stdout="21\n")
+        with mock.patch(
+            "subprocess.run",
+            side_effect=[modules, success, success],
+        ) as run:
+            self.assertTrue(configure_pulse_card_volume("E3"))
+
+        self.assertEqual(run.call_args_list[1].args[0], ["pactl", "unload-module", "8"])
+        loaded = run.call_args_list[2].args[0]
+        self.assertEqual(loaded[:3], ["pactl", "load-module", "module-alsa-card"])
+        self.assertIn("ignore_dB=yes", loaded)
+        self.assertNotIn("ignore_dB=no", loaded)
+
+    def test_pulse_card_reload_failure_restores_original_module(self):
+        modules = SimpleNamespace(
+            stdout="8 module-alsa-card device_id=0 name=usb-E3 ignore_dB=no\n"
+        )
+        unloaded = SimpleNamespace(returncode=0, stdout="")
+        with mock.patch(
+            "subprocess.run",
+            side_effect=[
+                modules,
+                unloaded,
+                subprocess.CalledProcessError(1, ["pactl", "load-module"]),
+                SimpleNamespace(returncode=0, stdout="22\n"),
+            ],
+        ) as run:
+            self.assertFalse(configure_pulse_card_volume("E3"))
+
+        restored = run.call_args_list[3].args[0]
+        self.assertIn("ignore_dB=no", restored)
+
+    def test_playback_volume_helpers_target_expected_controls(self):
+        success = SimpleNamespace(returncode=0, stdout="")
+        with mock.patch("subprocess.run", return_value=success) as run:
+            self.assertTrue(set_pulse_sink_volume("alsa_output.usb-E3", 50))
+            self.assertTrue(set_alsa_playback_volume("E3", 50))
+
+        self.assertEqual(
+            run.call_args_list[0].args[0],
+            ["pactl", "set-sink-volume", "alsa_output.usb-E3", "50%"],
+        )
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ["amixer", "-q", "-c", "E3", "sset", "PCM", "50%", "unmute"],
+        )
 
     def test_missing_openclaw_only_disables_optional_requests(self):
         bridge = OpenClawVoiceBridge(SimpleNamespace(openclaw_bin=Path("/missing/openclaw")))
@@ -628,6 +686,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(args.wake_feedback, "speech")
         self.assertEqual(args.playback_backend, "pulse")
         self.assertEqual(args.pulse_sink, "auto")
+        self.assertEqual(args.playback_volume, 50)
         self.assertEqual(args.agent_thinking, "off")
         self.assertEqual(args.dashboard_timeout_sec, 40.0)
 
