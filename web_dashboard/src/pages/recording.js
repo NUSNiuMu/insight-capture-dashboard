@@ -10,6 +10,15 @@ const refreshRecordTopicsButton = document.getElementById("refresh-record-topics
 const recordTopicStatus = document.getElementById("record-topic-status");
 const recordTopicGroups = document.getElementById("record-topic-groups");
 const recordingOutput = document.getElementById("recording-output");
+const recordingDirectory = document.getElementById("recording-directory");
+const browseRecordingDirectoryButton = document.getElementById("browse-recording-directory-button");
+const recordingDirectoryDialog = document.getElementById("recording-directory-dialog");
+const recordingDirectoryRoots = document.getElementById("recording-directory-roots");
+const recordingDirectoryPath = document.getElementById("recording-directory-path");
+const recordingDirectoryList = document.getElementById("recording-directory-list");
+const recordingDirectoryUp = document.getElementById("recording-directory-up");
+const recordingDirectoryHelp = document.getElementById("recording-directory-help");
+const selectRecordingDirectoryButton = document.getElementById("select-recording-directory");
 
 let recordingBusy = false;
 let recordingActive = false;
@@ -18,6 +27,8 @@ let selectedRecordTopics = new Set();
 let knownRecordTopics = new Set();
 let recordTopicsInitialized = false;
 let recordingLogLines = [];
+let browsedRecordingDirectory = "";
+let recordingDirectorySelectable = false;
 
 if (recordingPanel) {
   void refreshRecordingStatus({ refreshTopics: true, force: true });
@@ -40,6 +51,32 @@ if (stopRecordingButton) {
     void stopRecording();
   });
 }
+if (browseRecordingDirectoryButton) {
+  browseRecordingDirectoryButton.addEventListener("click", () => {
+    void openRecordingDirectoryPicker();
+  });
+}
+document.getElementById("close-recording-directory-dialog")?.addEventListener("click", () => {
+  recordingDirectoryDialog?.close();
+});
+document.getElementById("cancel-recording-directory")?.addEventListener("click", () => {
+  recordingDirectoryDialog?.close();
+});
+recordingDirectoryUp?.addEventListener("click", () => {
+  const parent = recordingDirectoryUp.dataset.parent || "";
+  if (parent) void browseRecordingDirectories(parent);
+});
+recordingDirectoryRoots?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-storage-root]");
+  if (button && !button.disabled) void browseRecordingDirectories(button.dataset.storageRoot || "");
+});
+recordingDirectoryList?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-recording-directory-path]");
+  if (button && !button.disabled) void browseRecordingDirectories(button.dataset.recordingDirectoryPath || "");
+});
+selectRecordingDirectoryButton?.addEventListener("click", () => {
+  void selectRecordingDirectory();
+});
 
 window.addEventListener("beforeunload", (event) => {
   if (!recordingActive) return;
@@ -97,6 +134,101 @@ async function refreshRecordTopics({ resetSelection = false } = {}) {
     return null;
   } finally {
     setRecordTopicRefreshBusy(false);
+  }
+}
+
+async function openRecordingDirectoryPicker() {
+  if (!recordingDirectoryDialog || recordingActive || recordingBusy) {
+    return;
+  }
+  if (!recordingDirectoryDialog.open) {
+    recordingDirectoryDialog.showModal();
+  }
+  await browseRecordingDirectories("");
+}
+
+async function browseRecordingDirectories(path) {
+  if (!recordingDirectoryList) {
+    return;
+  }
+  recordingDirectoryList.innerHTML = '<p class="directory-empty">Loading folders...</p>';
+  if (recordingDirectoryHelp) recordingDirectoryHelp.textContent = "Checking storage location...";
+  if (selectRecordingDirectoryButton) selectRecordingDirectoryButton.disabled = true;
+  try {
+    const query = path ? `?path=${encodeURIComponent(path)}` : "";
+    const response = await fetch(`/api/recording/storage/directories${query}`, { cache: "no-store" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to browse recording folders.");
+    }
+    renderRecordingDirectories(payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    recordingDirectoryList.innerHTML = `<p class="directory-empty directory-error">${escapeHtml(message)}</p>`;
+    if (recordingDirectoryHelp) recordingDirectoryHelp.textContent = message;
+  }
+}
+
+function renderRecordingDirectories(payload) {
+  browsedRecordingDirectory = String(payload.path || "");
+  recordingDirectorySelectable = Boolean(payload.selectable) && !Boolean(payload.recording);
+  if (recordingDirectoryPath) {
+    recordingDirectoryPath.textContent = browsedRecordingDirectory;
+    recordingDirectoryPath.title = browsedRecordingDirectory;
+  }
+  if (recordingDirectoryUp) {
+    recordingDirectoryUp.dataset.parent = payload.parent || "";
+    recordingDirectoryUp.disabled = !payload.parent;
+  }
+  if (recordingDirectoryRoots) {
+    recordingDirectoryRoots.innerHTML = (payload.roots || []).map((root) => `
+      <button type="button" class="recording-root-button ${root.current ? "is-current" : ""}"
+        data-storage-root="${escapeHtml(root.path)}" ${root.available ? "" : "disabled"}
+        title="${escapeHtml(root.path)}">${escapeHtml(root.name)}</button>
+    `).join("");
+  }
+  const directories = Array.isArray(payload.directories) ? payload.directories : [];
+  recordingDirectoryList.innerHTML = directories.length > 0
+    ? directories.map((directory) => `
+      <button type="button" class="recording-directory-row" data-recording-directory-path="${escapeHtml(directory.path)}"
+        ${directory.writable ? "" : "disabled"} title="${escapeHtml(directory.path)}">
+        <span class="directory-glyph">DIR</span><strong>${escapeHtml(directory.name)}</strong><span>Open</span>
+      </button>
+    `).join("")
+    : '<p class="directory-empty">No subfolders. You can use this folder.</p>';
+  if (recordingDirectoryHelp) {
+    recordingDirectoryHelp.textContent = payload.recording
+      ? "Stop the active recording before changing folders."
+      : "The selected folder is checked with a real write and fsync probe.";
+  }
+  if (selectRecordingDirectoryButton) {
+    selectRecordingDirectoryButton.disabled = !recordingDirectorySelectable;
+  }
+}
+
+async function selectRecordingDirectory() {
+  if (!browsedRecordingDirectory || !recordingDirectorySelectable || recordingBusy) {
+    return;
+  }
+  setRecordingBusy(true);
+  try {
+    const response = await fetch("/api/recording/storage/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: browsedRecordingDirectory })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to select recording folder.");
+    }
+    renderRecordingStatus(payload);
+    recordingDirectoryDialog?.close();
+    setRecordingOutput(`Recording folder selected: ${browsedRecordingDirectory}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (recordingDirectoryHelp) recordingDirectoryHelp.textContent = message;
+  } finally {
+    setRecordingBusy(false);
   }
 }
 
@@ -309,7 +441,7 @@ function collectSelectedRecordTopics() {
 function renderRecordingStatus(status) {
   const active = Boolean(status && status.recording);
   const mergeState = (status && status.merge_state) || "idle";
-  const finalizing = mergeState === "merging";
+  const finalizing = mergeState === "merging" || mergeState === "finalizing";
   const mergeTimings = (status && status.merge_timings) || {};
   recordingActive = active;
   const outputPath = (status && status.output_path) || "";
@@ -335,7 +467,23 @@ function renderRecordingStatus(status) {
   }
   renderGestureRecording(status && status.gesture_recording);
   renderDiskSpace(status && status.disk_space);
+  renderRecordingStorage(status && status.storage);
   setRecordingBusy(recordingBusy, { active, finalizing });
+  if (recordingDirectoryDialog?.open && (active || finalizing)) {
+    recordingDirectorySelectable = false;
+    if (selectRecordingDirectoryButton) selectRecordingDirectoryButton.disabled = true;
+    if (recordingDirectoryHelp) {
+      recordingDirectoryHelp.textContent = "Stop the active recording before changing folders.";
+    }
+  }
+}
+
+function renderRecordingStorage(storage) {
+  const path = String((storage && storage.active_path) || "");
+  if (recordingDirectory) {
+    recordingDirectory.textContent = path || "Unavailable";
+    recordingDirectory.title = path || "Recording folder unavailable";
+  }
 }
 
 function renderGestureRecording(gesture) {
@@ -430,6 +578,9 @@ function setRecordingBusy(isBusy, { active, finalizing = false } = {}) {
   if (stopRecordingButton) {
     stopRecordingButton.disabled = recordingBusy || !isActive;
     stopRecordingButton.classList.toggle("is-busy", recordingBusy && isActive);
+  }
+  if (browseRecordingDirectoryButton) {
+    browseRecordingDirectoryButton.disabled = recordingBusy || isActive || finalizing;
   }
 }
 

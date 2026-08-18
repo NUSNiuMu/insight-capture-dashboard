@@ -36,6 +36,23 @@ class RecordingRoutes:
         )
         return web.json_response(catalog)
 
+    async def _handle_recording_directories(self, request: web.Request) -> web.Response:
+        path = str(request.query.get("path", "")).strip() or None
+        return web.json_response(
+            self.context.recording_manager.browse_recording_directories(path)
+        )
+
+    async def _handle_recording_directory_select(
+        self, request: web.Request
+    ) -> web.Response:
+        payload = await read_json_body(request)
+        path = str(payload.get("path", "")).strip()
+        if not path:
+            raise ValueError("Field 'path' is required.")
+        return web.json_response(
+            self.context.recording_manager.select_recording_root(path)
+        )
+
     async def _handle_recording_start(self, request: web.Request) -> web.Response:
         payload = {}
         if request.can_read_body:

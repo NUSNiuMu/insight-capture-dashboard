@@ -19,6 +19,7 @@ from post_processing_core.integrity import nominal_for
 from perf_tracker import track
 
 from .composite_bag import COMPOSITE_FORMAT, MANIFEST_NAME, read_metadata
+from .config import probe_recording_root
 from .topic_catalog import (
     _normalize_topics,
     build_recording_topic_catalog,
@@ -138,6 +139,7 @@ class RecordingManager:
         recording_rmw_implementation: str = "rmw_cyclonedds_cpp",
         storage_status: Optional[Dict[str, object]] = None,
         storage_resolver: Optional[Callable[[], tuple[Path, Dict[str, object]]]] = None,
+        storage_browse_roots: Optional[Sequence[Path]] = None,
     ) -> None:
         self.raw_config = raw_config
         self.ros_domain_id = int(ros_domain_id)
@@ -150,6 +152,15 @@ class RecordingManager:
             "active_path": str(self.rosbag_root), "using_fallback": False
         })
         self._storage_resolver = storage_resolver
+        browse_roots = storage_browse_roots or [self.rosbag_root]
+        self._storage_browse_roots: List[Path] = []
+        for browse_root in browse_roots:
+            resolved = Path(browse_root).resolve()
+            if resolved not in self._storage_browse_roots:
+                self._storage_browse_roots.append(resolved)
+        if self.rosbag_root not in self._storage_browse_roots:
+            self._storage_browse_roots.append(self.rosbag_root)
+        self._manual_storage_selected = False
         self._storage_changed_callbacks: List[Callable[[Path], None]] = []
         self.default_topics = _normalize_topics(default_topics)
         self.publisher_checker = publisher_checker
@@ -203,6 +214,13 @@ class RecordingManager:
     def _refresh_recording_storage_unlocked(self) -> None:
         # Once failover occurs, remain on NVMe until restart. Switching roots
         # back and forth would make just-recorded bags disappear from the UI.
+        if self._manual_storage_selected:
+            probe_error = probe_recording_root(self.rosbag_root)
+            if probe_error:
+                raise RuntimeError(
+                    f"Selected recording directory is unavailable: {probe_error}"
+                )
+            return
         if self._storage_resolver is None or self.storage_status.get("using_fallback"):
             return
         active, status = self._storage_resolver()
@@ -223,6 +241,124 @@ class RecordingManager:
                 self._output_lines.append(
                     f"[storage] WARNING: root-change callback failed: {exc}"
                 )
+
+    def _storage_browse_root_for(self, path: Path) -> Optional[Path]:
+        resolved = path.resolve()
+        for root in self._storage_browse_roots:
+            if resolved == root or root in resolved.parents:
+                return root
+        return None
+
+    def browse_recording_directories(self, path: Optional[str] = None) -> Dict[str, object]:
+        """List safe server-side destination folders for the recording UI."""
+        with self._lock:
+            current_root = self.rosbag_root
+            recording = bool(self.processes) or self._image_writer_active
+            roots = list(self._storage_browse_roots)
+
+        target = Path(path).resolve() if path else current_root
+        containing_root = self._storage_browse_root_for(target)
+        if containing_root is None:
+            raise ValueError("Recording directory is outside the allowed storage locations.")
+        if not target.is_dir():
+            raise ValueError(f"Recording directory does not exist: {target}")
+
+        directories = []
+        try:
+            children = sorted(target.iterdir(), key=lambda child: child.name.casefold())
+        except OSError as exc:
+            raise ValueError(f"Cannot read recording directory {target}: {exc}") from exc
+        for child in children:
+            if child.name.startswith(".") or child.name in {"_outputs", "_staging"}:
+                continue
+            try:
+                resolved = child.resolve()
+                if not resolved.is_dir() or self._storage_browse_root_for(resolved) is None:
+                    continue
+                # A rosbag is an output item, not another destination folder.
+                if (resolved / "metadata.yaml").is_file():
+                    continue
+                directories.append({
+                    "name": child.name,
+                    "path": str(resolved),
+                    "writable": os.access(resolved, os.W_OK | os.X_OK),
+                })
+            except OSError:
+                continue
+
+        parent = target.parent if target != containing_root else None
+        available_roots = []
+        for root in roots:
+            available_roots.append({
+                "name": root.name or str(root),
+                "path": str(root),
+                "available": root.is_dir(),
+                "current": current_root == root or root in current_root.parents,
+            })
+        return {
+            "path": str(target),
+            "parent": str(parent) if parent is not None else None,
+            "directories": directories,
+            "roots": available_roots,
+            "current_path": str(current_root),
+            "selectable": os.access(target, os.W_OK | os.X_OK),
+            "recording": recording,
+        }
+
+    def select_recording_root(self, path: str) -> Dict[str, object]:
+        """Select and probe an allowed recording root while capture is idle."""
+        target = Path(path).resolve()
+        if self._storage_browse_root_for(target) is None:
+            raise ValueError("Recording directory is outside the allowed storage locations.")
+        if not target.is_dir():
+            raise ValueError(f"Recording directory does not exist: {target}")
+
+        callbacks: List[Callable[[Path], None]] = []
+        with self._lock:
+            self._cleanup_if_exited_unlocked()
+            if self.processes or self._image_writer_active:
+                raise RuntimeError("Cannot change the recording directory while recording.")
+            if self.merge_state in {"merging", "finalizing"}:
+                raise RuntimeError("Cannot change the recording directory while finalizing.")
+            probe_error = probe_recording_root(target)
+            if probe_error:
+                raise RuntimeError(
+                    f"Recording directory is not writable or durable: {probe_error}"
+                )
+            changed = target != self.rosbag_root
+            configured_value = str(self.storage_status.get("configured_path") or "").strip()
+            configured_root = Path(configured_value).resolve() if configured_value else target
+            manually_using_fallback = not (
+                target == configured_root or configured_root in target.parents
+            )
+            previous_fallback_reason = self.storage_status.get("fallback_reason")
+            manual_fallback_reason = None
+            if manually_using_fallback:
+                manual_fallback_reason = (
+                    previous_fallback_reason or "manually selected recording directory"
+                )
+            self.rosbag_root = target
+            self._manual_storage_selected = True
+            self.storage_status.update({
+                "active_path": str(target),
+                "manually_selected": True,
+                "using_fallback": manually_using_fallback,
+                "fallback_reason": manual_fallback_reason,
+            })
+            if changed:
+                self._output_lines.append(
+                    f"[storage] recording directory selected: {target}"
+                )
+                callbacks = list(self._storage_changed_callbacks)
+
+        for callback in callbacks:
+            try:
+                callback(target)
+            except Exception as exc:  # noqa: BLE001 - storage selection already succeeded
+                self._output_lines.append(
+                    f"[storage] WARNING: root-change callback failed: {exc}"
+                )
+        return self.status()
 
     def _notify_recording_completed(self, output_path: Path) -> None:
         with self._lock:

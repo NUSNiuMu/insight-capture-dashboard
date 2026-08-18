@@ -802,6 +802,14 @@ def main() -> None:
     rosbag_root, recording_storage_status = resolve_recording_root(
         configured_rosbag_root, project_root
     )
+    fallback_root = Path(
+        os.environ.get("INSIGHT_ROSBAG_FALLBACK_DIR", "").strip() or "rosbags"
+    )
+    if not fallback_root.is_absolute():
+        fallback_root = (project_root / fallback_root).resolve()
+    storage_browse_roots = [rosbag_root, fallback_root]
+    if not recording_storage_status["using_fallback"]:
+        storage_browse_roots.insert(0, configured_rosbag_root)
     results_root = Path(results_dir_value)
     if not results_root.is_absolute():
         results_root = (project_root / results_root).resolve()
@@ -852,6 +860,7 @@ def main() -> None:
         storage_resolver=lambda: resolve_recording_root(
             configured_rosbag_root, project_root
         ),
+        storage_browse_roots=storage_browse_roots,
     )
     # Adopt recordings orphaned in rosbags/_staging/ by a power cut or crash
     # (reindex/salvage + merge into a normal bag, in the background).

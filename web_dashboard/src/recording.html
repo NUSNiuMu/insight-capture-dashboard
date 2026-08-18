@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Insight Recording</title><link rel="stylesheet" href="/static/styles.css?v=20260804-navigation"><script defer src="/static/shared/navigation.js?v=20260804-navigation"></script>
+    <title>Insight Recording</title><link rel="stylesheet" href="/static/styles.css?v=20260818-recording-folder"><script defer src="/static/shared/navigation.js?v=20260804-navigation"></script>
   </head>
   <body data-dashboard-view="recording">
     <div class="app-shell">
@@ -18,11 +18,18 @@
           <header class="content-heading"><div><p class="section-kicker">Capture session</p><h1>New recording</h1><p>Name the session, select ROS topics and begin capture.</p></div><div class="heading-statuses"><span id="gesture-recording-pill" class="gesture-recording-pill" title="Double thumbs-up gesture recording status">gesture: loading</span><span id="storage-space-pill" class="storage-space-pill" title="Free space on the recording filesystem">disk: unknown</span></div></header>
           <section class="record-hero recording-panel" id="recording-panel">
             <div class="record-state"><span class="record-orb"></span><div><p class="section-kicker">Recorder status</p><h2 id="recording-status">Recording idle</h2><p id="record-topic-status">Waiting for topic catalog...</p></div></div>
-            <div class="record-controls">
-              <input type="text" id="recording-bag-name" class="field-control" placeholder="Session name (auto-generated if empty)" autocomplete="off" spellcheck="false">
-              <button type="button" id="refresh-record-topics-button" class="quiet-button">Refresh topics</button>
-              <button type="button" id="start-recording-button" class="primary-button">Start capture</button>
-              <button type="button" id="stop-recording-button" class="danger-button">Stop</button>
+            <div class="record-actions">
+              <div class="recording-destination">
+                <span>Recording folder</span>
+                <output id="recording-directory" title="Current recording folder">Loading...</output>
+                <button type="button" id="browse-recording-directory-button" class="quiet-button">Browse...</button>
+              </div>
+              <div class="record-controls">
+                <input type="text" id="recording-bag-name" class="field-control" placeholder="Session name (auto-generated if empty)" autocomplete="off" spellcheck="false">
+                <button type="button" id="refresh-record-topics-button" class="quiet-button">Refresh topics</button>
+                <button type="button" id="start-recording-button" class="primary-button">Start capture</button>
+                <button type="button" id="stop-recording-button" class="danger-button">Stop</button>
+              </div>
             </div>
           </section>
           <div class="recording-layout">
@@ -32,6 +39,23 @@
         </main>
       </section>
     </div>
-    <script type="module" src="/static/pages/recording.js?v=20260817-recording-timing"></script>
+    <dialog id="recording-directory-dialog" class="recording-directory-dialog" aria-labelledby="recording-directory-dialog-title">
+      <div class="directory-dialog-heading">
+        <div><p class="section-kicker">Storage destination</p><h2 id="recording-directory-dialog-title">Choose recording folder</h2></div>
+        <button type="button" id="close-recording-directory-dialog" class="quiet-button" aria-label="Close folder browser">Close</button>
+      </div>
+      <div id="recording-directory-roots" class="recording-directory-roots" aria-label="Storage locations"></div>
+      <div class="recording-directory-toolbar">
+        <button type="button" id="recording-directory-up" class="quiet-button">Up</button>
+        <code id="recording-directory-path">Loading...</code>
+      </div>
+      <div id="recording-directory-list" class="recording-directory-list" aria-live="polite"></div>
+      <p id="recording-directory-help" class="field-help">Only writable folders on storage mounted into the Dashboard are available.</p>
+      <div class="recording-directory-footer">
+        <button type="button" id="cancel-recording-directory" class="quiet-button">Cancel</button>
+        <button type="button" id="select-recording-directory" class="primary-button">Use this folder</button>
+      </div>
+    </dialog>
+    <script type="module" src="/static/pages/recording.js?v=20260818-recording-folder"></script>
   </body>
 </html>

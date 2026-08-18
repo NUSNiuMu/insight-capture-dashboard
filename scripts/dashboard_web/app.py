@@ -57,6 +57,14 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/images/capabilities", cameras._handle_image_capabilities)
     app.router.add_get("/api/recording/status", recording._handle_recording_status)
     app.router.add_get("/api/recording/topics", recording._handle_recording_topics)
+    app.router.add_get(
+        "/api/recording/storage/directories",
+        recording._handle_recording_directories,
+    )
+    app.router.add_post(
+        "/api/recording/storage/select",
+        recording._handle_recording_directory_select,
+    )
     app.router.add_post("/api/recording/start", recording._handle_recording_start)
     app.router.add_post("/api/recording/stop", recording._handle_recording_stop)
     app.router.add_post(

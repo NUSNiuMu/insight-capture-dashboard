@@ -145,6 +145,9 @@ Recording 页面：`Refresh Topics` 按当前 `ROS_DOMAIN_ID` 发现 live topic�
 staging 目录原子发布，同时保存 live header/network audit；不分 part、不合包、不重写 payload，
 发布后即可开始下一段。默认选择同时包含原始
 `vio_100hz` 和配置的全局 pose，供单臂/双臂数据集导出使用。
+录制空闲时可在页面的 **Recording folder → Browse...** 中选择后端已挂载的可写目录；
+选择前会执行一次写入/`fsync` 探测，录制中或停止排空期间不能切换。网页不会枚举整台设备，
+也不能选择操作者电脑上未挂载进 Dashboard 容器的目录。
 
 手势录制默认关闭，可在 Settings 开启；Insight9 同时检测到双手“拇指向上、四指
 握拳”持续 0.8 秒时，会用服务器默认 topics 开始录制，解除 2 秒后再次保持同一

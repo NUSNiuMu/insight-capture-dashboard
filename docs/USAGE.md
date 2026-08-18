@@ -79,6 +79,12 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 | `/optimization` | COLMAP 轨迹优化：对录制的彩色图像做三维重建并与 VIO 轨迹对齐 |
 | `/settings` | 手势录制、Stick-figure 模式全局开关；逐相机开关手部叠加和有效校准的夹爪追踪；Avatar 模型选择 |
 
+Recording 页的 **Recording folder → Browse...** 可在录制空闲时切换保存目录。弹窗只显示
+Dashboard 容器已经挂载的录制盘与 NVMe fallback 范围，不会暴露整台设备文件系统；浏览器所在
+电脑的普通本地目录若未挂载进容器也不会出现。确认目录时后端会执行实际写入和 `fsync` 探测，
+成功后 Bags、回放、评分和数据集导出会同步使用新的根目录。本次选择保留到 Dashboard 后端重启，
+重启后重新采用 `INSIGHT_ROSBAG_DIR`、必需挂载源检查与 fallback 配置。
+
 > 旧地址 `/images` 现在会自动跳转到 `/3d`（画面已合并进 Spatial 视图，收藏的旧链接不用改）。
 
 > 进入 `/3d` 后场景会先就绪，随后依次接通三路画面、轨迹和模型；模型加载期间不会显示占位物。
