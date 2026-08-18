@@ -22,7 +22,6 @@ tar xzf insight-dashboard-deploy-vX.Y.Z.tar.gz
 cd insight-dashboard-deploy        # 解压出的目录不带版本号——它是常驻安装目录，名字跨版本不变
 ./update.sh /path/to/insight-dashboard-vX.Y.Z.tar.gz
 sudo ./deploy/host_setup.sh       # 一次性调优：CycloneDDS/UDP 分片、RPS + 开机相机恢复
-./deploy/install_voice_control_service.sh  # 安装宿主机离线语音主控
 ```
 
 `update.sh` 会加载 Dashboard 镜像；如果本机还没有
@@ -33,7 +32,13 @@ jetson-nx profile 会在下一次开机相机恢复流程中把相机 DDS 模式
 安装的 `insight-camera-network.service` 负责网卡参数，
 `insight-camera-reboot.service` 在冷启动后恢复相机并校验 DDS 配置。
 
-语音服务作为发布包正式组件运行在宿主机，直接使用宿主机声卡；Dashboard 容器不再
+`update.sh` 会从当前 Dashboard 镜像同步宿主机语音代码，并在离线模型已经准备好时自动安装、
+启用或升级 `insight-voice-control.service`；若发现旧的
+`looper-openclaw-voice.service`，会自动停止并迁移。语音模型尚未准备好的设备会明确提示并
+跳过，不影响 Dashboard 启动；补齐模型后可手动执行
+`./deploy/install_voice_control_service.sh`。
+
+语音服务作为发布包默认组件运行在宿主机，直接使用宿主机声卡；Dashboard 容器不再
 挂载 `/dev/snd`。安装脚本默认自动发现稳定的 ALSA `CARD` 名称，不依赖 card index。
 SenseVoice、Silero VAD 和 Piper 固定命令完全离线；没有安装 OpenClaw 或 Gateway
 不可用时，只会禁用非固定自然语言问答，不影响开始/停止录制、校准、相机检查、

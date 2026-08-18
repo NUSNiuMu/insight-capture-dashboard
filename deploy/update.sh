@@ -17,8 +17,50 @@ IMAGE_NAME="insight-dashboard"
 SUPERGLUE_IMAGE="insight-superglue-validation:25.04"
 SUPERGLUE_TARBALL="insight-superglue-validation-25.04.tar.gz"
 
+if [[ -x "${SCRIPT_DIR}/deploy/install_voice_control_service.sh" ]]; then
+    HOST_RUNTIME_ROOT="${SCRIPT_DIR}"
+    VOICE_INSTALLER="${SCRIPT_DIR}/deploy/install_voice_control_service.sh"
+else
+    HOST_RUNTIME_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+    VOICE_INSTALLER="${SCRIPT_DIR}/install_voice_control_service.sh"
+fi
+
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
+
+sync_host_voice_runtime() {
+    local image="$1"
+    local container temporary
+    temporary="$(mktemp -d)"
+    container="$(docker create "${image}")"
+    cleanup_voice_sync() {
+        docker rm "${container}" >/dev/null 2>&1 || true
+        rm -rf "${temporary}"
+    }
+    trap cleanup_voice_sync EXIT
+
+    docker cp "${container}:/workspaces/insight_capture/insight_capture/voice" "${temporary}/voice"
+    docker cp "${container}:/workspaces/insight_capture/insight_capture/__init__.py" "${temporary}/insight_capture_init.py"
+    docker cp "${container}:/workspaces/insight_capture/scripts/run_voice.sh" "${temporary}/run_voice.sh"
+    docker cp "${container}:/workspaces/insight_capture/deploy/install_voice_control_service.sh" "${temporary}/install_voice_control_service.sh"
+    docker cp "${container}:/workspaces/insight_capture/deploy/systemd/insight-voice-control.service.in" "${temporary}/insight-voice-control.service.in"
+    docker cp "${container}:/workspaces/insight_capture/deploy/update.sh" "${temporary}/update.sh"
+
+    mkdir -p \
+        "${HOST_RUNTIME_ROOT}/insight_capture" \
+        "${HOST_RUNTIME_ROOT}/scripts" \
+        "${HOST_RUNTIME_ROOT}/deploy/systemd"
+    rm -rf "${HOST_RUNTIME_ROOT}/insight_capture/voice"
+    mv "${temporary}/voice" "${HOST_RUNTIME_ROOT}/insight_capture/voice"
+    install -m 0644 "${temporary}/insight_capture_init.py" "${HOST_RUNTIME_ROOT}/insight_capture/__init__.py"
+    install -m 0755 "${temporary}/run_voice.sh" "${HOST_RUNTIME_ROOT}/scripts/run_voice.sh"
+    install -m 0755 "${temporary}/install_voice_control_service.sh" "${HOST_RUNTIME_ROOT}/deploy/install_voice_control_service.sh"
+    install -m 0644 "${temporary}/insight-voice-control.service.in" "${HOST_RUNTIME_ROOT}/deploy/systemd/insight-voice-control.service.in"
+    install -m 0755 "${temporary}/update.sh" "${SCRIPT_DIR}/update.sh"
+
+    trap - EXIT
+    cleanup_voice_sync
+}
 
 force=false
 rollback=false
@@ -131,6 +173,10 @@ until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
     fi
     sleep 2
 done
+
+log "Synchronizing the host offline voice runtime from ${IMAGE_NAME}:${version} ..."
+sync_host_voice_runtime "${IMAGE_NAME}:${version}"
+"${VOICE_INSTALLER}" --if-ready
 
 log "Done. Dashboard is running ${IMAGE_NAME}:${version} on port ${PORT}."
 if [[ -n "${prev_version}" && "${prev_version}" != "${version}" ]]; then

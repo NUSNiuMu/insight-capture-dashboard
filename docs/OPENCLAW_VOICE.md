@@ -62,7 +62,9 @@ scripts/run_voice.sh --echo-once
 
 ## 安装与日志
 
-发布部署包已包含语音入口、安装器和 systemd unit。准备上述模型后执行：
+发布部署包已包含语音入口、安装器和 systemd unit。`update.sh` 会在每次安装或升级时从
+Dashboard 镜像同步最新宿主机语音代码；上述模型已准备好时会自动安装、启用或升级服务，
+并迁移旧的 `looper-openclaw-voice.service`。模型后补时可手动执行：
 
 ```bash
 deploy/install_voice_control_service.sh
