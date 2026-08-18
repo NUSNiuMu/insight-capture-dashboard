@@ -34,12 +34,14 @@ recorder I/O。异常持续超过阈值后，Dashboard 写入当前 Take 的 `an
 
 录音和 ALSA 播放默认使用 `auto`。服务通过 `arecord -L` / `aplay -L` 选择稳定的
 `plughw:CARD=<name>,DEV=<n>`，优先匹配 `LOOPER_AUDIO_DEVICE_HINT`（默认 `E3`），不依赖
-可能随重插变化的 card index。可按设备覆盖：
+可能随重插变化的 card index。PulseAudio 播放同样会按该 hint 自动选择 USB sink，不使用
+可能指向 Jetson 板载声卡的桌面默认输出。可按设备覆盖：
 
 ```bash
 export LOOPER_CAPTURE_DEVICE=plughw:CARD=E3,DEV=0
 export LOOPER_PLAYBACK_DEVICE=plughw:CARD=E3,DEV=0
 export LOOPER_PLAYBACK_BACKEND=alsa   # 默认 pulse
+export LOOPER_PULSE_SINK=alsa_output.usb-...E3...analog-stereo
 ```
 
 ## 本地模型与测试

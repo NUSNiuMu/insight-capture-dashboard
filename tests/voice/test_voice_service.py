@@ -19,6 +19,7 @@ from insight_capture.voice.service import (  # noqa: E402
     capture_check_reply_key,
     clean_utterance_transcript,
     discover_alsa_device,
+    discover_pulse_sink,
     extract_openclaw_reply,
     match_local_command,
     normalize_transcript,
@@ -75,6 +76,19 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             self.assertEqual(
                 discover_alsa_device("capture", "E3"),
                 "plughw:CARD=E3,DEV=0",
+            )
+
+    def test_pulse_auto_discovery_prefers_usb_sink_hint(self):
+        completed = SimpleNamespace(
+            stdout=(
+                "0\talsa_output.platform-sound.analog-stereo\tmodule\n"
+                "1\talsa_output.usb-CF-IC_CF001_E3_2025.analog-stereo\tmodule\n"
+            )
+        )
+        with mock.patch("subprocess.run", return_value=completed):
+            self.assertEqual(
+                discover_pulse_sink("E3"),
+                "alsa_output.usb-CF-IC_CF001_E3_2025.analog-stereo",
             )
 
     def test_missing_openclaw_only_disables_optional_requests(self):
@@ -530,6 +544,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertNotIn("曾经", args.wake_alias)
         self.assertEqual(args.wake_feedback, "speech")
         self.assertEqual(args.playback_backend, "pulse")
+        self.assertEqual(args.pulse_sink, "auto")
         self.assertEqual(args.agent_thinking, "off")
         self.assertEqual(args.dashboard_timeout_sec, 40.0)
 

@@ -359,7 +359,12 @@ class AlsaCapture:
 
 # Keep the service focused on orchestration. These imports intentionally rebind
 # the legacy module-level names so existing callers keep a stable facade.
-from insight_capture.voice.audio import AlsaCapture, discover_alsa_device, wake_tone_wav
+from insight_capture.voice.audio import (
+    AlsaCapture,
+    discover_alsa_device,
+    discover_pulse_sink,
+    wake_tone_wav,
+)
 from insight_capture.voice.commands import (
     LOCAL_COMMAND_ALIASES,
     LOCAL_COMMAND_ENDPOINTS,
@@ -1162,8 +1167,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--pulse-sink",
-        default=os.environ.get("LOOPER_PULSE_SINK", ""),
-        help="Optional PulseAudio sink name; the current default sink is used when empty.",
+        default=os.environ.get("LOOPER_PULSE_SINK", "auto"),
+        help="PulseAudio sink name; auto prefers the stable audio-device hint.",
     )
     parser.add_argument("--sample-rate", type=int, default=16000)
     parser.add_argument("--chunk-frames", type=int, default=4000)
@@ -1280,6 +1285,8 @@ def main() -> int:
         args.device = discover_alsa_device("capture", args.audio_device_hint)
     if args.playback_device == "auto":
         args.playback_device = discover_alsa_device("playback", args.audio_device_hint)
+    if args.playback_backend == "pulse" and args.pulse_sink == "auto":
+        args.pulse_sink = discover_pulse_sink(args.audio_device_hint)
     bridge = VoiceService(args)
     try:
         if args.speak_text is not None:

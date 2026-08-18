@@ -37,6 +37,30 @@ def discover_alsa_device(kind: str, preferred: str = "E3") -> str:
     return next((name for name in stable if hint and hint in name.casefold()), stable[0] if stable else "default")
 
 
+def discover_pulse_sink(preferred: str = "E3") -> str:
+    """Resolve a PulseAudio sink by stable USB identity instead of desktop default."""
+    try:
+        completed = subprocess.run(
+            ["pactl", "list", "short", "sinks"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    sinks = []
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 2:
+            sinks.append(fields[1])
+    hint = str(preferred or "").casefold()
+    return next(
+        (name for name in sinks if hint and hint in name.casefold()),
+        "",
+    )
+
+
 class AlsaCapture:
     def __init__(self, device: str, sample_rate: int, chunk_frames: int) -> None:
         self.device, self.sample_rate, self.chunk_frames = device, sample_rate, chunk_frames
