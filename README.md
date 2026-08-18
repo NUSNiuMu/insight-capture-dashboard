@@ -70,7 +70,7 @@ python3 scripts/multi_camera_dashboard_web.py &
 
 ## 单一配置入口：config/cameras.json
 
-> `config/cameras.json`、`config/post_processing.json`
+> `config/cameras.json`、`config/runtime.json`
 > 是按设备生成的产物（`.gitignore` 掉了），源头是 `config/devices/<name>/`，用
 > `scripts/select_device.sh <name>` 切换/生成——直接改 `config/` 下的文件本身没问题
 > （对当前选中的设备生效），但换设备/长期改动要改回 `config/devices/<name>/` 里的源文件，
@@ -151,7 +151,7 @@ staging 目录原子发布，同时保存 live header/network audit；不分 par
 也不能选择操作者电脑上未挂载进 Dashboard 容器的目录。
 
 输出目录优先级：CLI `--rosbag-dir` >
-环境变量 `INSIGHT_ROSBAG_DIR` > `config/post_processing.json` > 默认 `rosbags`。
+环境变量 `INSIGHT_ROSBAG_DIR` > `config/runtime.json` > 默认 `rosbags`。
 Docker 宿主机目录由 `INSIGHT_ROSBAG_HOST_DIR` 控制；例如在 `.env` 写入
 `INSIGHT_ROSBAG_HOST_DIR=/media/nvidia/INSIGHT_USB/rosbags`，即可将容器录制根目录
 直接绑定到 ext4 U 盘。还可设置 `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`；后端启动时及
@@ -175,28 +175,24 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 | `scripts/run_dashboard.sh` | 统一启动入口，`docker compose up -d` + 健康检查，`--jetson` 额外拉起本机 kiosk 窗口 |
 | `scripts/run_voice_control.sh` / `openclaw_voice_bridge.py` | 离线固定命令、本地 STT/TTS 与可选 OpenClaw adapter |
 | `scripts/multi_camera_dashboard_web.py` | Web dashboard 稳定进程入口与 ROS 生命周期组合 |
-| `scripts/dashboard_web/` / `dashboard_runtime/` | Web API、WebSocket 与 Dashboard 运行时领域实现 |
-| `scripts/dashboard_media/` | 硬件 JPEG 编解码与 WebRTC 流实现 |
+| `insight_capture/runtime/` / `web/` | 现场运行时、Web API 与 WebSocket 实现 |
+| `insight_capture/media/` | viewer 按需启用的 JPEG、preview 与 WebRTC |
 | `scripts/open_web_3d_right.sh` | 本机拉起指向 Web 3D 页面的全屏浏览器 kiosk |
 | `scripts/post_processing.py` | 录制与后处理公共导入的稳定兼容 facade |
-| `scripts/post_processing_core/` | 完整性、评分、录制、恢复、回放、同步、bag catalog 与优化实现 |
-| `scripts/hand_tracking/` | 按 viewer 启用的实时手部 landmark 与夹爪跟踪 |
-| `scripts/handpose/` | 从已有 rosbag 离线提取并管理 Hand pose 结果 |
-| `scripts/webrtc_worker.py` / `hand_overlay_worker.py` | 独立进程中的 WebRTC 编码/信令与 JPEG 手部叠加 |
-| `scripts/insight9_sparse_mapper.py` | Insight9 SuperPoint/SuperGlue 在线稀疏建图与位姿图入口 |
-| `scripts/insight9_dense_mapper.py` | 仅内部验证的 StereoSGBM/VIO 稠密点云入口 |
-| `scripts/insight3_global_localizer.py` | 两路 Insight3 到 Insight9 3D 描述子地图的全局定位与轨迹重建节点 |
-| `scripts/run_mapping_validation_rviz.sh` | 清空上一会话后启动稀疏三相机重定位与 RViz |
+| `insight_capture/postprocess/` | 完整性、评分、回放、同步、WiLoR、LeRobot 与优化实现 |
+| `insight_capture/runtime/mapping/` | Insight9 sparse mapping、Insight3 localization 与 SuperGlue |
+| `tools/mapping_validation/` | Dense Mapping 与 RViz 工程验证入口 |
+| `insight_capture/legacy/` | 历史 SQLite/composite bag 与 UMI Zarr 读取兼容 |
 | `Dockerfile.superglue-validation` | 客户发布与开发共用的 NVIDIA Jetson TensorRT/SuperGlue GPU 镜像 |
 | `scripts/camera_setup.py` | 从 `config/cameras.json` 生成 dashboard 所需 topic |
 | `scripts/reboot_cameras.sh` | 扫描 `169.254.x.x` 网段并批量重启相机 |
 | `scripts/sync_camera_restart.py` | 三相机共同定时重启采集服务并测量图像时间戳差 |
 | `scripts/gripper_tracking.py` / `gripper_calibrate.py` / `gripper_extract.py` | 夹爪张合度识别、标定与 rosbag 离线提取 |
 | `scripts/lerobot_dataset_export.py` / `umi_dataset_export.py` | LeRobot v3 标准归档与 Legacy UMI 数据集导出 |
-| `scripts/ego_lerobot_export.py` / `ego_lerobot/` | 三视角、仅头部手姿的缓存式 Ego LeRobot 交付流水线，支持可插拔手姿模型 |
+| `scripts/ego_lerobot_export.py` / `insight_capture/postprocess/datasets/ego_lerobot/` | 三视角、仅头部手姿的缓存式 Ego LeRobot 交付流水线 |
 | `scripts/traj_score.py` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
 | `web_dashboard/` | Babylon.js Web 前端源码，`npm run build` 生成 `dist/` 静态页面 |
-| `config/post_processing.json` | Web 版 rosbag 默认录制配置（`rosbag_dir` 等） |
+| `config/runtime.json` | 录制、Preflight、Session/Take 和主动 QC 配置 |
 
 新增功能和迁移规则见 [项目结构规范](docs/PROJECT_STRUCTURE.md)。
 
@@ -225,7 +221,7 @@ COLMAP（3.9.1，CUDA sm_87，GUI 关闭）和 `looper-vio-colmap-handoff` 流�
 （COLMAP 3.9.1 的 GPU 参数名、stdbuf 行缓冲让网页日志实时刷新），升级
 该仓库 commit 时需要复核补丁是否仍然适用（见 Dockerfile 内注释）。
 
-部署到新机器后，`config/cameras.json`、`config/post_processing.json`
+部署到新机器后，`config/cameras.json`、`config/runtime.json`
 都是跟**当前这批相机/这台设备**绑定的配置（均由 `select_device.sh`
 从 `config/devices/<name>/` 生成，不是手改的）。换了相机后需要更新命名空间、
 图像流和全局重定位 topic，不能直接沿用另一台设备的配置。

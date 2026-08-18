@@ -1,3 +1,5 @@
 """Compatibility facade for gripper tracking."""
 
-from hand_tracking.gripper import *  # noqa: F401,F403
+from _bootstrap import PROJECT_ROOT
+
+from insight_capture.postprocess.gripper.tracking import *  # noqa: F401,F403

@@ -180,7 +180,7 @@ docker compose --profile mapping-validation build insight9-mapping-rviz
 RViz 仅保留为调试工具。每次清空旧地图并打开 RViz：
 
 ```bash
-scripts/run_mapping_validation_rviz.sh
+tools/mapping_validation/run_validation.sh
 ```
 
 脚本保持在前台，关闭 RViz 后自动收回临时 X11 授权。它会先重建 mapper 和

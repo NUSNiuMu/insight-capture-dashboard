@@ -133,7 +133,8 @@ services:
     command:
       - python3
       - -u
-      - scripts/insight9_sparse_mapper.py
+      - -m
+      - insight_capture.runtime.mapping.insight9_mapper
       - --backend
       - ipc
       - --path-publish-hz
@@ -161,7 +162,8 @@ services:
     command:
       - python3
       - -u
-      - scripts/insight3_global_localizer.py
+      - -m
+      - insight_capture.runtime.mapping.insight3_localizer
       - --image-topic-template
       - /insight_mapping/{name}/infra1/image_rect_raw
       - --path-points

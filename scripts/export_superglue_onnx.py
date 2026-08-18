@@ -7,7 +7,15 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from superglue_tensorrt import export_onnx
+try:
+    from _bootstrap import PROJECT_ROOT
+except ModuleNotFoundError:  # isolated SuperGlue builder image
+    PROJECT_ROOT = None
+
+try:
+    from insight_capture.runtime.mapping.superglue_tensorrt import export_onnx
+except ModuleNotFoundError:  # isolated SuperGlue builder image
+    from superglue_tensorrt import export_onnx
 
 
 def build_parser() -> argparse.ArgumentParser:

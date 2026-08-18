@@ -15,7 +15,7 @@
 ### 设备与 config profile
 
 三台设备（`jetson-nx`/`lite`/`lite-779`）现在共用同一个 `main` 分支，不再各自一个 git
-分支。设备差异收敛到 `config/devices/<name>/{cameras.json,post_processing.json}`
+分支。设备差异收敛到 `config/devices/<name>/{cameras.json,runtime.json}`
 两个文件，`scripts/select_device.sh <name>` 把选中的 profile
 复制成 `config/` 下真正生效的文件（这两个文件本身是 `.gitignore` 掉的本地生成产物）。
 只有 `jetson-nx` 会走 §1 打成正式发布镜像；`lite`/`lite-779` 是开发机专用 profile。
@@ -82,9 +82,9 @@ Dashboard 日常升级包都重复携带同一份 TensorRT/CUDA 内容。
 `scripts/run_dashboard.sh`，以及宿主机一次性调优用的 `scripts/host_setup.sh`
 + `scripts/configure_camera_network.sh` + `scripts/reboot_cameras.sh`
 + `scripts/sync_camera_restart.py`
-+ `scripts/systemd/{insight-camera-network,insight-camera-reboot}.service`
-+ `looper_cli/`。这些文件本身不大，但**它们的内容来自当前
-分支的 `deploy/`、`scripts/`、`looper_cli/` 目录**，改过 `deploy/docker-compose.yml`
++ `deploy/systemd/{insight-camera-network,insight-camera-reboot}.service`
++ `tools/device_cli/`。这些文件本身不大，但**它们的内容来自当前
+分支的 `deploy/`、`scripts/`、`tools/device_cli/` 目录**，改过 `deploy/docker-compose.yml`
 （比如调 shm_size）或 `scripts/host_setup.sh` 一定要在改动落地之后的这个分支上
 重新跑一次 `build_release.sh`，不能沿用旧的部署包。
 
@@ -183,7 +183,7 @@ cd insight_capture
 ```
 
 `main` 现在是唯一的代码分支，三台设备（`jetson-nx`/`lite`/`lite-779`）的差异只体现在
-`config/devices/<name>/{cameras.json,post_processing.json}`——
+`config/devices/<name>/{cameras.json,runtime.json}`——
 `--device <name>` 会先跑一次 `scripts/select_device.sh <name>`，把对应 profile 复制成
 `config/` 下真正生效的文件（已经选过的话这个参数可以省略）。
 

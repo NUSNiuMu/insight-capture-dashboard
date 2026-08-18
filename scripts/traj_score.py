@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Compatibility command for trajectory scoring."""
 
-from post_processing_core.trajectory_scoring import *  # noqa: F401,F403
+from _bootstrap import PROJECT_ROOT
+
+from insight_capture.postprocess.quality.trajectory_score import *  # noqa: F401,F403
 
 
 if __name__ == "__main__":

@@ -12,8 +12,10 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from camera_setup import build_dashboard_config, load_setup
-from post_processing_core.prepared_playback import PreparedPlaybackManager
+from _bootstrap import PROJECT_ROOT
+
+from insight_capture.common.config import build_dashboard_config, load_setup
+from insight_capture.postprocess.bags.synchronization import PreparedPlaybackManager
 
 
 class _RecordingGuard:

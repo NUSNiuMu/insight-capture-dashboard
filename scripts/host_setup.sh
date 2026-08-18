@@ -58,7 +58,7 @@ fi
 
 # ── boot-time camera receive steering ───────────────────────────────────────
 NETWORK_SCRIPT="${SCRIPT_DIR}/configure_camera_network.sh"
-NETWORK_UNIT_SRC="${SCRIPT_DIR}/systemd/insight-camera-network.service"
+NETWORK_UNIT_SRC="${ROOT_DIR}/deploy/systemd/insight-camera-network.service"
 NETWORK_UNIT_DST=/etc/systemd/system/insight-camera-network.service
 NETWORK_UDEV_SRC="${SCRIPT_DIR}/udev/99-insight-camera-rps.rules"
 NETWORK_UDEV_DST=/etc/udev/rules.d/99-insight-camera-rps.rules
@@ -92,7 +92,7 @@ fi
 
 # ── boot-time camera reboot unit ─────────────────────────────────────────────
 # Reboot cameras after host links exist to refresh their DDS participants.
-UNIT_SRC="${SCRIPT_DIR}/systemd/insight-camera-reboot.service"
+UNIT_SRC="${ROOT_DIR}/deploy/systemd/insight-camera-reboot.service"
 UNIT_DST=/etc/systemd/system/insight-camera-reboot.service
 if [[ -f "${UNIT_SRC}" ]]; then
     rendered_unit="$(sed \

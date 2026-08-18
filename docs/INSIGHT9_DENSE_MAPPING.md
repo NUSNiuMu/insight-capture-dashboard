@@ -13,7 +13,7 @@ docker compose --profile mapping-validation up -d --force-recreate \
   insight9-dense-mapper
 ```
 
-`scripts/run_mapping_validation_rviz.sh` 会主动停止该服务，确保默认的三相机
+`tools/mapping_validation/run_validation.sh` 会主动停止该服务，确保默认的三相机
 定位验证不消耗 StereoSGBM 的 CPU 和内存。
 
 ## RViz 图层

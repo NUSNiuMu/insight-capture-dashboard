@@ -11,14 +11,21 @@ import platform
 import shutil
 from pathlib import Path
 
+try:
+    from _bootstrap import PROJECT_ROOT
+except ModuleNotFoundError:  # isolated SuperGlue runtime image
+    PROJECT_ROOT = None
+
 import tensorrt
 
-from superglue_tensorrt_runtime import (
-    CudaRuntime,
-    IMAGE_HEIGHT,
-    IMAGE_WIDTH,
-    OFFICIAL_COMMIT,
-)
+try:
+    from insight_capture.runtime.mapping.superglue_tensorrt_runtime import (
+        CudaRuntime, IMAGE_HEIGHT, IMAGE_WIDTH, OFFICIAL_COMMIT,
+    )
+except ModuleNotFoundError:  # isolated SuperGlue runtime image
+    from superglue_tensorrt_runtime import (
+        CudaRuntime, IMAGE_HEIGHT, IMAGE_WIDTH, OFFICIAL_COMMIT,
+    )
 
 
 ONNX_NAMES = ("superpoint.onnx", "superglue.onnx")

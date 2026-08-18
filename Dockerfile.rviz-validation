@@ -7,4 +7,4 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ros-humble-rviz2 \
     && rm -rf /var/lib/apt/lists/*
 
-CMD ["rviz2", "-d", "/workspaces/insight_capture/config/rviz/insight9_global_localization.rviz"]
+CMD ["rviz2", "-d", "/workspaces/insight_capture/tools/mapping_validation/rviz/insight9_global_localization.rviz"]

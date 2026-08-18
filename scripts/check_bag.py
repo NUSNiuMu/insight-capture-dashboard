@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Compatibility command for rosbag integrity analysis."""
 
-from post_processing_core.integrity import *  # noqa: F401,F403
+from _bootstrap import PROJECT_ROOT
+
+from insight_capture.postprocess.bags.integrity import *  # noqa: F401,F403
 
 
 if __name__ == "__main__":

@@ -7,7 +7,9 @@ import argparse
 import json
 from pathlib import Path
 
-from ego_lerobot import ExportOptions, export_dataset
+from _bootstrap import PROJECT_ROOT
+
+from insight_capture.postprocess.datasets.ego_lerobot import ExportOptions, export_dataset
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

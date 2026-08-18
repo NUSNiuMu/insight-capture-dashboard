@@ -4,7 +4,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLI="python3 ${SCRIPT_DIR}/../looper_cli/looper_cli.py"
+CLI="python3 ${SCRIPT_DIR}/../tools/device_cli/looper_cli.py"
 SYNC_CLI="${SCRIPT_DIR}/sync_camera_restart.py"
 
 sync_phase="${INSIGHT_SYNC_CAMERA_PHASE:-0}"

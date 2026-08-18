@@ -1,3 +1,5 @@
 """Compatibility facade for dashboard WebRTC streams."""
 
-from dashboard_media.webrtc import *  # noqa: F401,F403
+from _bootstrap import PROJECT_ROOT
+
+from insight_capture.media.webrtc import *  # noqa: F401,F403

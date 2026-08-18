@@ -7,7 +7,7 @@
 set -uo pipefail  # NOT -e: one camera's failure must not kill the loop
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLI="python3 ${SCRIPT_DIR}/../looper_cli/looper_cli.py"
+CLI="python3 ${SCRIPT_DIR}/../tools/device_cli/looper_cli.py"
 
 DISCOVERY_TIMEOUT="${INSIGHT_DISCOVERY_TIMEOUT:-40}"
 DISCOVERY_INTERVAL=2

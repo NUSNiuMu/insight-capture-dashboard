@@ -5,7 +5,7 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 voice_root="${LOOPER_VOICE_ROOT:-${XDG_DATA_HOME:-${HOME}/.local/share}/looper-voice}"
 unit_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
 unit_path="${unit_dir}/insight-voice-control.service"
-template="${project_root}/deploy/insight-voice-control.service.in"
+template="${project_root}/deploy/systemd/insight-voice-control.service.in"
 
 if ! PYTHONPATH="${voice_root}/python" python3 -c 'import sherpa_onnx' 2>/dev/null; then
   echo "sherpa-onnx runtime is missing under ${voice_root}/python" >&2

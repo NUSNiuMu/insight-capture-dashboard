@@ -380,7 +380,7 @@ RUN useradd -m -u 1000 -G video,104 -s /bin/bash kiosk \
     && chown -R kiosk:kiosk /opt/firefox-kiosk-profile
 
 # ── GStreamer core + PyGObject for the NVJPEG hardware JPEG path ────────────
-# scripts/dashboard_media/jpeg.py drives nvjpegenc/nvjpegdec through GStreamer. The NVIDIA
+# insight_capture/media/jpeg.py drives nvjpegenc/nvjpegdec through GStreamer. The NVIDIA
 # plugin .so files themselves (libgstnvjpeg.so, libgstnvvidconv.so, ...) are
 # NOT baked in -- the nvidia container runtime injects them from the host per
 # /etc/nvidia-container-runtime/host-files-for-container.d/drivers.csv -- but
@@ -389,7 +389,7 @@ RUN useradd -m -u 1000 -G video,104 -s /bin/bash kiosk \
 # /api/images/capabilities probe shells out to. Kept as its own layer (not in
 # the apt layer at the top) so the cached playwright/pip layers don't rebuild.
 # plugins-bad (webrtcbin/dtls/srtp/h264parse) + nice (ICE) serve the WebRTC
-# camera streams in scripts/dashboard_media/webrtc.py; the H.264 encoder itself is the
+# camera streams in insight_capture/media/webrtc.py; the H.264 encoder itself is the
 # host-injected nvv4l2h264enc. sqlite3 (the CLI) is the .recover salvage tool
 # for power-cut-corrupted recordings (post_processing.py orphan recovery).
 RUN apt-get update && apt-get install -y --no-install-recommends \

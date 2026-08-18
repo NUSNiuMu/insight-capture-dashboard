@@ -466,7 +466,7 @@ U 盘后重启 Dashboard，才会重新选择 U 盘。录制过程中断盘无�
    然后重录一段用 `check_bag.py` 复验；
 3. **softnet/网卡/UDP 都不丢，但多路 raw image 仍缺帧** → 检查 DDS 模式与 IP 分片重组：
    ```bash
-   python3 looper_cli/looper_cli.py --device-base-url http://<相机IP> dds show
+   python3 tools/device_cli/looper_cli.py --device-base-url http://<相机IP> dds show
    sysctl net.ipv4.ipfrag_max_dist     # jetson-nx 应为 4096
    nstat -az IpReasmFails IpReasmTimeout UdpInErrors UdpRcvbufErrors
    ```

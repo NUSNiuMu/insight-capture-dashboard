@@ -46,20 +46,39 @@ for (const [name, buf] of Object.entries(preserved)) {
   fs.writeFileSync(path.join(staticDir, name), buf);
 }
 
-copyFile(path.join(srcDir, "3d.html"), path.join(distDir, "3d.html"));
-copyFile(path.join(srcDir, "sessions.html"), path.join(distDir, "sessions.html"));
-copyFile(path.join(srcDir, "bags.html"), path.join(distDir, "bags.html"));
-copyFile(path.join(srcDir, "umi-dataset.html"), path.join(distDir, "umi-dataset.html"));
-copyFile(path.join(srcDir, "recording.html"), path.join(distDir, "recording.html"));
-copyFile(path.join(srcDir, "scoring.html"), path.join(distDir, "scoring.html"));
-copyFile(path.join(srcDir, "handpose.html"), path.join(distDir, "handpose.html"));
-copyFile(path.join(srcDir, "optimization.html"), path.join(distDir, "optimization.html"));
-copyFile(path.join(srcDir, "settings.html"), path.join(distDir, "settings.html"));
+const pageFiles = [
+  ["review/index.html", "3d.html"],
+  ["sessions/index.html", "sessions.html"],
+  ["storage/index.html", "bags.html"],
+  ["datasets/index.html", "umi-dataset.html"],
+  ["sessions/recording.html", "recording.html"],
+  ["advanced/trajectory/index.html", "scoring.html"],
+  ["advanced/handpose/index.html", "handpose.html"],
+  ["advanced/optimization/index.html", "optimization.html"],
+  ["advanced/system/index.html", "settings.html"],
+];
+for (const [source, target] of pageFiles) {
+  copyFile(path.join(srcDir, source), path.join(distDir, target));
+}
+
+const pageScripts = [
+  ["review/app.js", "spatial.js"],
+  ["sessions/app.js", "sessions.js"],
+  ["storage/app.js", "bags.js"],
+  ["datasets/app.js", "umi-dataset.js"],
+  ["sessions/recording.js", "recording.js"],
+  ["advanced/trajectory/app.js", "scoring.js"],
+  ["advanced/handpose/app.js", "handpose.js"],
+  ["advanced/optimization/app.js", "optimization.js"],
+  ["advanced/system/app.js", "settings.js"],
+];
+for (const [source, target] of pageScripts) {
+  copyFile(path.join(srcDir, source), path.join(staticDir, "pages", target));
+}
 copyTree(path.join(srcDir, "shared"), path.join(staticDir, "shared"));
-copyTree(path.join(srcDir, "camera"), path.join(staticDir, "camera"));
-copyTree(path.join(srcDir, "spatial"), path.join(staticDir, "spatial"));
-copyTree(path.join(srcDir, "handpose"), path.join(staticDir, "handpose"));
-copyTree(path.join(srcDir, "pages"), path.join(staticDir, "pages"));
+copyTree(path.join(srcDir, "review", "camera"), path.join(staticDir, "camera"));
+copyTree(path.join(srcDir, "review", "spatial"), path.join(staticDir, "spatial"));
+copyFile(path.join(srcDir, "advanced", "handpose", "viewer.js"), path.join(staticDir, "handpose", "viewer.js"));
 copyFile(path.join(srcDir, "styles.css"), path.join(staticDir, "styles.css"));
 copyFile(path.join(srcDir, "fonts", "InterVariable.woff2"), path.join(staticDir, "fonts", "InterVariable.woff2"));
 

@@ -42,23 +42,27 @@ log "Assembling deploy bundle..."
 # Keep the installed directory stable; only artifacts and image tags vary.
 bundle_dir="release/${IMAGE_NAME}-deploy"
 rm -rf "${bundle_dir}"
-mkdir -p "${bundle_dir}/scripts/systemd"
+mkdir -p "${bundle_dir}/scripts" "${bundle_dir}/deploy/systemd" "${bundle_dir}/insight_capture" "${bundle_dir}/tools"
 cp deploy/docker-compose.yml deploy/update.sh deploy/README.md "${bundle_dir}/"
 # run_dashboard.sh resolves the compose project root as its parent dir, so it
 # keeps working from <bundle>/scripts/ exactly like from the repo.
 cp scripts/run_dashboard.sh "${bundle_dir}/scripts/"
 cp scripts/openclaw_voice_bridge.py "${bundle_dir}/scripts/"
+cp scripts/_bootstrap.py "${bundle_dir}/scripts/"
+cp insight_capture/__init__.py "${bundle_dir}/insight_capture/"
+cp -r insight_capture/voice "${bundle_dir}/insight_capture/"
 cp scripts/run_voice_control.sh "${bundle_dir}/scripts/"
+cp scripts/run_voice.sh "${bundle_dir}/scripts/"
 cp scripts/run_openclaw_voice.sh "${bundle_dir}/scripts/"
 cp scripts/install_voice_control_service.sh "${bundle_dir}/scripts/"
 cp scripts/install_openclaw_voice_service.sh "${bundle_dir}/scripts/"
-cp deploy/insight-voice-control.service.in "${bundle_dir}/deploy-insight-voice-control.service.in"
-mkdir -p "${bundle_dir}/deploy"
-mv "${bundle_dir}/deploy-insight-voice-control.service.in" \
-    "${bundle_dir}/deploy/insight-voice-control.service.in"
+cp deploy/systemd/insight-voice-control.service.in "${bundle_dir}/deploy/systemd/"
+cp deploy/systemd/openclaw-voice.service.in "${bundle_dir}/deploy/systemd/"
+cp deploy/systemd/insight-capture.service "${bundle_dir}/deploy/systemd/"
 chmod +x "${bundle_dir}/update.sh" \
     "${bundle_dir}/scripts/run_dashboard.sh" \
     "${bundle_dir}/scripts/run_voice_control.sh" \
+    "${bundle_dir}/scripts/run_voice.sh" \
     "${bundle_dir}/scripts/run_openclaw_voice.sh" \
     "${bundle_dir}/scripts/install_voice_control_service.sh" \
     "${bundle_dir}/scripts/install_openclaw_voice_service.sh"
@@ -69,13 +73,12 @@ cp scripts/configure_camera_network.sh "${bundle_dir}/scripts/"
 cp scripts/reboot_cameras.sh "${bundle_dir}/scripts/"
 cp scripts/sync_camera_restart.py "${bundle_dir}/scripts/"
 cp scripts/README.md "${bundle_dir}/scripts/"
-cp scripts/systemd/insight-camera-network.service "${bundle_dir}/scripts/systemd/"
+cp deploy/systemd/insight-camera-network.service "${bundle_dir}/deploy/systemd/"
 mkdir -p "${bundle_dir}/scripts/udev"
 cp scripts/udev/99-insight-camera-rps.rules "${bundle_dir}/scripts/udev/"
-cp scripts/systemd/insight-camera-reboot.service "${bundle_dir}/scripts/systemd/"
-mkdir -p "${bundle_dir}/looper_cli"
-cp -r looper_cli/looper_cli looper_cli/looper_cli.py "${bundle_dir}/looper_cli/"
-find "${bundle_dir}/looper_cli" -name '__pycache__' -type d -exec rm -rf {} +
+cp deploy/systemd/insight-camera-reboot.service "${bundle_dir}/deploy/systemd/"
+cp -r tools/device_cli "${bundle_dir}/tools/"
+find "${bundle_dir}/tools/device_cli" -name '__pycache__' -type d -exec rm -rf {} +
 chmod +x "${bundle_dir}/scripts/host_setup.sh" \
     "${bundle_dir}/scripts/configure_camera_network.sh" \
     "${bundle_dir}/scripts/reboot_cameras.sh" \

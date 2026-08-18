@@ -1,3 +1,5 @@
 """Compatibility facade for the hand-tracking overlay domain."""
 
-from hand_tracking.overlay import *  # noqa: F401,F403
+from _bootstrap import PROJECT_ROOT
+
+from insight_capture.postprocess.gripper.overlay import *  # noqa: F401,F403

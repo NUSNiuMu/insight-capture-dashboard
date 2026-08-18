@@ -1,4 +1,6 @@
 bags/
+!insight_capture/postprocess/bags/
+!insight_capture/postprocess/bags/**
 logs/
 scripts/__pycache__/
 __pycache__/
@@ -23,4 +25,5 @@ gesture/
 # config/devices/<name>/ -- no longer hand-edited per branch.
 config/cameras.json
 config/post_processing.json
+config/runtime.json
 config/.device
