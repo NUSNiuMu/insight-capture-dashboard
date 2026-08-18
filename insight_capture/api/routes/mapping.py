@@ -14,4 +14,6 @@ class MappingRoutes:
 
     async def _handle_reset(self, _request: web.Request) -> web.Response:
         payload = self.context.node.reset_mapping()
+        if not payload["ok"]:
+            payload["speech"] = "校准服务未就绪，请检查建图和重定位服务。"
         return web.json_response(payload, status=200 if payload["ok"] else 503)

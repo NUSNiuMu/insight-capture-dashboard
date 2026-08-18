@@ -53,8 +53,12 @@ elif [[ -n "$(docker compose ps --status running --services 2>/dev/null)" ]]; th
     if [[ "${recording_in_progress}" == "true" ]]; then
         log "Backend is already running with a recording in progress -- not restarting (would kill it). Using the running backend as-is."
     else
-        log "Backend is already running -- restarting for a clean launch..."
-        docker compose restart
+        # Reconcile changed commands, mounts, and environment before reloading
+        # the bind-mounted dashboard code. A plain restart preserves stale
+        # container definitions after a Compose refactor.
+        log "Backend is already running -- reconciling Compose and restarting the dashboard..."
+        docker compose up -d
+        docker compose restart insight-dashboard
     fi
 else
     log "Starting dashboard backend via docker compose..."
@@ -137,7 +141,7 @@ while true; do
     fi
     data_restarts=$(( data_restarts + 1 ))
     log "Not all cameras live within ${ALL_LIVE_WAIT_SEC}s (stale: $(stale_camera_names)) -- restarting backend to recreate the DDS participant (attempt ${data_restarts}/${ALL_LIVE_MAX_RESTARTS})..."
-    docker compose restart
+    docker compose restart insight-dashboard
     wait_for_backend_health
 done
 

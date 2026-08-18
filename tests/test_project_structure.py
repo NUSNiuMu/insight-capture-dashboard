@@ -176,6 +176,11 @@ class ProjectStructureTest(unittest.TestCase):
 
         self.assertEqual(violations, [])
 
+    def test_dashboard_launcher_reconciles_compose_before_restart(self) -> None:
+        source = (ROOT / "deploy" / "run_dashboard.sh").read_text(encoding="utf-8")
+        self.assertIn("docker compose up -d", source)
+        self.assertNotIn("docker compose restart\n", source)
+
 
 if __name__ == "__main__":
     unittest.main()
