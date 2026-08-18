@@ -18,6 +18,7 @@ from .routes.settings import SettingsRoutes
 from .routes.static import StaticRoutes
 from .routes.datasets import UmiExportRoutes
 from .routes.takes import TakeRoutes
+from .routes.tasks import TaskRoutes
 from .websocket import PoseWebSocketService
 
 
@@ -38,6 +39,7 @@ def create_app(context: DashboardContext) -> web.Application:
     runtime = RuntimeRoutes(context)
     sessions = SessionRoutes(context)
     takes = TakeRoutes(context)
+    tasks = TaskRoutes(context)
     playback = PlaybackRoutes(context)
     optimization = OptimizationRoutes(context)
     settings = SettingsRoutes(context)
@@ -66,6 +68,11 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/system/status", runtime._handle_system_status)
     app.router.add_post("/api/system/status", runtime._handle_system_status)
     app.router.add_get("/api/sessions", sessions._handle_list)
+    app.router.add_get("/api/tasks", tasks._handle_list)
+    app.router.add_get("/api/tasks/current", tasks._handle_current)
+    app.router.add_post("/api/tasks/current", tasks._handle_current)
+    app.router.add_post("/api/tasks/current/end", tasks._handle_end)
+    app.router.add_post("/api/tasks/{task_id}/activate", tasks._handle_activate)
     app.router.add_post("/api/takes/current/reject", takes._handle_reject_current)
     app.router.add_get("/api/voice/alerts", runtime._handle_voice_alerts)
     app.router.add_get("/api/recording/topics", recording._handle_recording_topics)

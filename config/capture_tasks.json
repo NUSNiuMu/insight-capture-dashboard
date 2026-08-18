@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "default_task_id": "cup_stacking",
+  "tasks": [
+    {
+      "id": "cup_stacking",
+      "name": "叠杯子",
+      "instruction": "Stack the cups",
+      "capture_profile": "dual_arm_umi",
+      "voice_aliases": ["叠杯子", "杯子堆叠"],
+      "station_check_after_take": true
+    }
+  ]
+}

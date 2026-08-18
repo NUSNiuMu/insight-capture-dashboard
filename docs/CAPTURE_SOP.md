@@ -8,13 +8,22 @@ Insight3 localization、录制存储可写性和剩余空间，以及必要 reco
 
 ## Session / Take
 
-每次录制属于一个 Session 和 Task，并分配递增的 `take_id`。元数据保存在：
+数据按三级组织：Task 表示动作类型，Session 表示一次连续采集批次，Take 表示该批次中的
+一条录制。目前 Task 只有“叠杯子”，配置在 `config/capture_tasks.json`。当天服务重启会
+恢复未结束的 Session；明确结束 Task 后再次开始，才会创建新 Session 并从 Take 1 计数。
+
+现场可直接说“开始任务叠杯子”“当前任务多少条”“结束当前任务”。开始同一个进行中的
+Task 不会清零计数；录制过程中不能切换或结束 Task。每次录制分配递增的 `take_id`，元数据
+保存在：
 
 ```text
 outputs/results/sessions/<session_id>/
   session.json
   takes/take_0001.json
 ```
+
+Session 名称形如 `20260818-cup_stacking-001`，对应的默认 bag 名包含
+`cup_stacking_take_0001`，方便从目录名判断任务和条次。
 
 Take 包含 bag path、起止时间、trigger、quick QC、station check、operator accept/reject、
 reject reason 与 anomaly timeline。说“本条作废”只写入 operator reject，原始 MCAP 永远保留。

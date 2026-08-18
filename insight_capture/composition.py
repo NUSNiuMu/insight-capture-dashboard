@@ -13,6 +13,7 @@ from insight_capture.runtime.anomaly import ActiveQcMonitor, VoiceAlertQueue
 from insight_capture.runtime.preflight import CapturePreflight
 from insight_capture.runtime.recording import RecordingManager
 from insight_capture.runtime.take import SessionTakeStore
+from insight_capture.runtime.tasks import CaptureTaskCatalog
 from insight_capture.services.dataset_export import UmiExportManager
 from insight_capture.services.gripper_extraction import GripperExtractionManager
 from insight_capture.services.scoring import ScoringManager
@@ -117,8 +118,11 @@ def build_runtime_services(
 
     project_root = project_root.resolve()
     results_root = results_root.resolve()
+    task_catalog = CaptureTaskCatalog.load(project_root / "config" / "capture_tasks.json")
     take_store = SessionTakeStore(
-        results_root, runtime_config.get("capture_session")
+        results_root,
+        runtime_config.get("capture_session"),
+        task_catalog=task_catalog,
     )
     bag_library = BagLibrary(
         recording_manager.storage_browse_roots,

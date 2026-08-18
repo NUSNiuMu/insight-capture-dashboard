@@ -34,6 +34,9 @@ class RecordingRoutes:
         payload["disk_space"] = read_disk_space(self.context.recording_manager.rosbag_root)
         take_store = getattr(self.context, "take_store", None)
         payload["current_take"] = take_store.current() if take_store is not None else None
+        payload["task_status"] = (
+            take_store.task_status() if take_store is not None else {"active": True}
+        )
         return web.json_response(payload)
 
     async def _handle_recording_topics(self, _request: web.Request) -> web.Response:
@@ -85,6 +88,15 @@ class RecordingRoutes:
         return web.json_response({**status, "take": take})
 
     async def _start_with_preflight(self, *, topics, bag_name, automation: bool) -> web.Response:
+        take_store = getattr(self.context, "take_store", None)
+        if take_store is not None and not take_store.task_status().get("active"):
+            return web.json_response(
+                {
+                    "error": "No capture task is active.",
+                    "speech": "当前没有数采任务，请先说开始任务叠杯子。",
+                },
+                status=409,
+            )
         preflight_service = getattr(self.context, "capture_preflight", None)
         if preflight_service is not None:
             report = await asyncio.to_thread(
@@ -98,14 +110,29 @@ class RecordingRoutes:
                 )
         else:
             report = None
-        take_store = getattr(self.context, "take_store", None)
-        take = (
-            take_store.reserve_take(
-                bag_name, trigger="voice" if automation else "web"
+        try:
+            take = (
+                take_store.reserve_take(
+                    bag_name, trigger="voice" if automation else "web"
+                )
+                if take_store is not None
+                else None
             )
-            if take_store is not None
-            else None
-        )
+        except RuntimeError as exc:
+            task_active = bool(
+                take_store is not None and take_store.task_status().get("active")
+            )
+            return web.json_response(
+                {
+                    "error": str(exc),
+                    "speech": (
+                        "当前已有一条正在处理中。"
+                        if task_active
+                        else "当前没有数采任务，请先说开始任务叠杯子。"
+                    ),
+                },
+                status=409,
+            )
         actual_name = take["bag_name"] if take is not None else bag_name
         if automation and not actual_name:
             actual_name = time.strftime("looper_record_%Y%m%d_%H%M%S")

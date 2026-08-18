@@ -13,6 +13,10 @@ Dashboard 容器不挂载 `/dev/snd`。固定命令的完整链路为：
 
 ## 固定离线命令
 
+- 开始任务叠杯子：进入当前唯一的“叠杯子” Task；若已经在该 Task 中，只播报当前进度，
+  不重置 Session 或 Take 编号；
+- 当前任务多少条：播报当前 Task、当前 Session 已录制/有效/作废条数，以及下一条编号；
+- 结束当前任务：结束本批 Session；录制中拒绝执行，再次开始同一 Task 会新建 Session；
 - 开始录制：先运行三相机、定位、存储、必要 topics 与数据新鲜度 Preflight；失败时
   拒绝开始并直接播报原因；
 - 停止录制：等待原生 MCAP recorder 排空，并写入 Take quick QC；

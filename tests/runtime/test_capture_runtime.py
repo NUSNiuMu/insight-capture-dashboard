@@ -18,6 +18,7 @@ from insight_capture.runtime.payloads import PayloadBuilder
 from insight_capture.runtime.ros.node import PoseBridgeNode
 from insight_capture.runtime.ros.topics import playback_topic
 from insight_capture.runtime.take import SessionTakeStore
+from insight_capture.runtime.tasks import CaptureTask, CaptureTaskCatalog
 
 
 class _Manager:
@@ -206,6 +207,47 @@ class CaptureRuntimeTest(unittest.TestCase):
             rejected = store.reject_current("operator_rejected")
             self.assertFalse(rejected["operator_valid"])
             self.assertTrue((bag / "data.mcap").is_file())
+
+    def test_capture_task_session_persists_counts_and_starts_new_batch(self):
+        catalog = CaptureTaskCatalog(
+            [
+                CaptureTask(
+                    task_id="cup_stacking",
+                    name="叠杯子",
+                    instruction="Stack the cups",
+                    capture_profile="dual_arm_umi",
+                    voice_aliases=("叠杯子",),
+                    station_check_after_take=True,
+                )
+            ],
+            default_task_id="cup_stacking",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = SessionTakeStore(root, task_catalog=catalog)
+            first_session = store.session_id
+            self.assertRegex(first_session, r"^\d{8}-cup_stacking-001$")
+            take = store.reserve_take()
+            self.assertTrue(take["bag_name"].startswith("cup_stacking_take_0001_"))
+            store.mark_recording(root / "bags" / take["bag_name"])
+            store.complete_current({"output_path": take["bag_name"]})
+
+            status = store.task_status()
+            self.assertEqual(status["stats"]["recorded_takes"], 1)
+            self.assertEqual(status["stats"]["valid_takes"], 1)
+            self.assertEqual(status["stats"]["next_take_id"], 2)
+
+            restored = SessionTakeStore(root, task_catalog=catalog)
+            self.assertEqual(restored.session_id, first_session)
+            self.assertEqual(restored.task_status()["stats"]["recorded_takes"], 1)
+            restored.end_task()
+            self.assertFalse(restored.task_status()["active"])
+            with self.assertRaisesRegex(RuntimeError, "No capture task"):
+                restored.reserve_take()
+
+            restarted = restored.activate_task("cup_stacking")
+            self.assertRegex(restarted["session_id"], r"^\d{8}-cup_stacking-002$")
+            self.assertEqual(restarted["stats"]["next_take_id"], 1)
 
     def test_sustained_camera_fault_records_anomaly_and_voice_alert(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -2,6 +2,7 @@ import { escapeHtml } from "../shared/format.js";
 
 const recordingPanel = document.getElementById("recording-panel");
 const recordingStatus = document.getElementById("recording-status");
+const recordingTaskStatus = document.getElementById("record-task-status");
 const storageSpacePill = document.getElementById("storage-space-pill");
 const startRecordingButton = document.getElementById("start-recording-button");
 const stopRecordingButton = document.getElementById("stop-recording-button");
@@ -21,6 +22,7 @@ const selectRecordingDirectoryButton = document.getElementById("select-recording
 
 let recordingBusy = false;
 let recordingActive = false;
+let taskActive = true;
 let recordTopicRefreshBusy = false;
 let selectedRecordTopics = new Set();
 let knownRecordTopics = new Set();
@@ -443,6 +445,15 @@ function renderRecordingStatus(status) {
   const finalizing = mergeState === "merging" || mergeState === "finalizing";
   const mergeTimings = (status && status.merge_timings) || {};
   recordingActive = active;
+  const taskStatus = status && status.task_status;
+  taskActive = !taskStatus || taskStatus.active !== false;
+  if (recordingTaskStatus) {
+    const task = taskStatus && taskStatus.task;
+    const stats = (taskStatus && taskStatus.stats) || {};
+    recordingTaskStatus.textContent = taskActive
+      ? `${task?.name || "Current task"} · ${Number(stats.recorded_takes || 0)} recorded · next take ${Number(stats.next_take_id || 1)}`
+      : "No active task · say ‘开始任务叠杯子’";
+  }
   const outputPath = (status && status.output_path) || "";
   if (recordingStatus) {
     if (active) {
@@ -524,7 +535,7 @@ function setRecordingBusy(isBusy, { active, finalizing = false } = {}) {
   recordingBusy = Boolean(isBusy);
   const isActive = typeof active === "boolean" ? active : Boolean(recordingStatus && recordingStatus.textContent.startsWith("Recording to "));
   if (startRecordingButton) {
-    startRecordingButton.disabled = recordingBusy || isActive || finalizing;
+    startRecordingButton.disabled = recordingBusy || isActive || finalizing || !taskActive;
     startRecordingButton.classList.toggle("is-busy", (recordingBusy && !isActive) || finalizing);
   }
   if (stopRecordingButton) {

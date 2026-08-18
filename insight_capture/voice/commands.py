@@ -12,6 +12,22 @@ LOCAL_COMMAND_ALIASES = {
     "capture_reference": ("设置检测位", "记录检测位", "保存检测位"),
     "system_status": ("系统状态", "检查系统", "数采状态"),
     "take_reject": ("本条作废", "这条作废", "作废本条"),
+    "task_cup_stacking_start": (
+        "开始任务叠杯子",
+        "开始叠杯子任务",
+        "切换任务叠杯子",
+        "切换到叠杯子",
+    ),
+    "task_status": (
+        "当前任务",
+        "任务状态",
+        "查询当前任务",
+        "当前任务多少条",
+        "当前任务有多少条",
+        "叠杯子多少条",
+        "叠杯子录了多少条",
+    ),
+    "task_end": ("结束当前任务", "结束任务", "完成当前任务"),
 }
 
 LOCAL_COMMAND_ENDPOINTS = {
@@ -22,6 +38,9 @@ LOCAL_COMMAND_ENDPOINTS = {
     "capture_reference": "/api/capture-check/reference",
     "system_status": "/api/system/status",
     "take_reject": "/api/takes/current/reject",
+    "task_cup_stacking_start": "/api/tasks/cup_stacking/activate",
+    "task_status": "/api/tasks/current",
+    "task_end": "/api/tasks/current/end",
 }
 
 LOCAL_COMMAND_REPLY_KEYS = {
@@ -32,6 +51,9 @@ LOCAL_COMMAND_REPLY_KEYS = {
     "capture_reference": "capture_reference_saved",
     "system_status": "dynamic_reply",
     "take_reject": "dynamic_reply",
+    "task_cup_stacking_start": "dynamic_reply",
+    "task_status": "dynamic_reply",
+    "task_end": "dynamic_reply",
 }
 
 

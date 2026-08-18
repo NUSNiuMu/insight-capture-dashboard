@@ -802,7 +802,13 @@ class VoiceService:
             return capture_check_reply_key(payload)
         if action == "capture_reference":
             return capture_check_reply_key(payload, reference=True)
-        if action in {"system_status", "take_reject"}:
+        if action in {
+            "system_status",
+            "take_reject",
+            "task_cup_stacking_start",
+            "task_status",
+            "task_end",
+        }:
             self._pending_spoken_reply = str(payload.get("speech") or "").strip()
             if not self._pending_spoken_reply:
                 raise RuntimeError("Dashboard returned no spoken status")

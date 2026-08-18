@@ -165,7 +165,8 @@ Docker 宿主机目录由 `INSIGHT_ROSBAG_HOST_DIR` 控制；例如在 `.env` �
 `storage.fallback_reason` 会显示实际写入位置与回退原因。
 
 声控统一使用宿主机上的 [Insight 离线语音控制](docs/OPENCLAW_VOICE.md)。SenseVoice、
-VAD 与 Piper 在本地完成“开始/停止录制、开始校准、检查相机、系统状态、本条作废”等
+VAD 与 Piper 在本地完成“开始任务叠杯子、当前任务多少条、结束当前任务、开始/停止录制、
+开始校准、检查相机、系统状态、本条作废”等
 固定命令；开始前自动执行 Preflight，不满足时拒绝并播报原因。OpenClaw 只处理唤醒词
 后的非固定自然语言，未安装或断网不影响固定命令。
 
@@ -197,6 +198,7 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 | `insight_capture.postprocess.quality.trajectory_score` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
 | `web_dashboard/` | Babylon.js Web 前端源码，`npm run build` 生成 `dist/` 静态页面 |
 | `config/runtime.json` | 录制、Preflight、Session/Take 和主动 QC 配置 |
+| `config/capture_tasks.json` | Task 名称、导出指令、采集 profile 与默认任务 |
 
 新增功能和迁移规则见 [项目结构规范](docs/PROJECT_STRUCTURE.md)。
 

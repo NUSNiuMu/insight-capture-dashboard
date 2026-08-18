@@ -21,12 +21,15 @@ async function refresh() {
 function render(payload) {
   const session = payload.session || {};
   const takes = Array.isArray(payload.takes) ? payload.takes : [];
+  const stats = payload.stats || {};
   const accepted = takes.filter((take) => take.operator_valid !== false && take.quick_qc?.state === "pass").length;
   const suspect = takes.filter((take) => take.operator_valid !== false && take.quick_qc?.state === "suspect").length;
   const rejected = takes.filter((take) => take.operator_valid === false).length;
-  title.textContent = session.task && session.task !== "unspecified" ? session.task : "Capture sessions";
-  summary.innerHTML = [["Session", session.session_id || "--"], ["Takes", takes.length], ["Quick pass", accepted], ["Suspect", suspect], ["Rejected", rejected]].map(([label, value]) => `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join("");
-  status.textContent = `${takes.length} take${takes.length === 1 ? "" : "s"}`;
+  title.textContent = session.active === false
+    ? "No active task"
+    : (session.task_name || session.task || "Capture sessions");
+  summary.innerHTML = [["Task", session.task_name || "--"], ["Session", session.session_id || "--"], ["Recorded", Number(stats.recorded_takes || 0)], ["Next take", Number(stats.next_take_id || 1)], ["Quick pass", accepted], ["Suspect", suspect], ["Rejected", rejected]].map(([label, value]) => `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>`).join("");
+  status.textContent = `${Number(stats.recorded_takes || 0)} recorded take${Number(stats.recorded_takes || 0) === 1 ? "" : "s"}`;
   if (!takes.length) {
     list.innerHTML = '<div class="empty-state">No takes recorded in this session yet.</div>';
     return;

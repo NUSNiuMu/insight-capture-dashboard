@@ -57,6 +57,12 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(match_local_command("请设置检测位"), "capture_reference")
         self.assertEqual(match_local_command("系统状态"), "system_status")
         self.assertEqual(match_local_command("请本条作废"), "take_reject")
+        self.assertEqual(
+            match_local_command("开始任务叠杯子"),
+            "task_cup_stacking_start",
+        )
+        self.assertEqual(match_local_command("当前任务多少条"), "task_status")
+        self.assertEqual(match_local_command("结束当前任务"), "task_end")
         self.assertIsNone(match_local_command("设置批次基准"))
         self.assertIsNone(match_local_command("开始录制前先检查磁盘"))
         self.assertIsNone(match_local_command("现在是否正在录制"))
@@ -292,6 +298,27 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(
             bridge._last_local_command_timing["dashboard_start_timings"]["total_sec"],
             2.7,
+        )
+
+    def test_task_status_uses_deterministic_local_endpoint_and_dynamic_reply(self):
+        bridge = OpenClawVoiceBridge(
+            SimpleNamespace(
+                dashboard_url="http://127.0.0.1:8765",
+                dashboard_timeout_sec=7.0,
+            )
+        )
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            "{\"speech\": \"当前任务是叠杯子，本批已录制3条。\"}"
+        ).encode()
+        with mock.patch("urllib.request.urlopen", return_value=response) as urlopen:
+            reply_key = bridge.execute_local_command("task_status")
+
+        self.assertEqual(reply_key, "dynamic_reply")
+        self.assertEqual(bridge._pending_spoken_reply, "当前任务是叠杯子，本批已录制3条。")
+        self.assertEqual(
+            urlopen.call_args.args[0].full_url,
+            "http://127.0.0.1:8765/api/tasks/current",
         )
 
     def test_local_recording_emits_end_to_end_timing(self):
