@@ -54,7 +54,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(match_local_command("帮我重新校准一下"), "calibration_start")
         self.assertEqual(match_local_command("检查相机"), "capture_check")
         self.assertEqual(match_local_command("请设置检测位"), "capture_reference")
-        self.assertEqual(match_local_command("设置批次基准"), "capture_reference")
+        self.assertIsNone(match_local_command("设置批次基准"))
         self.assertIsNone(match_local_command("开始录制前先检查磁盘"))
         self.assertIsNone(match_local_command("现在是否正在录制"))
 

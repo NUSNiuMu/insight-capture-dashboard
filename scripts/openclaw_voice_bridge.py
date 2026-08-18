@@ -54,7 +54,7 @@ LOCAL_COMMAND_ALIASES = {
     ),
     "calibration_start": ("开始校准", "重新校准", "重置校准"),
     "capture_check": ("检查相机", "开始检测", "位置检测", "检测相机"),
-    "capture_reference": ("设置检测位", "记录检测位", "保存检测位", "设置批次基准"),
+    "capture_reference": ("设置检测位", "记录检测位", "保存检测位"),
 }
 LOCAL_COMMAND_ENDPOINTS = {
     "recording_start": "/api/automation/recording/start",
@@ -78,12 +78,12 @@ CANNED_REPLIES = {
     "calibration_started": "校准已经开始。",
     "calibration_completed": "校准完成。",
     "capture_check_started": "开始检测。",
-    "capture_reference_saved": "双手检测位和头部相机批次地图基准已经记录。",
+    "capture_reference_saved": "双手检测位和头部相机地图基准已经记录。",
     "capture_check_pass": "双手相机位置和头部相机地图闭环正常，可以开始下一次采集。",
     "capture_check_retry": "检测尚未通过。请确认左右手相机完全归位，并用头部相机扫视已建图工作区，然后再说检查相机。",
-    "capture_check_recalibrate": "相机位置或头部地图闭环异常。请说开始校准，完成后重新设置批次基准。",
+    "capture_check_recalibrate": "相机位置或头部地图闭环异常。请说开始校准，完成后重新设置检测位。",
     "capture_check_not_ready": "检测条件未满足。请确认左右手相机已经静止，头部相机和两路全局定位服务在线。",
-    "capture_check_no_reference": "还没有批次基准。请放好左右手相机，确认建图完成，然后说设置批次基准。",
+    "capture_check_no_reference": "还没有检测位基准。请放好左右手相机，确认建图完成，然后说设置检测位。",
     "recording_already_active": "当前已经在录制。",
     "command_failed": "指令执行失败，请检查数采服务。",
 }

@@ -290,7 +290,7 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 短暂扫视已建图工作区，然后说“检查相机”。系统先播报“开始检测”，再比较两台 Insight3
 的固定 Pose，并要求 Insight9 相对批次开始时冻结的自然特征地图产生一条新闭环；闭环校正量
 用于判断头部 VIO 是否漂移。结果按 PASS/复检/重校准分级并关联到最近一条 bag。首次部署
-治具或开始新地图 session 时，由标定负责人确认校准正确后说“设置批次基准”。详见
+治具或开始新地图 session 时，由标定负责人确认校准正确后说“设置检测位”。详见
 [叠杯批量数据采集标准作业规范](CUP_STACKING_DATA_COLLECTION_SOP.md)。
 回复会从 USB 音响播出；服务
 每次启动会把 USB PCM 音量恢复到 50%。开始/停止属于有

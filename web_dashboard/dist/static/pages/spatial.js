@@ -339,7 +339,7 @@ async function setCaptureReference() {
     renderCaptureCheck(await response.json());
   } finally {
     captureReferenceButton.disabled = false;
-    captureReferenceButton.textContent = "Set batch reference";
+    captureReferenceButton.textContent = "Set station";
   }
 }
 
@@ -350,8 +350,8 @@ function renderCaptureCheck(payload) {
     pass: "Episode check PASS",
     retry: "Reseat hands or rescan scene",
     recalibrate: "Recalibration required",
-    reference_saved: "Batch reference saved",
-    no_reference: "Batch reference required",
+    reference_saved: "Station reference saved",
+    no_reference: "Station reference required",
     ready: "Ready for episode check",
     not_ready: "Waiting for hand stations and mapping",
     disabled: "Episode check disabled",
