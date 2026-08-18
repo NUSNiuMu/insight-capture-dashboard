@@ -10,7 +10,7 @@ def task_status_speech(status: dict) -> str:
         return "当前没有进行中的数采任务。请先说开始任务叠杯子。"
     task = status.get("task") or {}
     stats = status.get("stats") or {}
-    name = str(task.get("name") or "未命名任务")
+    name = str(task.get("speech_name") or task.get("name") or "未命名任务")
     recorded = int(stats.get("recorded_takes") or 0)
     valid = int(stats.get("valid_takes") or 0)
     rejected = int(stats.get("rejected_takes") or 0)
@@ -46,9 +46,17 @@ class TaskRoutes:
             and (previous.get("task") or {}).get("task_id") == task_id
             and previous.get("session_id") == status.get("session_id")
         )
-        speech = task_status_speech(status) if unchanged else (
-            f"已进入{(status.get('task') or {}).get('name', '数采')}任务，"
-            f"下一条是第{(status.get('stats') or {}).get('next_take_id', 1)}条。"
+        active_task = status.get("task") or {}
+        speech_name = active_task.get("speech_name") or active_task.get(
+            "name", "数采"
+        )
+        speech = (
+            task_status_speech(status)
+            if unchanged
+            else (
+                f"已进入{speech_name}任务，"
+                f"下一条是第{(status.get('stats') or {}).get('next_take_id', 1)}条。"
+            )
         )
         return web.json_response({**status, "changed": not unchanged, "speech": speech})
 
@@ -61,7 +69,12 @@ class TaskRoutes:
         previous = self.context.take_store.task_status()
         if not previous.get("active"):
             return web.json_response({**previous, "speech": task_status_speech(previous)})
-        name = str((previous.get("task") or {}).get("name") or "当前")
+        previous_task = previous.get("task") or {}
+        name = str(
+            previous_task.get("speech_name")
+            or previous_task.get("name")
+            or "当前"
+        )
         recorded = int((previous.get("stats") or {}).get("recorded_takes") or 0)
         status = self.context.take_store.end_task()
         return web.json_response(

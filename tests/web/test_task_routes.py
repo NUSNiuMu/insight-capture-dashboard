@@ -27,7 +27,8 @@ def _catalog() -> CaptureTaskCatalog:
         [
             CaptureTask(
                 task_id="cup_stacking",
-                name="叠杯子",
+                name="Cup stacking",
+                speech_name="叠杯子",
                 instruction="Stack the cups",
                 capture_profile="dual_arm_umi",
                 voice_aliases=("叠杯子",),
@@ -55,7 +56,7 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
             response = await routes._handle_current(None)
             payload = json.loads(response.text)
 
-            self.assertEqual(payload["task"]["name"], "叠杯子")
+            self.assertEqual(payload["task"]["name"], "Cup stacking")
             self.assertEqual(payload["stats"]["recorded_takes"], 1)
             self.assertEqual(payload["stats"]["next_take_id"], 2)
             self.assertIn("已录制1条", payload["speech"])

@@ -12,6 +12,7 @@ from typing import Dict, Iterable, Optional
 class CaptureTask:
     task_id: str
     name: str
+    speech_name: str
     instruction: str
     capture_profile: str
     voice_aliases: tuple[str, ...]
@@ -21,6 +22,7 @@ class CaptureTask:
         return {
             "task_id": self.task_id,
             "name": self.name,
+            "speech_name": self.speech_name,
             "instruction": self.instruction,
             "capture_profile": self.capture_profile,
             "voice_aliases": list(self.voice_aliases),
@@ -68,6 +70,7 @@ class CaptureTaskCatalog:
                 CaptureTask(
                     task_id=task_id,
                     name=name,
+                    speech_name=str(raw.get("speech_name") or name).strip(),
                     instruction=instruction,
                     capture_profile=str(raw.get("capture_profile") or "").strip(),
                     voice_aliases=aliases,

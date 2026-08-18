@@ -452,7 +452,7 @@ function renderRecordingStatus(status) {
     const stats = (taskStatus && taskStatus.stats) || {};
     recordingTaskStatus.textContent = taskActive
       ? `${task?.name || "Current task"} · ${Number(stats.recorded_takes || 0)} recorded · next take ${Number(stats.next_take_id || 1)}`
-      : "No active task · say ‘开始任务叠杯子’";
+      : "No active task · start Cup stacking by voice";
   }
   const outputPath = (status && status.output_path) || "";
   if (recordingStatus) {

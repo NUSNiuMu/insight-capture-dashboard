@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+import re
 import unittest
 
 
@@ -151,6 +153,28 @@ class ProjectStructureTest(unittest.TestCase):
             [node.name for node in module.body if isinstance(node, ast.ClassDef)]
         )
         self.assertLessEqual(len(source.splitlines()), 200)
+
+    def test_frontend_source_and_task_labels_are_english_only(self) -> None:
+        han = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+        violations = []
+        frontend_root = ROOT / "web_dashboard" / "src"
+        for path in frontend_root.rglob("*"):
+            if path.suffix not in {".css", ".html", ".js"}:
+                continue
+            for line_number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                if han.search(line):
+                    violations.append(f"{path.relative_to(ROOT)}:{line_number}")
+
+        task_config = json.loads(
+            (ROOT / "config" / "capture_tasks.json").read_text(encoding="utf-8")
+        )
+        for task in task_config.get("tasks", []):
+            if han.search(str(task.get("name") or "")):
+                violations.append(f"config/capture_tasks.json:{task.get('id')}:name")
+
+        self.assertEqual(violations, [])
 
 
 if __name__ == "__main__":

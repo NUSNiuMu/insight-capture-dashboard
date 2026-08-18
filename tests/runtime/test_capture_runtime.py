@@ -213,7 +213,8 @@ class CaptureRuntimeTest(unittest.TestCase):
             [
                 CaptureTask(
                     task_id="cup_stacking",
-                    name="叠杯子",
+                    name="Cup stacking",
+                    speech_name="叠杯子",
                     instruction="Stack the cups",
                     capture_profile="dual_arm_umi",
                     voice_aliases=("叠杯子",),
