@@ -25,7 +25,8 @@ Post-capture
 subprocess 或数据集路由逻辑。
 SQLite/composite 只保留历史数据兼容，新录制不得依赖它们。
 
-`runtime/app.py` 只负责解析启动参数、组装 node/recorder/API 和关闭生命周期；
+`runtime/app.py` 只负责解析启动参数、触发进程级服务组装并关闭生命周期；跨越
+runtime、postprocess、services 和 API 的组装细节集中在 `insight_capture/composition.py`。
 `runtime/bootstrap.py` 解析现场路径并创建 recorder，ROS node 实现在
 `runtime/ros/node.py`。图像、录制、mapping、payload 和 worker 的具体工作继续委托给
 各自模块，不能重新堆回入口。

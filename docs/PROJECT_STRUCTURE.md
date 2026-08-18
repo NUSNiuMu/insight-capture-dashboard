@@ -7,6 +7,7 @@
 
 ```text
 insight_capture/
+  composition.py             进程级 composition root，组装 runtime/postprocess/services/API
   core/                    最底层 models、paths、config、性能工具
   runtime/                 现场录制、Preflight、Session/Take、主动 QC、建图定位
     app.py                 仅负责配置、服务组装和进程生命周期
@@ -17,7 +18,7 @@ insight_capture/
   voice/                   离线固定命令、ALSA、SenseVoice/VAD、Piper、可选 OpenClaw
   perception/
     gripper/               在线/离线共用的 marker tracking、hand overlay、calibration
-  quality/                 在线与采后共用的 capture gate
+  quality/                 在线与采后共用的 capture gate、topic rate 目录
   media/                   viewer 出现后才工作的 JPEG、preview、WebRTC worker
   services/                dataset export、scoring、gripper extraction 任务编排
   api/                     aiohttp app、context、WebSocket 和薄 routes

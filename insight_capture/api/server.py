@@ -2,12 +2,9 @@
 
 import asyncio
 import threading
-from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from aiohttp import web
-
-from insight_capture.runtime.recording import RecordingManager
 
 from .app import create_app
 from .context import DashboardContext
@@ -16,21 +13,11 @@ from .context import DashboardContext
 class WebDashboardServer:
     def __init__(
         self,
-        node: Any,
+        context: DashboardContext,
         host: str,
         port: int,
-        web_root: Optional[Path],
-        project_root: Path,
-        recording_manager: RecordingManager,
-        results_root: Path,
     ) -> None:
-        self.context = DashboardContext(
-            node=node,
-            web_root=web_root,
-            project_root=project_root,
-            recording_manager=recording_manager,
-            results_root=results_root,
-        )
+        self.context = context
         self.host = host
         self.port = int(port)
         self._loop = asyncio.new_event_loop()

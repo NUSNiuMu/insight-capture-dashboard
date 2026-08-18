@@ -47,9 +47,6 @@ def create_app(context: DashboardContext) -> web.Application:
     async def handle_health(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "fake_pose": context.node.fake_pose})
 
-    async def stop_active_qc(_app: web.Application) -> None:
-        context.active_qc.stop()
-
     app.router.add_get("/ws", websocket._handle_ws)
     app.router.add_get("/healthz", handle_health)
     app.router.add_get("/api/cameras", cameras._handle_camera_snapshot)
@@ -159,6 +156,5 @@ def create_app(context: DashboardContext) -> web.Application:
     app.on_shutdown.append(umi_export._on_shutdown)
     app.on_shutdown.append(handpose._on_shutdown)
     app.on_shutdown.append(playback._on_shutdown)
-    app.on_shutdown.append(stop_active_qc)
     app.on_shutdown.append(websocket._on_shutdown)
     return app

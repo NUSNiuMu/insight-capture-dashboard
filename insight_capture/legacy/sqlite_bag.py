@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from insight_capture.postprocess.bags.integrity import nominal_for
+from insight_capture.quality.topic_rates import nominal_for
 
 try:
     import yaml

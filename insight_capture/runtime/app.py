@@ -19,6 +19,7 @@ except Exception:  # pragma: no cover - help and import work outside ROS
     MultiThreadedExecutor = None
 
 from insight_capture.api import WebDashboardServer
+from insight_capture.api.context import DashboardContext
 from insight_capture.core.paths import PROJECT_ROOT, runtime_config_path
 from insight_capture.runtime.bootstrap import (
     RuntimeSettings,
@@ -26,6 +27,7 @@ from insight_capture.runtime.bootstrap import (
     configure_crash_diagnostics,
     load_runtime_settings,
 )
+from insight_capture.composition import build_runtime_services
 from insight_capture.runtime.ros import PoseBridgeNode, make_image_qos, make_qos
 
 __all__ = [
@@ -141,15 +143,22 @@ def main() -> None:
     spin_thread.start()
 
     web_root = Path(args.web_root) if args.web_root else None
-    server = WebDashboardServer(
-        node,
-        args.host,
-        args.port,
-        web_root,
-        node.project_root,
-        recording_manager,
-        settings.results_root,
+    services = build_runtime_services(
+        node=node,
+        project_root=node.project_root,
+        recording_manager=recording_manager,
+        results_root=settings.results_root,
+        runtime_config=settings.runtime_config,
     )
+    context = DashboardContext(
+        node=node,
+        web_root=web_root.resolve() if web_root else None,
+        project_root=node.project_root.resolve(),
+        recording_manager=recording_manager,
+        results_root=settings.results_root.resolve(),
+        **services.dashboard_dependencies(),
+    )
+    server = WebDashboardServer(context, args.host, args.port)
     server.start()
 
     try:
@@ -159,10 +168,9 @@ def main() -> None:
         pass
     finally:
         server.stop()
+        services.active_qc.stop()
         executor.shutdown()
-        node._preview_manager.close()
-        node.stop_webrtc_worker()
-        node.stop_hand_overlay_worker()
+        node.close()
         node.destroy_node()
         with contextlib.suppress(Exception):
             rclpy.shutdown()

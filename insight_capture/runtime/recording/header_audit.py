@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from insight_capture.postprocess.bags.integrity import nominal_for
+from insight_capture.quality.topic_rates import nominal_for
 
 
 class RecordingBridge:

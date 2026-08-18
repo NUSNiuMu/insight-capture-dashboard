@@ -97,5 +97,8 @@ def read_disk_space(path: Path) -> Dict[str, object]:
 
 
 def bagplay_topic(topic: str) -> str:
-    """Return the isolated playback topic for a live ROS topic."""
-    return f"/bagplay{topic}"
+    """Retain the legacy API helper while delegating to the ROS mapping."""
+
+    from insight_capture.runtime.ros.topics import playback_topic
+
+    return playback_topic(topic)

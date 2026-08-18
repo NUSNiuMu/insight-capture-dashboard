@@ -15,6 +15,8 @@ from insight_capture.media.image_pipeline import ImagePipeline
 from insight_capture.runtime.preflight import CapturePreflight
 from insight_capture.media.preview_manager import PreviewManager
 from insight_capture.runtime.payloads import PayloadBuilder
+from insight_capture.runtime.ros.node import PoseBridgeNode
+from insight_capture.runtime.ros.topics import playback_topic
 from insight_capture.runtime.take import SessionTakeStore
 
 
@@ -36,6 +38,21 @@ class _Manager:
 
 
 class CaptureRuntimeTest(unittest.TestCase):
+    def test_playback_topic_is_owned_by_ros_runtime(self):
+        self.assertEqual(playback_topic("/camera/image"), "/bagplay/camera/image")
+
+    def test_node_close_releases_owned_media_resources(self):
+        calls = []
+        node = SimpleNamespace(
+            _preview_manager=SimpleNamespace(close=lambda: calls.append("preview")),
+            stop_webrtc_worker=lambda: calls.append("webrtc"),
+            stop_hand_overlay_worker=lambda: calls.append("hand_overlay"),
+        )
+
+        PoseBridgeNode.close(node)
+
+        self.assertEqual(calls, ["preview", "webrtc", "hand_overlay"])
+
     def test_pose_payload_keeps_configured_3d_model(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

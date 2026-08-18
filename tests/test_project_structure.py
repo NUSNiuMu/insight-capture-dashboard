@@ -94,6 +94,46 @@ class ProjectStructureTest(unittest.TestCase):
                     violations.append(f"{path.relative_to(ROOT)}: {forbidden}")
         self.assertEqual(violations, [])
 
+    def test_runtime_modules_respect_delivery_and_postprocess_boundaries(self) -> None:
+        violations = []
+        runtime_root = ROOT / "insight_capture" / "runtime"
+        composition_root = runtime_root / "app.py"
+        forbidden_imports = ("insight_capture.api", "insight_capture.postprocess")
+        for path in runtime_root.rglob("*.py"):
+            if path == composition_root:
+                continue
+            source = path.read_text(encoding="utf-8")
+            for forbidden in forbidden_imports:
+                if forbidden in source:
+                    violations.append(f"{path.relative_to(ROOT)}: {forbidden}")
+        self.assertEqual(violations, [])
+
+    def test_dashboard_context_only_stores_injected_dependencies(self) -> None:
+        from insight_capture.api.context import DashboardContext
+
+        dependency = object()
+        context = DashboardContext(
+            node=dependency,
+            web_root=None,
+            project_root=ROOT,
+            recording_manager=dependency,
+            results_root=ROOT / "outputs",
+            scoring_manager=dependency,
+            prepared_playback_manager=dependency,
+            optimization_manager=dependency,
+            handpose_manager=dependency,
+            gripper_extraction_manager=dependency,
+            umi_export_manager=dependency,
+            take_store=dependency,
+            capture_preflight=dependency,
+            voice_alerts=dependency,
+            active_qc=dependency,
+            playback_configuration=lambda: ([], []),
+        )
+
+        self.assertIs(context.active_qc, dependency)
+        self.assertIs(context.scoring_manager, dependency)
+
     def test_runtime_package_does_not_reexport_other_layers(self) -> None:
         source = (ROOT / "insight_capture" / "runtime" / "__init__.py").read_text(
             encoding="utf-8"

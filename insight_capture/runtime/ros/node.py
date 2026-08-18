@@ -48,7 +48,7 @@ from insight_capture.perception.gripper.overlay import HandOverlayMixin
 from insight_capture.media.jpeg import HwJpegCodec
 from insight_capture.core import performance as perf_tracker
 from insight_capture.runtime.recording import RecordingManager
-from insight_capture.api.support import bagplay_topic
+from insight_capture.runtime.ros.topics import playback_topic
 
 from insight_capture.core.models import CameraFrame, CameraSpec, PoseSample, PoseSpec
 from insight_capture.media.image_pipeline import ImagePipeline
@@ -312,7 +312,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             # split so replayed trajectories never blend with a live one.
             playback_sub = self.create_subscription(
                 PoseStamped,
-                bagplay_topic(pose.topic),
+                playback_topic(pose.topic),
                 self._make_pose_callback(pose.name, is_live=False),
                 pose_qos,
                 callback_group=self.ros_callback_group,
@@ -340,7 +340,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             # still-connected live camera (see _make_dashboard_image_callback).
             playback_sub = self.create_subscription(
                 msg_type,
-                bagplay_topic(camera.topic),
+                playback_topic(camera.topic),
                 self._make_dashboard_image_callback(
                     camera.name, camera.topic_type, is_live=False
                 ),
@@ -403,7 +403,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             # live-only and intentionally omitted from rosbag playback.
             kp_playback_sub = self.create_subscription(
                 Detection2DArray,
-                bagplay_topic(keypoints_topic),
+                playback_topic(keypoints_topic),
                 lambda msg, name=camera.name: self._on_hand_keypoints(name, msg, is_live=False),
                 hand_qos,
                 callback_group=self.ros_callback_group,
@@ -512,6 +512,13 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
 
     def preview_status(self) -> Dict[str, object]:
         return {"configured_mode": self.runtime_mode, **self._preview_manager.status()}
+
+    def close(self) -> None:
+        """Stop node-owned media resources before ROS node destruction."""
+
+        self._preview_manager.close()
+        self.stop_webrtc_worker()
+        self.stop_hand_overlay_worker()
 
 
     def stop_webrtc_worker(self) -> None:
