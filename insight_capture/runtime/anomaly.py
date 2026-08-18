@@ -71,7 +71,16 @@ class ActiveQcMonitor:
                 if logger is not None:
                     logger.warning(f"active QC poll failed: {exc}")
 
-    def _observe(self, code: str, present: bool, text: str, **details: object) -> None:
+    def _observe(
+        self,
+        code: str,
+        present: bool,
+        text: str,
+        *,
+        severity: str = "critical",
+        affects_quality: bool = True,
+        **details: object,
+    ) -> None:
         now = time.monotonic()
         if not present:
             self._pending_since.pop(code, None)
@@ -81,6 +90,7 @@ class ActiveQcMonitor:
                     "code": code,
                     "severity": "info",
                     "event": "resolved",
+                    "affects_quality": affects_quality,
                     "details": details,
                 })
             return
@@ -90,13 +100,14 @@ class ActiveQcMonitor:
         self._active.add(code)
         anomaly = {
             "code": code,
-            "severity": "critical",
+            "severity": severity,
             "event": "started",
+            "affects_quality": affects_quality,
             "message": text,
             "details": details,
         }
         self.take_store.add_anomaly(anomaly)
-        self.alerts.publish(text, code=code)
+        self.alerts.publish(text, code=code, severity=severity)
 
     def poll(self) -> None:
         if not self.recording_manager.is_recording():
@@ -142,7 +153,9 @@ class ActiveQcMonitor:
         storage = status.get("storage") or {}
         self._observe(
             "storage_fallback", bool(storage.get("using_fallback")),
-            "录制存储已切换到备用盘，本条已记录异常。",
+            "当前正在使用备用存储。",
+            severity="warning",
+            affects_quality=False,
             reason=storage.get("fallback_reason"),
         )
         try:

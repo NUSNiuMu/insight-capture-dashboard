@@ -296,6 +296,52 @@ class CaptureRuntimeTest(unittest.TestCase):
             self.assertEqual(alerts.since(0)[0]["code"], "camera_stale:a")
             timeline = store.current()["anomaly_timeline"]
             self.assertEqual(timeline[0]["code"], "camera_stale:a")
+            self.assertTrue(timeline[0]["affects_quality"])
+
+    def test_fallback_storage_warning_does_not_make_take_suspect(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = SessionTakeStore(root, {"session_id": "s1"})
+            store.reserve_take()
+            store.mark_recording(root / "bag")
+            manager = _Manager(root)
+            manager.recording = True
+            manager.storage_status = {
+                "using_fallback": True,
+                "fallback_reason": "capture disk is absent",
+            }
+            now = time.monotonic()
+            node = SimpleNamespace(
+                cameras=[SimpleNamespace(name="a", label="A camera")],
+                camera_input_lock=threading.Lock(),
+                camera_input_times={"a": deque([now], maxlen=10)},
+                build_mapping_payload=lambda: {
+                    "statuses": {
+                        "insight9": {"online": True},
+                        "insight3_a": {"online": True, "localized": True},
+                        "insight3_b": {"online": True, "localized": True},
+                    }
+                },
+                _recording_bridge=SimpleNamespace(
+                    snapshot_image_header_audit=lambda: {"topics": {}}
+                ),
+            )
+            alerts = VoiceAlertQueue()
+            monitor = ActiveQcMonitor(
+                node, manager, store, alerts,
+                {"sustain_sec": 0.5, "minimum_free_gb": 0},
+            )
+            monitor.poll()
+            monitor._pending_since["storage_fallback"] = now - 1.0
+            monitor.poll()
+
+            warning = store.current()["anomaly_timeline"][0]
+            self.assertEqual(warning["code"], "storage_fallback")
+            self.assertEqual(warning["severity"], "warning")
+            self.assertFalse(warning["affects_quality"])
+            self.assertEqual(alerts.since(0)[0]["severity"], "warning")
+            completed = store.complete_current(manager.status())
+            self.assertEqual(completed["quick_qc"]["state"], "pass")
 
 
 if __name__ == "__main__":

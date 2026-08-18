@@ -288,10 +288,13 @@ class SessionTakeStore:
             if isinstance(image_audit, dict) and image_audit.get("ok") is False:
                 reasons.append("image continuity audit failed")
             anomalies = payload.get("anomaly_timeline") or []
-            if any(item.get("severity") == "critical" for item in anomalies):
+            quality_anomalies = [
+                item for item in anomalies if item.get("affects_quality", True)
+            ]
+            if any(item.get("severity") == "critical" for item in quality_anomalies):
                 reasons.append("critical live QC anomaly")
             qc_state = "fail" if recording_status.get("merge_state") == "error" else (
-                "suspect" if reasons or anomalies else "pass"
+                "suspect" if reasons or quality_anomalies else "pass"
             )
             payload.update({
                 "state": "complete" if qc_state != "fail" else "finalization_failed",
