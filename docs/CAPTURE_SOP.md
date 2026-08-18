@@ -18,6 +18,8 @@ outputs/results/sessions/<session_id>/
 
 Take 包含 bag path、起止时间、trigger、quick QC、station check、operator accept/reject、
 reject reason 与 anomaly timeline。说“本条作废”只写入 operator reject，原始 MCAP 永远保留。
+Sessions 页面中的 **Open rosbag** 使用 Take 保存的 bag path 定位录制，因此切换 Recorder
+写入目录后仍可打开旧 Take。
 
 ## 采集中
 

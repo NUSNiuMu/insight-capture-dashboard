@@ -1,3 +1,3 @@
-import { initializeRosbags } from "../shared/rosbags.js?v=20260812-review-bundle-v1";
+import { initializeRosbags } from "../shared/rosbags.js?v=20260818-bag-library";
 
 initializeRosbags();

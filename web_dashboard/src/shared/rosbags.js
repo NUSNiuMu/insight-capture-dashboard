@@ -7,11 +7,14 @@ const scoringBagMeta = document.getElementById("scoring-bag-meta");
 const optimizationBagMeta = document.getElementById("optimization-bag-meta");
 const handposeBagMeta = document.getElementById("handpose-bag-meta");
 let knownRosbags = [];
+let rosbagScope = "all";
+let initialBagReference = "";
 
 async function refreshRosbags() {
   setBagListStatus("Loading bags...");
   try {
-    const response = await fetch(`/api/rosbags?ts=${Date.now()}`, { cache: "no-store" });
+    const query = new URLSearchParams({ scope: rosbagScope, ts: String(Date.now()) });
+    const response = await fetch(`/api/rosbags?${query}`, { cache: "no-store" });
     const payload = await response.json();
     if (!response.ok) {
       throw new Error(payload.error || "Failed to load rosbags.");
@@ -19,7 +22,10 @@ async function refreshRosbags() {
     knownRosbags = Array.isArray(payload.bags) ? payload.bags : [];
     renderBagList(knownRosbags);
     renderBagSelects(knownRosbags);
-    setBagListStatus(`${knownRosbags.length} bags in ${payload.rosbag_root || "rosbags"}`);
+    const scopeLabel = rosbagScope === "current"
+      ? `current recording directory · ${payload.rosbag_root || "rosbags"}`
+      : `${Array.isArray(payload.library_roots) ? payload.library_roots.length : 1} storage root(s)`;
+    setBagListStatus(`${knownRosbags.length} bags · ${scopeLabel}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setBagListStatus(message);
@@ -42,6 +48,7 @@ function renderBagList(bags) {
         <span class="bag-index">${String(index + 1).padStart(2, "0")}</span>
         <div class="bag-row-main">
           <strong>${escapeHtml(bag.name || "unnamed bag")}</strong>
+          <small>${escapeHtml(bagLocationLabel(bag))}</small>
         </div>
       </div>
       <div class="bag-row-stats">
@@ -58,12 +65,12 @@ function renderBagList(bags) {
         <span class="bag-badge ${bag.review_state === "ready" ? "is-ok" : bag.review_state === "invalid" ? "is-bad" : ""}">${escapeHtml(reviewStatusLabel(bag))}</span>
       </div>
       <div class="bag-row-actions">
-        <button type="button" class="bag-delete-button" data-bag-name="${escapeHtml(bag.name || "")}">Delete</button>
+        <button type="button" class="bag-delete-button" data-bag-ref="${escapeHtml(bagReference(bag))}">Delete</button>
       </div>
     </article>
   `).join("");
   bagList.querySelectorAll(".bag-delete-button").forEach((btn) => {
-    btn.addEventListener("click", () => deleteBag(btn.dataset.bagName));
+    btn.addEventListener("click", () => deleteBag(btn.dataset.bagRef));
   });
 }
 
@@ -79,9 +86,11 @@ function renderBagSelects(bags) {
       updateSelectedBagMeta(select);
       return;
     }
-    select.innerHTML = bags.map((bag) => `<option value="${escapeHtml(bag.name || "")}">${escapeHtml(bag.name || "")} · ${bag.review_state === "ready" ? "ready" : "pending"}</option>`).join("");
-    if (previous && bags.some((bag) => bag.name === previous)) {
+    select.innerHTML = bags.map((bag) => `<option value="${escapeHtml(bagReference(bag))}">${escapeHtml(bag.name || "")} · ${escapeHtml(bagLocationLabel(bag))} · ${bag.review_state === "ready" ? "ready" : "pending"}</option>`).join("");
+    if (previous && bags.some((bag) => bagReference(bag) === previous)) {
       select.value = previous;
+    } else if (initialBagReference && bags.some((bag) => bagReference(bag) === initialBagReference)) {
+      select.value = initialBagReference;
     }
     select.onchange = () => updateSelectedBagMeta(select);
     updateSelectedBagMeta(select);
@@ -96,7 +105,7 @@ function reviewStatusLabel(bag) {
 }
 
 function updateSelectedBagMeta(select) {
-  const bag = knownRosbags.find((item) => item.name === select.value);
+  const bag = knownRosbags.find((item) => bagReference(item) === select.value);
   const metaBySelect = {
     "scoring-bag-select": scoringBagMeta,
     "optimization-bag-select": optimizationBagMeta,
@@ -113,11 +122,23 @@ function updateSelectedBagMeta(select) {
   meta.textContent = `${formatDuration(Number(bag.duration_s || 0))} · ${bag.size_label || "--"} · ${Number(bag.message_count || 0).toLocaleString()} messages · ${bag.label || ""}`;
 }
 
-async function deleteBag(bagName) {
-  if (!bagName) return;
-  if (!confirm(`Delete bag "${bagName}"?\n\nThis will permanently remove the bag directory and cannot be undone.`)) return;
+function bagReference(bag) {
+  return String((bag && (bag.id || bag.name)) || "");
+}
+
+function bagLocationLabel(bag) {
+  const relative = String(bag?.relative_path || "");
+  if (relative && relative !== bag?.name) return relative;
+  return String(bag?.root || relative || "recording library");
+}
+
+async function deleteBag(bagRef) {
+  if (!bagRef) return;
+  const bag = knownRosbags.find((item) => bagReference(item) === bagRef);
+  const label = bag?.name || bagRef;
+  if (!confirm(`Delete bag "${label}"?\n\nThis will permanently remove the bag directory and cannot be undone.`)) return;
   try {
-    const response = await fetch(`/api/rosbags/${encodeURIComponent(bagName)}`, { method: "DELETE" });
+    const response = await fetch(`/api/rosbags/${encodeURIComponent(bagRef)}`, { method: "DELETE" });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       alert(`Failed to delete bag: ${payload.error || response.statusText}`);
@@ -135,12 +156,25 @@ function setBagListStatus(message) {
   }
 }
 
-export function initializeRosbags() {
+export function initializeRosbags(options = {}) {
+  rosbagScope = options.scope === "current" ? "current" : "all";
+  initialBagReference = String(options.initialBag || "");
   if (refreshBagsButton) {
     refreshBagsButton.addEventListener("click", () => {
       void refreshRosbags();
     });
   }
+  document.querySelectorAll("[data-bag-scope]").forEach((button) => {
+    const scope = button.dataset.bagScope === "current" ? "current" : "all";
+    button.classList.toggle("is-active", scope === rosbagScope);
+    button.addEventListener("click", () => {
+      rosbagScope = scope;
+      document.querySelectorAll("[data-bag-scope]").forEach((item) => {
+        item.classList.toggle("is-active", item.dataset.bagScope === rosbagScope);
+      });
+      void refreshRosbags();
+    });
+  });
   if (bagList || document.querySelector("[data-bag-select]")) {
     void refreshRosbags();
   }

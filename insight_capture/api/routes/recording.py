@@ -11,7 +11,7 @@ from pathlib import Path
 from aiohttp import web
 
 from insight_capture.postprocess.bags.integrity import analyze_bag
-from insight_capture.postprocess.bags import list_rosbags
+from insight_capture.postprocess.bags import BagLibrary, list_rosbag_locations
 from insight_capture.api.support import read_disk_space, read_json_body, read_system_load
 
 from insight_capture.api.context import DashboardContext
@@ -20,6 +20,13 @@ from insight_capture.api.context import DashboardContext
 class RecordingRoutes:
     def __init__(self, context: DashboardContext) -> None:
         self.context = context
+
+    def _bag_library(self) -> BagLibrary:
+        library = getattr(self.context, "bag_library", None)
+        if library is not None:
+            return library
+        manager = self.context.recording_manager
+        return BagLibrary(manager.storage_browse_roots, lambda: manager.rosbag_root)
 
     async def _handle_recording_status(self, _request: web.Request) -> web.Response:
         payload = self.context.recording_manager.status()
@@ -170,15 +177,26 @@ class RecordingRoutes:
         take = take_store.complete_current(status) if take_store is not None else None
         return web.json_response({"automation": "openclaw", "trigger": "voice", **status, "take": take})
 
-    async def _handle_rosbag_list(self, _request: web.Request) -> web.Response:
+    async def _handle_rosbag_list(self, request: web.Request) -> web.Response:
+        scope = str(request.query.get("scope", "all")).strip().lower()
+        if scope not in {"all", "current"}:
+            return web.json_response({"error": "scope must be all or current"}, status=400)
+        library = self._bag_library()
         loop = asyncio.get_event_loop()
         bags = await loop.run_in_executor(
-            None, list_rosbags, self.context.recording_manager.rosbag_root, self.context.results_root
+            None,
+            lambda: list_rosbag_locations(
+                library.locations(scope), self.context.results_root
+            ),
         )
         return web.json_response(
             {
                 "type": "rosbag_list",
                 "rosbag_root": str(self.context.recording_manager.rosbag_root),
+                "scope": scope,
+                "library_roots": [
+                    str(path) for path in self.context.recording_manager.storage_browse_roots()
+                ],
                 "results_root": str(self.context.results_root),
                 "bags": bags,
             }
@@ -188,24 +206,26 @@ class RecordingRoutes:
         bag_name = request.match_info.get("bag_name", "").strip()
         if not bag_name or "/" in bag_name or bag_name in (".", ".."):
             return web.json_response({"error": "Invalid bag name."}, status=400)
-        bag_path = (self.context.recording_manager.rosbag_root / bag_name).resolve()
-        if not bag_path.is_relative_to(self.context.recording_manager.rosbag_root.resolve()):
-            return web.json_response({"error": "Access denied."}, status=403)
-        if not bag_path.exists():
+        try:
+            bag_path = self._bag_library().resolve(bag_name)
+        except FileNotFoundError:
             return web.json_response({"error": "Bag not found."}, status=404)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         shutil.rmtree(bag_path)
-        return web.json_response({"status": "deleted", "bag_name": bag_name})
+        return web.json_response({"status": "deleted", "bag_name": bag_path.name})
 
     async def _handle_integrity_run(self, request: web.Request) -> web.Response:
         payload = await read_json_body(request)
         bag_name = str(payload.get("bag_name", "")).strip()
-        if not bag_name or "/" in bag_name or bag_name in (".", ".."):
+        if not bag_name or bag_name in (".", ".."):
             return web.json_response({"error": "Invalid bag name."}, status=400)
-        bag_path = (self.context.recording_manager.rosbag_root / bag_name).resolve()
-        if not bag_path.is_relative_to(self.context.recording_manager.rosbag_root.resolve()):
-            return web.json_response({"error": "Access denied."}, status=403)
-        if not bag_path.exists():
+        try:
+            bag_path = self._bag_library().resolve(bag_name)
+        except FileNotFoundError:
             return web.json_response({"error": "Bag not found."}, status=404)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         loop = asyncio.get_event_loop()
         try:
             # SQLite aggregates provide each topic's count and active time
@@ -217,6 +237,7 @@ class RecordingRoutes:
             return web.json_response({"error": str(exc)}, status=422)
         # Persisted next to scores/optimized so list_rosbags can surface a
         # per-bag integrity badge without re-scanning gigabytes per listing.
+        bag_name = bag_path.name
         integrity_dir = self.context.results_root / "integrity"
         integrity_dir.mkdir(parents=True, exist_ok=True)
         (integrity_dir / f"{bag_name}.json").write_text(json.dumps(report, indent=2))

@@ -18,7 +18,11 @@ class OptimizationRoutes:
         bag_name = str(body.get("bag_name", "")).strip()
         camera_name = str(body.get("camera_name", "")).strip()
         stream_type = str(body.get("stream_type", "color_compressed")).strip()
-        run_name = str(body.get("run_name", "")).strip() or bag_name
+        try:
+            bag_label = self.context.bag_library.resolve(bag_name).name
+        except (ValueError, FileNotFoundError) as exc:
+            return web.json_response({"error": str(exc)}, status=404)
+        run_name = str(body.get("run_name", "")).strip() or bag_label
         if not bag_name:
             return web.json_response({"error": "bag_name is required"}, status=400)
         if stream_type not in IMAGE_STREAMS:

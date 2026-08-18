@@ -83,8 +83,10 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 Recording 页的 **Recording folder → Browse...** 可在录制空闲时切换保存目录。弹窗只显示
 Dashboard 容器已经挂载的录制盘与 NVMe fallback 范围，不会暴露整台设备文件系统；浏览器所在
 电脑的普通本地目录若未挂载进容器也不会出现。确认目录时后端会执行实际写入和 `fsync` 探测，
-成功后 Bags、回放、评分和数据集导出会同步使用新的根目录。本次选择保留到 Dashboard 后端重启，
-重启后重新采用 `INSIGHT_ROSBAG_DIR`、必需挂载源检查与 fallback 配置。
+成功后只改变后续录制的写入目标，不会隐藏或搬动旧目录中的 rosbag。Bags 页可在 **All
+directories** 与 **Current recording directory** 间筛选；回放、评分、Hand pose、优化和
+数据集导出通过稳定 bag ID 定位所选录制，不依赖当前写入目录。本次写入目录选择保留到
+Dashboard 后端重启，重启后重新采用 `INSIGHT_ROSBAG_DIR`、必需挂载源检查与 fallback 配置。
 
 > 旧地址 `/images` 现在会自动跳转到 `/3d`（画面已合并进 Spatial 视图，收藏的旧链接不用改）。
 

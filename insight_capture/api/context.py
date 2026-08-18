@@ -8,7 +8,7 @@ from insight_capture.postprocess.handpose import HandPoseManager
 from insight_capture.runtime.anomaly import ActiveQcMonitor, VoiceAlertQueue
 from insight_capture.runtime.preflight import CapturePreflight
 from insight_capture.runtime.take import SessionTakeStore
-from insight_capture.postprocess.bags import PreparedPlaybackManager
+from insight_capture.postprocess.bags import BagLibrary, PreparedPlaybackManager
 from insight_capture.postprocess.optimization import OptimizationManager
 from insight_capture.runtime.recording import RecordingManager
 
@@ -23,6 +23,7 @@ class DashboardContext:
     web_root: Optional[Path]
     project_root: Path
     recording_manager: RecordingManager
+    bag_library: BagLibrary
     results_root: Path
     scoring_manager: ScoringManager
     prepared_playback_manager: PreparedPlaybackManager

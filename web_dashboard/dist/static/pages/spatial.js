@@ -5,7 +5,7 @@ import {
   stopPreparedCameraPlayback,
 } from "../camera/dashboard.js?v=20260813-playback-wall";
 import { escapeHtml } from "../shared/format.js";
-import { initializeRosbags } from "../shared/rosbags.js?v=20260812-review-bundle-v1";
+import { initializeRosbags } from "../shared/rosbags.js?v=20260818-bag-library";
 import {
   clearKeptTrajectory,
   clearRenderedTrajectories,
@@ -96,7 +96,10 @@ function scheduleStartup() {
     void refreshCaptureCheckStatus();
     captureCheckPollTimer = window.setInterval(() => { void refreshCaptureCheckStatus(); }, 1000);
   }, 250);
-  scheduleStartupTask(() => initializeRosbags(), 1500);
+  scheduleStartupTask(() => initializeRosbags({
+    scope: "all",
+    initialBag: new URLSearchParams(window.location.search).get("bag") || "",
+  }), 1500);
   scheduleStartupTask(() => setAvatarLoadStage(1), 1900);
   scheduleStartupTask(() => setAvatarLoadStage(2), 3600);
 }
@@ -514,7 +517,7 @@ async function refreshPlaybackStatus() {
 
 function renderPlaybackStatus(payload) {
   const state = (payload && payload.state) || "idle";
-  const bagName = (payload && payload.bag_name) || "";
+  const bagName = (payload && (payload.bag_label || payload.bag_name)) || "";
   const queued = Array.isArray(payload?.queued) ? payload.queued.length : 0;
   const isBackground = Boolean(payload?.background) && !playbackRequested;
   const isPlaying = state === "playing";
@@ -592,7 +595,7 @@ async function startPreparedPlayback(status) {
     const activate = await fetch("/api/playback/activate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bag_name: preparedManifest.bag_name }),
+      body: JSON.stringify({ bag_name: preparedManifest.bag_ref || preparedManifest.bag_name }),
     });
     if (!activate.ok) {
       const payload = await activate.json();
@@ -605,7 +608,7 @@ async function startPreparedPlayback(status) {
       },
       onEnded: () => { void stopPlayback(); },
     });
-    renderPlaybackStatus({ state: "playing", bag_name: preparedManifest.bag_name });
+    renderPlaybackStatus({ state: "playing", bag_name: preparedManifest.bag_ref || preparedManifest.bag_name, bag_label: preparedManifest.bag_name });
   } catch (error) {
     preparedPlaybackActive = false;
     playbackRequested = false;

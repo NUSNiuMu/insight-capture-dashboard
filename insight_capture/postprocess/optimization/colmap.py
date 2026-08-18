@@ -41,10 +41,12 @@ class OptimizationManager:
         project_root: Path,
         pipeline_script: Path,
         on_finished: Optional[Callable[[bool], None]] = None,
+        bag_resolver: Optional[Callable[[str], Path]] = None,
     ) -> None:
         self.project_root = project_root.resolve()
         self.pipeline_script = pipeline_script.resolve()
         self._on_finished = on_finished
+        self._bag_resolver = bag_resolver
         self._lock = threading.Lock()
         self._process: Optional[subprocess.Popen] = None
         self._state: str = "idle"
@@ -87,7 +89,11 @@ class OptimizationManager:
         with self._lock:
             if self._state == "running":
                 raise RuntimeError("Optimization already running")
-            bag_path = self.project_root / "rosbags" / bag_name
+            bag_path = (
+                self._bag_resolver(bag_name).resolve()
+                if self._bag_resolver is not None
+                else self.project_root / "rosbags" / bag_name
+            )
             if not bag_path.exists():
                 raise ValueError(f"Bag not found: {bag_name}")
             hz_label = str(int(output_hz)) if output_hz == int(output_hz) else str(output_hz).replace(".", "p")

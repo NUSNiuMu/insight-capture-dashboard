@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from .schema import METHODS, safe_child
 
@@ -36,9 +36,11 @@ class HandPoseManager:
         project_root: Path,
         rosbag_root: Path,
         output_root: Optional[Path] = None,
+        bag_resolver: Optional[Callable[[str], Path]] = None,
     ) -> None:
         self.project_root = project_root.resolve()
         self.rosbag_root = rosbag_root.resolve()
+        self._bag_resolver = bag_resolver
         self.output_root = (
             output_root or self.project_root / "outputs" / "handpose"
         ).resolve()
@@ -135,9 +137,14 @@ class HandPoseManager:
     def start(self, bag_name: str, method: str) -> None:
         if method not in METHODS:
             raise ValueError(f"Unknown method '{method}'")
-        bag_path = safe_child(self.rosbag_root, bag_name)
+        bag_path = (
+            self._bag_resolver(bag_name).resolve()
+            if self._bag_resolver is not None
+            else safe_child(self.rosbag_root, bag_name)
+        )
         if not bag_path.is_dir() or not (bag_path / "metadata.yaml").is_file():
             raise ValueError(f"Rosbag '{bag_name}' was not found")
+        bag_name = bag_path.name
         capabilities = self.capabilities()["methods"][method]
         if not capabilities["available"]:
             missing = ", ".join(capabilities["missing"])

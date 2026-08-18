@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 
 @dataclass
@@ -26,9 +26,16 @@ class _ScoringJob:
 class ScoringManager:
     _TRAJ_SCORE_MODULE = "insight_capture.postprocess.quality.trajectory_score"
 
-    def __init__(self, rosbag_root: Path, results_root: Path) -> None:
+    def __init__(
+        self,
+        rosbag_root: Path,
+        results_root: Path,
+        *,
+        bag_resolver: Optional[Callable[[str], Path]] = None,
+    ) -> None:
         self.rosbag_root = rosbag_root
         self.results_root = results_root
+        self._bag_resolver = bag_resolver
         self._lock = threading.Lock()
         self._current_job: Optional[_ScoringJob] = None
 
@@ -57,10 +64,14 @@ class ScoringManager:
         with self._lock:
             if self._current_job and self._current_job.status == "running":
                 return False
-            bag_path = str((self.rosbag_root / bag_name).resolve())
+            resolved = (
+                self._bag_resolver(bag_name).resolve()
+                if self._bag_resolver is not None
+                else (self.rosbag_root / bag_name).resolve()
+            )
             job = _ScoringJob(
-                bag_name=bag_name,
-                bag_path=bag_path,
+                bag_name=resolved.name,
+                bag_path=str(resolved),
                 topic=topic,
                 status="running",
                 started_at=time.monotonic(),

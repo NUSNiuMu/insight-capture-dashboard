@@ -497,8 +497,17 @@ def _decode_review_image(
 class PreparedPlaybackManager:
     """Build and cache fixed-rate video plus pose timelines before playback."""
 
-    def __init__(self, rosbag_root: Path, cache_root: Path) -> None:
+    def __init__(
+        self,
+        rosbag_root: Path,
+        cache_root: Path,
+        *,
+        bag_resolver: Optional[Callable[[str], Path]] = None,
+        bag_references: Optional[Callable[[], Iterable[str]]] = None,
+    ) -> None:
         self.rosbag_root = rosbag_root.resolve()
+        self._bag_resolver = bag_resolver
+        self._bag_references = bag_references
         self.cache_root = cache_root.resolve()
         self.cache_root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -507,6 +516,7 @@ class PreparedPlaybackManager:
         self._writer = None
         self._state = "idle"
         self._bag_name = ""
+        self._bag_label = ""
         self._progress = 0.0
         self._stage = ""
         self._error = ""
@@ -533,6 +543,7 @@ class PreparedPlaybackManager:
         payload: Dict[str, object] = {
             "state": self._state,
             "bag_name": self._bag_name,
+            "bag_label": self._bag_label,
             "progress": round(self._progress, 3),
             "stage": self._stage,
             "error": self._error,
@@ -591,6 +602,7 @@ class PreparedPlaybackManager:
             with self._lock:
                 self._state = "ready"
                 self._bag_name = bag_name
+                self._bag_label = bag_path.name
                 self._progress = 1.0
                 self._stage = "Prepared playback cache ready"
                 self._error = ""
@@ -606,6 +618,7 @@ class PreparedPlaybackManager:
             self._cancel.clear()
             self._state = "preparing"
             self._bag_name = bag_name
+            self._bag_label = bag_path.name
             self._progress = 0.0
             self._stage = "Scanning bag timelines"
             self._error = ""
@@ -654,6 +667,10 @@ class PreparedPlaybackManager:
             return self._status_unlocked()
 
     def enqueue_all(self) -> Dict[str, object]:
+        if self._bag_references is not None:
+            for reference in self._bag_references():
+                self.enqueue(reference)
+            return self.status()
         for path in sorted(self.rosbag_root.iterdir(), key=lambda item: item.stat().st_mtime):
             if path.is_dir() and (
                 (path / "metadata.yaml").is_file() or (path / MANIFEST_NAME).is_file()
@@ -754,6 +771,7 @@ class PreparedPlaybackManager:
             writer = self._writer
             self._state = "idle"
             self._bag_name = ""
+            self._bag_label = ""
             self._progress = 0.0
             self._stage = ""
             self._error = ""
@@ -778,6 +796,11 @@ class PreparedPlaybackManager:
         return f"/api/playback/artifacts/{quote(bag_name, safe='')}/manifest.json"
 
     def _bag_path(self, bag_name: str) -> Path:
+        if self._bag_resolver is not None:
+            path = self._bag_resolver(bag_name).resolve()
+            if not path.is_dir():
+                raise ValueError(f"Bag not found: {bag_name}")
+            return path
         if not bag_name or Path(bag_name).name != bag_name:
             raise ValueError("Invalid bag name.")
         path = (self.rosbag_root / bag_name).resolve()
@@ -798,6 +821,10 @@ class PreparedPlaybackManager:
             return False
         return (
             manifest.get("schema_version") == SCHEMA_VERSION
+            and (
+                self._bag_resolver is None
+                or manifest.get("bag_ref") == bag_name
+            )
             and manifest.get("source_signature") == signature
             and manifest.get("configuration") == configuration
             and manifest.get("cache_key") == _cache_key(signature, configuration)
@@ -937,7 +964,8 @@ class PreparedPlaybackManager:
             }
             manifest = {
                 "schema_version": SCHEMA_VERSION,
-                "bag_name": bag_name,
+                "bag_name": bag_path.name,
+                "bag_ref": bag_name,
                 "cache_key": cache_key,
                 "source_signature": signature,
                 "configuration": configuration,
@@ -996,12 +1024,14 @@ class PreparedPlaybackManager:
                     self._state = "idle"
                     self._stage = "Review generation paused for recording"
                     self._bag_name = ""
+                    self._bag_label = ""
         except _Cancelled:
             with self._lock:
                 if self._bag_name == bag_name and self._state == "preparing":
                     self._state = "idle"
                     self._stage = ""
                     self._bag_name = ""
+                    self._bag_label = ""
         except Exception as exc:  # noqa: BLE001 - surface background failure to UI
             with self._lock:
                 if self._bag_name == bag_name:

@@ -117,6 +117,7 @@ class ProjectStructureTest(unittest.TestCase):
             web_root=None,
             project_root=ROOT,
             recording_manager=dependency,
+            bag_library=dependency,
             results_root=ROOT / "outputs",
             scoring_manager=dependency,
             prepared_playback_manager=dependency,

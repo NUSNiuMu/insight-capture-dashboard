@@ -1,5 +1,5 @@
 import { escapeHtml } from "../shared/format.js";
-import { initializeRosbags, refreshRosbags } from "../shared/rosbags.js?v=20260812-review-bundle-v1";
+import { initializeRosbags, refreshRosbags } from "../shared/rosbags.js?v=20260818-bag-library";
 
 const runScoringButton = document.getElementById("run-scoring-button");
 const integrityResultEl = document.getElementById("integrity-result");

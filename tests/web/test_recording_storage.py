@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from insight_capture.api.routes.recording import RecordingRoutes  # noqa: E402
+from insight_capture.postprocess.bags import BagLibrary  # noqa: E402
 from insight_capture.runtime.recording.manager import RecordingManager  # noqa: E402
 
 
@@ -24,6 +25,44 @@ def _manager(root: Path, *browse_roots: Path) -> RecordingManager:
 
 
 class RecordingStorageTest(unittest.TestCase):
+    def test_library_keeps_old_and_new_recording_directories_visible(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "rosbags"
+            old_bag = root / "campaign-a" / "take-a"
+            new_root = root / "campaign-b"
+            new_bag = new_root / "take-b"
+            for bag in (old_bag, new_bag):
+                bag.mkdir(parents=True)
+                (bag / "metadata.yaml").write_text(
+                    "rosbag2_bagfile_information:\n  message_count: 1\n"
+                )
+            manager = _manager(root)
+            manager.select_recording_root(str(new_root))
+            library = BagLibrary(manager.storage_browse_roots, lambda: manager.rosbag_root)
+
+            all_locations = library.locations("all")
+            current_locations = library.locations("current")
+
+            self.assertEqual(
+                {item.path for item in all_locations},
+                {old_bag.resolve(), new_bag.resolve()},
+            )
+            self.assertEqual([item.path for item in current_locations], [new_bag.resolve()])
+            self.assertEqual(library.resolve(all_locations[0].bag_id), all_locations[0].path)
+
+    def test_library_rejects_ambiguous_legacy_bag_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "rosbags"
+            for campaign in ("campaign-a", "campaign-b"):
+                bag = root / campaign / "take-0001"
+                bag.mkdir(parents=True)
+                (bag / "metadata.yaml").write_text("rosbag2_bagfile_information: {}\n")
+            manager = _manager(root)
+            library = BagLibrary(manager.storage_browse_roots, lambda: manager.rosbag_root)
+
+            with self.assertRaisesRegex(ValueError, "ambiguous"):
+                library.resolve("take-0001")
+
     def test_browser_stays_inside_allowed_roots_and_hides_bags(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "rosbags"

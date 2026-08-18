@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, TypedDict
 
-from insight_capture.postprocess.bags import PreparedPlaybackManager
+from insight_capture.postprocess.bags import BagLibrary, PreparedPlaybackManager
 from insight_capture.postprocess.handpose import HandPoseManager
 from insight_capture.postprocess.optimization import OptimizationManager
 from insight_capture.runtime.anomaly import ActiveQcMonitor, VoiceAlertQueue
@@ -19,6 +19,7 @@ from insight_capture.services.scoring import ScoringManager
 
 
 class DashboardDependencies(TypedDict):
+    bag_library: BagLibrary
     scoring_manager: ScoringManager
     prepared_playback_manager: PreparedPlaybackManager
     optimization_manager: OptimizationManager
@@ -39,6 +40,7 @@ class RuntimeServices:
     """Process-owned services injected into delivery adapters."""
 
     node: Any
+    bag_library: BagLibrary
     scoring_manager: ScoringManager
     prepared_playback_manager: PreparedPlaybackManager
     optimization_manager: OptimizationManager
@@ -84,24 +86,11 @@ class RuntimeServices:
         ]
         return cameras, poses
 
-    def set_rosbag_root(self, rosbag_root: Path) -> None:
-        """Keep bag consumers aligned after recording storage failover."""
-
-        root = rosbag_root.resolve()
-        consumers = (
-            self.scoring_manager,
-            self.prepared_playback_manager,
-            self.handpose_manager,
-            self.gripper_extraction_manager,
-            self.umi_export_manager,
-        )
-        for consumer in consumers:
-            consumer.rosbag_root = root
-
     def dashboard_dependencies(self) -> DashboardDependencies:
         """Return explicitly named dependencies accepted by DashboardContext."""
 
         return {
+            "bag_library": self.bag_library,
             "scoring_manager": self.scoring_manager,
             "prepared_playback_manager": self.prepared_playback_manager,
             "optimization_manager": self.optimization_manager,
@@ -131,16 +120,26 @@ def build_runtime_services(
     take_store = SessionTakeStore(
         results_root, runtime_config.get("capture_session")
     )
+    bag_library = BagLibrary(
+        recording_manager.storage_browse_roots,
+        lambda: recording_manager.rosbag_root,
+    )
     voice_alerts = VoiceAlertQueue()
     services = RuntimeServices(
         node=node,
+        bag_library=bag_library,
         scoring_manager=ScoringManager(
             rosbag_root=recording_manager.rosbag_root,
             results_root=results_root,
+            bag_resolver=bag_library.resolve,
         ),
         prepared_playback_manager=PreparedPlaybackManager(
             rosbag_root=recording_manager.rosbag_root,
             cache_root=results_root / "playback_cache",
+            bag_resolver=bag_library.resolve,
+            bag_references=lambda: [
+                item.bag_id for item in bag_library.locations("all")
+            ],
         ),
         optimization_manager=OptimizationManager(
             project_root=project_root,
@@ -150,18 +149,22 @@ def build_runtime_services(
                 / "scripts"
                 / "run_pipeline_from_rosbag.py"
             ),
+            bag_resolver=bag_library.resolve,
         ),
         handpose_manager=HandPoseManager(
             project_root=project_root,
             rosbag_root=recording_manager.rosbag_root,
+            bag_resolver=bag_library.resolve,
         ),
         gripper_extraction_manager=GripperExtractionManager(
             project_root=project_root,
             rosbag_root=recording_manager.rosbag_root,
+            bag_resolver=bag_library.resolve,
         ),
         umi_export_manager=UmiExportManager(
             project_root=project_root,
             rosbag_root=recording_manager.rosbag_root,
+            bag_resolver=bag_library.resolve,
         ),
         take_store=take_store,
         capture_preflight=CapturePreflight(
@@ -183,8 +186,9 @@ def build_runtime_services(
         services.playback_configuration,
     )
     recording_manager.add_recording_completed_callback(
-        lambda path: services.prepared_playback_manager.enqueue(path.name)
+        lambda path: services.prepared_playback_manager.enqueue(
+            services.bag_library.reference_for_path(path) or path.name
+        )
     )
-    recording_manager.add_storage_changed_callback(services.set_rosbag_root)
     services.active_qc.start()
     return services

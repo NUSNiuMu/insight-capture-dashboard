@@ -34,6 +34,23 @@ from insight_capture.postprocess.bags.catalog import list_rosbags  # noqa: E402
 
 
 class PreparedPlaybackTest(unittest.TestCase):
+    def test_resolver_opens_bag_outside_initial_recording_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            initial_root = root / "initial"
+            archived_bag = root / "archive" / "take-0001"
+            initial_root.mkdir()
+            archived_bag.mkdir(parents=True)
+            manager = PreparedPlaybackManager(
+                initial_root,
+                root / "cache",
+                bag_resolver=lambda reference: (
+                    archived_bag if reference == "bag-reference" else initial_root / reference
+                ),
+            )
+
+            self.assertEqual(manager._bag_path("bag-reference"), archived_bag.resolve())
+
     def test_scan_uses_record_timestamps_across_different_header_clocks(self) -> None:
         class HeaderStamp:
             def __init__(self, nanoseconds: int) -> None:

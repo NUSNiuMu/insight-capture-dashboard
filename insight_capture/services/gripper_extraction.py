@@ -11,7 +11,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
@@ -37,9 +37,16 @@ class GripperExtractionManager:
 
     _MODULE = "insight_capture.postprocess.gripper.extraction"
 
-    def __init__(self, project_root: Path, rosbag_root: Path) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        rosbag_root: Path,
+        *,
+        bag_resolver: Optional[Callable[[str], Path]] = None,
+    ) -> None:
         self.project_root = project_root.resolve()
         self.rosbag_root = rosbag_root.resolve()
+        self._bag_resolver = bag_resolver
         self.output_root = self.project_root / "outputs" / "gripper"
         self.calibration_path = self.project_root / "config" / "gripper_calibration.json"
         self._lock = threading.Lock()
@@ -85,6 +92,7 @@ class GripperExtractionManager:
         require_calibration: bool = True,
     ) -> Dict[str, object]:
         bag_path = self._bag_path(bag_name)
+        bag_name = bag_path.name
         camera_name = self._validate_name(camera_name, "camera name")
         if topic and not topic.startswith("/"):
             raise ValueError("topic must start with '/'")
@@ -181,6 +189,11 @@ class GripperExtractionManager:
                 self._process = None
 
     def _bag_path(self, bag_name: str) -> Path:
+        if self._bag_resolver is not None:
+            path = self._bag_resolver(bag_name).resolve()
+            if not path.is_dir():
+                raise FileNotFoundError("Rosbag not found.")
+            return path
         bag_name = self._validate_name(bag_name, "bag name")
         path = (self.rosbag_root / bag_name).resolve()
         if not path.is_relative_to(self.rosbag_root) or not path.is_dir():

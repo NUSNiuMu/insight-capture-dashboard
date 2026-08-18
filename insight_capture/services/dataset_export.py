@@ -13,7 +13,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from insight_capture.postprocess.datasets.routing import build_ego_spec, inspect_gripper_markers
 from insight_capture.legacy.umi_zarr import load_camera_specs
@@ -70,9 +70,16 @@ class UmiExportManager:
     _LEROBOT_MODULE = "insight_capture.postprocess.datasets.lerobot"
     _EGO_LEROBOT_MODULE = "insight_capture.postprocess.datasets.ego_lerobot.cli"
 
-    def __init__(self, project_root: Path, rosbag_root: Path) -> None:
+    def __init__(
+        self,
+        project_root: Path,
+        rosbag_root: Path,
+        *,
+        bag_resolver: Optional[Callable[[str], Path]] = None,
+    ) -> None:
         self.project_root = project_root.resolve()
         self.rosbag_root = rosbag_root.resolve()
+        self._bag_resolver = bag_resolver
         self.umi_output_root = self.project_root / "outputs" / "umi_datasets"
         self.lerobot_output_root = (
             self.project_root / "outputs" / "lerobot_datasets"
@@ -149,8 +156,11 @@ class UmiExportManager:
         if len(bag_names) > 1000:
             raise ValueError("Too many rosbags selected.")
         resolved_bags = [self._bag_path(name) for name in bag_names]
-        if len(set(bag_names)) != len(bag_names):
+        resolved_names = [path.name for path in resolved_bags]
+        if len(set(resolved_bags)) != len(resolved_bags):
             raise ValueError("Duplicate rosbag names are not allowed.")
+        if len(set(resolved_names)) != len(resolved_names):
+            raise ValueError("Selected rosbags have duplicate names across directories.")
         if camera_names is None:
             camera_names = ["insight3_a", "insight3_b", "insight9_a"]
         if not camera_names:
@@ -163,7 +173,7 @@ class UmiExportManager:
         if len(set(camera_names)) != len(camera_names):
             raise ValueError("Duplicate camera names are not allowed.")
         items = []
-        for bag_name, bag_path in zip(bag_names, resolved_bags):
+        for bag_name, bag_path in zip(resolved_names, resolved_bags):
             if export_format == "lerobot":
                 dataset_name = f"{bag_name}_lerobot"
                 output_path = self.lerobot_output_root / dataset_name
@@ -187,7 +197,7 @@ class UmiExportManager:
             if self._current_job and self._current_job.status == "running":
                 raise RuntimeError("A dataset export job is already running.")
             job = _UmiExportJob(
-                bag_names=list(bag_names),
+                bag_names=list(resolved_names),
                 image_size=image_size,
                 camera_names=camera_names,
                 episode_mode=episode_mode,
@@ -422,18 +432,16 @@ class UmiExportManager:
     def _quarantine_rejected_source(self, item: _UmiExportItem) -> None:
         try:
             bag_path = item.bag_path.resolve()
-            if not bag_path.is_relative_to(self.rosbag_root):
-                raise RuntimeError("Rejected rosbag resolved outside rosbag root.")
             if not bag_path.is_dir():
                 raise FileNotFoundError(
                     f"Rejected rosbag no longer exists: {bag_path.name}"
                 )
             failed_name = f"{_FAILED_BAG_PREFIX}{bag_path.name}"
-            failed_path = self.rosbag_root / failed_name
+            failed_path = bag_path.parent / failed_name
             suffix = 2
             while failed_path.exists():
                 failed_name = f"{_FAILED_BAG_PREFIX}{suffix}_{bag_path.name}"
-                failed_path = self.rosbag_root / failed_name
+                failed_path = bag_path.parent / failed_name
                 suffix += 1
             bag_path.rename(failed_path)
             item.source_failed_name = failed_name
@@ -479,6 +487,15 @@ class UmiExportManager:
         return item.output_path.with_name(f"{item.dataset_name}.manifest.json")
 
     def _bag_path(self, bag_name: str) -> Path:
+        if self._bag_resolver is not None:
+            path = self._bag_resolver(bag_name).resolve()
+            if path.name.startswith(_FAILED_BAG_PREFIX):
+                raise ValueError("Failed rosbags are hidden from dataset export.")
+            if not path.is_dir():
+                raise FileNotFoundError(f"Rosbag not found: {bag_name}")
+            if not (path / "metadata.yaml").is_file():
+                raise ValueError(f"Rosbag has no metadata.yaml: {path.name}")
+            return path
         bag_name = self._validate_name(bag_name, "bag name")
         if bag_name.startswith(_FAILED_BAG_PREFIX):
             raise ValueError("Failed rosbags are hidden from dataset export.")

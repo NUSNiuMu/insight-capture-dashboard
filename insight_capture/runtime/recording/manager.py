@@ -211,6 +211,12 @@ class RecordingManager:
         with self._lock:
             self._storage_changed_callbacks.append(callback)
 
+    def storage_browse_roots(self) -> List[Path]:
+        """Return the stable roots that may contain visible recordings."""
+
+        with self._lock:
+            return list(self._storage_browse_roots)
+
     def _refresh_recording_storage_unlocked(self) -> None:
         # Once failover occurs, remain on NVMe until restart. Switching roots
         # back and forth would make just-recorded bags disappear from the UI.

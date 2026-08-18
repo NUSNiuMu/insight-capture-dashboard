@@ -76,8 +76,8 @@ function renderBags() {
   }
   bagList.innerHTML = bags.map((bag) => `
     <label class="umi-bag-option">
-      <input type="checkbox" value="${escapeHtml(bag.name || "")}">
-      <span><strong>${escapeHtml(bag.name || "unnamed")}</strong><small>${formatDuration(Number(bag.duration_s || 0))} · ${escapeHtml(bag.size_label || "--")} · ${Number(bag.topic_count || 0)} topics</small></span>
+      <input type="checkbox" value="${escapeHtml(bag.id || bag.name || "")}">
+      <span><strong>${escapeHtml(bag.name || "unnamed")}</strong><small>${formatDuration(Number(bag.duration_s || 0))} · ${escapeHtml(bag.size_label || "--")} · ${Number(bag.topic_count || 0)} topics · ${escapeHtml(bag.relative_path || bag.root || "")}</small></span>
     </label>`).join("");
 }
 

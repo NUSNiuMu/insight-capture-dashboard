@@ -151,7 +151,8 @@ staging 目录原子发布，同时保存 live header/network audit；不分 par
 `vio_100hz` 和配置的全局 pose，供单臂/双臂数据集导出使用。
 录制空闲时可在页面的 **Recording folder → Browse...** 中选择后端已挂载的可写目录；
 选择前会执行一次写入/`fsync` 探测，录制中或停止排空期间不能切换。网页不会枚举整台设备，
-也不能选择操作者电脑上未挂载进 Dashboard 容器的目录。
+也不能选择操作者电脑上未挂载进 Dashboard 容器的目录。切换只改变后续录制的写入目标；
+`/bags` 可聚合已配置录制根目录中的历史数据，并在“全部目录”和“当前录制目录”之间筛选。
 
 输出目录优先级：CLI `--rosbag-dir` >
 环境变量 `INSIGHT_ROSBAG_DIR` > `config/runtime.json` > 默认 `rosbags`。

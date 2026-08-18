@@ -36,6 +36,9 @@ function render(payload) {
     const outcome = take.operator_valid === false ? "rejected" : qc;
     const anomalyCount = Array.isArray(take.anomaly_timeline) ? take.anomaly_timeline.length : 0;
     const started = take.start_epoch_s ? new Date(take.start_epoch_s * 1000).toLocaleString() : "--";
-    return `<article class="take-row take-${escapeHtml(outcome)}"><div><span>TAKE ${String(take.take_id || 0).padStart(4, "0")}</span><strong>${escapeHtml(take.bag_name || "pending bag")}</strong><small>${escapeHtml(started)}</small></div><div><span>Quick QC</span><strong>${escapeHtml(outcome)}</strong><small>${anomalyCount} anomaly event${anomalyCount === 1 ? "" : "s"}</small></div><div><span>Decision</span><strong>${escapeHtml(take.operator_decision || "pending")}</strong><small>${escapeHtml(take.reject_reason || take.state || "")}</small></div></article>`;
+    const openAction = take.bag_id
+      ? `<a class="take-open-link" href="/3d?bag=${encodeURIComponent(take.bag_id)}">Open rosbag</a>`
+      : '<small>Rosbag is not available in the library.</small>';
+    return `<article class="take-row take-${escapeHtml(outcome)}"><div><span>TAKE ${String(take.take_id || 0).padStart(4, "0")}</span><strong>${escapeHtml(take.bag_name || "pending bag")}</strong><small>${escapeHtml(started)}</small></div><div><span>Quick QC</span><strong>${escapeHtml(outcome)}</strong><small>${anomalyCount} anomaly event${anomalyCount === 1 ? "" : "s"}</small></div><div><span>Decision</span><strong>${escapeHtml(take.operator_decision || "pending")}</strong><small>${escapeHtml(take.reject_reason || take.state || "")}</small>${openAction}</div></article>`;
   }).join("");
 }
