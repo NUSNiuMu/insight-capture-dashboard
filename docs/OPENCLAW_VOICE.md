@@ -21,7 +21,8 @@ Dashboard 容器不挂载 `/dev/snd`。固定命令的完整链路为：
   拒绝开始并直接播报原因；
 - 停止录制：等待原生 MCAP recorder 排空，并写入 Take quick QC；
 - 开始校准：清空 Insight9 sparse map 与两路 Insight3 global localization 状态；
-- 检查相机：运行可选的固定检测位检查，并写入最近 Take；
+- 检查相机：运行可选的固定检测位检查，并写入最近 Take；未通过时按右手、左手、头部
+  相机分别播报问题，并明确是重新归位、扫视工作区还是需要重新校准；
 - 系统状态：播报 Preflight、定位、存储与录制可用性；
 - 本条作废：只把最近 Take 标为 `operator_valid=false`，绝不删除原始 bag；
 - 设置检测位：供需要固定治具的 task profile 使用。
@@ -52,6 +53,11 @@ export LOOPER_PULSE_SINK=alsa_output.usb-...E3...analog-stereo
 - `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/`；
 - `silero_vad.onnx`；
 - `zh_CN-huayan-medium.onnx` 与 JSON。
+
+Piper 默认使用自然语速、较低的声学与时长随机性，并在每个完整句子之间插入 220 毫秒
+静音，避免多个音频块直接拼接造成吞句或异常断句。现场可通过
+`--piper-length-scale`、`--piper-noise-scale`、`--piper-noise-w-scale` 和
+`--piper-sentence-silence-ms` 微调。
 
 以下测试完全离线：
 

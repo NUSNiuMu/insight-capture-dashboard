@@ -1,6 +1,7 @@
 import io
 import json
 import sys
+import tempfile
 import unittest
 import wave
 from pathlib import Path
@@ -17,6 +18,7 @@ from insight_capture.voice.service import (  # noqa: E402
     build_agent_command,
     calibration_is_complete,
     capture_check_reply_key,
+    capture_check_speech,
     clean_utterance_transcript,
     discover_alsa_device,
     discover_pulse_sink,
@@ -29,6 +31,7 @@ from insight_capture.voice.service import (  # noqa: E402
     wake_word_detected,
     parse_args,
 )
+from insight_capture.voice.tts import synthesize_piper_wav  # noqa: E402
 
 
 class OpenClawVoiceBridgeTest(unittest.TestCase):
@@ -409,6 +412,28 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             "http://127.0.0.1:8765/api/capture-check/run",
         )
 
+    def test_failed_capture_check_uses_dynamic_camera_details(self):
+        bridge = OpenClawVoiceBridge(
+            SimpleNamespace(
+                dashboard_url="http://127.0.0.1:8765",
+                dashboard_timeout_sec=7.0,
+            )
+        )
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps(
+            {
+                "state": "retry",
+                "comparisons": {
+                    "insight3_a": {"state": "retry"},
+                    "insight3_b": {"state": "pass"},
+                },
+            }
+        ).encode()
+        with mock.patch("urllib.request.urlopen", return_value=response):
+            reply_key = bridge.execute_local_command("capture_check")
+        self.assertEqual(reply_key, "dynamic_reply")
+        self.assertIn("右手相机", bridge._pending_spoken_reply)
+
     def test_capture_check_announces_start_before_calling_dashboard(self):
         bridge = OpenClawVoiceBridge(SimpleNamespace())
         events = []
@@ -480,6 +505,35 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             "capture_reference_saved",
         )
 
+    def test_capture_check_speech_names_each_failed_camera(self):
+        speech = capture_check_speech(
+            {
+                "state": "retry",
+                "comparisons": {
+                    "insight3_a": {"state": "retry"},
+                    "insight3_b": {"state": "pass"},
+                    "insight9_a": {
+                        "state": "retry",
+                        "reason": "Insight9 closure is stale",
+                    },
+                },
+            }
+        )
+        self.assertIn("右手相机没有回到检测位", speech)
+        self.assertNotIn("左手相机", speech)
+        self.assertIn("头部相机没有获得新的地图闭环", speech)
+        self.assertIn("暂时不需要重新校准", speech)
+
+    def test_capture_check_speech_requests_calibration_for_large_offset(self):
+        speech = capture_check_speech(
+            {
+                "state": "recalibrate",
+                "comparisons": {"insight3_b": {"state": "recalibrate"}},
+            }
+        )
+        self.assertIn("左手相机位置偏差过大", speech)
+        self.assertIn("需要重新校准", speech)
+
     def test_extract_reply_prefers_visible_final_text(self):
         payload = {
             "payloads": [{"text": "fallback"}],
@@ -506,6 +560,35 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
     def test_speech_text_removes_markdown_and_caps_length(self):
         self.assertEqual(speech_text("**查看** [页面](http://localhost)"), "查看 页面")
         self.assertEqual(speech_text("一" * 8, max_chars=5), "一一一一。")
+        self.assertEqual(speech_text("第一句；第二句。"), "第一句。第二句。")
+
+    def test_piper_writer_inserts_silence_between_sentence_chunks(self):
+        chunks = [
+            SimpleNamespace(
+                sample_rate=1000,
+                sample_width=2,
+                sample_channels=1,
+                audio_int16_bytes=b"\x01\x00\x01\x00",
+            ),
+            SimpleNamespace(
+                sample_rate=1000,
+                sample_width=2,
+                sample_channels=1,
+                audio_int16_bytes=b"\x02\x00\x02\x00",
+            ),
+        ]
+        voice = SimpleNamespace(synthesize=lambda *_args, **_kwargs: iter(chunks))
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "speech.wav"
+            synthesize_piper_wav(
+                voice,
+                "第一句。第二句。",
+                output,
+                object(),
+                sentence_silence_ms=100,
+            )
+            with wave.open(str(output), "rb") as wav_file:
+                self.assertEqual(wav_file.getnframes(), 104)
 
     def test_clean_utterance_repairs_domain_phrase(self):
         self.assertEqual(clean_utterance_transcript("检查 一下 素材 状态"), "检查一下数采状态")

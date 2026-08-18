@@ -8,16 +8,16 @@ CANNED_REPLIES = {
     "recording_starting": "初始化录制中，请稍等。",
     "recording_started": "录制已经开始。",
     "recording_stopping": "正在结束录制。",
-    "recording_stopped": "录制已经结束。请将左右手相机放回检测位，并用头部相机扫视已建图工作区，然后说检查相机。",
+    "recording_stopped": "录制已经结束。请把左右手相机放回检测位。请用头部相机扫视已建图工作区。然后说检查相机。",
     "calibration_started": "校准已经开始。",
     "calibration_completed": "校准完成。",
     "capture_check_started": "开始检测。",
-    "capture_reference_saved": "双手检测位和头部相机地图基准已经记录。",
-    "capture_check_pass": "双手相机位置和头部相机地图闭环正常，可以开始下一次采集。",
-    "capture_check_retry": "检测尚未通过。请确认左右手相机完全归位，并用头部相机扫视已建图工作区，然后再说检查相机。",
-    "capture_check_recalibrate": "相机位置或头部地图闭环异常。请说开始校准，完成后重新设置检测位。",
-    "capture_check_not_ready": "检测条件未满足。请确认左右手相机已经静止，头部相机和两路全局定位服务在线。",
-    "capture_check_no_reference": "还没有检测位基准。请放好左右手相机，确认建图完成，然后说设置检测位。",
+    "capture_reference_saved": "检测位已经记录。头部相机地图基准已经记录。",
+    "capture_check_pass": "检测通过。三台相机状态正常。可以开始下一次采集。",
+    "capture_check_retry": "检测没有通过。请把双手相机放回检测位。请用头部相机扫视工作区。然后再次检查。",
+    "capture_check_recalibrate": "相机偏差过大。需要重新校准。请说开始校准。",
+    "capture_check_not_ready": "检测条件没有准备好。请确认相机已经静止。请检查定位状态。",
+    "capture_check_no_reference": "还没有检测位基准。请放好三台相机。然后说设置检测位。",
     "recording_already_active": "当前已经在录制。",
     "command_failed": "指令执行失败，请检查数采服务。",
 }
@@ -29,6 +29,8 @@ def speech_text(text: object, max_chars: int = 240) -> str:
     value = re.sub(r"\[\[tts:[^\]]+]]", "", value).replace("[[/tts:text]]", "").replace("[[tts:text]]", "")
     value = re.sub(r"[`*_#>|]", "", value)
     value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"[；;]+", "。", value)
+    value = re.sub(r"。{2,}", "。", value)
     return value if len(value) <= max_chars else value[:max(1, max_chars - 1)].rstrip("，。！？；：,.!?;:") + "。"
 
 

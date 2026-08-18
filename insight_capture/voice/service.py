@@ -372,6 +372,7 @@ from insight_capture.voice.commands import (
     LocalCommandFailure,
     calibration_is_complete,
     capture_check_reply_key,
+    capture_check_speech,
     match_local_command,
     normalize_transcript,
     wake_word_detected,
@@ -384,7 +385,7 @@ from insight_capture.voice.replies import (
     strip_wake_prefix,
 )
 from insight_capture.voice.stt import decode as decode_sense_voice
-from insight_capture.voice.tts import synthesize_espeak
+from insight_capture.voice.tts import synthesize_espeak, synthesize_piper_wav
 
 
 class VoiceService:
@@ -438,16 +439,19 @@ class VoiceService:
         self._piper_voice = PiperVoice.load(self.args.piper_model)
         self._piper_synthesis_config = SynthesisConfig(
             length_scale=self.args.piper_length_scale,
+            noise_scale=self.args.piper_noise_scale,
+            noise_w_scale=self.args.piper_noise_w_scale,
         )
 
     def _synthesize_piper(self, text: str, output_path: Path) -> None:
         self._load_piper()
-        with wave.open(str(output_path), "wb") as wav_file:
-            self._piper_voice.synthesize_wav(
-                text,
-                wav_file,
-                syn_config=self._piper_synthesis_config,
-            )
+        synthesize_piper_wav(
+            self._piper_voice,
+            text,
+            output_path,
+            self._piper_synthesis_config,
+            sentence_silence_ms=self.args.piper_sentence_silence_ms,
+        )
 
     def _prepare_wake_feedback(self) -> None:
         if self.args.no_tts or self.args.wake_feedback != "speech":
@@ -804,6 +808,10 @@ class VoiceService:
         if action == "calibration_start":
             self._start_calibration_monitor()
         if action == "capture_check":
+            detail = capture_check_speech(payload)
+            if detail:
+                self._pending_spoken_reply = detail
+                return "dynamic_reply"
             return capture_check_reply_key(payload)
         if action == "capture_reference":
             return capture_check_reply_key(payload, reference=True)
@@ -1228,7 +1236,10 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_DATA_ROOT / "zh_CN-huayan-medium.onnx",
     )
-    parser.add_argument("--piper-length-scale", type=float, default=0.9)
+    parser.add_argument("--piper-length-scale", type=float, default=1.0)
+    parser.add_argument("--piper-noise-scale", type=float, default=0.45)
+    parser.add_argument("--piper-noise-w-scale", type=float, default=0.5)
+    parser.add_argument("--piper-sentence-silence-ms", type=int, default=220)
     parser.add_argument("--tts-bin", default="espeak-ng")
     parser.add_argument("--tts-voice", default="cmn")
     parser.add_argument("--tts-speed", type=int, default=185)
@@ -1276,6 +1287,11 @@ def parse_args() -> argparse.Namespace:
     args.wake_tone_frequency = max(100, min(4000, args.wake_tone_frequency))
     args.wake_tone_volume = max(0.05, min(1.0, args.wake_tone_volume))
     args.piper_length_scale = max(0.5, min(2.0, args.piper_length_scale))
+    args.piper_noise_scale = max(0.0, min(1.5, args.piper_noise_scale))
+    args.piper_noise_w_scale = max(0.0, min(1.5, args.piper_noise_w_scale))
+    args.piper_sentence_silence_ms = max(
+        0, min(1000, args.piper_sentence_silence_ms)
+    )
     return args
 
 

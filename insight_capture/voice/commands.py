@@ -108,3 +108,69 @@ def capture_check_reply_key(payload: object, *, reference: bool = False) -> str:
     if reference and state == "reference_saved":
         return "capture_reference_saved"
     return {"pass": "capture_check_pass", "retry": "capture_check_retry", "recalibrate": "capture_check_recalibrate", "no_reference": "capture_check_no_reference"}.get(state, "capture_check_not_ready")
+
+
+def capture_check_speech(payload: object) -> Optional[str]:
+    """Describe failed station checks with operator-facing camera names."""
+    if not isinstance(payload, dict):
+        return None
+    state = str(payload.get("state") or "not_ready")
+    if state == "pass":
+        return None
+    if state == "no_reference":
+        return "还没有检测位基准。请放好三台相机。然后说设置检测位。"
+
+    comparisons = payload.get("comparisons")
+    comparisons = comparisons if isinstance(comparisons, dict) else {}
+    camera_names = {
+        "insight3_a": "右手相机",
+        "insight3_b": "左手相机",
+        "insight9_a": "头部相机",
+    }
+    messages = []
+    needs_recalibration = state == "recalibrate"
+    for camera_id in ("insight3_a", "insight3_b", "insight9_a"):
+        comparison = comparisons.get(camera_id)
+        if not isinstance(comparison, dict):
+            continue
+        camera_state = str(comparison.get("state") or "pass")
+        if camera_state == "pass":
+            continue
+        name = camera_names[camera_id]
+        if camera_id == "insight9_a":
+            reason = str(comparison.get("reason") or "").lower()
+            if "stale" in reason:
+                messages.append(
+                    f"{name}没有获得新的地图闭环。请缓慢扫视已建图工作区。"
+                )
+            elif camera_state == "recalibrate":
+                messages.append(f"{name}地图偏差过大。")
+            else:
+                messages.append(f"{name}地图闭环没有通过。请重新扫视工作区。")
+        elif camera_state == "recalibrate":
+            messages.append(f"{name}位置偏差过大。")
+        else:
+            messages.append(f"{name}没有回到检测位。请重新归位。")
+        needs_recalibration = needs_recalibration or camera_state == "recalibrate"
+
+    if not messages:
+        reasons = [
+            str(reason).lower()
+            for reason in (payload.get("reasons") or [])
+            if str(reason).strip()
+        ]
+        if any("stationary" in reason for reason in reasons):
+            messages.append("相机还没有静止。请放稳后重新检测。")
+        elif any("offline" in reason or "localized" in reason for reason in reasons):
+            messages.append("相机定位服务没有准备好。请检查定位状态。")
+        elif any("stale" in reason for reason in reasons):
+            messages.append("头部相机闭环已经过期。请缓慢扫视已建图工作区。")
+        else:
+            messages.append("检测条件没有准备好。请检查相机位置和定位状态。")
+
+    ending = (
+        "需要重新校准。请说开始校准。"
+        if needs_recalibration
+        else "暂时不需要重新校准。请调整后再次检查。"
+    )
+    return "检测没有通过。" + "".join(messages) + ending
