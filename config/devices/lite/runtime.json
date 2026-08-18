@@ -32,7 +32,8 @@
     "minimum_window_sec": 0.8,
     "minimum_samples": 12,
     "maximum_pose_age_sec": 0.5,
-    "maximum_insight9_validation_age_sec": 5.0,
+    "maximum_insight9_validation_age_sec": 30.0,
+    "insight9_validation_wait_sec": 12.0,
     "insight3": {
       "stationary_translation_m": 0.006,
       "stationary_rotation_deg": 1.5,

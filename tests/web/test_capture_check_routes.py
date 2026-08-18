@@ -2,6 +2,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +50,17 @@ def _payload(response):
 
 
 class CaptureCheckRoutesTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        async def direct(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        patcher = mock.patch(
+            "insight_capture.api.routes.quality.asyncio.to_thread",
+            side_effect=direct,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     async def test_check_is_associated_with_latest_bag(self):
         context = _Context()
         response = await CaptureCheckRoutes(context)._handle_run(None)

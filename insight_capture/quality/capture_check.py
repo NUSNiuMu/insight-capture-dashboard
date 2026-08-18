@@ -77,7 +77,10 @@ class CaptureCheckManager:
         )
         self.maximum_insight9_validation_age_sec = max(
             0.5,
-            float(settings.get("maximum_insight9_validation_age_sec", 5.0)),
+            float(settings.get("maximum_insight9_validation_age_sec", 30.0)),
+        )
+        self.insight9_validation_wait_sec = max(
+            0.0, float(settings.get("insight9_validation_wait_sec", 12.0))
         )
         self.thresholds = {
             "insight3": self._parse_thresholds(
@@ -288,6 +291,27 @@ class CaptureCheckManager:
                 if bag_name:
                     self._write_bag_result(bag_name, result)
                 return result
+            measurement, validation = self._wait_for_fresh_insight9_validation(
+                measurement,
+                validation,
+                reference_validation,
+            )
+            identity_reason = self._validation_identity_reason(
+                reference_validation, validation
+            )
+            if identity_reason:
+                result = self._result(
+                    "recalibrate",
+                    bag_name=bag_name,
+                    reasons=[identity_reason],
+                    suspect_roles=["head"],
+                    suspect_cameras=[self.role_names["head"]],
+                )
+                self.last_result = result
+                self._append_history(result)
+                if bag_name:
+                    self._write_bag_result(bag_name, result)
+                return result
             for role, current in measurement["poses"].items():
                 baseline = self.reference["poses"].get(role)
                 if not isinstance(baseline, dict):
@@ -361,6 +385,53 @@ class CaptureCheckManager:
         if bag_name:
             self._write_bag_result(bag_name, result)
         return result
+
+    def _wait_for_fresh_insight9_validation(
+        self,
+        measurement: dict,
+        validation: dict,
+        reference: object,
+    ) -> tuple[dict, dict]:
+        if (
+            self.insight9_validation_wait_sec <= 0.0
+            or self._validation_is_fresh(validation, reference)
+        ):
+            return measurement, validation
+        deadline = time.monotonic() + self.insight9_validation_wait_sec
+        latest_measurement = measurement
+        latest_validation = validation
+        while time.monotonic() < deadline:
+            remaining = max(0.0, deadline - time.monotonic())
+            time.sleep(min(0.25, remaining))
+            candidate, _reasons = self._measure()
+            if candidate is None:
+                continue
+            current, _reason = self._current_validation(candidate)
+            if current is None:
+                continue
+            latest_measurement = candidate
+            latest_validation = current
+            if self._validation_identity_reason(reference, current):
+                break
+            if self._validation_is_fresh(current, reference):
+                break
+        return latest_measurement, latest_validation
+
+    def _validation_is_fresh(self, validation: dict, reference: object) -> bool:
+        if not isinstance(reference, dict):
+            return False
+        try:
+            sequence = int(validation.get("validation_count", 0) or 0)
+            validated = int(reference.get("validated_count", 0) or 0)
+            last = validation.get("last_validation")
+            age = (
+                float(last.get("age_sec", math.inf))
+                if isinstance(last, dict)
+                else math.inf
+            )
+        except (TypeError, ValueError):
+            return False
+        return sequence > validated and age <= self.maximum_insight9_validation_age_sec
 
     def _measure(self) -> tuple[Optional[dict], list[str]]:
         if not self.enabled:
@@ -640,6 +711,7 @@ class CaptureCheckManager:
             "maximum_insight9_validation_age_sec": (
                 self.maximum_insight9_validation_age_sec
             ),
+            "insight9_validation_wait_sec": self.insight9_validation_wait_sec,
         }
 
     @staticmethod

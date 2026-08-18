@@ -91,7 +91,11 @@ class CaptureCheckManagerTest(unittest.TestCase):
             pose_roles={name: role for name, (role, _) in POSES.items()},
             mapping_snapshot=lambda: self.mapping,
             results_root=Path(self.temporary.name),
-            config={"minimum_samples": 8, "minimum_window_sec": 0.6},
+            config={
+                "minimum_samples": 8,
+                "minimum_window_sec": 0.6,
+                "insight9_validation_wait_sec": 0.0,
+            },
         )
 
     def tearDown(self):
@@ -199,7 +203,7 @@ class CaptureCheckManagerTest(unittest.TestCase):
     def test_old_episode_closure_cannot_validate_the_boundary(self):
         self.save_reference()
         stale = validation_status(count=1)
-        stale["last_validation"]["age_sec"] = 8.0
+        stale["last_validation"]["age_sec"] = 31.0
         self.mapping["statuses"]["insight9"]["capture_validation"] = stale
         self.feed()
         result = self.manager.check()
@@ -208,6 +212,32 @@ class CaptureCheckManagerTest(unittest.TestCase):
             "closure is stale",
             result["comparisons"]["insight9_a"]["reason"],
         )
+
+    def test_check_waits_for_a_new_headset_closure(self):
+        self.save_reference()
+        self.manager.reference["insight9_validation"]["validated_count"] = 1
+        stale = validation_status(count=1)
+        stale["last_validation"]["age_sec"] = 31.0
+        self.mapping["statuses"]["insight9"]["capture_validation"] = stale
+        calls = 0
+
+        def snapshot():
+            nonlocal calls
+            calls += 1
+            if calls >= 2:
+                self.mapping["statuses"]["insight9"]["capture_validation"] = (
+                    validation_status(count=2)
+                )
+            return self.mapping
+
+        self.manager.mapping_snapshot = snapshot
+        self.manager.insight9_validation_wait_sec = 0.5
+        self.feed()
+
+        result = self.manager.check()
+
+        self.assertEqual(result["state"], "pass")
+        self.assertGreaterEqual(calls, 2)
 
     def test_map_session_change_requires_recalibration(self):
         self.save_reference()

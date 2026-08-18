@@ -22,7 +22,8 @@ Dashboard 容器不挂载 `/dev/snd`。固定命令的完整链路为：
 - 停止录制：等待原生 MCAP recorder 排空，并写入 Take quick QC；
 - 开始校准：清空 Insight9 sparse map 与两路 Insight3 global localization 状态；
 - 检查相机：运行可选的固定检测位检查，并写入最近 Take；未通过时按右手、左手、头部
-  相机分别播报问题，并明确是重新归位、扫视工作区还是需要重新校准；
+  相机分别播报问题，并明确是重新归位、对准检测位方向小范围扫动还是需要重新校准；命令
+  发出后最多等待 12 秒接收新闭环，闭环结果有效 30 秒；
 - 系统状态：播报 Preflight、定位、存储与录制可用性；
 - 本条作废：只把最近 Take 标为 `operator_valid=false`，绝不删除原始 bag；
 - 设置检测位：供需要固定治具的 task profile 使用。

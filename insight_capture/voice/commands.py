@@ -141,7 +141,7 @@ def capture_check_speech(payload: object) -> Optional[str]:
             reason = str(comparison.get("reason") or "").lower()
             if "stale" in reason:
                 messages.append(
-                    f"{name}没有获得新的地图闭环。请缓慢扫视已建图工作区。"
+                    f"{name}没有获得新的地图闭环。请对准检测位方向，并小范围缓慢扫动。"
                 )
             elif camera_state == "recalibrate":
                 messages.append(f"{name}地图偏差过大。")
@@ -164,7 +164,9 @@ def capture_check_speech(payload: object) -> Optional[str]:
         elif any("offline" in reason or "localized" in reason for reason in reasons):
             messages.append("相机定位服务没有准备好。请检查定位状态。")
         elif any("stale" in reason for reason in reasons):
-            messages.append("头部相机闭环已经过期。请缓慢扫视已建图工作区。")
+            messages.append(
+                "头部相机闭环已经过期。请对准检测位方向，并小范围缓慢扫动。"
+            )
         else:
             messages.append("检测条件没有准备好。请检查相机位置和定位状态。")
 
