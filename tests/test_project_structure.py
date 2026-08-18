@@ -176,6 +176,34 @@ class ProjectStructureTest(unittest.TestCase):
 
         self.assertEqual(violations, [])
 
+    def test_dashboard_navigation_order_is_consistent(self) -> None:
+        expected = [
+            "/",
+            "/3d",
+            "/bags",
+            "/umi-dataset",
+            "/scoring",
+            "/handpose",
+            "/optimization",
+            "/recording",
+            "/settings",
+        ]
+        frontend_root = ROOT / "web_dashboard" / "src"
+        checked = []
+        for path in frontend_root.rglob("*.html"):
+            source = path.read_text(encoding="utf-8")
+            navigation = re.search(
+                r'<nav class="(?:side-nav|rail-nav)"[^>]*>(.*?)</nav>',
+                source,
+                flags=re.DOTALL,
+            )
+            if navigation is None:
+                continue
+            links = re.findall(r'<a href="([^"]+)"', navigation.group(1))
+            self.assertEqual(links, expected, str(path.relative_to(ROOT)))
+            checked.append(path)
+        self.assertEqual(len(checked), 9)
+
     def test_dashboard_launcher_reconciles_compose_before_restart(self) -> None:
         source = (ROOT / "deploy" / "run_dashboard.sh").read_text(encoding="utf-8")
         self.assertIn("docker compose up -d", source)
