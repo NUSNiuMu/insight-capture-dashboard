@@ -155,6 +155,20 @@ class CaptureCheckManagerTest(unittest.TestCase):
             result["comparisons"]["insight3_a"]["threshold_group"], "insight3"
         )
 
+    def test_updated_hand_camera_translation_tolerance(self):
+        self.save_reference()
+        self.feed(offsets={"insight3_a": (0.014, 0.0, 0.0)})
+        result = self.manager.check()
+        self.assertEqual(result["state"], "pass")
+        self.assertEqual(
+            self.manager.thresholds["insight3"]["pass_translation_m"],
+            0.015,
+        )
+        self.assertEqual(
+            self.manager.thresholds["insight3"]["pass_rotation_deg"],
+            3.0,
+        )
+
     def test_large_offset_requires_recalibration(self):
         self.save_reference()
         self.feed(offsets={"insight3_b": (0.05, 0.0, 0.0)})
