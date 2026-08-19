@@ -125,6 +125,14 @@ class SettingsRoutes:
             return web.json_response({"error": str(exc)}, status=503)
         return web.json_response({"voice_audio": voice_audio})
 
+    async def _handle_settings_voice_sample(
+        self, _request: web.Request
+    ) -> web.Response:
+        try:
+            voice_audio = await self._voice_control_request("/v1/audio/sample", payload={})
+        except RuntimeError as exc:
+            return web.json_response({"error": str(exc)}, status=503)
+        return web.json_response({"voice_audio": voice_audio})
 
     async def _handle_settings_restart(self, _request: web.Request) -> web.Response:
         self.context.node.get_logger().info(

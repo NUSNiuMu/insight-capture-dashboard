@@ -96,16 +96,19 @@ class VoiceControlServer:
         port: int,
         status: Callable[[], dict[str, object]],
         set_volume: Callable[[object], dict[str, object]],
+        play_sample: Callable[[], dict[str, object]],
     ) -> None:
         self.host = host
         self.port = port
         self._status = status
         self._set_volume = set_volume
+        self._play_sample = play_sample
         self._server: ThreadingHTTPServer | None = None
 
     def start(self) -> None:
         status = self._status
         set_volume = self._set_volume
+        play_sample = self._play_sample
 
         class Handler(BaseHTTPRequestHandler):
             def _json_response(self, status_code: int, payload: object) -> None:
@@ -123,24 +126,36 @@ class VoiceControlServer:
                 self._json_response(200, status())
 
             def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
-                if self.path != "/v1/audio/volume":
-                    self._json_response(404, {"error": "not found"})
+                length = int(self.headers.get("Content-Length", "0"))
+                if length > 4096:
+                    self._json_response(400, {"error": "request body too large"})
                     return
-                try:
-                    length = int(self.headers.get("Content-Length", "0"))
-                    if length <= 0 or length > 4096:
-                        raise ValueError("request body must contain a volume")
-                    payload = json.loads(self.rfile.read(length))
-                    if not isinstance(payload, dict) or "volume_percent" not in payload:
-                        raise ValueError("field 'volume_percent' is required")
-                    result = set_volume(payload["volume_percent"])
-                except (json.JSONDecodeError, ValueError) as exc:
-                    self._json_response(400, {"error": str(exc)})
+                body = self.rfile.read(length) if length > 0 else b""
+                if self.path == "/v1/audio/volume":
+                    try:
+                        if not body:
+                            raise ValueError("request body must contain a volume")
+                        payload = json.loads(body)
+                        if not isinstance(payload, dict) or "volume_percent" not in payload:
+                            raise ValueError("field 'volume_percent' is required")
+                        result = set_volume(payload["volume_percent"])
+                    except (json.JSONDecodeError, ValueError) as exc:
+                        self._json_response(400, {"error": str(exc)})
+                        return
+                    except Exception as exc:  # noqa: BLE001 - isolate control failures
+                        self._json_response(409, {"error": str(exc)})
+                        return
+                    self._json_response(200, result)
                     return
-                except Exception as exc:  # noqa: BLE001 - isolate control failures
-                    self._json_response(409, {"error": str(exc)})
+                if self.path == "/v1/audio/sample":
+                    try:
+                        result = play_sample()
+                    except Exception as exc:  # noqa: BLE001 - isolate control failures
+                        self._json_response(409, {"error": str(exc)})
+                        return
+                    self._json_response(200, result)
                     return
-                self._json_response(200, result)
+                self._json_response(404, {"error": "not found"})
 
             def log_message(self, _format: str, *_args: object) -> None:
                 return

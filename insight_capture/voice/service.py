@@ -84,6 +84,9 @@ class LocalCommandFailure(RuntimeError):
     def __init__(self, message: str, speech: Optional[str] = None) -> None:
         super().__init__(message)
         self.speech = str(speech or "").strip()
+
+
+VOLUME_SAMPLE_TEXT = "宸境科技"
 CANNED_REPLIES = {
     "recording_starting": "初始化录制中，请稍等。",
     "recording_started": "录制已经开始。",
@@ -799,12 +802,17 @@ class VoiceService:
         self._emit("playback_volume", volume_percent=volume, source="web")
         return self.audio_control_status()
 
+    def play_volume_sample(self) -> dict[str, object]:
+        self.speak(VOLUME_SAMPLE_TEXT)
+        return self.audio_control_status()
+
     def _start_control_server(self) -> None:
         self._control_server = VoiceControlServer(
             self.args.control_host,
             self.args.control_port,
             self.audio_control_status,
             self.set_playback_volume,
+            self.play_volume_sample,
         )
         self._control_server.start()
         self._emit(

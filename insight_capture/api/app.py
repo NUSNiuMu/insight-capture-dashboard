@@ -141,6 +141,10 @@ def create_app(context: DashboardContext) -> web.Application:
         "/api/settings/voice-volume",
         settings._handle_settings_voice_volume,
     )
+    app.router.add_post(
+        "/api/settings/voice-sample",
+        settings._handle_settings_voice_sample,
+    )
     app.router.add_get("/asset", static._handle_asset)
 
     if context.web_root and context.web_root.exists():

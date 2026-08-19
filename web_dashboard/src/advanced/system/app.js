@@ -10,9 +10,11 @@ const insight3MaskRatio = document.getElementById("insight3-mask-ratio");
 const voiceVolumeSlider = document.getElementById("voice-volume-slider");
 const voiceVolumeOutput = document.getElementById("voice-volume-output");
 const voiceVolumeStatus = document.getElementById("voice-volume-status");
+const voiceVolumeSampleButton = document.getElementById("voice-volume-sample-button");
 let voiceVolumeTimer = null;
 let pendingVoiceVolume = null;
 let voiceVolumeSaving = false;
+let voiceVolumeSamplePlaying = false;
 const ROLE_STYLE = {
   head: { label: "Head" },
   left_hand: { label: "Left Hand" },
@@ -50,6 +52,11 @@ if (voiceVolumeSlider) {
     window.clearTimeout(voiceVolumeTimer);
     pendingVoiceVolume = Number(voiceVolumeSlider.value);
     void flushVoiceVolume();
+  });
+}
+if (voiceVolumeSampleButton) {
+  voiceVolumeSampleButton.addEventListener("click", () => {
+    void playVoiceVolumeSample();
   });
 }
 
@@ -139,6 +146,9 @@ function renderVoiceAudio(audio) {
   }
   const available = Boolean(audio && audio.available);
   voiceVolumeSlider.disabled = !available;
+  if (voiceVolumeSampleButton) {
+    voiceVolumeSampleButton.disabled = !available || voiceVolumeSamplePlaying;
+  }
   if (!available) {
     voiceVolumeSlider.value = "0";
     if (voiceVolumeOutput) {
@@ -184,6 +194,37 @@ async function flushVoiceVolume() {
     voiceVolumeSaving = false;
     if (pendingVoiceVolume !== null) {
       void flushVoiceVolume();
+    }
+  }
+}
+
+async function playVoiceVolumeSample() {
+  if (voiceVolumeSamplePlaying) {
+    return;
+  }
+  voiceVolumeSamplePlaying = true;
+  if (voiceVolumeSampleButton) {
+    voiceVolumeSampleButton.disabled = true;
+  }
+  if (voiceVolumeStatus) {
+    voiceVolumeStatus.textContent = "Playing sample...";
+  }
+  try {
+    const response = await fetch("/api/settings/voice-sample", { method: "POST" });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to play sample.");
+    }
+    renderVoiceAudio(payload.voice_audio);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (voiceVolumeStatus) {
+      voiceVolumeStatus.textContent = `Failed to play sample: ${message}`;
+    }
+  } finally {
+    voiceVolumeSamplePlaying = false;
+    if (voiceVolumeSampleButton) {
+      voiceVolumeSampleButton.disabled = voiceVolumeSlider ? voiceVolumeSlider.disabled : false;
     }
   }
 }
