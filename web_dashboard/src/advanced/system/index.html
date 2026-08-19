@@ -14,8 +14,7 @@
           <div id="settings-restart-banner" class="restart-banner" hidden><span id="settings-restart-message">Saved. Restart the backend to apply.</span><button type="button" id="settings-restart-button" class="quiet-button">Restart backend</button></div>
           <section class="settings-surface settings-audio-panel"><div class="section-heading"><div><p class="section-kicker">Voice feedback</p><h2>Speaker volume</h2></div><p id="voice-volume-status" class="field-help" aria-live="polite">Loading audio service...</p></div>
             <div class="settings-volume-control">
-              <label for="voice-volume-slider"><span>Output level</span><small>Automatically follows whichever supported USB speaker is currently connected.</small></label>
-              <div class="settings-volume-input"><input id="voice-volume-slider" type="range" min="0" max="100" step="1" disabled><output id="voice-volume-output" for="voice-volume-slider">--%</output><button type="button" id="voice-volume-sample-button" class="quiet-button" disabled>Play sample</button></div>
+              <div class="settings-volume-input"><input id="voice-volume-slider" type="range" min="0" max="100" step="1" aria-label="Output level" disabled><output id="voice-volume-output" for="voice-volume-slider">--%</output><button type="button" id="voice-volume-sample-button" class="quiet-button" disabled>Play sample</button></div>
             </div>
           </section>
           <section class="settings-surface recording-panel" id="settings-panel"><div class="section-heading"><div><p class="section-kicker">Connected devices</p><h2>Camera configuration</h2></div><p id="settings-status" class="field-help" aria-live="polite">Loading settings...</p></div>
