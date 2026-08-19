@@ -10,8 +10,14 @@
         <nav class="side-nav" aria-label="Dashboard pages"><p>Review</p><a href="/"><b>01</b><span>Sessions</span></a><a href="/3d"><b>02</b><span>Spatial review</span></a><a href="/bags"><b>03</b><span>Rosbags</span></a><p>Process</p><a href="/umi-dataset"><b>04</b><span>Datasets</span></a><a href="/scoring"><b>05</b><span>Scoring</span></a><p>Advanced</p><a href="/handpose"><b>06</b><span>Hand pose</span></a><p>Engineering</p><a href="/optimization"><b>07</b><span>Optimization</span></a><p>Maintenance</p><a href="/recording"><b>08</b><span>Recorder</span></a><a href="/settings" class="is-active"><b>09</b><span>Settings</span></a></nav><div class="sidebar-foot"><i></i><span>System online<small>All services reachable</small></span></div>
       </aside>
       <section class="app-main"><header class="app-topbar"><span>System / <strong>Settings</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
-        <main class="page-content"><header class="content-heading"><div><p class="section-kicker">System configuration</p><h1>Workspace settings</h1><p>Configure camera representation and tracking services.</p></div><div class="heading-stat"><strong>Local</strong><span>configuration</span></div></header>
+        <main class="page-content"><header class="content-heading"><div><p class="section-kicker">System configuration</p><h1>Workspace settings</h1><p>Configure audio, camera representation, and tracking services.</p></div><div class="heading-stat"><strong>Local</strong><span>configuration</span></div></header>
           <div id="settings-restart-banner" class="restart-banner" hidden><span id="settings-restart-message">Saved. Restart the backend to apply.</span><button type="button" id="settings-restart-button" class="quiet-button">Restart backend</button></div>
+          <section class="settings-surface settings-audio-panel"><div class="section-heading"><div><p class="section-kicker">Voice feedback</p><h2>Speaker volume</h2></div><p id="voice-volume-status" class="field-help" aria-live="polite">Loading audio service...</p></div>
+            <div class="settings-volume-control">
+              <label for="voice-volume-slider"><span>Output level</span><small>Automatically follows whichever supported USB speaker is currently connected.</small></label>
+              <div class="settings-volume-input"><input id="voice-volume-slider" type="range" min="0" max="100" step="1" disabled><output id="voice-volume-output" for="voice-volume-slider">--%</output></div>
+            </div>
+          </section>
           <section class="settings-surface recording-panel" id="settings-panel"><div class="section-heading"><div><p class="section-kicker">Connected devices</p><h2>Camera configuration</h2></div><p id="settings-status" class="field-help" aria-live="polite">Loading settings...</p></div>
             <form id="insight3-mask-form" class="settings-inline-form" hidden>
               <label class="settings-form-field" for="insight3-mask-ratio"><span>Insight3 gripper mask height ratio</span><input id="insight3-mask-ratio" type="number" min="0" max="0.99" step="0.01" inputmode="decimal" required><small>Default 0.2 masks the bottom 20% of both Insight3 images; set 0 to disable the mask.</small></label>
@@ -20,6 +26,6 @@
             <div id="settings-camera-list" class="settings-camera-list"></div></section>
         </main>
       </section>
-    </div><script type="module" src="/static/pages/settings.js?v=20260806-mask-default-02"></script>
+    </div><script type="module" src="/static/pages/settings.js?v=20260819-speaker-hotplug"></script>
   </body>
 </html>

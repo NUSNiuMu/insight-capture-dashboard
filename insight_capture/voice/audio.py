@@ -52,7 +52,7 @@ def _alsa_devices(kind: str) -> list[tuple[str, str]]:
 
 
 def _alsa_card(device: str) -> str:
-    match = re.search(r"(?:^|,)CARD=([^,]+)", device)
+    match = re.search(r"(?:^|[:,])CARD=([^,]+)", device)
     return match.group(1) if match else ""
 
 
@@ -81,55 +81,26 @@ def discover_alsa_device(kind: str, preferred: str = "") -> str:
     return _select_alsa_device(_alsa_devices(kind), preferred)
 
 
-def discover_alsa_duplex(preferred: str = "") -> tuple[str, str]:
-    """Select one scanned card that supports both capture and playback."""
-    capture_devices = _alsa_devices("capture")
-    playback_devices = _alsa_devices("playback")
-    playback_by_card: dict[str, list[tuple[str, str]]] = {}
-    for device in playback_devices:
-        playback_by_card.setdefault(_alsa_card(device[0]), []).append(device)
-
-    pairs: list[tuple[tuple[str, str], tuple[str, str]]] = []
-    for capture in capture_devices:
-        card = _alsa_card(capture[0])
-        if card and playback_by_card.get(card):
-            pairs.append((capture, playback_by_card[card][0]))
-
-    hint = str(preferred or "").casefold()
-    if hint:
-        matched = next(
-            (
-                pair
-                for pair in pairs
-                if hint
-                in " ".join(
-                    (pair[0][0], pair[0][1], pair[1][0], pair[1][1])
-                ).casefold()
-            ),
-            None,
-        )
-        if matched is not None:
-            return matched[0][0], matched[1][0]
-
-    usb_pair = next(
-        (
-            pair
-            for pair in pairs
-            if "usb" in f"{pair[0][1]} {pair[1][1]}".casefold()
-        ),
-        None,
-    )
-    if usb_pair is not None:
-        return usb_pair[0][0], usb_pair[1][0]
-    if pairs:
-        return pairs[0][0][0], pairs[0][1][0]
-    return (
-        _select_alsa_device(capture_devices, preferred),
-        _select_alsa_device(playback_devices, preferred),
-    )
+def list_alsa_devices(kind: str) -> list[dict[str, str]]:
+    """List one stable device per currently scanned USB sound card."""
+    devices = _alsa_devices(kind)
+    usb_devices = [
+        device for device in devices if "usb" in device[1].casefold()
+    ]
+    candidates = usb_devices or devices
+    options: list[dict[str, str]] = []
+    seen_cards: set[str] = set()
+    for device, description in candidates:
+        card = _alsa_card(device)
+        if not card or card in seen_cards:
+            continue
+        seen_cards.add(card)
+        label = description.split(", USB Audio", 1)[0].strip() or card
+        options.append({"id": device, "card": card, "label": label})
+    return options
 
 
-def discover_pulse_sink(preferred: str = "") -> str:
+def discover_pulse_sink(preferred: str = "", playback_device: str = "") -> str:
     """Resolve a live PulseAudio sink, honoring an optional operator hint."""
     try:
         completed = subprocess.run(
@@ -153,6 +124,18 @@ def discover_pulse_sink(preferred: str = "") -> str:
     )
     if matched:
         return matched
+    card_key = re.sub(r"[^a-z0-9]+", "", _alsa_card(playback_device).casefold())
+    if len(card_key) >= 3:
+        matched = next(
+            (
+                name
+                for name in sinks
+                if card_key in re.sub(r"[^a-z0-9]+", "", name.casefold())
+            ),
+            "",
+        )
+        if matched:
+            return matched
     try:
         default = subprocess.run(
             ["pactl", "get-default-sink"],

@@ -363,8 +363,8 @@ from insight_capture.voice.audio import (
     AlsaCapture,
     configure_pulse_card_volume,
     discover_alsa_device,
-    discover_alsa_duplex,
     discover_pulse_sink,
+    list_alsa_devices,
     set_alsa_playback_volume,
     set_pulse_sink_volume,
     wake_tone_wav,
@@ -380,6 +380,12 @@ from insight_capture.voice.commands import (
     match_local_command,
     normalize_transcript,
     wake_word_detected,
+)
+from insight_capture.voice.control import (
+    VoiceControlServer,
+    load_playback_volume,
+    save_playback_volume,
+    validate_playback_volume,
 )
 from insight_capture.voice.openclaw_adapter import build_agent_command, extract_openclaw_reply
 from insight_capture.voice.replies import (
@@ -402,6 +408,7 @@ class VoiceService:
         self._wake_feedback_audio: Optional[Path] = None
         self._canned_audio: dict[str, Path] = {}
         self._playback_lock = threading.Lock()
+        self._control_server: Optional[VoiceControlServer] = None
         self._calibration_monitor_generation = 0
         self._wake_candidates = 0
         self._last_recognition_timing: dict[str, object] = {}
@@ -733,6 +740,78 @@ class VoiceService:
             raise RuntimeError(
                 f"Audio feedback failed via {self.args.playback_backend}: {exc}"
             ) from exc
+
+    def _refresh_playback_device(self) -> dict[str, str]:
+        options = list_alsa_devices("playback")
+        if not options:
+            raise RuntimeError("no playback device is currently available")
+        selected = next(
+            (
+                option
+                for option in options
+                if option["id"] == self.args.playback_device
+            ),
+            options[0],
+        )
+        device_changed = selected["id"] != self.args.playback_device
+        self.args.playback_device = selected["id"]
+        sink_changed = False
+        if self.args.playback_backend == "pulse":
+            pulse_sink = discover_pulse_sink("", self.args.playback_device)
+            if pulse_sink and pulse_sink != self.args.pulse_sink:
+                self.args.pulse_sink = pulse_sink
+                sink_changed = True
+        if device_changed or sink_changed:
+            self._emit(
+                "playback_device",
+                device=self.args.playback_device,
+                pulse_sink=self.args.pulse_sink or "default",
+                source="hotplug",
+            )
+        return selected
+
+    def audio_control_status(self) -> dict[str, object]:
+        selected = self._refresh_playback_device()
+        return {
+            "available": True,
+            "volume_percent": self.args.playback_volume,
+            "backend": self.args.playback_backend,
+            "playback_device": self.args.playback_device,
+            "playback_label": selected["label"],
+            "pulse_sink": self.args.pulse_sink or "default",
+        }
+
+    def set_playback_volume(self, value: object) -> dict[str, object]:
+        volume = validate_playback_volume(value)
+        with self._playback_lock:
+            self._refresh_playback_device()
+            if self.args.playback_backend == "pulse":
+                applied = set_pulse_sink_volume(self.args.pulse_sink, volume)
+            else:
+                applied = set_alsa_playback_volume(
+                    self.args.playback_device,
+                    volume,
+                )
+            if not applied:
+                raise RuntimeError("audio device rejected the volume change")
+            save_playback_volume(self.args.audio_settings, volume)
+            self.args.playback_volume = volume
+        self._emit("playback_volume", volume_percent=volume, source="web")
+        return self.audio_control_status()
+
+    def _start_control_server(self) -> None:
+        self._control_server = VoiceControlServer(
+            self.args.control_host,
+            self.args.control_port,
+            self.audio_control_status,
+            self.set_playback_volume,
+        )
+        self._control_server.start()
+        self._emit(
+            "control_ready",
+            host=self.args.control_host,
+            port=self.args.control_port,
+        )
 
     def ask_openclaw(self, utterance: str) -> str:
         if not self.args.openclaw_bin.is_file():
@@ -1128,6 +1207,10 @@ class VoiceService:
             self._rollback_new_unconfirmed_recording(recording_before)
 
     def run_forever(self) -> None:
+        try:
+            self._start_control_server()
+        except OSError as exc:
+            self._emit("error", stage="control_server", message=str(exc))
         self.load_models()
         self._start_alert_monitor()
         self._emit(
@@ -1187,6 +1270,26 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=int(os.environ.get("LOOPER_PLAYBACK_VOLUME", "40")),
         help="Playback volume percentage restored whenever the service starts.",
+    )
+    parser.add_argument(
+        "--audio-settings",
+        type=Path,
+        default=Path(
+            os.environ.get(
+                "LOOPER_VOICE_SETTINGS",
+                str(DEFAULT_DATA_ROOT / "settings.json"),
+            )
+        ),
+        help="Persistent host-side settings written by the Dashboard volume control.",
+    )
+    parser.add_argument(
+        "--control-host",
+        default=os.environ.get("LOOPER_CONTROL_HOST", "127.0.0.1"),
+    )
+    parser.add_argument(
+        "--control-port",
+        type=int,
+        default=int(os.environ.get("LOOPER_CONTROL_PORT", "8770")),
     )
     parser.add_argument("--sample-rate", type=int, default=16000)
     parser.add_argument("--chunk-frames", type=int, default=4000)
@@ -1297,6 +1400,7 @@ def parse_args() -> argparse.Namespace:
     args.wake_tone_frequency = max(100, min(4000, args.wake_tone_frequency))
     args.wake_tone_volume = max(0.05, min(1.0, args.wake_tone_volume))
     args.playback_volume = max(0, min(100, args.playback_volume))
+    args.control_port = max(1, min(65535, args.control_port))
     args.piper_length_scale = max(0.5, min(2.0, args.piper_length_scale))
     args.piper_noise_scale = max(0.0, min(1.5, args.piper_noise_scale))
     args.piper_noise_w_scale = max(0.0, min(1.5, args.piper_noise_w_scale))
@@ -1308,24 +1412,26 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.device == "auto" and args.playback_device == "auto":
-        args.device, args.playback_device = discover_alsa_duplex(
-            args.audio_device_hint
+    args.playback_volume = load_playback_volume(
+        args.audio_settings,
+        default=args.playback_volume,
+    )
+    if args.device == "auto":
+        args.device = discover_alsa_device("capture", args.audio_device_hint)
+    if args.playback_device == "auto":
+        args.playback_device = discover_alsa_device(
+            "playback", args.audio_device_hint
         )
-    else:
-        if args.device == "auto":
-            args.device = discover_alsa_device("capture", args.audio_device_hint)
-        if args.playback_device == "auto":
-            args.playback_device = discover_alsa_device(
-                "playback", args.audio_device_hint
-            )
     audio_setup_ok = False
     if args.playback_backend == "pulse":
         pulse_card_ok = not args.audio_device_hint or configure_pulse_card_volume(
             args.audio_device_hint
         )
         if args.pulse_sink == "auto":
-            args.pulse_sink = discover_pulse_sink(args.audio_device_hint)
+            args.pulse_sink = discover_pulse_sink(
+                args.audio_device_hint,
+                args.playback_device,
+            )
         audio_setup_ok = pulse_card_ok and set_pulse_sink_volume(
             args.pulse_sink,
             args.playback_volume,

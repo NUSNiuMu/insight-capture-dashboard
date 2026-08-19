@@ -7,6 +7,12 @@ const settingsRestartMessage = document.getElementById("settings-restart-message
 const settingsRestartButton = document.getElementById("settings-restart-button");
 const insight3MaskForm = document.getElementById("insight3-mask-form");
 const insight3MaskRatio = document.getElementById("insight3-mask-ratio");
+const voiceVolumeSlider = document.getElementById("voice-volume-slider");
+const voiceVolumeOutput = document.getElementById("voice-volume-output");
+const voiceVolumeStatus = document.getElementById("voice-volume-status");
+let voiceVolumeTimer = null;
+let pendingVoiceVolume = null;
+let voiceVolumeSaving = false;
 const ROLE_STYLE = {
   head: { label: "Head" },
   left_hand: { label: "Left Hand" },
@@ -25,6 +31,25 @@ if (insight3MaskForm) {
   insight3MaskForm.addEventListener("submit", (event) => {
     event.preventDefault();
     void setInsight3GripperMaskRatio(insight3MaskRatio && insight3MaskRatio.value);
+  });
+}
+if (voiceVolumeSlider) {
+  voiceVolumeSlider.addEventListener("input", () => {
+    const volume = Number(voiceVolumeSlider.value);
+    renderVoiceVolumeValue(volume);
+    pendingVoiceVolume = volume;
+    if (voiceVolumeStatus) {
+      voiceVolumeStatus.textContent = "Adjusting...";
+    }
+    window.clearTimeout(voiceVolumeTimer);
+    voiceVolumeTimer = window.setTimeout(() => {
+      void flushVoiceVolume();
+    }, 120);
+  });
+  voiceVolumeSlider.addEventListener("change", () => {
+    window.clearTimeout(voiceVolumeTimer);
+    pendingVoiceVolume = Number(voiceVolumeSlider.value);
+    void flushVoiceVolume();
   });
 }
 
@@ -55,6 +80,7 @@ function setSettingsStatus(message) {
 }
 
 function renderSettings(payload) {
+  renderVoiceAudio(payload && payload.voice_audio);
   if (!settingsCameraList) {
     return;
   }
@@ -99,6 +125,67 @@ function renderSettings(payload) {
       void setHandOverlayEnabled(toggle.dataset.camera, toggle.checked);
     });
   });
+}
+
+function renderVoiceVolumeValue(volume) {
+  if (voiceVolumeOutput) {
+    voiceVolumeOutput.textContent = `${Math.round(volume)}%`;
+  }
+}
+
+function renderVoiceAudio(audio) {
+  if (!voiceVolumeSlider) {
+    return;
+  }
+  const available = Boolean(audio && audio.available);
+  voiceVolumeSlider.disabled = !available;
+  if (!available) {
+    voiceVolumeSlider.value = "0";
+    if (voiceVolumeOutput) {
+      voiceVolumeOutput.textContent = "--%";
+    }
+    if (voiceVolumeStatus) {
+      voiceVolumeStatus.textContent = (audio && audio.error) || "Voice service unavailable.";
+    }
+    return;
+  }
+  const volume = Math.max(0, Math.min(100, Number(audio.volume_percent) || 0));
+  voiceVolumeSlider.value = String(volume);
+  renderVoiceVolumeValue(volume);
+  if (voiceVolumeStatus) {
+    voiceVolumeStatus.textContent = `${audio.backend === "pulse" ? "PulseAudio" : "ALSA"} · ${audio.playback_label || "active output"}`;
+  }
+}
+
+async function flushVoiceVolume() {
+  if (voiceVolumeSaving || pendingVoiceVolume === null) {
+    return;
+  }
+  const volume = pendingVoiceVolume;
+  pendingVoiceVolume = null;
+  voiceVolumeSaving = true;
+  try {
+    const response = await fetch("/api/settings/voice-volume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ volume_percent: volume })
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to update speaker volume.");
+    }
+    renderVoiceAudio(payload.voice_audio);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (voiceVolumeStatus) {
+      voiceVolumeStatus.textContent = `Failed to update volume: ${message}`;
+    }
+  } finally {
+    voiceVolumeSaving = false;
+    if (pendingVoiceVolume !== null) {
+      void flushVoiceVolume();
+    }
+  }
 }
 
 async function setInsight3GripperMaskRatio(rawValue) {

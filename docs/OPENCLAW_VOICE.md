@@ -34,11 +34,12 @@ recorder I/O。异常持续超过阈值后，Dashboard 写入当前 Take 的 `an
 
 ## 音频设备
 
-录音和 ALSA 播放默认使用 `auto`。服务通过 `arecord -L` / `aplay -L` 扫描当前硬件，优先
-选择同时支持录音和播放的 USB 声卡，并使用稳定的 `plughw:CARD=<name>,DEV=<n>`，不依赖
-可能随重插变化的 card index，也不写死产品名。PulseAudio 播放使用当前有效的默认 sink；
-默认 sink 不可用时再选择扫描到的 USB sink。只有设置 `LOOPER_AUDIO_DEVICE_HINT` 后才会按
-名称覆盖自动选择，并对匹配设备应用兼容性音量设置。可按设备覆盖：
+录音和 ALSA 播放默认使用 `auto`。服务通过 `arecord -L` / `aplay -L` 分别扫描当前输入和
+输出硬件，各自优先选择具备对应能力的 USB 设备；麦克风和音响不要求属于同一块双工声卡。
+选择结果使用稳定的 `plughw:CARD=<name>,DEV=<n>`，不依赖可能随重插变化的 card index，也
+不写死产品名。PulseAudio 播放优先匹配扫描到的播放 `CARD` 对应 sink，再回退当前有效的默认
+或扫描到的 USB sink，避免断开的旧设备残留成为默认输出。只有设置
+`LOOPER_AUDIO_DEVICE_HINT` 后才会按名称覆盖自动选择。可按设备覆盖：
 
 ```bash
 export LOOPER_CAPTURE_DEVICE=plughw:CARD=E3,DEV=0
@@ -48,6 +49,15 @@ export LOOPER_PLAYBACK_BACKEND=alsa   # 默认 pulse
 export LOOPER_PULSE_SINK=alsa_output.usb-...E3...analog-stereo
 export LOOPER_PLAYBACK_VOLUME=40
 ```
+
+Settings 页的 Speaker volume 滑块通过 Dashboard 代理到宿主机语音服务的 loopback 控制接口，
+实时调整当前自动选择的 PulseAudio/ALSA 输出。音量写入
+`~/.local/share/looper-voice/settings.json`，语音服务重启后继续使用；控制接口默认只监听
+`127.0.0.1:8770`，不向局域网暴露。可用 `LOOPER_CONTROL_HOST`、`LOOPER_CONTROL_PORT` 和
+`INSIGHT_VOICE_CONTROL_URL` 覆盖。
+
+服务读取或调整音量时会重新扫描播放设备；原音响已拔出时自动跟随当前插入的 USB 音响，
+因此同一滑块可控制不同型号而无需写死产品名。持久化的只是音量百分比，不绑定设备。
 
 ## 本地模型与测试
 

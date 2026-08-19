@@ -23,7 +23,6 @@ from insight_capture.voice.service import (  # noqa: E402
     clean_utterance_transcript,
     configure_pulse_card_volume,
     discover_alsa_device,
-    discover_alsa_duplex,
     discover_pulse_sink,
     extract_openclaw_reply,
     match_local_command,
@@ -86,29 +85,31 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 "plughw:CARD=E3,DEV=0",
             )
 
-    def test_audio_auto_discovery_prefers_scanned_duplex_usb_card(self):
+    def test_audio_auto_discovery_scans_capture_and_playback_independently(self):
         capture = SimpleNamespace(
             stdout=(
                 "plughw:CARD=APE,DEV=0\n"
                 "    NVIDIA Jetson APE\n"
-                "plughw:CARD=A311,DEV=0\n"
-                "    Yundea A31-1, USB Audio\n"
+                "plughw:CARD=USBMIC,DEV=0\n"
+                "    External Microphone, USB Audio\n"
             )
         )
         playback = SimpleNamespace(
             stdout=(
                 "plughw:CARD=HDA,DEV=3\n"
                 "    NVIDIA HDMI\n"
-                "plughw:CARD=A311,DEV=0\n"
-                "    Yundea A31-1, USB Audio\n"
-                "plughw:CARD=APE,DEV=0\n"
-                "    NVIDIA Jetson APE\n"
+                "plughw:CARD=USBSPK,DEV=0\n"
+                "    External Speaker, USB Audio\n"
             )
         )
         with mock.patch("subprocess.run", side_effect=[capture, playback]):
             self.assertEqual(
-                discover_alsa_duplex(),
-                ("plughw:CARD=A311,DEV=0", "plughw:CARD=A311,DEV=0"),
+                discover_alsa_device("capture"),
+                "plughw:CARD=USBMIC,DEV=0",
+            )
+            self.assertEqual(
+                discover_alsa_device("playback"),
+                "plughw:CARD=USBSPK,DEV=0",
             )
 
     def test_pulse_auto_discovery_prefers_usb_sink_hint(self):
@@ -139,6 +140,20 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 discover_pulse_sink(),
                 "alsa_output.usb-Yundea_A31.analog-stereo",
             )
+
+    def test_pulse_auto_discovery_matches_scanned_alsa_card_before_stale_default(self):
+        sinks = SimpleNamespace(
+            stdout=(
+                "1\talsa_output.usb-CF-IC_CF001_E3.analog-stereo\tmodule\n"
+                "2\talsa_output.usb-Yundea_A31-1.analog-stereo\tmodule\n"
+            )
+        )
+        with mock.patch("subprocess.run", return_value=sinks) as run:
+            self.assertEqual(
+                discover_pulse_sink("", "plughw:CARD=A311,DEV=0"),
+                "alsa_output.usb-Yundea_A31-1.analog-stereo",
+            )
+        run.assert_called_once()
 
     def test_pulse_card_ignores_invalid_db_metadata(self):
         modules = SimpleNamespace(
@@ -193,6 +208,120 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             run.call_args_list[1].args[0],
             ["amixer", "-q", "-c", "E3", "sset", "PCM", "40%", "unmute"],
         )
+
+    def test_web_volume_update_applies_and_persists(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = SimpleNamespace(
+                device="plughw:CARD=MIC,DEV=0",
+                playback_backend="pulse",
+                pulse_sink="alsa_output.usb-device",
+                playback_device="plughw:CARD=USB,DEV=0",
+                playback_volume=40,
+                audio_settings=Path(temporary) / "settings.json",
+            )
+            bridge = OpenClawVoiceBridge(args)
+            with (
+                mock.patch(
+                    "insight_capture.voice.service.set_pulse_sink_volume",
+                    return_value=True,
+                ) as apply_volume,
+                mock.patch(
+                    "insight_capture.voice.service.list_alsa_devices",
+                    return_value=[
+                        {
+                            "id": "plughw:CARD=USB,DEV=0",
+                            "card": "USB",
+                            "label": "USB Speaker",
+                        }
+                    ],
+                ),
+            ):
+                status = bridge.set_playback_volume(37)
+
+            apply_volume.assert_called_once_with(
+                "alsa_output.usb-device",
+                37,
+            )
+            self.assertEqual(status["volume_percent"], 37)
+            self.assertEqual(
+                status["playback_device"],
+                "plughw:CARD=USB,DEV=0",
+            )
+            self.assertEqual(status["playback_label"], "USB Speaker")
+            self.assertEqual(
+                json.loads(args.audio_settings.read_text())["playback_volume"],
+                37,
+            )
+
+    def test_volume_control_follows_newly_connected_speaker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = SimpleNamespace(
+                playback_backend="pulse",
+                pulse_sink="alsa_output.usb-disconnected",
+                playback_device="plughw:CARD=OLD,DEV=0",
+                playback_volume=40,
+                audio_settings=Path(temporary) / "settings.json",
+            )
+            bridge = OpenClawVoiceBridge(args)
+            connected = {
+                "id": "plughw:CARD=NEW,DEV=0",
+                "card": "NEW",
+                "label": "Connected Speaker",
+            }
+            with (
+                mock.patch(
+                    "insight_capture.voice.service.list_alsa_devices",
+                    return_value=[connected],
+                ),
+                mock.patch(
+                    "insight_capture.voice.service.discover_pulse_sink",
+                    return_value="alsa_output.usb-connected",
+                ),
+                mock.patch(
+                    "insight_capture.voice.service.set_pulse_sink_volume",
+                    return_value=True,
+                ) as apply_volume,
+            ):
+                status = bridge.set_playback_volume(28)
+
+            self.assertEqual(status["playback_device"], connected["id"])
+            self.assertEqual(status["playback_label"], "Connected Speaker")
+            self.assertEqual(args.pulse_sink, "alsa_output.usb-connected")
+            apply_volume.assert_called_once_with("alsa_output.usb-connected", 28)
+
+    def test_volume_control_refreshes_recreated_sink_for_same_speaker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args = SimpleNamespace(
+                playback_backend="pulse",
+                pulse_sink="alsa_output.usb-speaker",
+                playback_device="plughw:CARD=USB,DEV=0",
+                playback_volume=40,
+                audio_settings=Path(temporary) / "settings.json",
+            )
+            bridge = OpenClawVoiceBridge(args)
+            connected = {
+                "id": args.playback_device,
+                "card": "USB",
+                "label": "USB Speaker",
+            }
+            with (
+                mock.patch(
+                    "insight_capture.voice.service.list_alsa_devices",
+                    return_value=[connected],
+                ),
+                mock.patch(
+                    "insight_capture.voice.service.discover_pulse_sink",
+                    return_value="alsa_output.usb-speaker.2",
+                ),
+                mock.patch(
+                    "insight_capture.voice.service.set_pulse_sink_volume",
+                    return_value=True,
+                ) as apply_volume,
+            ):
+                bridge.set_playback_volume(31)
+
+            self.assertEqual(args.pulse_sink, "alsa_output.usb-speaker.2")
+            apply_volume.assert_called_once_with("alsa_output.usb-speaker.2", 31)
 
     def test_missing_openclaw_only_disables_optional_requests(self):
         bridge = OpenClawVoiceBridge(SimpleNamespace(openclaw_bin=Path("/missing/openclaw")))

@@ -12,6 +12,8 @@ Environment=LOOPER_CAPTURE_DEVICE=auto
 Environment=LOOPER_PLAYBACK_DEVICE=auto
 Environment=LOOPER_PULSE_SINK=auto
 Environment=LOOPER_PLAYBACK_VOLUME=40
+Environment=LOOPER_CONTROL_HOST=127.0.0.1
+Environment=LOOPER_CONTROL_PORT=8770
 ExecStart=@PROJECT_ROOT@/scripts/run_voice.sh
 Restart=on-failure
 RestartSec=5

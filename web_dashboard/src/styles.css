@@ -389,6 +389,14 @@ img.camera-frame:not([src]) { visibility: hidden; }
 .settings-inline-form { display: grid; margin-bottom: 14px; padding: 12px; grid-template-columns: minmax(220px,1fr) auto; align-items: end; gap: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
 .settings-inline-form input { width: 100%; min-height: 34px; padding: 6px 9px; border: 1px solid var(--line-dark); border-radius: 6px; color: var(--ink); background: var(--surface); font: inherit; }
 .settings-inline-form small { color: var(--muted-light); line-height: 1.4; }
+.settings-audio-panel { margin-bottom: 18px; }
+.settings-volume-control { display: grid; grid-template-columns: minmax(220px,1fr) minmax(260px,1.6fr); align-items: center; gap: 24px; }
+.settings-volume-control label { display: flex; flex-direction: column; gap: 6px; color: var(--ink); font-size: 11px; font-weight: 650; }
+.settings-volume-control label small { color: var(--muted-light); font-size: 9px; font-weight: 400; line-height: 1.45; }
+.settings-volume-input { display: grid; grid-template-columns: 1fr 54px; align-items: center; gap: 14px; }
+.settings-volume-input input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+.settings-volume-input input[type="range"]:disabled { cursor: not-allowed; opacity: 0.45; }
+.settings-volume-input output { color: var(--ink); font-family: var(--mono); font-size: 13px; font-weight: 700; text-align: right; }
 
 /* Immersive 3D studio -- paper chrome around a dark scene screen. */
 body[data-dashboard-view="3d"] { height: 100%; overflow: hidden; color-scheme: light; background: var(--paper); }
@@ -589,7 +597,7 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .umi-schema-grid, .umi-result { grid-template-columns: 1fr; }
   .umi-result-item { grid-template-columns: 1fr; }
   .bag-row-stats, .bag-row-badges, .bag-badges, .bag-row-actions { grid-column: auto; justify-content: flex-start; }
-  .settings-form-grid, .settings-inline-form, .opt-radio-group { grid-template-columns: 1fr; }
+  .settings-form-grid, .settings-inline-form, .settings-volume-control, .opt-radio-group { grid-template-columns: 1fr; }
   .handpose-player { grid-template-columns: auto minmax(80px,1fr); }
   .handpose-player > span { grid-column: 1 / -1; text-align: left; }
   .handpose-coordinates { align-items: flex-start; flex-direction: column; }
