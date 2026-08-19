@@ -1432,8 +1432,8 @@ def main() -> int:
         )
     audio_setup_ok = False
     if args.playback_backend == "pulse":
-        pulse_card_ok = not args.audio_device_hint or configure_pulse_card_volume(
-            args.audio_device_hint
+        pulse_card_ok = configure_pulse_card_volume(
+            args.audio_device_hint or args.playback_device
         )
         if args.pulse_sink == "auto":
             args.pulse_sink = discover_pulse_sink(

@@ -175,6 +175,25 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertIn("ignore_dB=yes", loaded)
         self.assertNotIn("ignore_dB=no", loaded)
 
+    def test_pulse_card_uses_card_from_auto_discovered_alsa_device(self):
+        modules = SimpleNamespace(
+            stdout=(
+                '8\tmodule-alsa-card\tdevice_id="0" name="usb-CF-IC_CF001_E3" '
+                "ignore_dB=no deferred_volume=yes\n"
+            )
+        )
+        success = SimpleNamespace(returncode=0, stdout="21\n")
+        with mock.patch(
+            "subprocess.run",
+            side_effect=[modules, success, success],
+        ) as run:
+            self.assertTrue(
+                configure_pulse_card_volume("plughw:CARD=E3,DEV=0")
+            )
+
+        loaded = run.call_args_list[2].args[0]
+        self.assertIn("ignore_dB=yes", loaded)
+
     def test_pulse_card_reload_failure_restores_original_module(self):
         modules = SimpleNamespace(
             stdout="8 module-alsa-card device_id=0 name=usb-E3 ignore_dB=no\n"

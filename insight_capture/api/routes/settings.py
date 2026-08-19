@@ -30,6 +30,7 @@ class SettingsRoutes:
         path: str,
         *,
         payload: dict[str, object] | None = None,
+        timeout_sec: float = 2.0,
     ) -> dict[str, object]:
         body = None if payload is None else json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
@@ -39,7 +40,7 @@ class SettingsRoutes:
             method="POST" if body is not None else "GET",
         )
         try:
-            with urllib.request.urlopen(request, timeout=2.0) as response:
+            with urllib.request.urlopen(request, timeout=timeout_sec) as response:
                 result = json.loads(response.read())
         except urllib.error.HTTPError as exc:
             try:
@@ -58,11 +59,13 @@ class SettingsRoutes:
         path: str,
         *,
         payload: dict[str, object] | None = None,
+        timeout_sec: float = 2.0,
     ) -> dict[str, object]:
         return await asyncio.to_thread(
             self._voice_control_request_sync,
             path,
             payload=payload,
+            timeout_sec=timeout_sec,
         )
 
     async def _settings_payload(self) -> dict[str, object]:
@@ -129,7 +132,11 @@ class SettingsRoutes:
         self, _request: web.Request
     ) -> web.Response:
         try:
-            voice_audio = await self._voice_control_request("/v1/audio/sample", payload={})
+            voice_audio = await self._voice_control_request(
+                "/v1/audio/sample",
+                payload={},
+                timeout_sec=15.0,
+            )
         except RuntimeError as exc:
             return web.json_response({"error": str(exc)}, status=503)
         return web.json_response({"voice_audio": voice_audio})

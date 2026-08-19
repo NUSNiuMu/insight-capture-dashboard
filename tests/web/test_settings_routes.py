@@ -75,5 +75,21 @@ class SettingsRoutesTest(unittest.IsolatedAsyncioTestCase):
             payload={"volume_percent": 32},
         )
 
+    async def test_sample_playback_allows_for_cold_tts_startup(self):
+        routes = self._routes()
+        status = {"available": True, "volume_percent": 40}
+        control = mock.AsyncMock(return_value=status)
+        with mock.patch.object(routes, "_voice_control_request", new=control):
+            response = await routes._handle_settings_voice_sample(None)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(response.text)["voice_audio"], status)
+        control.assert_awaited_once_with(
+            "/v1/audio/sample",
+            payload={},
+            timeout_sec=15.0,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

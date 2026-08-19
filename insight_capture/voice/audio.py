@@ -155,7 +155,7 @@ def discover_pulse_sink(preferred: str = "", playback_device: str = "") -> str:
 
 
 def configure_pulse_card_volume(preferred: str = "") -> bool:
-    """Ignore a matching USB card's invalid dB metadata without affecting other cards."""
+    """Ignore a matching card's invalid dB metadata without affecting other cards."""
     try:
         completed = subprocess.run(
             ["pactl", "list", "short", "modules"],
@@ -167,7 +167,8 @@ def configure_pulse_card_volume(preferred: str = "") -> bool:
     except (OSError, subprocess.SubprocessError):
         return False
 
-    hint = str(preferred or "").casefold()
+    raw_hint = str(preferred or "")
+    hint = (_alsa_card(raw_hint) or raw_hint).casefold()
     module_index = ""
     original_args: list[str] = []
     for line in completed.stdout.splitlines():
