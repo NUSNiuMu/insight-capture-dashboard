@@ -32,7 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from insight_capture.voice.audio import discover_alsa_device
 
 
-DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "outputs" / "microphone-direction"
+DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "runs" / "microphone-direction"
 VOICE_SERVICE = "insight-voice-control.service"
 CSV_FIELDS = [
     "timestamp",

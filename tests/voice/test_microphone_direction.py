@@ -13,6 +13,12 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+def test_default_output_uses_host_writable_runtime_directory() -> None:
+    assert MODULE.DEFAULT_OUTPUT_ROOT == (
+        MODULE.PROJECT_ROOT / "runs" / "microphone-direction"
+    )
+
+
 def test_analyze_samples_separates_speech_from_noise() -> None:
     sample_rate = 16000
     rng = np.random.default_rng(7)
