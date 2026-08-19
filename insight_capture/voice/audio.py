@@ -125,7 +125,7 @@ def discover_pulse_sink(preferred: str = "", playback_device: str = "") -> str:
     if matched:
         return matched
     card_key = re.sub(r"[^a-z0-9]+", "", _alsa_card(playback_device).casefold())
-    if len(card_key) >= 3:
+    if len(card_key) >= 2:
         matched = next(
             (
                 name
