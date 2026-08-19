@@ -725,6 +725,7 @@ class VoiceService:
     def _play_wav(self, audio_path: Path) -> None:
         """Play a WAV through the configured shared or direct audio backend."""
         if self.args.playback_backend == "pulse":
+            self._refresh_playback_device()
             command = ["paplay"]
             if self.args.pulse_sink:
                 command.extend(["--device", self.args.pulse_sink])
@@ -760,10 +761,18 @@ class VoiceService:
         self.args.playback_device = selected["id"]
         sink_changed = False
         if self.args.playback_backend == "pulse":
+            configure_pulse_card_volume(self.args.playback_device)
             pulse_sink = discover_pulse_sink("", self.args.playback_device)
+            if not pulse_sink:
+                raise RuntimeError("no PulseAudio sink is currently available")
             if pulse_sink and pulse_sink != self.args.pulse_sink:
                 self.args.pulse_sink = pulse_sink
                 sink_changed = True
+            if not set_pulse_sink_volume(
+                self.args.pulse_sink,
+                self.args.playback_volume,
+            ):
+                raise RuntimeError("audio device rejected the volume restore")
         if device_changed or sink_changed:
             self._emit(
                 "playback_device",
@@ -1425,11 +1434,21 @@ def main() -> int:
         default=args.playback_volume,
     )
     if args.device == "auto":
-        args.device = discover_alsa_device("capture", args.audio_device_hint)
+        args.device = discover_alsa_device(
+            "capture",
+            args.audio_device_hint,
+            usb_only=True,
+        )
+        if not args.device:
+            raise RuntimeError("no USB capture device is currently available")
     if args.playback_device == "auto":
         args.playback_device = discover_alsa_device(
-            "playback", args.audio_device_hint
+            "playback",
+            args.audio_device_hint,
+            usb_only=True,
         )
+        if not args.playback_device:
+            raise RuntimeError("no USB playback device is currently available")
     audio_setup_ok = False
     if args.playback_backend == "pulse":
         pulse_card_ok = configure_pulse_card_volume(

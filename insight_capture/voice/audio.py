@@ -77,8 +77,20 @@ def _select_alsa_device(
     )
 
 
-def discover_alsa_device(kind: str, preferred: str = "") -> str:
-    return _select_alsa_device(_alsa_devices(kind), preferred)
+def discover_alsa_device(
+    kind: str,
+    preferred: str = "",
+    *,
+    usb_only: bool = False,
+) -> str:
+    devices = _alsa_devices(kind)
+    if usb_only:
+        devices = [
+            device for device in devices if "usb" in device[1].casefold()
+        ]
+        if not devices:
+            return ""
+    return _select_alsa_device(devices, preferred)
 
 
 def list_alsa_devices(kind: str) -> list[dict[str, str]]:
@@ -155,7 +167,7 @@ def discover_pulse_sink(preferred: str = "", playback_device: str = "") -> str:
 
 
 def configure_pulse_card_volume(preferred: str = "") -> bool:
-    """Ignore a matching card's invalid dB metadata without affecting other cards."""
+    """Normalize one matching card and collapse stale hotplug duplicates."""
     try:
         completed = subprocess.run(
             ["pactl", "list", "short", "modules"],
@@ -169,23 +181,21 @@ def configure_pulse_card_volume(preferred: str = "") -> bool:
 
     raw_hint = str(preferred or "")
     hint = (_alsa_card(raw_hint) or raw_hint).casefold()
-    module_index = ""
-    original_args: list[str] = []
+    matches: list[tuple[str, list[str]]] = []
     for line in completed.stdout.splitlines():
         fields = line.split(maxsplit=2)
         if len(fields) < 3 or fields[1] != "module-alsa-card":
             continue
         if not hint or hint not in fields[2].casefold():
             continue
-        module_index = fields[0]
         try:
-            original_args = shlex.split(fields[2])
+            matches.append((fields[0], shlex.split(fields[2])))
         except ValueError:
             return False
-        break
-    if not module_index or not original_args:
+    if not matches:
         return False
 
+    _module_index, original_args = matches[-1]
     patched_args = []
     ignore_db_found = False
     already_ignored = False
@@ -200,21 +210,24 @@ def configure_pulse_card_volume(preferred: str = "") -> bool:
             patched_args.append("ignore_dB=yes")
         else:
             patched_args.append(argument)
-    if already_ignored:
+    if len(matches) == 1 and already_ignored:
         return True
     if not ignore_db_found:
         patched_args.append("ignore_dB=yes")
 
-    unloaded = False
     try:
-        subprocess.run(
-            ["pactl", "unload-module", module_index],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5.0,
-        )
-        unloaded = True
+        for module_index, _module_args in reversed(matches):
+            subprocess.run(
+                ["pactl", "unload-module", module_index],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+    try:
         subprocess.run(
             ["pactl", "load-module", "module-alsa-card", *patched_args],
             check=True,
@@ -225,17 +238,16 @@ def configure_pulse_card_volume(preferred: str = "") -> bool:
     except (OSError, subprocess.SubprocessError):
         # The udev-loaded card is more useful than no PulseAudio card if the
         # device-specific workaround is unsupported on another host.
-        if unloaded:
-            try:
-                subprocess.run(
-                    ["pactl", "load-module", "module-alsa-card", *original_args],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=5.0,
-                )
-            except (OSError, subprocess.SubprocessError):
-                pass
+        try:
+            subprocess.run(
+                ["pactl", "load-module", "module-alsa-card", *original_args],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
         return False
     return True
 

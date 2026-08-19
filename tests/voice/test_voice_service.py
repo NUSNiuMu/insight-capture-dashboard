@@ -112,6 +112,19 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 "plughw:CARD=USBSPK,DEV=0",
             )
 
+    def test_audio_usb_only_discovery_waits_instead_of_using_board_audio(self):
+        completed = SimpleNamespace(
+            stdout=(
+                "plughw:CARD=APE,DEV=0\n"
+                "    NVIDIA Jetson APE\n"
+            )
+        )
+        with mock.patch("subprocess.run", return_value=completed):
+            self.assertEqual(
+                discover_alsa_device("capture", usb_only=True),
+                "",
+            )
+
     def test_pulse_auto_discovery_prefers_usb_sink_hint(self):
         completed = SimpleNamespace(
             stdout=(
@@ -194,6 +207,34 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         loaded = run.call_args_list[2].args[0]
         self.assertIn("ignore_dB=yes", loaded)
 
+    def test_pulse_card_collapses_stale_and_reconnected_modules(self):
+        modules = SimpleNamespace(
+            stdout=(
+                "21\tmodule-alsa-card\tdevice_id=0 name=usb-E3 "
+                "ignore_dB=yes tsched=yes\n"
+                "23\tmodule-alsa-card\tdevice_id=0 name=usb-E3 "
+                "ignore_dB=no tsched=no\n"
+            )
+        )
+        success = SimpleNamespace(returncode=0, stdout="24\n")
+        with mock.patch(
+            "subprocess.run",
+            side_effect=[modules, success, success, success],
+        ) as run:
+            self.assertTrue(configure_pulse_card_volume("E3"))
+
+        self.assertEqual(
+            run.call_args_list[1].args[0],
+            ["pactl", "unload-module", "23"],
+        )
+        self.assertEqual(
+            run.call_args_list[2].args[0],
+            ["pactl", "unload-module", "21"],
+        )
+        loaded = run.call_args_list[3].args[0]
+        self.assertIn("ignore_dB=yes", loaded)
+        self.assertIn("tsched=no", loaded)
+
     def test_pulse_card_reload_failure_restores_original_module(self):
         modules = SimpleNamespace(
             stdout="8 module-alsa-card device_id=0 name=usb-E3 ignore_dB=no\n"
@@ -241,6 +282,10 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             bridge = OpenClawVoiceBridge(args)
             with (
                 mock.patch(
+                    "insight_capture.voice.service.configure_pulse_card_volume",
+                    return_value=True,
+                ),
+                mock.patch(
                     "insight_capture.voice.service.set_pulse_sink_volume",
                     return_value=True,
                 ) as apply_volume,
@@ -254,12 +299,17 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                         }
                     ],
                 ),
+                mock.patch(
+                    "insight_capture.voice.service.discover_pulse_sink",
+                    return_value="alsa_output.usb-device",
+                ),
             ):
                 status = bridge.set_playback_volume(37)
 
-            apply_volume.assert_called_once_with(
-                "alsa_output.usb-device",
-                37,
+            apply_volume.assert_any_call("alsa_output.usb-device", 37)
+            self.assertEqual(
+                apply_volume.call_args.args,
+                ("alsa_output.usb-device", 37),
             )
             self.assertEqual(status["volume_percent"], 37)
             self.assertEqual(
@@ -289,6 +339,10 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             }
             with (
                 mock.patch(
+                    "insight_capture.voice.service.configure_pulse_card_volume",
+                    return_value=True,
+                ),
+                mock.patch(
                     "insight_capture.voice.service.list_alsa_devices",
                     return_value=[connected],
                 ),
@@ -306,7 +360,11 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             self.assertEqual(status["playback_device"], connected["id"])
             self.assertEqual(status["playback_label"], "Connected Speaker")
             self.assertEqual(args.pulse_sink, "alsa_output.usb-connected")
-            apply_volume.assert_called_once_with("alsa_output.usb-connected", 28)
+            apply_volume.assert_any_call("alsa_output.usb-connected", 28)
+            self.assertEqual(
+                apply_volume.call_args.args,
+                ("alsa_output.usb-connected", 28),
+            )
 
     def test_volume_control_refreshes_recreated_sink_for_same_speaker(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -325,6 +383,10 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             }
             with (
                 mock.patch(
+                    "insight_capture.voice.service.configure_pulse_card_volume",
+                    return_value=True,
+                ),
+                mock.patch(
                     "insight_capture.voice.service.list_alsa_devices",
                     return_value=[connected],
                 ),
@@ -340,7 +402,11 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 bridge.set_playback_volume(31)
 
             self.assertEqual(args.pulse_sink, "alsa_output.usb-speaker.2")
-            apply_volume.assert_called_once_with("alsa_output.usb-speaker.2", 31)
+            apply_volume.assert_any_call("alsa_output.usb-speaker.2", 31)
+            self.assertEqual(
+                apply_volume.call_args.args,
+                ("alsa_output.usb-speaker.2", 31),
+            )
 
     def test_missing_openclaw_only_disables_optional_requests(self):
         bridge = OpenClawVoiceBridge(SimpleNamespace(openclaw_bin=Path("/missing/openclaw")))
@@ -454,7 +520,10 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 playback_device="plughw:E3,0",
             )
         )
-        with mock.patch("subprocess.run") as run:
+        with (
+            mock.patch.object(bridge, "_refresh_playback_device"),
+            mock.patch("subprocess.run") as run,
+        ):
             bridge._play_wav(Path("/tmp/feedback.wav"))
         run.assert_called_once_with(
             [
