@@ -23,6 +23,7 @@ from insight_capture.voice.service import (  # noqa: E402
     clean_utterance_transcript,
     configure_pulse_card_volume,
     discover_alsa_device,
+    discover_alsa_duplex,
     discover_pulse_sink,
     extract_openclaw_reply,
     match_local_command,
@@ -75,7 +76,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertIsNone(match_local_command("开始录制前先检查磁盘"))
         self.assertIsNone(match_local_command("现在是否正在录制"))
 
-    def test_audio_auto_discovery_prefers_stable_card_name(self):
+    def test_audio_auto_discovery_prefers_optional_stable_card_hint(self):
         completed = SimpleNamespace(
             stdout="default\nplughw:CARD=Other,DEV=0\nplughw:CARD=E3,DEV=0\n"
         )
@@ -83,6 +84,31 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             self.assertEqual(
                 discover_alsa_device("capture", "E3"),
                 "plughw:CARD=E3,DEV=0",
+            )
+
+    def test_audio_auto_discovery_prefers_scanned_duplex_usb_card(self):
+        capture = SimpleNamespace(
+            stdout=(
+                "plughw:CARD=APE,DEV=0\n"
+                "    NVIDIA Jetson APE\n"
+                "plughw:CARD=A311,DEV=0\n"
+                "    Yundea A31-1, USB Audio\n"
+            )
+        )
+        playback = SimpleNamespace(
+            stdout=(
+                "plughw:CARD=HDA,DEV=3\n"
+                "    NVIDIA HDMI\n"
+                "plughw:CARD=A311,DEV=0\n"
+                "    Yundea A31-1, USB Audio\n"
+                "plughw:CARD=APE,DEV=0\n"
+                "    NVIDIA Jetson APE\n"
+            )
+        )
+        with mock.patch("subprocess.run", side_effect=[capture, playback]):
+            self.assertEqual(
+                discover_alsa_duplex(),
+                ("plughw:CARD=A311,DEV=0", "plughw:CARD=A311,DEV=0"),
             )
 
     def test_pulse_auto_discovery_prefers_usb_sink_hint(self):
@@ -96,6 +122,22 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             self.assertEqual(
                 discover_pulse_sink("E3"),
                 "alsa_output.usb-CF-IC_CF001_E3_2025.analog-stereo",
+            )
+
+    def test_pulse_auto_discovery_uses_scanned_default_without_hint(self):
+        sinks = SimpleNamespace(
+            stdout=(
+                "0\talsa_output.platform-sound.analog-stereo\tmodule\n"
+                "1\talsa_output.usb-Yundea_A31.analog-stereo\tmodule\n"
+            )
+        )
+        default = SimpleNamespace(
+            stdout="alsa_output.usb-Yundea_A31.analog-stereo\n"
+        )
+        with mock.patch("subprocess.run", side_effect=[sinks, default]):
+            self.assertEqual(
+                discover_pulse_sink(),
+                "alsa_output.usb-Yundea_A31.analog-stereo",
             )
 
     def test_pulse_card_ignores_invalid_db_metadata(self):

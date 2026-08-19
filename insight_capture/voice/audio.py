@@ -2,6 +2,7 @@
 
 import io
 import math
+import re
 import shlex
 import struct
 import subprocess
@@ -26,20 +27,110 @@ def wake_tone_wav(sample_rate: int, duration_ms: int, frequency_hz: int, volume:
     return output.getvalue()
 
 
-def discover_alsa_device(kind: str, preferred: str = "E3") -> str:
+def _alsa_devices(kind: str) -> list[tuple[str, str]]:
     binary = "arecord" if kind == "capture" else "aplay"
     try:
         completed = subprocess.run([binary, "-L"], check=False, capture_output=True, text=True, timeout=3.0)
     except (OSError, subprocess.SubprocessError):
-        return "default"
-    candidates = [line.strip() for line in completed.stdout.splitlines() if line and not line[0].isspace()]
-    stable = [name for name in candidates if name.startswith("plughw:CARD=")]
+        return []
+
+    devices: list[tuple[str, str]] = []
+    current = ""
+    description: list[str] = []
+    for line in completed.stdout.splitlines():
+        if line and not line[0].isspace():
+            if current:
+                devices.append((current, " ".join(description)))
+            name = line.strip()
+            current = name if name.startswith("plughw:CARD=") else ""
+            description = []
+        elif current and line.strip():
+            description.append(line.strip())
+    if current:
+        devices.append((current, " ".join(description)))
+    return devices
+
+
+def _alsa_card(device: str) -> str:
+    match = re.search(r"(?:^|,)CARD=([^,]+)", device)
+    return match.group(1) if match else ""
+
+
+def _select_alsa_device(
+    devices: list[tuple[str, str]], preferred: str = ""
+) -> str:
     hint = str(preferred or "").casefold()
-    return next((name for name in stable if hint and hint in name.casefold()), stable[0] if stable else "default")
+    if hint:
+        matched = next(
+            (
+                name
+                for name, description in devices
+                if hint in f"{name} {description}".casefold()
+            ),
+            "",
+        )
+        if matched:
+            return matched
+    return next(
+        (name for name, description in devices if "usb" in description.casefold()),
+        devices[0][0] if devices else "default",
+    )
 
 
-def discover_pulse_sink(preferred: str = "E3") -> str:
-    """Resolve a PulseAudio sink by stable USB identity instead of desktop default."""
+def discover_alsa_device(kind: str, preferred: str = "") -> str:
+    return _select_alsa_device(_alsa_devices(kind), preferred)
+
+
+def discover_alsa_duplex(preferred: str = "") -> tuple[str, str]:
+    """Select one scanned card that supports both capture and playback."""
+    capture_devices = _alsa_devices("capture")
+    playback_devices = _alsa_devices("playback")
+    playback_by_card: dict[str, list[tuple[str, str]]] = {}
+    for device in playback_devices:
+        playback_by_card.setdefault(_alsa_card(device[0]), []).append(device)
+
+    pairs: list[tuple[tuple[str, str], tuple[str, str]]] = []
+    for capture in capture_devices:
+        card = _alsa_card(capture[0])
+        if card and playback_by_card.get(card):
+            pairs.append((capture, playback_by_card[card][0]))
+
+    hint = str(preferred or "").casefold()
+    if hint:
+        matched = next(
+            (
+                pair
+                for pair in pairs
+                if hint
+                in " ".join(
+                    (pair[0][0], pair[0][1], pair[1][0], pair[1][1])
+                ).casefold()
+            ),
+            None,
+        )
+        if matched is not None:
+            return matched[0][0], matched[1][0]
+
+    usb_pair = next(
+        (
+            pair
+            for pair in pairs
+            if "usb" in f"{pair[0][1]} {pair[1][1]}".casefold()
+        ),
+        None,
+    )
+    if usb_pair is not None:
+        return usb_pair[0][0], usb_pair[1][0]
+    if pairs:
+        return pairs[0][0][0], pairs[0][1][0]
+    return (
+        _select_alsa_device(capture_devices, preferred),
+        _select_alsa_device(playback_devices, preferred),
+    )
+
+
+def discover_pulse_sink(preferred: str = "") -> str:
+    """Resolve a live PulseAudio sink, honoring an optional operator hint."""
     try:
         completed = subprocess.run(
             ["pactl", "list", "short", "sinks"],
@@ -56,13 +147,31 @@ def discover_pulse_sink(preferred: str = "E3") -> str:
         if len(fields) >= 2:
             sinks.append(fields[1])
     hint = str(preferred or "").casefold()
-    return next(
+    matched = next(
         (name for name in sinks if hint and hint in name.casefold()),
         "",
     )
+    if matched:
+        return matched
+    try:
+        default = subprocess.run(
+            ["pactl", "get-default-sink"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3.0,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        default = ""
+    if default in sinks:
+        return default
+    return next(
+        (name for name in sinks if name.startswith("alsa_output.usb-")),
+        sinks[0] if sinks else "",
+    )
 
 
-def configure_pulse_card_volume(preferred: str = "E3") -> bool:
+def configure_pulse_card_volume(preferred: str = "") -> bool:
     """Ignore a matching USB card's invalid dB metadata without affecting other cards."""
     try:
         completed = subprocess.run(
@@ -166,6 +275,9 @@ def set_pulse_sink_volume(sink: str, volume_percent: int) -> bool:
 
 def set_alsa_playback_volume(card: str, volume_percent: int) -> bool:
     """Restore direct ALSA playback volume when PulseAudio is disabled."""
+    card = _alsa_card(card) or card
+    if not card:
+        return False
     try:
         completed = subprocess.run(
             [

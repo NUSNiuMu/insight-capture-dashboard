@@ -363,6 +363,7 @@ from insight_capture.voice.audio import (
     AlsaCapture,
     configure_pulse_card_volume,
     discover_alsa_device,
+    discover_alsa_duplex,
     discover_pulse_sink,
     set_alsa_playback_volume,
     set_pulse_sink_volume,
@@ -1167,8 +1168,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--playback-device", default=os.environ.get("LOOPER_PLAYBACK_DEVICE", "auto"))
     parser.add_argument(
         "--audio-device-hint",
-        default=os.environ.get("LOOPER_AUDIO_DEVICE_HINT", "E3"),
-        help="Preferred stable ALSA CARD name when a device is set to auto.",
+        default=os.environ.get("LOOPER_AUDIO_DEVICE_HINT", ""),
+        help="Optional ALSA CARD hint; auto scans for a duplex USB device by default.",
     )
     parser.add_argument(
         "--playback-backend",
@@ -1307,13 +1308,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.device == "auto":
-        args.device = discover_alsa_device("capture", args.audio_device_hint)
-    if args.playback_device == "auto":
-        args.playback_device = discover_alsa_device("playback", args.audio_device_hint)
+    if args.device == "auto" and args.playback_device == "auto":
+        args.device, args.playback_device = discover_alsa_duplex(
+            args.audio_device_hint
+        )
+    else:
+        if args.device == "auto":
+            args.device = discover_alsa_device("capture", args.audio_device_hint)
+        if args.playback_device == "auto":
+            args.playback_device = discover_alsa_device(
+                "playback", args.audio_device_hint
+            )
     audio_setup_ok = False
     if args.playback_backend == "pulse":
-        pulse_card_ok = configure_pulse_card_volume(args.audio_device_hint)
+        pulse_card_ok = not args.audio_device_hint or configure_pulse_card_volume(
+            args.audio_device_hint
+        )
         if args.pulse_sink == "auto":
             args.pulse_sink = discover_pulse_sink(args.audio_device_hint)
         audio_setup_ok = pulse_card_ok and set_pulse_sink_volume(
@@ -1322,7 +1332,7 @@ def main() -> int:
         )
     else:
         audio_setup_ok = set_alsa_playback_volume(
-            args.audio_device_hint,
+            args.audio_device_hint or args.playback_device,
             args.playback_volume,
         )
     bridge = VoiceService(args)

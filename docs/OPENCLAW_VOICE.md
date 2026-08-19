@@ -34,16 +34,16 @@ recorder I/O。异常持续超过阈值后，Dashboard 写入当前 Take 的 `an
 
 ## 音频设备
 
-录音和 ALSA 播放默认使用 `auto`。服务通过 `arecord -L` / `aplay -L` 选择稳定的
-`plughw:CARD=<name>,DEV=<n>`，优先匹配 `LOOPER_AUDIO_DEVICE_HINT`（默认 `E3`），不依赖
-可能随重插变化的 card index。PulseAudio 播放同样会按该 hint 自动选择 USB sink，不使用
-可能指向 Jetson 板载声卡的桌面默认输出。E3 固件上报的 PCM dB 范围不可靠，服务启动时
-只对匹配的 E3 PulseAudio card 启用 `ignore_dB`，再把共享 sink 恢复到 40%；其他声卡不受
-影响。可按设备覆盖：
+录音和 ALSA 播放默认使用 `auto`。服务通过 `arecord -L` / `aplay -L` 扫描当前硬件，优先
+选择同时支持录音和播放的 USB 声卡，并使用稳定的 `plughw:CARD=<name>,DEV=<n>`，不依赖
+可能随重插变化的 card index，也不写死产品名。PulseAudio 播放使用当前有效的默认 sink；
+默认 sink 不可用时再选择扫描到的 USB sink。只有设置 `LOOPER_AUDIO_DEVICE_HINT` 后才会按
+名称覆盖自动选择，并对匹配设备应用兼容性音量设置。可按设备覆盖：
 
 ```bash
 export LOOPER_CAPTURE_DEVICE=plughw:CARD=E3,DEV=0
 export LOOPER_PLAYBACK_DEVICE=plughw:CARD=E3,DEV=0
+export LOOPER_AUDIO_DEVICE_HINT=E3       # 可选；默认留空并自动扫描
 export LOOPER_PLAYBACK_BACKEND=alsa   # 默认 pulse
 export LOOPER_PULSE_SINK=alsa_output.usb-...E3...analog-stereo
 export LOOPER_PLAYBACK_VOLUME=40
