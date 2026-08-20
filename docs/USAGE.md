@@ -581,10 +581,11 @@ Shell 入口会自动显示完整证据，并把 JSON 保存为带时间戳的
 `/tmp/insight_system_YYYYMMDD_HHMMSS.json`。默认全程只读；有故障时退出码为 `2`，
 只有警告时默认仍为 `0`。自动巡检需要把警告也视为失败时，可运行
 `./scripts/system_doctor.sh --fail-on-warning`。纯 JSON 输出用 `--json`，日志范围可用
-`--log-since 2h` 调整。脚本会通过三台相机的只读 HTTP 接口分别检查 NTP 开关、同步状态
-和“相机时间减宿主机时间”的当前偏差，并报告相机间最大差值；每台采样 5 次并采用最低
-RTT 样本。该检查只发送 GET，不会执行时间同步、相机重启或相位调整，也不会把 ROS
-消息新鲜度误称为纯时钟差。
+`--log-since 2h` 调整。Shell 会提示输入一次相机 SSH 密码，然后在三台相机内部执行只读的
+`ntpdate -q`，分别报告相机相对各自宿主机链路地址的真实 NTP offset 和相机间最大差值。
+该检查与 `reboot_cameras.sh --sync-phase` 使用相同的 offset 查询，但不会执行后续的
+`ntpdate -b` 时间同步、相机重启或相位调整，也不会把 HTTP 接口响应时机或 ROS 消息延迟
+误称为纯时钟差。也可预先设置 `INSIGHT_CAMERA_SSH_IDENTITY` 免密码检查。
 
 脚本若在权限受限的容器中运行，会把无法读取的宿主机检查标为未验证；现场报障应直接
 在 Jetson 宿主机仓库目录执行。修复建议可能包含重启或重挂载操作，录制中不得执行；

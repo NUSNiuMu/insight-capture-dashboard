@@ -2,11 +2,11 @@ import json
 from pathlib import Path
 
 from insight_capture.diagnostics.system_doctor import (
-    _clock_offset_sample,
     _error_lines,
     _existing_staging_entries,
     _parse_compose_rows,
     parse_chrony_tracking,
+    parse_camera_ntp_offsets,
     render_report,
 )
 
@@ -30,15 +30,21 @@ Leap status     : Normal
     assert tracking["last_offset_seconds"] == -0.000002
 
 
-def test_clock_offset_sample_uses_request_midpoint() -> None:
-    offset_ns, rtt_ns = _clock_offset_sample(
-        {"timestampNanos": 1_003_000_000},
-        request_start_ns=999_000_000,
-        response_end_ns=1_001_000_000,
+def test_parse_camera_ntp_offsets_ignores_estimated_spread() -> None:
+    offsets = parse_camera_ntp_offsets(
+        """Current NTP offsets
+  insight3_a     +0.412 ms
+  insight3_b     -1.203 ms
+  insight9_a     +0.067 ms
+  estimated spread 1.615 ms
+"""
     )
 
-    assert offset_ns == 3_000_000
-    assert rtt_ns == 2_000_000
+    assert offsets == {
+        "insight3_a": 0.412,
+        "insight3_b": -1.203,
+        "insight9_a": 0.067,
+    }
 
 
 def test_staging_check_uses_current_disk_state(tmp_path: Path) -> None:
@@ -119,4 +125,6 @@ def test_shell_entrypoint_enables_verbose_timestamped_report() -> None:
     assert "--verbose" in script
     assert "--output" in script
     assert "date +%Y%m%d_%H%M%S" in script
+    assert "INSIGHT_CAMERA_SSH_PASSWORD" in script
+    assert "不会同步或重启" in script
     assert '"$@"' in script

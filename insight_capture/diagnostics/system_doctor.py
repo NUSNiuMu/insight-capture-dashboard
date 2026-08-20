@@ -28,11 +28,6 @@ STATUS_LABEL = {
     "WARN": "警告",
     "FAIL": "故障",
 }
-CAMERA_TIME_ENDPOINTS = (
-    ("insight3_a", "http://169.254.10.1"),
-    ("insight3_b", "http://169.254.20.1"),
-    ("insight9_a", "http://169.254.30.1"),
-)
 
 
 @dataclasses.dataclass
@@ -168,21 +163,18 @@ def parse_chrony_tracking(text: str) -> dict[str, Any]:
     return parsed
 
 
-def _clock_offset_sample(
-    payload: Mapping[str, Any], *, request_start_ns: int, response_end_ns: int
-) -> tuple[int, int]:
-    """Return camera-minus-host offset and RTT for one read-only time query."""
+def parse_camera_ntp_offsets(text: str) -> dict[str, float]:
+    """Parse the read-only ntpdate report emitted by sync_camera_restart."""
 
-    timestamp_ns = payload.get("timestampNanos")
-    if timestamp_ns is None:
-        timestamp = payload.get("timestamp")
-        if timestamp is None:
-            raise ValueError("system-time response has no timestamp")
-        timestamp_ns = int(timestamp) * 1_000_000_000
-    midpoint_ns = (int(request_start_ns) + int(response_end_ns)) // 2
-    return int(timestamp_ns) - midpoint_ns, int(response_end_ns) - int(
-        request_start_ns
+    offsets: dict[str, float] = {}
+    pattern = re.compile(
+        r"^\s*(insight(?:3_[ab]|9_a))\s+([+-]?[0-9]+(?:\.[0-9]+)?)\s+ms\s*$"
     )
+    for line in text.splitlines():
+        match = pattern.match(line)
+        if match:
+            offsets[match.group(1)] = float(match.group(2))
+    return offsets
 
 
 def _parse_compose_rows(text: str) -> list[dict[str, Any]]:
@@ -1239,103 +1231,63 @@ class SystemDoctor:
             )
 
     def check_camera_clocks(self) -> None:
-        def inspect_camera(name: str, endpoint: str) -> dict[str, Any]:
-            sync_payload, sync_error = self.fetch_url_json(
-                f"{endpoint}/api/time-sync-setting", timeout=3.0
+        identity = os.environ.get("INSIGHT_CAMERA_SSH_IDENTITY")
+        password = os.environ.get("INSIGHT_CAMERA_SSH_PASSWORD")
+        if not identity and not password:
+            self.add(
+                "time.camera_clocks",
+                "时间同步",
+                "INFO",
+                "未取得相机 NTP offset：缺少相机 SSH 凭据",
+                evidence=[
+                    "measurement=需要在相机内执行只读 ntpdate -q <host-link-ip>",
+                    "actions=未执行时间同步、相机重启或相位调整",
+                ],
+                fixes=[
+                    "使用 ./scripts/system_doctor.sh 时输入相机 SSH 密码；密码只通过环境传给只读检查。"
+                ],
             )
-            samples = []
-            sample_errors = []
-            for _ in range(5):
-                request_start_ns = time.time_ns()
-                time_payload, time_error = self.fetch_url_json(
-                    f"{endpoint}/api/system-time", timeout=3.0
-                )
-                response_end_ns = time.time_ns()
-                if time_error or not isinstance(time_payload, dict):
-                    sample_errors.append(time_error or "invalid system-time response")
-                    continue
-                try:
-                    offset_ns, rtt_ns = _clock_offset_sample(
-                        time_payload,
-                        request_start_ns=request_start_ns,
-                        response_end_ns=response_end_ns,
-                    )
-                except (TypeError, ValueError) as exc:
-                    sample_errors.append(str(exc))
-                    continue
-                samples.append((rtt_ns, offset_ns))
-            sync_data = {}
-            if isinstance(sync_payload, dict) and sync_payload.get("success"):
-                sync_data = sync_payload.get("data") or {}
-            best = min(samples) if samples else None
-            return {
-                "name": name,
-                "endpoint": endpoint,
-                "enabled": sync_data.get("enabled"),
-                "synced": sync_data.get("synced"),
-                "sync_error": sync_error,
-                "sample_error": sample_errors[-1] if sample_errors else None,
-                "sample_count": len(samples),
-                "rtt_ns": best[0] if best else None,
-                "offset_ns": best[1] if best else None,
-            }
+            return
 
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=len(CAMERA_TIME_ENDPOINTS)
-        ) as pool:
-            futures = [
-                pool.submit(inspect_camera, name, endpoint)
-                for name, endpoint in CAMERA_TIME_ENDPOINTS
-            ]
-            results = [future.result() for future in futures]
-
-        evidence = []
-        measured = []
-        unavailable = []
-        unsynchronized = []
-        slow_queries = []
-        for result in results:
-            offset_ns = result["offset_ns"]
-            rtt_ns = result["rtt_ns"]
-            if offset_ns is None or rtt_ns is None:
-                unavailable.append(result["name"])
-                evidence.append(
-                    f"{result['name']}: endpoint={result['endpoint']}, "
-                    f"error={result['sample_error'] or result['sync_error'] or 'no samples'}"
-                )
-                continue
-            offset_ms = float(offset_ns) / 1_000_000.0
-            rtt_ms = float(rtt_ns) / 1_000_000.0
-            measured.append((result["name"], offset_ms))
-            if result["enabled"] is not True or result["synced"] is not True:
-                unsynchronized.append(result["name"])
-            if rtt_ms > 20.0:
-                slow_queries.append(result["name"])
-            evidence.append(
-                f"{result['name']}: enabled={result['enabled']}, "
-                f"synced={result['synced']}, camera_minus_host={offset_ms:+.3f} ms, "
-                f"best_rtt={rtt_ms:.3f} ms, samples={result['sample_count']}"
+        command = [
+            sys.executable,
+            str(self.root / "scripts/sync_camera_restart.py"),
+            "--check-only",
+        ]
+        if identity:
+            command.extend(["--identity-file", identity])
+        result = self.runner.run(command, timeout=90.0)
+        offsets_by_camera = parse_camera_ntp_offsets(result.stdout)
+        expected_names = {"insight3_a", "insight3_b", "insight9_a"}
+        if result.returncode != 0 or set(offsets_by_camera) != expected_names:
+            self.add(
+                "time.camera_clocks",
+                "时间同步",
+                "WARN",
+                "相机 NTP offset 只读查询失败",
+                evidence=[
+                    line
+                    for line in [result.stdout, result.stderr]
+                    if line
+                ][-4:]
+                + ["actions=未执行时间同步、相机重启或相位调整"],
+                fixes=["确认三台相机 SSH 可达且密码/identity 正确，然后重新运行诊断。"],
             )
+            return
 
-        offsets = [offset for _name, offset in measured]
-        max_host_offset = max((abs(offset) for offset in offsets), default=0.0)
-        camera_skew = max(offsets) - min(offsets) if len(offsets) > 1 else 0.0
-        if unavailable:
-            status = "WARN"
-            summary = "部分相机时间接口不可用：" + ", ".join(unavailable)
-        elif unsynchronized:
-            status = "FAIL"
-            summary = "相机 NTP 未同步或未启用：" + ", ".join(unsynchronized)
-        elif max_host_offset > 50.0 or camera_skew > 50.0:
+        offsets = list(offsets_by_camera.values())
+        max_host_offset = max(abs(offset) for offset in offsets)
+        camera_skew = max(offsets) - min(offsets)
+        if max_host_offset > 50.0 or camera_skew > 50.0:
             status = "FAIL"
             summary = (
                 f"相机 NTP 时差过大：最大主机时差 {max_host_offset:.3f} ms，"
                 f"相机间差 {camera_skew:.3f} ms"
             )
-        elif max_host_offset > 10.0 or camera_skew > 10.0 or slow_queries:
+        elif max_host_offset > 10.0 or camera_skew > 10.0:
             status = "WARN"
             summary = (
-                f"相机 NTP 已同步但时差偏大：最大主机时差 {max_host_offset:.3f} ms，"
+                f"相机 NTP 时差偏大：最大主机时差 {max_host_offset:.3f} ms，"
                 f"相机间差 {camera_skew:.3f} ms"
             )
         else:
@@ -1350,18 +1302,21 @@ class SystemDoctor:
             "时间同步",
             status,
             summary,
-            evidence=evidence
+            evidence=[
+                f"{name}: ntp_offset={offset:+.3f} ms"
+                for name, offset in sorted(offsets_by_camera.items())
+            ]
             + [
-                "offset_sign=正值表示相机快于宿主机；采用 5 次只读 HTTP GET 中最低 RTT 样本",
+                "measurement=相机内 ntpdate -q 查询对应宿主机链路地址；正值表示相机快于宿主机",
                 "actions=未执行时间同步、相机重启或相位调整",
             ],
             impact=(
-                "相机与宿主机时差会影响跨设备时间对齐；该数值不同于包含传输和处理耗时的消息新鲜度。"
+                "真实 NTP offset 会影响跨设备时间对齐；该数值不同于 HTTP 接口响应时机或消息传输延迟。"
                 if status != "PASS"
                 else None
             ),
             fixes=(
-                ["检查相机时间同步页面的 NTP 开关和服务器连通性；本诊断不会自动同步或重启相机。"]
+                ["检查相机 NTP 开关和宿主机 UDP 123 连通性；本诊断不会自动同步或重启相机。"]
                 if status != "PASS"
                 else []
             ),
