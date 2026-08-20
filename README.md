@@ -12,6 +12,8 @@ QC 为核心；采后才打开本机 Firefox/Kiosk 或 Web Dashboard 查看三�
 >
 > **叠杯批量采集、每单元检测位复核和异常重录规则见 [docs/CUP_STACKING_DATA_COLLECTION_SOP.md](docs/CUP_STACKING_DATA_COLLECTION_SOP.md)**
 > （开发者打包手册 + 使用者升级手册 + 全新 Jetson 首次部署，两条路径）。
+> **数采员现场语音操作见 [PDF 指导手册](docs/DATA_COLLECTOR_VOICE_MANUAL.pdf)**
+> （8 页，可直接打印；对应的可维护印刷源为 [HTML](docs/DATA_COLLECTOR_VOICE_MANUAL.html)）。
 > 内部装机用 `./deploy/setup_host.sh`（幂等：runtime 检查 + CycloneDDS/分片/RPS 调优 +
 > 构建 + 启动）；录制后数据完整性检查用 `scripts/check_bag.py`。
 > 本 README 侧重功能与配置参考。

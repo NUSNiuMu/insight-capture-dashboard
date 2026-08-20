@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>数采员语音录制指导手册</title>
+  <style>
+    :root {
+      --ink: #17243b;
+      --muted: #5e6b7d;
+      --blue: #165dff;
+      --blue-dark: #103b91;
+      --blue-soft: #eaf1ff;
+      --green: #0a7a55;
+      --green-soft: #e8f7f1;
+      --amber: #9a5a00;
+      --amber-soft: #fff4d6;
+      --red: #b42318;
+      --red-soft: #ffebe9;
+      --line: #dce3ed;
+      --paper: #fff;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: #dfe4eb;
+      color: var(--ink);
+      font-family: "Noto Sans CJK SC", "Droid Sans Fallback", sans-serif;
+      font-size: 10.4pt;
+      line-height: 1.48;
+    }
+    .sheet {
+      position: relative;
+      width: 210mm;
+      height: 297mm;
+      margin: 8mm auto;
+      padding: 14mm 16mm 15mm;
+      overflow: hidden;
+      background: var(--paper);
+      box-shadow: 0 4mm 12mm rgba(23, 36, 59, .16);
+      page-break-after: always;
+    }
+    .sheet:last-child { page-break-after: auto; }
+    @media print {
+      @page { size: A4; margin: 0; }
+      body { background: #fff; }
+      .sheet { margin: 0; box-shadow: none; }
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: 29pt; line-height: 1.15; letter-spacing: -.5pt; margin-bottom: 6mm; }
+    h2 { font-size: 19pt; line-height: 1.2; margin-bottom: 5mm; color: var(--blue-dark); }
+    h3 { font-size: 12.5pt; line-height: 1.3; margin: 0 0 2mm; }
+    p { margin-bottom: 3mm; }
+    ul, ol { margin: 0 0 3mm; padding-left: 5mm; }
+    li { margin-bottom: 1.5mm; }
+    strong { font-weight: 700; }
+    small, .small { font-size: 8.7pt; color: var(--muted); }
+    .nowrap { white-space: nowrap; }
+
+    .topline {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 3mm;
+      margin-bottom: 6mm;
+      border-bottom: .45mm solid var(--blue);
+      color: var(--muted);
+      font-size: 8.5pt;
+      letter-spacing: .4pt;
+      text-transform: uppercase;
+    }
+    .page-no {
+      position: absolute;
+      right: 16mm;
+      bottom: 6mm;
+      color: #8792a3;
+      font-size: 8pt;
+    }
+    .footer-note {
+      position: absolute;
+      left: 16mm;
+      bottom: 6mm;
+      color: #8792a3;
+      font-size: 8pt;
+    }
+    .kicker {
+      color: var(--blue);
+      font-size: 10pt;
+      font-weight: 700;
+      letter-spacing: 1.2pt;
+      margin-bottom: 4mm;
+    }
+    .lead { font-size: 13pt; line-height: 1.6; color: #3d4a5d; }
+    .subtle { color: var(--muted); }
+
+    .cover {
+      color: #fff;
+      background:
+        radial-gradient(circle at 82% 17%, rgba(86, 155, 255, .68), transparent 23%),
+        linear-gradient(145deg, #0a245d 0%, #1147ae 56%, #1677ff 100%);
+    }
+    .cover::after {
+      content: "";
+      position: absolute;
+      width: 110mm;
+      height: 110mm;
+      right: -38mm;
+      bottom: -30mm;
+      border: 1mm solid rgba(255,255,255,.18);
+      border-radius: 50%;
+      box-shadow: 0 0 0 12mm rgba(255,255,255,.04), 0 0 0 25mm rgba(255,255,255,.03);
+    }
+    .cover .brand { font-size: 11pt; letter-spacing: 1.5pt; opacity: .86; }
+    .cover .hero { margin-top: 27mm; width: 156mm; }
+    .cover h1 { font-size: 34pt; color: #fff; }
+    .cover .lead { color: rgba(255,255,255,.86); width: 145mm; }
+    .cover-card {
+      margin-top: 18mm;
+      width: 148mm;
+      padding: 7mm;
+      border: .3mm solid rgba(255,255,255,.28);
+      border-radius: 4mm;
+      background: rgba(6, 25, 68, .32);
+      backdrop-filter: blur(3px);
+    }
+    .cover-flow { display: flex; align-items: center; gap: 3mm; margin-top: 4mm; }
+    .cover-step {
+      flex: 1;
+      padding: 3mm 2mm;
+      border-radius: 2mm;
+      background: rgba(255,255,255,.12);
+      text-align: center;
+      font-weight: 700;
+    }
+    .cover-arrow { font-size: 16pt; opacity: .65; }
+    .cover-meta { position: absolute; left: 16mm; bottom: 18mm; font-size: 9pt; opacity: .75; }
+
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4mm; }
+    .card {
+      padding: 4.2mm;
+      border: .3mm solid var(--line);
+      border-radius: 3mm;
+      background: #fff;
+    }
+    .card.blue { border-color: #b8cffd; background: var(--blue-soft); }
+    .card.green { border-color: #acdcca; background: var(--green-soft); }
+    .card.amber { border-color: #efd394; background: var(--amber-soft); }
+    .card.red { border-color: #f0b4ae; background: var(--red-soft); }
+    .card p:last-child, .card ul:last-child, .card ol:last-child { margin-bottom: 0; }
+    .rule {
+      display: grid;
+      grid-template-columns: 9mm 1fr;
+      gap: 3mm;
+      align-items: start;
+      margin-bottom: 3.2mm;
+    }
+    .num {
+      display: grid;
+      place-items: center;
+      width: 8mm;
+      height: 8mm;
+      border-radius: 50%;
+      background: var(--blue);
+      color: #fff;
+      font-size: 8.5pt;
+      font-weight: 800;
+    }
+    .tag {
+      display: inline-block;
+      margin: 0 1.3mm 1.3mm 0;
+      padding: .9mm 2.2mm;
+      border-radius: 99px;
+      color: var(--blue-dark);
+      background: var(--blue-soft);
+      font-size: 8.5pt;
+      font-weight: 700;
+    }
+    .tag.green { color: var(--green); background: var(--green-soft); }
+    .tag.amber { color: var(--amber); background: var(--amber-soft); }
+    .tag.red { color: var(--red); background: var(--red-soft); }
+
+    .command-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .command-table th {
+      padding: 2.4mm 2.6mm;
+      color: #fff;
+      background: var(--blue-dark);
+      text-align: left;
+      font-size: 8.8pt;
+    }
+    .command-table td {
+      padding: 2.45mm 2.6mm;
+      border-bottom: .25mm solid var(--line);
+      vertical-align: top;
+      font-size: 9.1pt;
+    }
+    .command-table tr:nth-child(even) td { background: #f7f9fc; }
+    .command-table .say { width: 27%; color: var(--blue-dark); font-weight: 800; }
+    .command-table .when { width: 31%; }
+    .command-table .result { width: 42%; color: #465368; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 2.4mm;
+      align-items: stretch;
+      margin: 4mm 0 5mm;
+    }
+    .flow-box {
+      position: relative;
+      min-height: 35mm;
+      padding: 4mm 3mm;
+      border: .3mm solid #b8cffd;
+      border-radius: 3mm;
+      background: var(--blue-soft);
+    }
+    .flow-box::after {
+      content: "›";
+      position: absolute;
+      right: -3.7mm;
+      top: 10mm;
+      z-index: 2;
+      color: var(--blue);
+      font-size: 18pt;
+      font-weight: 500;
+    }
+    .flow-box:last-child::after { content: none; }
+    .flow-box .step { color: var(--blue); font-size: 8pt; font-weight: 800; letter-spacing: .5pt; }
+    .flow-box b { display: block; margin: 1mm 0 1.4mm; font-size: 10.5pt; }
+    .flow-box p { margin: 0; color: #4e5c70; font-size: 8.4pt; line-height: 1.45; }
+
+    .timeline { margin: 4mm 0; }
+    .time-row {
+      display: grid;
+      grid-template-columns: 12mm 34mm 1fr;
+      gap: 3mm;
+      padding: 3mm 0;
+      border-bottom: .25mm solid var(--line);
+      align-items: start;
+    }
+    .time-row:last-child { border-bottom: 0; }
+    .time-id {
+      display: grid;
+      place-items: center;
+      width: 9mm;
+      height: 9mm;
+      border-radius: 2.5mm;
+      color: #fff;
+      background: var(--blue);
+      font-weight: 800;
+    }
+    .speech {
+      padding: 1.8mm 2.5mm;
+      border-radius: 2mm;
+      color: var(--blue-dark);
+      background: var(--blue-soft);
+      font-weight: 800;
+      text-align: center;
+    }
+    .reply {
+      display: inline-block;
+      margin-top: 1mm;
+      padding: .7mm 1.8mm;
+      border-left: .9mm solid var(--green);
+      color: #335f51;
+      background: var(--green-soft);
+      font-size: 8.8pt;
+    }
+
+    .decision {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 4mm;
+      margin: 4mm 0;
+    }
+    .decision .card { min-height: 70mm; }
+    .state {
+      display: inline-block;
+      margin-bottom: 3mm;
+      padding: 1.2mm 3mm;
+      border-radius: 2mm;
+      font-weight: 900;
+      letter-spacing: .4pt;
+    }
+    .state.pass { color: #fff; background: var(--green); }
+    .state.retry { color: #fff; background: var(--amber); }
+    .state.recal { color: #fff; background: var(--red); }
+
+    .alert-table { width: 100%; border-collapse: collapse; }
+    .alert-table td { padding: 2.6mm 2.5mm; border-bottom: .25mm solid var(--line); vertical-align: top; }
+    .alert-table td:first-child { width: 41%; font-weight: 700; }
+    .alert-table tr:last-child td { border-bottom: 0; }
+    .alert-table .critical td { background: #fff6f5; }
+
+    .checklist { list-style: none; padding-left: 0; }
+    .checklist li { position: relative; padding-left: 7mm; margin-bottom: 2.6mm; }
+    .checklist li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 1.1mm;
+      width: 4.2mm;
+      height: 4.2mm;
+      border: .35mm solid #758297;
+      border-radius: .7mm;
+    }
+    .field {
+      display: inline-block;
+      min-width: 28mm;
+      height: 5mm;
+      margin: 0 1mm;
+      border-bottom: .25mm solid #7e8999;
+      vertical-align: bottom;
+    }
+    .compact li { margin-bottom: 1mm; }
+    .note {
+      padding: 3mm 4mm;
+      border-left: 1.2mm solid var(--blue);
+      background: #f5f8fe;
+      color: #405069;
+    }
+  </style>
+</head>
+<body>
+  <section class="sheet cover">
+    <div class="brand">INSIGHT CAPTURE · FIELD GUIDE</div>
+    <div class="hero">
+      <div class="kicker" style="color:#a9ceff">无屏数采 · 离线语音控制</div>
+      <h1>数采员语音录制<br>指导手册</h1>
+      <p class="lead">面向叠杯子批量采集：用固定口令完成任务进入、录制、作废、相机复检与班次结束。</p>
+    </div>
+    <div class="cover-card">
+      <strong>一条数据的最短闭环</strong>
+      <div class="cover-flow">
+        <div class="cover-step">开始录制</div><div class="cover-arrow">›</div>
+        <div class="cover-step">完成动作</div><div class="cover-arrow">›</div>
+        <div class="cover-step">停止录制</div><div class="cover-arrow">›</div>
+        <div class="cover-step">检查相机</div>
+      </div>
+      <p style="margin:4mm 0 0;opacity:.82">只有听到“检测通过”，才能开始下一条。</p>
+    </div>
+    <div class="cover-meta">版本 1.0 · 2026-08-20 · 当前设备配置：lite</div>
+    <div class="page-no" style="color:rgba(255,255,255,.62)">1 / 8</div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>先读这一页</span><span>现场原则</span></div>
+    <h2>五条必须遵守的规则</h2>
+    <div class="grid-2">
+      <div>
+        <div class="rule"><span class="num">1</span><div><h3>固定口令不用唤醒词</h3><p>直接说“开始录制”等口令。只有自然语言问答才先说“宸境”。</p></div></div>
+        <div class="rule"><span class="num">2</span><div><h3>播报结束后再讲话</h3><p>系统说话时不要插话。说完一条口令后，等待最终结果播报。</p></div></div>
+        <div class="rule"><span class="num">3</span><div><h3>先听“录制已经开始”再动作</h3><p>“初始化录制中”不等于已经开始；未听到最终确认，不要操作杯子。</p></div></div>
+      </div>
+      <div>
+        <div class="rule"><span class="num">4</span><div><h3>每条结束都要检查相机</h3><p>双手相机归位并静止，头部相机扫视工作区，再说“检查相机”。</p></div></div>
+        <div class="rule"><span class="num">5</span><div><h3>作废不等于删除</h3><p>动作失败时说“本条作废”。系统只标记无效，原始数据仍保留。</p></div></div>
+      </div>
+    </div>
+
+    <div class="card amber" style="margin-top:4mm">
+      <h3>遇到不确定情况</h3>
+      <p><strong>先停止动作，保留现场，听完播报。</strong>不要反复下口令、不要拔线、不要自行覆盖检测位。需要重新校准时通知组长。</p>
+    </div>
+
+    <h3 style="margin-top:6mm">本手册中的三台相机</h3>
+    <div class="grid-3">
+      <div class="card"><span class="tag">右手</span><h3>Insight3 A</h3><p class="small">放入右手检测治具；位置要求严格。</p></div>
+      <div class="card"><span class="tag">左手</span><h3>Insight3 B</h3><p class="small">放入左手检测治具；位置要求严格。</p></div>
+      <div class="card"><span class="tag">头部</span><h3>Insight9 A</h3><p class="small">无需回固定姿态；结束后扫视已建图工作区。</p></div>
+    </div>
+
+    <div class="note" style="margin-top:5mm"><strong>语音链路离线运行。</strong>固定命令不依赖网络或 OpenClaw；原始音频在本机处理。</div>
+    <div class="footer-note">Insight Capture · 数采员语音录制指导手册</div><div class="page-no">2 / 8</div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>口令速查</span><span>无需说“宸境”</span></div>
+    <h2>10 条固定语音命令</h2>
+    <table class="command-table">
+      <thead><tr><th>直接说</th><th>什么时候说</th><th>系统会做什么</th></tr></thead>
+      <tbody>
+        <tr><td class="say">开始任务叠杯子</td><td class="when">开班或新批次开始</td><td class="result">进入叠杯子任务并播报下一条编号；重复说不会清零。</td></tr>
+        <tr><td class="say">当前任务多少条</td><td class="when">核对进度</td><td class="result">播报本批已录制、有效、作废和下一条编号。</td></tr>
+        <tr><td class="say">结束当前任务</td><td class="when">本批全部完成</td><td class="result">结束当前 Session；录制中会拒绝执行。</td></tr>
+        <tr><td class="say">系统状态</td><td class="when">开班、恢复采集前</td><td class="result">检查三台相机、定位、数据流、存储和剩余空间。</td></tr>
+        <tr><td class="say">开始校准</td><td class="when">开班或系统要求重校准</td><td class="result">清空旧地图/定位状态，重新建立工作区基准。</td></tr>
+        <tr><td class="say">设置检测位</td><td class="when">校准完成后，仅组长</td><td class="result">保存双手相机检测位并冻结头部相机地图基准。</td></tr>
+        <tr><td class="say">开始录制</td><td class="when">杯子和人员已就位</td><td class="result">先做 Preflight；通过后开始一条 Take。</td></tr>
+        <tr><td class="say">停止录制</td><td class="when">动作结束并稳定 1 秒</td><td class="result">停止并排空数据，完成本条 quick QC。</td></tr>
+        <tr><td class="say">检查相机</td><td class="when">每条停止后</td><td class="result">检查双手归位和头部新地图闭环，给出 PASS/重试/重校准。</td></tr>
+        <tr><td class="say">本条作废</td><td class="when">动作失败或人为判定无效</td><td class="result">把最近一条标为作废，原始 bag 不删除。</td></tr>
+      </tbody>
+    </table>
+    <div class="grid-2" style="margin-top:5mm">
+      <div class="card green"><h3>也能识别的常用说法</h3><p class="small">开始采集／停止采集、重新校准、开始检测、检查系统、这条作废、任务状态。</p></div>
+      <div class="card amber"><h3>建议</h3><p class="small">现场统一使用表格左列的标准口令，短、清楚、最不容易误识别。</p></div>
+    </div>
+    <div class="footer-note">标准口令应自然语速、一次只说一条</div><div class="page-no">3 / 8</div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>开班</span><span>开始第一条之前</span></div>
+    <h2>开班准备与校准</h2>
+    <div class="grid-2">
+      <div>
+        <h3>数采员准备</h3>
+        <ol>
+          <li>检查三台相机、麦克风、音响和线缆固定；镜片清洁无遮挡。</li>
+          <li>检查桌面、杯子初始位和双手相机检测治具未移动。</li>
+          <li>在实际站位说<strong>“系统状态”</strong>。</li>
+          <li>只有听到“可以开始采集”，才进入下一步；否则按播报原因处理。</li>
+          <li>说<strong>“开始任务叠杯子”</strong>，确认系统播报下一条编号。</li>
+        </ol>
+      </div>
+      <div class="card blue">
+        <h3>系统状态通过示例</h3>
+        <p>“三台相机、定位和录制数据流正常，剩余空间……GB，可以开始采集。”</p>
+        <h3 style="margin-top:4mm">系统状态失败</h3>
+        <p>系统会播报最多三个主要原因，例如相机无图像、定位未就绪、必要数据流缺失、存储不可写或空间不足。</p>
+        <p><strong>失败时禁止强行开始录制。</strong></p>
+      </div>
+    </div>
+
+    <h3 style="margin-top:6mm">校准与检测位（组长负责）</h3>
+    <div class="timeline">
+      <div class="time-row"><span class="time-id">1</span><span class="speech">开始校准</span><div>听到“校准已经开始”后，用头部相机缓慢扫视整个任务工作区，让双手相机也看到已建图区域。</div></div>
+      <div class="time-row"><span class="time-id">2</span><span class="speech">等待播报</span><div>两路双手相机重新完成定位后，系统播报“校准完成”。未完成前不要设置检测位。</div></div>
+      <div class="time-row"><span class="time-id">3</span><span class="speech">相机归位</span><div>左右手相机完全放入各自治具，松手，线缆不受力，静止至少 1.2 秒；头部相机对准工作区。</div></div>
+      <div class="time-row"><span class="time-id">4</span><span class="speech">设置检测位</span><div><strong>仅组长执行。</strong>听到“检测位和地图基准已经记录”后，基准才生效。</div></div>
+      <div class="time-row"><span class="time-id">5</span><span class="speech">检查相机</span><div>连续检查 3 次均通过，再开始正式采集；任何一次不稳定都先排查现场。</div></div>
+    </div>
+    <div class="card red"><strong>不要为了消除告警反复说“设置检测位”。</strong>治具、相机、线缆或场地发生移动，或系统明确要求重校准时，应由组长重新校准并重设基准。</div>
+    <div class="footer-note">开班目标：系统就绪、任务已进入、校准与检测位有效</div><div class="page-no">4 / 8</div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>核心流程</span><span>每一条 Take</span></div>
+    <h2>单条录制标准闭环</h2>
+    <div class="flow">
+      <div class="flow-box"><span class="step">01 准备</span><b>摆好初态</b><p>杯子、双手、头部到标准初始姿态，稳定约 1 秒。</p></div>
+      <div class="flow-box"><span class="step">02 开始</span><b>开始录制</b><p>等到“录制已经开始”后再动作。</p></div>
+      <div class="flow-box"><span class="step">03 动作</span><b>完成一次任务</b><p>一条只做一个完整动作；关键阶段保持三路可见。</p></div>
+      <div class="flow-box"><span class="step">04 停止</span><b>停止录制</b><p>终态稳定约 1 秒，再下口令并等结束确认。</p></div>
+      <div class="flow-box"><span class="step">05 复检</span><b>检查相机</b><p>双手归位、头部扫视；通过才进入下一条。</p></div>
+    </div>
+
+    <div class="grid-2">
+      <div>
+        <h3>开始时会听到两段播报</h3>
+        <div class="card blue">
+          <p><strong>① “初始化录制中，请稍等。”</strong><br><span class="small">系统正在检查并启动，不能开始动作。</span></p>
+          <p><strong>② “录制已经开始。”</strong><br><span class="small">从这句播完后开始动作。</span></p>
+        </div>
+      </div>
+      <div>
+        <h3>停止时会听到两段播报</h3>
+        <div class="card green">
+          <p><strong>① “正在结束录制。”</strong><br><span class="small">保持现场，不要立即开始下一条。</span></p>
+          <p><strong>② “录制已经结束。”</strong><br><span class="small">随后执行归位、扫视和相机检查。</span></p>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="margin-top:6mm">动作质量要求</h3>
+    <div class="grid-3">
+      <div class="card"><span class="tag green">保留</span><p>正常的速度、路线和操作风格差异；符合任务定义的真实变化。</p></div>
+      <div class="card"><span class="tag amber">作废</span><p>杯子倒下/漏叠、手或杯子长期出画、旁人协助、做错动作或做了多个完整动作。</p></div>
+      <div class="card"><span class="tag red">停采</span><p>听到相机、定位、持续丢帧、空间不足或写入异常播报。</p></div>
+    </div>
+    <div class="note" style="margin-top:5mm"><strong>动作失败：</strong>先说“停止录制”，等结束，再说“本条作废”；随后仍要完成相机检查。</div>
+    <div class="footer-note">不得把播报声或准备动作当作任务动作的一部分</div><div class="page-no">5 / 8</div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>每条复检</span><span>归位 · 扫视 · 判断</span></div>
+    <h2>“检查相机”之后怎么做</h2>
+    <ol>
+      <li>把左右手 Insight3 完全放入各自治具，<strong>松手并静止至少 1.2 秒</strong>。</li>
+      <li>头部 Insight9 对准设置检测位时的工作区方向，做小范围、缓慢扫动。</li>
+      <li>说<strong>“检查相机”</strong>；听到“开始检测”后继续缓慢扫视，最多等待 12 秒。</li>
+      <li>按最终播报进入以下一个分支。</li>
+    </ol>
+
+    <div class="decision">
+      <div class="card green"><span class="state pass">PASS</span><h3>检测通过</h3><p>系统会说双手位置和头部地图闭环正常。</p><p><strong>可以整理杯子，开始下一条。</strong></p></div>
+      <div class="card amber"><span class="state retry">RETRY</span><h3>调整后复检</h3><p>按播报点名处理：</p><ul class="compact"><li>右/左手：重新完全入位，松手。</li><li>头部：对准原方向，小范围慢扫。</li><li>未静止：放稳后等待。</li></ul><p><strong>再次说“检查相机”。</strong></p></div>
+      <div class="card red"><span class="state recal">RECALIBRATE</span><h3>停止本批采集</h3><p>本条先隔离；若之前跳过检查，从上一次 PASS 后的条目全部隔离。</p><p><strong>通知组长，重新校准并设置检测位。</strong></p></div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card blue"><h3>头部相机没有新闭环</h3><p>这通常表示画面与冻结地图重叠不足。回到设置检测位时的朝向，慢速扫视有纹理、照明稳定的工作区，再检查。</p></div>
+      <div class="card amber"><h3>连续两次仍不通过</h3><p>不要不断重试或放宽标准。保持现场并通知组长，判断是治具/线缆问题、场景特征不足还是需要重新校准。</p></div>
+    </div>
+
+    <div class="note" style="margin-top:5mm"><strong>检查不能复用旧结果。</strong>每一条 Take 都必须得到一次新的头部地图闭环；页面或语音明确 PASS 才算完成。</div>
+    <div class="footer-note">“本条作废”也不能跳过相机复检</div><div class="page-no">6 / 8</div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>异常处理</span><span>先保数据，再恢复</span></div>
+    <h2>主动告警与语音故障</h2>
+    <table class="alert-table">
+      <tbody>
+        <tr class="critical"><td>“某相机图像中断，本条已记录异常”</td><td>停止动作并说“停止录制”；本条作废/隔离。检查线缆与相机状态，试采通过后再继续。</td></tr>
+        <tr class="critical"><td>“定位异常，本条已标记复检”</td><td>停止录制并完成相机检查；按结果调整或重校准。未恢复前不开始下一条。</td></tr>
+        <tr class="critical"><td>“检测到持续丢帧，本条已标记复检”</td><td>停止录制，本条隔离；通知组长检查数据流，完成标准试采后恢复。</td></tr>
+        <tr><td>“当前正在使用备用存储”</td><td>记录情况，可继续当前条；班次结束前通知组长确认录制盘。该告警本身不等于数据无效。</td></tr>
+        <tr class="critical"><td>“录制存储空间不足，请尽快停止采集”</td><td>立即停止当前条并停止本批；不要删除数据，通知组长释放/更换存储。</td></tr>
+        <tr class="critical"><td>“录制写入出现异常，本条已标记复检”</td><td>停止录制并隔离本条；未确认写入恢复前禁止继续批量采集。</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin-top:5mm">系统没听清或没回应</h3>
+    <div class="grid-2">
+      <div class="card blue">
+        <ol>
+          <li>等系统播报完全结束。</li>
+          <li>停顿一下，用标准短口令重说一次。</li>
+          <li>检查麦克风无遮挡、音响有声，现场无强噪声。</li>
+          <li>仍无回应：停止操作，通知组长，不凭猜测继续。</li>
+        </ol>
+      </div>
+      <div class="card amber">
+        <h3>常见回复</h3>
+        <ul>
+          <li><strong>“没听清”</strong>：等播完后重说。</li>
+          <li><strong>“当前已经在录制”</strong>：不要重复开始；确认是否应继续当前条。</li>
+          <li><strong>“当前没有数采任务”</strong>：先说“开始任务叠杯子”。</li>
+          <li><strong>“指令执行失败”</strong>：停止现场操作并通知组长。</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card red" style="margin-top:5mm"><strong>禁止：</strong>录制异常时拔相机、断电、删除 bag；禁止用网页手动录制和语音录制混在同一条中。先安全停止并保留原始数据。</div>
+    <div class="footer-note">异常条目标记作废/隔离，不删除原始 bag</div><div class="page-no">7 / 8</div>
+  </section>
+
+  <section class="sheet">
+    <div class="topline"><span>交接清单</span><span>可直接打印勾选</span></div>
+    <h2>班次检查表</h2>
+    <div class="grid-2">
+      <div class="card">
+        <h3>开班</h3>
+        <ul class="checklist">
+          <li>设备、三相机、麦克风、音响、线缆正常</li>
+          <li>镜片、桌面、杯子、治具与标记正常</li>
+          <li>“系统状态”通过</li>
+          <li>已说“开始任务叠杯子”并确认条次</li>
+          <li>组长完成校准、设置检测位</li>
+          <li>连续 3 次“检查相机”均 PASS</li>
+          <li>标准试采与人工画面检查通过</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>每一条</h3>
+        <ul class="checklist">
+          <li>杯子与人员处于标准初态</li>
+          <li>听到“录制已经开始”后才动作</li>
+          <li>只完成一个规定动作</li>
+          <li>终态稳定后停止，等“录制已经结束”</li>
+          <li>失败条已说“本条作废”</li>
+          <li>双手归位，头部扫视</li>
+          <li>“检查相机”最终 PASS</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="grid-2" style="margin-top:5mm">
+      <div class="card blue">
+        <h3>结束本批</h3>
+        <ul class="checklist">
+          <li>最后一条停止、复检并记录</li>
+          <li>说“当前任务多少条”，核对录制/有效/作废数</li>
+          <li>确认异常、隔离与重录关系已登记</li>
+          <li>说“结束当前任务”并听到批次结束确认</li>
+          <li>整理相机、线缆、治具与场地</li>
+        </ul>
+      </div>
+      <div class="card amber">
+        <h3>班次记录</h3>
+        <p>日期：<span class="field"></span>　设备：<span class="field"></span></p>
+        <p>采集员：<span class="field"></span>　组长：<span class="field"></span></p>
+        <p>计划：<span class="field" style="min-width:18mm"></span> 条　录制：<span class="field" style="min-width:18mm"></span> 条</p>
+        <p>有效：<span class="field" style="min-width:18mm"></span> 条　作废：<span class="field" style="min-width:18mm"></span> 条</p>
+        <p>复检：<span class="field" style="min-width:18mm"></span> 次　重校准：<span class="field" style="min-width:18mm"></span> 次</p>
+        <p>异常/交接：<span class="field" style="min-width:48mm"></span></p>
+        <p><span class="field" style="min-width:71mm"></span></p>
+      </div>
+    </div>
+
+    <div class="card green" style="margin-top:5mm">
+      <h3>现场记忆口诀</h3>
+      <p style="font-size:15pt;font-weight:800;letter-spacing:.4pt;margin:0">先听确认再动作，停止结束再归位；双手放稳、头部慢扫，检查通过再下一条。</p>
+    </div>
+    <p class="small" style="margin-top:5mm">系统计数用于现场核对；最终可交付数据还需 quick QC、相机检测、完整性检查和人工复核全部通过。详细质量标准见《叠杯批量数据采集标准作业规范》。</p>
+    <div class="footer-note">Insight Capture · 数采员语音录制指导手册</div><div class="page-no">8 / 8</div>
+  </section>
+</body>
+</html>
