@@ -71,12 +71,21 @@ def test_render_report_shows_actionable_failure_details() -> None:
         ],
     }
 
-    rendered = render_report(report, verbose=False, color=False)
+    rendered = render_report(
+        report,
+        verbose=False,
+        color=False,
+        output_path=Path("/tmp/system-doctor.json"),
+    )
 
     assert "[故障] insight3_a 无新鲜图像" in rendered
     assert "证据: input_age_sec=None" in rendered
     assert "修复 1: 检查 USB 线。" in rendered
     assert "当前正在录制" in rendered
+    assert "完整 JSON 已保存：/tmp/system-doctor.json" in rendered
+    summary = "结论: 故障  故障 1 / 警告 0 / 正常 0 / 信息或跳过 0"
+    assert rendered.count(summary) == 2
+    assert rendered.endswith(summary)
 
 
 def test_shell_entrypoint_enables_verbose_timestamped_report() -> None:

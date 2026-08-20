@@ -1226,7 +1226,22 @@ class SystemDoctor:
         }
 
 
-def render_report(report: Mapping[str, Any], *, verbose: bool, color: bool) -> str:
+def _summary_line(report: Mapping[str, Any]) -> str:
+    counts = report["counts"]
+    return (
+        f"结论: {STATUS_LABEL[report['verdict']]}  "
+        f"故障 {counts['FAIL']} / 警告 {counts['WARN']} / "
+        f"正常 {counts['PASS']} / 信息或跳过 {counts['INFO'] + counts['SKIP']}"
+    )
+
+
+def render_report(
+    report: Mapping[str, Any],
+    *,
+    verbose: bool,
+    color: bool,
+    output_path: Path | None = None,
+) -> str:
     colors = {
         "PASS": "\033[32m",
         "INFO": "\033[36m",
@@ -1240,11 +1255,11 @@ def render_report(report: Mapping[str, Any], *, verbose: bool, color: bool) -> s
         label = f"[{STATUS_LABEL[status]}]"
         return f"{colors[status]}{label}{reset}" if color else label
 
-    counts = report["counts"]
+    summary = _summary_line(report)
     lines = [
         "Insight Capture 系统深度诊断",
         f"时间: {report['generated_at']}  主机: {report['host']}",
-        f"结论: {STATUS_LABEL[report['verdict']]}  故障 {counts['FAIL']} / 警告 {counts['WARN']} / 正常 {counts['PASS']} / 信息或跳过 {counts['INFO'] + counts['SKIP']}",
+        summary,
         "",
     ]
     last_section = None
@@ -1268,6 +1283,9 @@ def render_report(report: Mapping[str, Any], *, verbose: bool, color: bool) -> s
     lines.extend(["", f"诊断耗时: {report['duration_seconds']:.1f} 秒"])
     if report.get("recording_active"):
         lines.append("安全提示: 当前正在录制；不要执行任何重启、重建容器、重挂载或相机断电操作。")
+    if output_path is not None:
+        lines.append(f"完整 JSON 已保存：{output_path}")
+    lines.extend(["", summary])
     return "\n".join(lines)
 
 
@@ -1319,10 +1337,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 report,
                 verbose=args.verbose,
                 color=not args.no_color and sys.stdout.isatty(),
+                output_path=args.output,
             )
         )
-        if args.output:
-            print(f"\n完整 JSON 已保存：{args.output}")
     if report["counts"]["FAIL"]:
         return 2
     if args.fail_on_warning and report["counts"]["WARN"]:
