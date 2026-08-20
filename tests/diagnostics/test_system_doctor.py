@@ -310,6 +310,21 @@ def test_error_lines_excludes_zero_failure_counters() -> None:
     ]
 
 
+def test_error_lines_excludes_unused_jetson_gstreamer_plugin_scan_noise() -> None:
+    lines = _error_lines(
+        [
+            "GStreamer-WARNING: Failed to load plugin '/usr/lib/gstreamer-1.0/libgstnvvideosinks.so': libGLESv2.so.2: cannot open shared object file",
+            "GStreamer-WARNING: Failed to load plugin '/usr/lib/gstreamer-1.0/libgstnveglglessink.so': libGLESv2.so.2: cannot open shared object file",
+            "GStreamer-WARNING: Failed to load plugin '/usr/lib/gstreamer-1.0/libgstnvarguscamerasrc.so': libGLESv2.so.2: cannot open shared object file",
+            "GStreamer-WARNING: Failed to load plugin '/usr/lib/gstreamer-1.0/libgstwebrtc.so': missing required library",
+        ]
+    )
+
+    assert lines == [
+        "GStreamer-WARNING: Failed to load plugin '/usr/lib/gstreamer-1.0/libgstwebrtc.so': missing required library"
+    ]
+
+
 def test_render_report_shows_actionable_failure_details() -> None:
     report = {
         "generated_at": "2026-08-20T12:00:00+08:00",

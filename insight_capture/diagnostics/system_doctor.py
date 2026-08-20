@@ -323,7 +323,9 @@ def _error_lines(lines: Iterable[str], limit: int = 12) -> list[str]:
     )
     benign = re.compile(
         r"0 (?:errors|failed)|no (?:error|failure)|expected.*failure|"
-        r"failure_count[=:]\s*0",
+        r"failure_count[=:]\s*0|"
+        r"GStreamer-WARNING.*Failed to load plugin .*libgst(?:nvvideosinks|"
+        r"nveglglessink|nvarguscamerasrc)\.so.*libGLESv2\.so\.2",
         re.IGNORECASE,
     )
     matches = []
