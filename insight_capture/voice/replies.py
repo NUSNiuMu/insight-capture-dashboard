@@ -8,7 +8,7 @@ CANNED_REPLIES = {
     "recording_starting": "初始化录制中，请稍等。",
     "recording_started": "录制已经开始。",
     "recording_stopping": "正在结束录制。",
-    "recording_stopped": "录制已经结束。请将左右手相机放回检测位，并用头部相机扫视已建图工作区，然后说检查相机。",
+    "recording_stopped": "录制已经结束，请重新校准。",
     "calibration_started": "校准已经开始。",
     "calibration_completed": "校准完成。",
     "capture_check_started": "开始检测。",

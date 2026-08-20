@@ -45,6 +45,12 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             "初始化录制中，请稍等。",
         )
 
+    def test_recording_stop_prompts_next_calibration(self):
+        self.assertEqual(
+            CANNED_REPLIES["recording_stopped"],
+            "录制已经结束，请重新校准。",
+        )
+
     def test_normalize_and_match_wake_word(self):
         self.assertEqual(normalize_transcript("  宸境！ "), "宸境")
         self.assertTrue(wake_word_detected("宸境", ["宸境"]))
