@@ -986,7 +986,17 @@ class SystemDoctor:
         system = payloads.get("system") if isinstance(payloads.get("system"), dict) else {}
         preflight = system.get("preflight") if isinstance(system.get("preflight"), dict) else {}
         failures = preflight.get("failures") if isinstance(preflight.get("failures"), list) else []
-        warnings = preflight.get("warnings") if isinstance(preflight.get("warnings"), list) else []
+        preflight_warnings = preflight.get("warnings") if isinstance(preflight.get("warnings"), list) else []
+        delegated_warnings = [
+            item
+            for item in preflight_warnings
+            if isinstance(item, dict) and item.get("code") == "storage_fallback"
+        ]
+        warnings = [
+            item
+            for item in preflight_warnings
+            if not (isinstance(item, dict) and item.get("code") == "storage_fallback")
+        ]
         if failures or warnings:
             evidence = []
             fixes = []
@@ -1011,8 +1021,17 @@ class SystemDoctor:
                 "dashboard.preflight",
                 "采集就绪",
                 "PASS",
-                "录制前检通过",
-                evidence=[f"free={_human_bytes(storage.get('free_bytes'))}", f"topics_missing={len((preflight.get('topics') or {}).get('missing') or [])}"],
+                "录制前检通过（存储告警已合并至 recording.storage）"
+                if delegated_warnings
+                else "录制前检通过",
+                evidence=[
+                    f"delegated_warning=storage_fallback -> recording.storage"
+                    for _item in delegated_warnings
+                ]
+                + [
+                    f"free={_human_bytes(storage.get('free_bytes'))}",
+                    f"topics_missing={len((preflight.get('topics') or {}).get('missing') or [])}",
+                ],
             )
         else:
             self.add("dashboard.preflight", "采集就绪", "WARN", "未取得录制前检结果", evidence=[errors.get("system", "missing preflight payload")])

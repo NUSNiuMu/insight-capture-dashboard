@@ -3,6 +3,7 @@ from pathlib import Path
 
 from insight_capture.diagnostics.system_doctor import (
     CommandResult,
+    SystemDoctor,
     _error_lines,
     _existing_staging_entries,
     _parse_compose_rows,
@@ -323,6 +324,59 @@ def test_error_lines_excludes_unused_jetson_gstreamer_plugin_scan_noise() -> Non
     assert lines == [
         "GStreamer-WARNING: Failed to load plugin '/usr/lib/gstreamer-1.0/libgstwebrtc.so': missing required library"
     ]
+
+
+def test_storage_fallback_is_counted_only_by_dedicated_check(monkeypatch) -> None:
+    doctor = SystemDoctor(
+        root=ROOT,
+        api_url="http://127.0.0.1:8765",
+        log_since="30m",
+        sample_seconds=0,
+        runner=StubRunner(CommandResult([], 1, "", "not mounted", 0)),
+    )
+    payloads = {
+        "/healthz": {"ok": True, "fake_pose": False},
+        "/api/system/status": {
+            "preflight": {
+                "failures": [],
+                "warnings": [
+                    {
+                        "code": "storage_fallback",
+                        "message": "using fallback storage",
+                        "details": {"reason": "required source missing"},
+                    }
+                ],
+                "storage": {"free_bytes": 1024},
+                "topics": {"missing": []},
+            }
+        },
+        "/api/cameras": {"cameras": []},
+        "/api/recording/status": {
+            "recording": False,
+            "storage": {
+                "using_fallback": True,
+                "configured_path": "/mnt/insight-recordings",
+                "active_path": "/workspaces/insight_capture/rosbags",
+                "required_source": "/dev/sda1",
+                "mounted_source": "/dev/nvme1n1p1",
+                "fallback_reason": "required source missing",
+            },
+        },
+        "/api/images/capabilities": {},
+        "/api/mapping": {},
+    }
+    monkeypatch.setattr(
+        doctor,
+        "fetch_json",
+        lambda path, timeout=8.0: (payloads[path], None),
+    )
+
+    doctor.check_dashboard()
+
+    findings = {finding.check_id: finding for finding in doctor.findings}
+    assert findings["dashboard.preflight"].status == "PASS"
+    assert "已合并" in findings["dashboard.preflight"].summary
+    assert findings["recording.storage"].status == "WARN"
 
 
 def test_render_report_shows_actionable_failure_details() -> None:
