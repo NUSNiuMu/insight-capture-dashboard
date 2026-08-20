@@ -17,6 +17,7 @@ class ProjectStructureTest(unittest.TestCase):
             "run_voice.sh",
             "select_device.sh",
             "sync_camera_restart.py",
+            "system_doctor.py",
         }
         actual = {path.name for path in (ROOT / "scripts").iterdir() if path.is_file()}
         self.assertEqual(actual, expected)

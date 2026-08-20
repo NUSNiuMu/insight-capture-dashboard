@@ -568,21 +568,25 @@ curl -s localhost:8765/api/images/capabilities | python3 -m json.tool
 
 ## 7. 报障信息收集
 
-报障时执行以下命令，把生成的文件发给我们：
+优先运行只读的深度诊断脚本。它会检查 NTP 实际选中源和偏差、CPU/内存/温度、
+系统盘与录制盘、相机网卡、DDS/UDP 内核参数、RPS 与短时丢包增量、核心容器、
+Dashboard/Preflight、三路相机输入帧率、建图定位、硬件图像管线、近期日志和语音服务。
+异常项会同时给出原始证据、影响和按顺序执行的修复建议：
 
 ```bash
-{
-  date
-  cat /etc/nv_tegra_release | head -1
-  sysctl net.core.rmem_max
-  docker ps -a | grep insight
-  ip -4 -br addr | grep 169.254
-  curl -s localhost:8765/api/images/capabilities
-  curl -s localhost:8765/api/cameras
-  docker logs insight-dashboard --since 30m 2>&1 | tail -100
-} > /tmp/insight_diag_$(date +%Y%m%d_%H%M%S).txt 2>&1
-ls /tmp/insight_diag_*.txt
+python3 scripts/system_doctor.py --verbose \
+  --output /tmp/insight_system_$(date +%Y%m%d_%H%M%S).json
 ```
+
+默认全程只读；有故障时退出码为 `2`，只有警告时默认仍为 `0`。自动巡检需要把警告也
+视为失败时增加 `--fail-on-warning`。纯 JSON 输出用 `--json`，日志范围可用
+`--log-since 2h` 调整。真实的相机 NTP 偏差需要设备 SSH key，使用
+`--camera-ssh-identity <key>`；未提供时脚本会明确标记为“未验证”，不会把 ROS
+消息新鲜度误称为相机时钟差。
+
+脚本若在权限受限的容器中运行，会把无法读取的宿主机检查标为未验证；现场报障应直接
+在 Jetson 宿主机仓库目录执行。修复建议可能包含重启或重挂载操作，录制中不得执行；
+脚本检测到正在录制时会在报告结尾再次提示。
 
 若问题与某次录制有关，同时附上该 bag 的检查结果：
 

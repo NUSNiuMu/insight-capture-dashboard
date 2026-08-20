@@ -33,6 +33,7 @@ insight-export-lerobot = "insight_capture.postprocess.datasets.lerobot:main"
 insight-export-ego-lerobot = "insight_capture.postprocess.datasets.ego_lerobot.cli:main"
 insight-extract-gripper = "insight_capture.postprocess.gripper.extraction:main"
 insight-calibrate-gripper = "insight_capture.perception.gripper.calibration:main"
+insight-system-doctor = "insight_capture.diagnostics.system_doctor:main"
 
 [tool.setuptools.packages.find]
 include = ["insight_capture*"]
