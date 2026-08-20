@@ -14,7 +14,7 @@ fi
 
 if [[ -z "${INSIGHT_CAMERA_SSH_IDENTITY:-}" \
         && -z "${INSIGHT_CAMERA_SSH_PASSWORD:-}" && -t 0 ]]; then
-    read -r -s -p "相机 SSH 密码（仅只读检查 NTP，不会同步或重启）: " \
+    read -r -s -p "相机 SSH 密码（仅本次使用，不会保存）: " \
         INSIGHT_CAMERA_SSH_PASSWORD
     printf '\n'
     export INSIGHT_CAMERA_SSH_PASSWORD

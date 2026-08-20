@@ -2,11 +2,15 @@ import json
 from pathlib import Path
 
 from insight_capture.diagnostics.system_doctor import (
+    CommandResult,
     _error_lines,
     _existing_staging_entries,
     _parse_compose_rows,
+    build_parser,
     parse_chrony_tracking,
     parse_camera_ntp_offsets,
+    parse_camera_phase_result,
+    repair_camera_timing,
     render_report,
 )
 
@@ -45,6 +49,113 @@ def test_parse_camera_ntp_offsets_ignores_estimated_spread() -> None:
         "insight3_b": -1.203,
         "insight9_a": 0.067,
     }
+
+
+def test_parse_camera_phase_result() -> None:
+    assert parse_camera_phase_result(
+        "Result: FAIL (max observed skew 16.664 ms, limit 10.000 ms)"
+    ) == {
+        "verdict": "FAIL",
+        "max_skew_ms": 16.664,
+        "limit_ms": 10.0,
+    }
+
+
+def test_repare_is_alias_for_repair() -> None:
+    assert build_parser().parse_args(["--repair"]).repair is True
+    assert build_parser().parse_args(["--repare"]).repair is True
+
+
+class StubRunner:
+    def __init__(self, result: CommandResult) -> None:
+        self.result = result
+        self.calls: list[tuple[list[str], float]] = []
+
+    def run(self, argv: list[str], *, timeout: float = 8.0) -> CommandResult:
+        self.calls.append((list(argv), timeout))
+        return self.result
+
+
+def _camera_clock_report(*, recording_active: bool) -> dict:
+    return {
+        "recording_active": recording_active,
+        "findings": [
+            {
+                "check_id": "time.camera_clocks",
+                "status": "FAIL",
+                "summary": "相机 NTP 时差过大",
+            }
+        ],
+    }
+
+
+def test_repair_camera_timing_refuses_during_recording() -> None:
+    runner = StubRunner(CommandResult([], 0, "", "", 0))
+
+    outcome = repair_camera_timing(
+        root=ROOT,
+        report=_camera_clock_report(recording_active=True),
+        runner=runner,
+    )
+
+    assert outcome.attempted is False
+    assert outcome.finding.status == "FAIL"
+    assert "正在录制" in outcome.finding.summary
+    assert runner.calls == []
+
+
+def test_repair_camera_timing_reports_phase_failure(monkeypatch) -> None:
+    monkeypatch.setenv("INSIGHT_CAMERA_SSH_IDENTITY", "/tmp/camera-key")
+    output = """Current NTP offsets
+  insight3_a     -2.764 ms
+  insight3_b    -69.463 ms
+  insight9_a    -31.029 ms
+Post-sync NTP offsets
+  insight3_a     -0.146 ms
+  insight3_b     -0.307 ms
+  insight9_a     -0.015 ms
+Final NTP offsets
+  insight3_a     -0.444 ms
+  insight3_b     -0.357 ms
+  insight9_a     -0.348 ms
+Result: FAIL (max observed skew 16.664 ms, limit 10.000 ms)
+"""
+    runner = StubRunner(CommandResult([], 2, output, "", 90000))
+
+    outcome = repair_camera_timing(
+        root=ROOT,
+        report=_camera_clock_report(recording_active=False),
+        runner=runner,
+    )
+
+    assert outcome.attempted is True
+    assert outcome.finding.status == "FAIL"
+    assert "最大 NTP 时差 0.444 ms" in outcome.finding.summary
+    assert "图像最大差 16.664 ms" in outcome.finding.summary
+    assert runner.calls[0][1] == 180.0
+    assert "--identity-file" in runner.calls[0][0]
+
+
+def test_repair_camera_timing_reports_success(monkeypatch) -> None:
+    monkeypatch.setenv("INSIGHT_CAMERA_SSH_IDENTITY", "/tmp/camera-key")
+    output = """Final NTP offsets
+  insight3_a     +0.112 ms
+  insight3_b     +0.103 ms
+  insight9_a     +0.022 ms
+Result: PASS (max observed skew 3.665 ms, limit 10.000 ms)
+"""
+    runner = StubRunner(CommandResult([], 0, output, "", 90000))
+
+    outcome = repair_camera_timing(
+        root=ROOT,
+        report=_camera_clock_report(recording_active=False),
+        runner=runner,
+    )
+
+    assert outcome.attempted is True
+    assert outcome.finding.status == "PASS"
+    assert "最大 NTP 时差 0.112 ms" in outcome.finding.summary
+    assert "图像最大差 3.665 ms" in outcome.finding.summary
 
 
 def test_staging_check_uses_current_disk_state(tmp_path: Path) -> None:
@@ -128,5 +239,5 @@ def test_shell_entrypoint_enables_verbose_timestamped_report() -> None:
     assert "insight_camera_ed25519" in script
     assert "INSIGHT_CAMERA_SSH_IDENTITY" in script
     assert "INSIGHT_CAMERA_SSH_PASSWORD" in script
-    assert "不会同步或重启" in script
+    assert "不会保存" in script
     assert '"$@"' in script

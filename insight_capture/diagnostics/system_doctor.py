@@ -1,4 +1,4 @@
-"""Evidence-based, read-only system diagnostics for capture appliances."""
+"""Evidence-based system diagnostics and explicit repairs for capture appliances."""
 
 from __future__ import annotations
 
@@ -54,8 +54,14 @@ class Finding:
         return dataclasses.asdict(self)
 
 
+@dataclasses.dataclass
+class RepairOutcome:
+    finding: Finding
+    attempted: bool
+
+
 class Runner:
-    """Run bounded, non-interactive read-only commands."""
+    """Run bounded, non-interactive commands."""
 
     def run(self, argv: Sequence[str], *, timeout: float = 8.0) -> CommandResult:
         started = time.monotonic()
@@ -175,6 +181,55 @@ def parse_camera_ntp_offsets(text: str) -> dict[str, float]:
         if match:
             offsets[match.group(1)] = float(match.group(2))
     return offsets
+
+
+def parse_camera_phase_result(text: str) -> dict[str, float | str] | None:
+    """Extract the final image timestamp phase verdict from the sync tool."""
+
+    match = re.search(
+        r"^Result:\s+(PASS|FAIL)\s+\(max observed skew\s+"
+        r"([0-9]+(?:\.[0-9]+)?)\s+ms,\s+limit\s+"
+        r"([0-9]+(?:\.[0-9]+)?)\s+ms\)$",
+        text,
+        re.MULTILINE,
+    )
+    if not match:
+        return None
+    return {
+        "verdict": match.group(1),
+        "max_skew_ms": float(match.group(2)),
+        "limit_ms": float(match.group(3)),
+    }
+
+
+def _camera_repair_evidence(text: str) -> list[str]:
+    """Keep the useful before/after timing lines without embedding raw JSON."""
+
+    evidence: list[str] = []
+    section = ""
+    headings = {
+        "Current NTP offsets",
+        "Post-sync NTP offsets",
+        "Final NTP offsets",
+        "Restart timer results",
+        "LPWM configuration events",
+        "Image timestamp measurement",
+    }
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line in headings:
+            section = line
+            evidence.append(section)
+            continue
+        if not line:
+            continue
+        if re.match(r"^insight(?:3_[ab]|9_a)\s+", line):
+            evidence.append(f"{section}: {line}" if section else line)
+        elif line.startswith("estimated spread"):
+            evidence.append(f"{section}: {line}" if section else line)
+        elif line.startswith("Result:"):
+            evidence.append(line)
+    return evidence
 
 
 def _parse_compose_rows(text: str) -> list[dict[str, Any]]:
@@ -1352,6 +1407,142 @@ class SystemDoctor:
         }
 
 
+def repair_camera_timing(
+    *,
+    root: Path,
+    report: Mapping[str, Any],
+    runner: Runner | None = None,
+) -> RepairOutcome:
+    """Synchronize camera clocks and capture phase after explicit authorization."""
+
+    before = next(
+        (
+            item
+            for item in report.get("findings", [])
+            if item.get("check_id") == "time.camera_clocks"
+        ),
+        None,
+    )
+    before_summary = str(before.get("summary")) if before else "未取得修复前相机时钟结果"
+    scope = "scope=仅修复相机时钟和采集相位；不处理磁盘、容器、网络或定位故障"
+    if report.get("recording_active"):
+        return RepairOutcome(
+            finding=Finding(
+                check_id="repair.time.camera_timing",
+                section="自动修复",
+                status="FAIL",
+                summary="拒绝修复相机时钟：当前正在录制",
+                evidence=[f"before={before_summary}", scope, "action=未执行"],
+                impact="校时和采集服务重启会中断正在写入的相机数据。",
+                fixes=["停止录制并确认数据落盘完成后，再运行 --repair。"],
+            ),
+            attempted=False,
+        )
+
+    identity = os.environ.get("INSIGHT_CAMERA_SSH_IDENTITY")
+    password = os.environ.get("INSIGHT_CAMERA_SSH_PASSWORD")
+    if not identity and not password:
+        return RepairOutcome(
+            finding=Finding(
+                check_id="repair.time.camera_timing",
+                section="自动修复",
+                status="FAIL",
+                summary="无法修复相机时钟：缺少相机 SSH 凭据",
+                evidence=[f"before={before_summary}", scope, "action=未执行"],
+                fixes=[
+                    "安装 ~/.ssh/insight_camera_ed25519，或设置 INSIGHT_CAMERA_SSH_IDENTITY 后重试。"
+                ],
+            ),
+            attempted=False,
+        )
+
+    command = [
+        sys.executable,
+        str(root / "scripts/sync_camera_restart.py"),
+        "--json",
+    ]
+    if identity:
+        command.extend(["--identity-file", identity])
+    result = (runner or Runner()).run(command, timeout=180.0)
+    offsets = parse_camera_ntp_offsets(result.stdout)
+    phase = parse_camera_phase_result(result.stdout)
+    evidence = [
+        f"before={before_summary}",
+        scope,
+        "action=执行 ntpdate -b、同步重启三路采集服务并测量 10 秒图像时间戳",
+    ]
+    evidence.extend(_camera_repair_evidence(result.stdout))
+    if result.stderr:
+        evidence.append(f"stderr={result.stderr.splitlines()[-1][:300]}")
+
+    expected_names = {"insight3_a", "insight3_b", "insight9_a"}
+    verified_offsets = set(offsets) == expected_names
+    if result.returncode == 0 and verified_offsets and phase and phase["verdict"] == "PASS":
+        maximum = max(abs(value) for value in offsets.values())
+        spread = max(offsets.values()) - min(offsets.values())
+        return RepairOutcome(
+            finding=Finding(
+                check_id="repair.time.camera_timing",
+                section="自动修复",
+                status="PASS",
+                summary=(
+                    f"相机时钟与采集相位修复完成：最大 NTP 时差 {maximum:.3f} ms，"
+                    f"相机间差 {spread:.3f} ms，图像最大差 {phase['max_skew_ms']:.3f} ms"
+                ),
+                evidence=evidence,
+            ),
+            attempted=True,
+        )
+
+    if verified_offsets and phase and phase["verdict"] == "FAIL":
+        maximum = max(abs(value) for value in offsets.values())
+        spread = max(offsets.values()) - min(offsets.values())
+        return RepairOutcome(
+            finding=Finding(
+                check_id="repair.time.camera_timing",
+                section="自动修复",
+                status="FAIL",
+                summary=(
+                    f"NTP 校时完成，但采集相位仍未达标：最大 NTP 时差 {maximum:.3f} ms，"
+                    f"相机间差 {spread:.3f} ms，图像最大差 {phase['max_skew_ms']:.3f} ms"
+                ),
+                evidence=evidence,
+                impact="设备时钟已对齐，但相机曝光/采集相位仍可能影响严格的跨相机帧配对。",
+                fixes=[
+                    "检查 Restart timer 和 LPWM 事件差异；排除原因后重新运行 --repair，不要连续盲目重试。"
+                ],
+            ),
+            attempted=True,
+        )
+
+    detail = _short_error(result)
+    return RepairOutcome(
+        finding=Finding(
+            check_id="repair.time.camera_timing",
+            section="自动修复",
+            status="FAIL",
+            summary="相机时钟与采集相位修复命令失败",
+            evidence=evidence + [f"exit={result.returncode}", f"error={detail}"],
+            impact="无法确认三台相机是否完成校时和同步采集服务重启。",
+            fixes=["按上方错误检查 SSH、NTP、相机服务和 Dashboard 状态后再重试。"],
+        ),
+        attempted=True,
+    )
+
+
+def _append_finding(report: dict[str, Any], finding: Finding) -> None:
+    report["findings"].append(finding.as_dict())
+    counts = {status: 0 for status in STATUS_LABEL}
+    for item in report["findings"]:
+        counts[item["status"]] += 1
+    highest = max(
+        (STATUS_RANK[item["status"]] for item in report["findings"]),
+        default=0,
+    )
+    report["counts"] = counts
+    report["verdict"] = "FAIL" if highest >= 2 else "WARN" if highest == 1 else "PASS"
+
+
 def _summary_line(report: Mapping[str, Any]) -> str:
     counts = report["counts"]
     return (
@@ -1417,7 +1608,7 @@ def render_report(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="只读深度检查主机、相机、ROS、容器、录制盘和 Dashboard，并给出证据与修复建议。"
+        description="深度检查主机、相机、ROS、容器、录制盘和 Dashboard，并给出证据与修复建议。"
     )
     parser.add_argument("--api-url", default="http://127.0.0.1:8765", help="Dashboard API base URL")
     parser.add_argument("--log-since", default="30m", help="Docker log window, for example 30m or 2h")
@@ -1427,10 +1618,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verbose", action="store_true", help="Show evidence for successful checks too")
     parser.add_argument("--no-color", action="store_true", help="Disable ANSI colors")
     parser.add_argument("--fail-on-warning", action="store_true", help="Return nonzero when warnings exist")
+    parser.add_argument(
+        "--repair",
+        "--repare",
+        dest="repair",
+        action="store_true",
+        help="Explicitly synchronize camera clocks/capture phase, then run diagnostics again",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    workflow_started = time.time()
     args = build_parser().parse_args(argv)
     if args.sample_seconds < 0 or args.sample_seconds > 30:
         print("ERROR: --sample-seconds must be between 0 and 30", file=sys.stderr)
@@ -1443,6 +1642,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         sample_seconds=args.sample_seconds,
     )
     report = doctor.run()
+    if args.repair:
+        outcome = repair_camera_timing(root=root, report=report)
+        if outcome.attempted:
+            report = SystemDoctor(
+                root=root,
+                api_url=args.api_url,
+                log_since=args.log_since,
+                sample_seconds=args.sample_seconds,
+            ).run()
+        report["repair_requested"] = True
+        report["repair_attempted"] = outcome.attempted
+        _append_finding(report, outcome.finding)
+        report["duration_seconds"] = round(time.time() - workflow_started, 3)
     if args.output:
         try:
             args.output.parent.mkdir(parents=True, exist_ok=True)
