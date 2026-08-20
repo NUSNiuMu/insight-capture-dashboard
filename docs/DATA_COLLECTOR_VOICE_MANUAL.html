@@ -329,7 +329,7 @@
     <div class="hero">
       <div class="kicker" style="color:#a9ceff">无屏数采 · 离线语音控制</div>
       <h1>数采员语音录制<br>指导手册</h1>
-      <p class="lead">面向叠杯子批量采集：用固定口令完成任务进入、录制、作废、相机复检与班次结束。</p>
+      <p class="lead">面向叠杯子批量采集：用固定口令完成任务进入、录制、作废、逐条重新校准与班次结束。</p>
     </div>
     <div class="cover-card">
       <strong>一条数据的最短闭环</strong>
@@ -337,11 +337,11 @@
         <div class="cover-step">开始录制</div><div class="cover-arrow">›</div>
         <div class="cover-step">完成动作</div><div class="cover-arrow">›</div>
         <div class="cover-step">停止录制</div><div class="cover-arrow">›</div>
-        <div class="cover-step">检查相机</div>
+        <div class="cover-step">重新校准</div>
       </div>
-      <p style="margin:4mm 0 0;opacity:.82">只有听到“检测通过”，才能开始下一条。</p>
+      <p style="margin:4mm 0 0;opacity:.82">每条停止后重新校准；只有听到“校准完成”，才能开始下一条。</p>
     </div>
-    <div class="cover-meta">版本 1.0 · 2026-08-20 · 当前设备配置：lite</div>
+    <div class="cover-meta">版本 1.1 · 2026-08-20 · 当前设备配置：lite</div>
     <div class="page-no" style="color:rgba(255,255,255,.62)">1 / 8</div>
   </section>
 
@@ -355,21 +355,21 @@
         <div class="rule"><span class="num">3</span><div><h3>先听“录制已经开始”再动作</h3><p>“初始化录制中”不等于已经开始；未听到最终确认，不要操作杯子。</p></div></div>
       </div>
       <div>
-        <div class="rule"><span class="num">4</span><div><h3>每条结束都要检查相机</h3><p>双手相机归位并静止，头部相机扫视工作区，再说“检查相机”。</p></div></div>
+        <div class="rule"><span class="num">4</span><div><h3>每条结束都重新校准</h3><p>听到“录制已经结束”后说“开始校准”，扫视工作区，等“校准完成”。</p></div></div>
         <div class="rule"><span class="num">5</span><div><h3>作废不等于删除</h3><p>动作失败时说“本条作废”。系统只标记无效，原始数据仍保留。</p></div></div>
       </div>
     </div>
 
     <div class="card amber" style="margin-top:4mm">
       <h3>遇到不确定情况</h3>
-      <p><strong>先停止动作，保留现场，听完播报。</strong>不要反复下口令、不要拔线、不要自行覆盖检测位。需要重新校准时通知组长。</p>
+      <p><strong>先停止动作，保留现场，听完播报。</strong>不要反复下口令、不要拔线。每条录制后按规定重新校准；校准迟迟不完成时通知组长。</p>
     </div>
 
     <h3 style="margin-top:6mm">本手册中的三台相机</h3>
     <div class="grid-3">
-      <div class="card"><span class="tag">右手</span><h3>Insight3 A</h3><p class="small">放入右手检测治具；位置要求严格。</p></div>
-      <div class="card"><span class="tag">左手</span><h3>Insight3 B</h3><p class="small">放入左手检测治具；位置要求严格。</p></div>
-      <div class="card"><span class="tag">头部</span><h3>Insight9 A</h3><p class="small">无需回固定姿态；结束后扫视已建图工作区。</p></div>
+      <div class="card"><span class="tag">右手</span><h3>Insight3 A</h3><p class="small">校准时让相机看到头部相机正在建立的工作区地图。</p></div>
+      <div class="card"><span class="tag">左手</span><h3>Insight3 B</h3><p class="small">校准时让相机看到头部相机正在建立的工作区地图。</p></div>
+      <div class="card"><span class="tag">头部</span><h3>Insight9 A</h3><p class="small">校准时缓慢扫视任务工作区，无需回到固定姿态。</p></div>
     </div>
 
     <div class="note" style="margin-top:5mm"><strong>语音链路离线运行。</strong>固定命令不依赖网络或 OpenClaw；原始音频在本机处理。</div>
@@ -378,7 +378,7 @@
 
   <section class="sheet">
     <div class="topline"><span>口令速查</span><span>无需说“宸境”</span></div>
-    <h2>10 条固定语音命令</h2>
+    <h2>现场使用的 8 条固定命令</h2>
     <table class="command-table">
       <thead><tr><th>直接说</th><th>什么时候说</th><th>系统会做什么</th></tr></thead>
       <tbody>
@@ -386,17 +386,15 @@
         <tr><td class="say">当前任务多少条</td><td class="when">核对进度</td><td class="result">播报本批已录制、有效、作废和下一条编号。</td></tr>
         <tr><td class="say">结束当前任务</td><td class="when">本批全部完成</td><td class="result">结束当前 Session；录制中会拒绝执行。</td></tr>
         <tr><td class="say">系统状态</td><td class="when">开班、恢复采集前</td><td class="result">检查三台相机、定位、数据流、存储和剩余空间。</td></tr>
-        <tr><td class="say">开始校准</td><td class="when">开班或系统要求重校准</td><td class="result">清空旧地图/定位状态，重新建立工作区基准。</td></tr>
-        <tr><td class="say">设置检测位</td><td class="when">校准完成后，仅组长</td><td class="result">保存双手相机检测位并冻结头部相机地图基准。</td></tr>
+        <tr><td class="say">开始校准</td><td class="when">开班及每条停止后</td><td class="result">清空旧地图/定位状态，重新建立工作区地图与定位。</td></tr>
         <tr><td class="say">开始录制</td><td class="when">杯子和人员已就位</td><td class="result">先做 Preflight；通过后开始一条 Take。</td></tr>
         <tr><td class="say">停止录制</td><td class="when">动作结束并稳定 1 秒</td><td class="result">停止并排空数据，完成本条 quick QC。</td></tr>
-        <tr><td class="say">检查相机</td><td class="when">每条停止后</td><td class="result">检查双手归位和头部新地图闭环，给出 PASS/重试/重校准。</td></tr>
         <tr><td class="say">本条作废</td><td class="when">动作失败或人为判定无效</td><td class="result">把最近一条标为作废，原始 bag 不删除。</td></tr>
       </tbody>
     </table>
     <div class="grid-2" style="margin-top:5mm">
-      <div class="card green"><h3>也能识别的常用说法</h3><p class="small">开始采集／停止采集、重新校准、开始检测、检查系统、这条作废、任务状态。</p></div>
-      <div class="card amber"><h3>建议</h3><p class="small">现场统一使用表格左列的标准口令，短、清楚、最不容易误识别。</p></div>
+      <div class="card green"><h3>也能识别的常用说法</h3><p class="small">开始采集／停止采集、重新校准、检查系统、这条作废、任务状态。</p></div>
+      <div class="card red"><h3>现行流程不使用</h3><p class="small">不说“设置检测位”，也不说“检查相机”。每条录制后统一重新校准。</p></div>
     </div>
     <div class="footer-note">标准口令应自然语速、一次只说一条</div><div class="page-no">3 / 8</div>
   </section>
@@ -409,7 +407,7 @@
         <h3>数采员准备</h3>
         <ol>
           <li>检查三台相机、麦克风、音响和线缆固定；镜片清洁无遮挡。</li>
-          <li>检查桌面、杯子初始位和双手相机检测治具未移动。</li>
+          <li>检查桌面、杯子初始位和任务区域保持稳定、无遮挡。</li>
           <li>在实际站位说<strong>“系统状态”</strong>。</li>
           <li>只有听到“可以开始采集”，才进入下一步；否则按播报原因处理。</li>
           <li>说<strong>“开始任务叠杯子”</strong>，确认系统播报下一条编号。</li>
@@ -424,16 +422,15 @@
       </div>
     </div>
 
-    <h3 style="margin-top:6mm">校准与检测位（组长负责）</h3>
+    <h3 style="margin-top:6mm">首次校准</h3>
     <div class="timeline">
       <div class="time-row"><span class="time-id">1</span><span class="speech">开始校准</span><div>听到“校准已经开始”后，用头部相机缓慢扫视整个任务工作区，让双手相机也看到已建图区域。</div></div>
-      <div class="time-row"><span class="time-id">2</span><span class="speech">等待播报</span><div>两路双手相机重新完成定位后，系统播报“校准完成”。未完成前不要设置检测位。</div></div>
-      <div class="time-row"><span class="time-id">3</span><span class="speech">相机归位</span><div>左右手相机完全放入各自治具，松手，线缆不受力，静止至少 1.2 秒；头部相机对准工作区。</div></div>
-      <div class="time-row"><span class="time-id">4</span><span class="speech">设置检测位</span><div><strong>仅组长执行。</strong>听到“检测位和地图基准已经记录”后，基准才生效。</div></div>
-      <div class="time-row"><span class="time-id">5</span><span class="speech">检查相机</span><div>连续检查 3 次均通过，再开始正式采集；任何一次不稳定都先排查现场。</div></div>
+      <div class="time-row"><span class="time-id">2</span><span class="speech">扫视工作区</span><div>头部相机缓慢覆盖桌面与任务范围；左右手相机同时朝向已建图区域，无遮挡、不过快移动。</div></div>
+      <div class="time-row"><span class="time-id">3</span><span class="speech">等待播报</span><div>两路双手相机重新完成全局定位后，系统播报“校准完成”。未听到前不能开始录制。</div></div>
+      <div class="time-row"><span class="time-id">4</span><span class="speech">标准试采</span><div>完成一条标准录制，停止后再执行一次完整重新校准；确认流程稳定后开始批量采集。</div></div>
     </div>
-    <div class="card red"><strong>不要为了消除告警反复说“设置检测位”。</strong>治具、相机、线缆或场地发生移动，或系统明确要求重校准时，应由组长重新校准并重设基准。</div>
-    <div class="footer-note">开班目标：系统就绪、任务已进入、校准与检测位有效</div><div class="page-no">4 / 8</div>
+    <div class="card blue"><strong>本流程没有检测位。</strong>左右手相机无需回到固定治具或固定 Pose；校准以系统播报“校准完成”为结束标志。</div>
+    <div class="footer-note">开班目标：系统就绪、任务已进入、首次校准完成</div><div class="page-no">4 / 8</div>
   </section>
 
   <section class="sheet">
@@ -444,7 +441,7 @@
       <div class="flow-box"><span class="step">02 开始</span><b>开始录制</b><p>等到“录制已经开始”后再动作。</p></div>
       <div class="flow-box"><span class="step">03 动作</span><b>完成一次任务</b><p>一条只做一个完整动作；关键阶段保持三路可见。</p></div>
       <div class="flow-box"><span class="step">04 停止</span><b>停止录制</b><p>终态稳定约 1 秒，再下口令并等结束确认。</p></div>
-      <div class="flow-box"><span class="step">05 复检</span><b>检查相机</b><p>双手归位、头部扫视；通过才进入下一条。</p></div>
+      <div class="flow-box"><span class="step">05 校准</span><b>重新校准</b><p>说“开始校准”，扫视工作区；完成后才进入下一条。</p></div>
     </div>
 
     <div class="grid-2">
@@ -459,7 +456,7 @@
         <h3>停止时会听到两段播报</h3>
         <div class="card green">
           <p><strong>① “正在结束录制。”</strong><br><span class="small">保持现场，不要立即开始下一条。</span></p>
-          <p><strong>② “录制已经结束。”</strong><br><span class="small">随后执行归位、扫视和相机检查。</span></p>
+          <p><strong>② “录制已经结束。”</strong><br><span class="small">随后说“开始校准”，扫视工作区并等完成。</span></p>
         </div>
       </div>
     </div>
@@ -468,35 +465,36 @@
     <div class="grid-3">
       <div class="card"><span class="tag green">保留</span><p>正常的速度、路线和操作风格差异；符合任务定义的真实变化。</p></div>
       <div class="card"><span class="tag amber">作废</span><p>杯子倒下/漏叠、手或杯子长期出画、旁人协助、做错动作或做了多个完整动作。</p></div>
-      <div class="card"><span class="tag red">停采</span><p>听到相机、定位、持续丢帧、空间不足或写入异常播报。</p></div>
+      <div class="card"><span class="tag red">停采</span><p>听到相机、持续丢帧、空间不足或写入异常播报；定位异常按规定重校准。</p></div>
     </div>
-    <div class="note" style="margin-top:5mm"><strong>动作失败：</strong>先说“停止录制”，等结束，再说“本条作废”；随后仍要完成相机检查。</div>
+    <div class="note" style="margin-top:5mm"><strong>动作失败：</strong>先说“停止录制”，等结束，再说“本条作废”；随后仍要完成重新校准。</div>
     <div class="footer-note">不得把播报声或准备动作当作任务动作的一部分</div><div class="page-no">5 / 8</div>
   </section>
 
   <section class="sheet">
-    <div class="topline"><span>每条复检</span><span>归位 · 扫视 · 判断</span></div>
-    <h2>“检查相机”之后怎么做</h2>
+    <div class="topline"><span>每条校准</span><span>重建地图 · 重新定位</span></div>
+    <h2>每次停止录制后重新校准</h2>
     <ol>
-      <li>把左右手 Insight3 完全放入各自治具，<strong>松手并静止至少 1.2 秒</strong>。</li>
-      <li>头部 Insight9 对准设置检测位时的工作区方向，做小范围、缓慢扫动。</li>
-      <li>说<strong>“检查相机”</strong>；听到“开始检测”后继续缓慢扫视，最多等待 12 秒。</li>
-      <li>按最终播报进入以下一个分支。</li>
+      <li>听到<strong>“录制已经结束”</strong>，确认数据已经停止写入。</li>
+      <li>如本条动作失败，先说<strong>“本条作废”</strong>并等待确认。</li>
+      <li>说<strong>“开始校准”</strong>；听到“校准已经开始”后再移动相机建图。</li>
+      <li>头部 Insight9 缓慢扫视整个任务工作区；左右手 Insight3 同时看到已建图区域。</li>
+      <li>只有听到<strong>“校准完成”</strong>，才能摆放下一条并再次说“开始录制”。</li>
     </ol>
 
     <div class="decision">
-      <div class="card green"><span class="state pass">PASS</span><h3>检测通过</h3><p>系统会说双手位置和头部地图闭环正常。</p><p><strong>可以整理杯子，开始下一条。</strong></p></div>
-      <div class="card amber"><span class="state retry">RETRY</span><h3>调整后复检</h3><p>按播报点名处理：</p><ul class="compact"><li>右/左手：重新完全入位，松手。</li><li>头部：对准原方向，小范围慢扫。</li><li>未静止：放稳后等待。</li></ul><p><strong>再次说“检查相机”。</strong></p></div>
-      <div class="card red"><span class="state recal">RECALIBRATE</span><h3>停止本批采集</h3><p>本条先隔离；若之前跳过检查，从上一次 PASS 后的条目全部隔离。</p><p><strong>通知组长，重新校准并设置检测位。</strong></p></div>
+      <div class="card blue"><span class="state pass">START</span><h3>听到开始确认</h3><p>系统已清空旧地图和定位状态。</p><p><strong>开始缓慢、完整地扫视任务区域。</strong></p></div>
+      <div class="card amber"><span class="state retry">WAIT</span><h3>等待定位完成</h3><p>保持三台相机视野与已建图区域有重叠；移动不要过快，避免遮挡、强反光和画面模糊。</p><p><strong>不要提前开始下一条。</strong></p></div>
+      <div class="card green"><span class="state pass">READY</span><h3>听到“校准完成”</h3><p>两路双手相机已重新定位。</p><p><strong>可以摆好初态，开始下一条录制。</strong></p></div>
     </div>
 
     <div class="grid-2">
-      <div class="card blue"><h3>头部相机没有新闭环</h3><p>这通常表示画面与冻结地图重叠不足。回到设置检测位时的朝向，慢速扫视有纹理、照明稳定的工作区，再检查。</p></div>
-      <div class="card amber"><h3>连续两次仍不通过</h3><p>不要不断重试或放宽标准。保持现场并通知组长，判断是治具/线缆问题、场景特征不足还是需要重新校准。</p></div>
+      <div class="card blue"><h3>迟迟没有“校准完成”</h3><p>继续慢速覆盖有纹理、照明稳定的工作区，并让左右手相机看到该区域；检查镜片、遮挡和线缆。</p></div>
+      <div class="card amber"><h3>仍然无法完成</h3><p>停止现场操作并通知组长，检查相机图像、建图和两路定位服务。不要跳过校准继续录制。</p></div>
     </div>
 
-    <div class="note" style="margin-top:5mm"><strong>检查不能复用旧结果。</strong>每一条 Take 都必须得到一次新的头部地图闭环；页面或语音明确 PASS 才算完成。</div>
-    <div class="footer-note">“本条作废”也不能跳过相机复检</div><div class="page-no">6 / 8</div>
+    <div class="note" style="margin-top:5mm"><strong>每条都从新地图开始。</strong>上一次“校准完成”不能用于下一条；停止一条录制后必须重新说“开始校准”。</div>
+    <div class="footer-note">“本条作废”也不能跳过重新校准</div><div class="page-no">6 / 8</div>
   </section>
 
   <section class="sheet">
@@ -505,7 +503,7 @@
     <table class="alert-table">
       <tbody>
         <tr class="critical"><td>“某相机图像中断，本条已记录异常”</td><td>停止动作并说“停止录制”；本条作废/隔离。检查线缆与相机状态，试采通过后再继续。</td></tr>
-        <tr class="critical"><td>“定位异常，本条已标记复检”</td><td>停止录制并完成相机检查；按结果调整或重校准。未恢复前不开始下一条。</td></tr>
+        <tr class="critical"><td>“定位异常，本条已标记复检”</td><td>停止录制并隔离本条；随后重新校准。未听到“校准完成”前不开始下一条。</td></tr>
         <tr class="critical"><td>“检测到持续丢帧，本条已标记复检”</td><td>停止录制，本条隔离；通知组长检查数据流，完成标准试采后恢复。</td></tr>
         <tr><td>“当前正在使用备用存储”</td><td>记录情况，可继续当前条；班次结束前通知组长确认录制盘。该告警本身不等于数据无效。</td></tr>
         <tr class="critical"><td>“录制存储空间不足，请尽快停止采集”</td><td>立即停止当前条并停止本批；不要删除数据，通知组长释放/更换存储。</td></tr>
@@ -545,11 +543,10 @@
         <h3>开班</h3>
         <ul class="checklist">
           <li>设备、三相机、麦克风、音响、线缆正常</li>
-          <li>镜片、桌面、杯子、治具与标记正常</li>
+          <li>镜片、桌面、杯子、任务区域与标记正常</li>
           <li>“系统状态”通过</li>
           <li>已说“开始任务叠杯子”并确认条次</li>
-          <li>组长完成校准、设置检测位</li>
-          <li>连续 3 次“检查相机”均 PASS</li>
+          <li>首次“开始校准”并听到“校准完成”</li>
           <li>标准试采与人工画面检查通过</li>
         </ul>
       </div>
@@ -561,8 +558,8 @@
           <li>只完成一个规定动作</li>
           <li>终态稳定后停止，等“录制已经结束”</li>
           <li>失败条已说“本条作废”</li>
-          <li>双手归位，头部扫视</li>
-          <li>“检查相机”最终 PASS</li>
+          <li>停止后说“开始校准”</li>
+          <li>扫视工作区并听到“校准完成”</li>
         </ul>
       </div>
     </div>
@@ -571,11 +568,11 @@
       <div class="card blue">
         <h3>结束本批</h3>
         <ul class="checklist">
-          <li>最后一条停止、复检并记录</li>
+          <li>最后一条停止、重新校准并记录</li>
           <li>说“当前任务多少条”，核对录制/有效/作废数</li>
           <li>确认异常、隔离与重录关系已登记</li>
           <li>说“结束当前任务”并听到批次结束确认</li>
-          <li>整理相机、线缆、治具与场地</li>
+          <li>整理相机、线缆与场地</li>
         </ul>
       </div>
       <div class="card amber">
@@ -584,7 +581,7 @@
         <p>采集员：<span class="field"></span>　组长：<span class="field"></span></p>
         <p>计划：<span class="field" style="min-width:18mm"></span> 条　录制：<span class="field" style="min-width:18mm"></span> 条</p>
         <p>有效：<span class="field" style="min-width:18mm"></span> 条　作废：<span class="field" style="min-width:18mm"></span> 条</p>
-        <p>复检：<span class="field" style="min-width:18mm"></span> 次　重校准：<span class="field" style="min-width:18mm"></span> 次</p>
+        <p>校准完成：<span class="field" style="min-width:18mm"></span> 次　异常：<span class="field" style="min-width:18mm"></span> 次</p>
         <p>异常/交接：<span class="field" style="min-width:48mm"></span></p>
         <p><span class="field" style="min-width:71mm"></span></p>
       </div>
@@ -592,9 +589,9 @@
 
     <div class="card green" style="margin-top:5mm">
       <h3>现场记忆口诀</h3>
-      <p style="font-size:15pt;font-weight:800;letter-spacing:.4pt;margin:0">先听确认再动作，停止结束再归位；双手放稳、头部慢扫，检查通过再下一条。</p>
+      <p style="font-size:15pt;font-weight:800;letter-spacing:.4pt;margin:0">先听确认再动作，停止结束就校准；头部慢扫、双手看图，校准完成再下一条。</p>
     </div>
-    <p class="small" style="margin-top:5mm">系统计数用于现场核对；最终可交付数据还需 quick QC、相机检测、完整性检查和人工复核全部通过。详细质量标准见《叠杯批量数据采集标准作业规范》。</p>
+    <p class="small" style="margin-top:5mm">系统计数用于现场核对；最终可交付数据还需 quick QC、完整性检查和人工复核全部通过。</p>
     <div class="footer-note">Insight Capture · 数采员语音录制指导手册</div><div class="page-no">8 / 8</div>
   </section>
 </body>
