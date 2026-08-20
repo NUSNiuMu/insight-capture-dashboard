@@ -1,2 +1,2 @@
-# USB camera netdevs lose their RPS values whenever cdc_ncm reconnects.
-ACTION=="add", SUBSYSTEM=="net", KERNEL=="enx*", DRIVERS=="cdc_ncm", RUN+="@NETWORK_SCRIPT@ $kernel"
+# The cdc_ncm add event starts as usbN; ID_NET_NAME contains the final enx name.
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="cdc_ncm", ENV{ID_NET_NAME}=="enx*", RUN+="@NETWORK_SCRIPT@ $env{ID_NET_NAME}"

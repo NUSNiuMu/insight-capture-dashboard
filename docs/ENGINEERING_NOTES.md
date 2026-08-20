@@ -58,7 +58,9 @@
 - 2026-08-17 的单原生 MCAP 133 秒压力录制中，一张相机 USB 网卡重连后
   `rps_cpus` 从 `3e` 重置为 `00`，窗口内 `UdpRcvbufErrors` 增加 9,578，bag 内高频
   topic 缺失约 0.9%–1.7%；MCAP cache 排空仅 0.98 秒且没有 writer loss 日志。
-  因此 `host_setup.sh` 同时安装 udev 规则，在每次 cdc_ncm netdev 重建时恢复 RPS/RFS；
+  因此 `host_setup.sh` 同时安装 udev 规则，在每次 cdc_ncm netdev 重建时恢复 RPS/RFS。
+  add 事件中的内核名起初仍是 `usbN`，规则必须匹配 udev 计算出的 `ID_NET_NAME`
+  并把最终的 `enx...` 名称传给配置脚本，不能直接匹配事件的 `KERNEL` 名称；
   不能只依赖开机 oneshot 服务。
 - 三张网卡 RPS 均为 `3e` 后，FastDDS recorder 的 134 秒全量测试仍新增 30,225 次
   `UdpRcvbufErrors`；同一进程改用 CycloneDDS 后，最终 130.02 秒测试的 softnet、网卡、
