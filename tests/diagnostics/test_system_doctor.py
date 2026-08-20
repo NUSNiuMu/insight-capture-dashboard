@@ -4,6 +4,7 @@ from pathlib import Path
 from insight_capture.diagnostics.system_doctor import (
     _clock_offset_sample,
     _error_lines,
+    _existing_staging_entries,
     _parse_compose_rows,
     parse_chrony_tracking,
     render_report,
@@ -38,6 +39,18 @@ def test_clock_offset_sample_uses_request_midpoint() -> None:
 
     assert offset_ns == 3_000_000
     assert rtt_ns == 2_000_000
+
+
+def test_staging_check_uses_current_disk_state(tmp_path: Path) -> None:
+    staging = tmp_path / "rosbags/_staging"
+    staging.mkdir(parents=True)
+    interrupted = staging / "insight_record_interrupted"
+    interrupted.mkdir()
+
+    assert _existing_staging_entries([staging]) == [interrupted]
+
+    interrupted.rmdir()
+    assert _existing_staging_entries([staging]) == []
 
 
 def test_parse_compose_rows_accepts_array_and_json_lines() -> None:

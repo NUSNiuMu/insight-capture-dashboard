@@ -252,6 +252,21 @@ def _tail_lines(path: Path, maximum_bytes: int = 512 * 1024) -> list[str]:
         return []
 
 
+def _existing_staging_entries(roots: Iterable[Path]) -> list[Path]:
+    entries: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        try:
+            normalized = root.resolve()
+            if normalized in seen or not normalized.is_dir():
+                continue
+            seen.add(normalized)
+            entries.extend(sorted(normalized.iterdir()))
+        except OSError:
+            continue
+    return entries
+
+
 def _error_lines(lines: Iterable[str], limit: int = 12) -> list[str]:
     severe = re.compile(
         r"traceback|segmentation fault|out of memory|cuda.*(?:error|failed)|"
@@ -1039,18 +1054,47 @@ class SystemDoctor:
         elif recording:
             self.add("recording.storage", "录制存储", "PASS", "录制存储使用预期路径", evidence=[f"active={storage.get('active_path')}"])
         recovery_lines = [str(line) for line in recording.get("recent_output", []) if "unrecoverable" in str(line).lower() or "nothing recoverable" in str(line).lower()]
-        if recovery_lines:
+        staging_roots = [self.root / "rosbags/_staging"]
+        configured_host_dir = _key_values(
+            _read_text(self.root / ".env") or ""
+        ).get("INSIGHT_ROSBAG_HOST_DIR")
+        if configured_host_dir:
+            configured_path = Path(configured_host_dir)
+            if not configured_path.is_absolute():
+                configured_path = self.root / configured_path
+            staging_roots.append(configured_path / "_staging")
+        active_path = str(storage.get("active_path") or "")
+        project_container_prefix = "/workspaces/insight_capture/"
+        if active_path.startswith(project_container_prefix):
+            staging_roots.append(
+                self.root
+                / active_path.removeprefix(project_container_prefix)
+                / "_staging"
+            )
+        staging_entries = _existing_staging_entries(staging_roots)
+        if staging_entries:
             self.add(
                 "recording.recovery",
                 "录制存储",
                 "WARN",
                 "发现未恢复的中断录制 staging 数据",
-                evidence=recovery_lines[-10:],
+                evidence=[f"path={path}" for path in staging_entries]
+                + recovery_lines[-6:],
                 impact="这些旧录制尚不可作为完整数据使用，但应保留用于取证。",
                 fixes=["不要直接删除 _staging；记录目录名，先备份并用 check_bag.py/SQLite 工具评估可恢复性。"],
             )
         else:
-            self.add("recording.recovery", "录制存储", "PASS", "未报告待处理的不可恢复录制")
+            self.add(
+                "recording.recovery",
+                "录制存储",
+                "PASS",
+                "磁盘上没有待处理的中断录制 staging 数据",
+                evidence=(
+                    ["Dashboard API 仍含启动时历史恢复日志，因对应目录已不存在而忽略"]
+                    if recovery_lines
+                    else []
+                ),
+            )
 
         runtime = cameras.get("runtime") if isinstance(cameras.get("runtime"), dict) else (system.get("runtime") or {})
         if runtime and not runtime.get("webrtc_worker_running"):
