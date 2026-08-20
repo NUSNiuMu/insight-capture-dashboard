@@ -73,6 +73,16 @@ docker compose down                   # 停止
 浏览器访问：`http://<设备IP>:8765/`。可用页面包括 3D、录制、Bags、
 LeRobot/UMI 数据集、轨迹评分、Hand pose、轨迹优化和设置。
 
+如果同一局域网内有多套采集设备，应为每套设备分配不同的 ROS Domain。以下命令会
+统一修改三台相机、`config/cameras.json` 和 `.env`，并重启相机、重建 ROS 服务：
+
+```bash
+./scripts/set_ros_domain_id.py 21 --dry-run
+./scripts/set_ros_domain_id.py 21
+```
+
+脚本检测到相机数量不是三台或正在录制时会拒绝修改；无人值守执行可加 `-y`。
+
 ## 升级
 
 拿到新的镜像压缩包后，在本目录执行：

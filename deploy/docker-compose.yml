@@ -32,7 +32,7 @@ services:
     shm_size: '2gb'
 
     environment:
-      - ROS_DOMAIN_ID=20           # Must match devices; override in .env if needed
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}  # Must match devices; set via scripts/set_ros_domain_id.py
       # Rosbag names and log timestamps use localtime; without this they'd be
       # 8h behind wall clock on a China-based host (base image is Etc/UTC).
       - TZ=Asia/Shanghai
@@ -124,7 +124,7 @@ services:
     ipc: host
     runtime: nvidia
     environment:
-      - ROS_DOMAIN_ID=20
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
@@ -152,7 +152,7 @@ services:
     network_mode: host
     ipc: host
     environment:
-      - ROS_DOMAIN_ID=20
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
       # Small descriptor matrices are faster and use far less CPU without
       # OpenBLAS oversubscribing all six Jetson cores.
       - OPENBLAS_NUM_THREADS=1

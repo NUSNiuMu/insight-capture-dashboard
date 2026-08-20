@@ -111,6 +111,19 @@ python3 -m insight_capture.runtime.app &
 
 会自动扫描当前活跃的 `169.254.x.x` 网络接口发现相机（每台相机独占一个 USB 网口、独立 `/24` 段），不需要在脚本里写死 IP；换了 segment 或增减相机都不用改脚本。
 
+三台相机和 Dashboard 必须使用同一个、且同一局域网内不冲突的 ROS Domain。统一修改时执行：
+
+```bash
+./scripts/set_ros_domain_id.py 21 --dry-run
+./scripts/set_ros_domain_id.py 21
+```
+
+脚本会先确认三台相机均可访问且当前没有录制，再同时维护相机设置、
+`config/cameras.json` 和 Compose `.env`。默认随后重启三台相机并强制重建三个 ROS
+容器，使新 ID 真正生效；自动化环境可加 `-y`，只写配置暂不重启可加
+`--no-restart`。`config/cameras.json` 是当前机器的 live 配置，之后重新执行
+`select_device.sh` 会用 profile 默认值覆盖它，需要时应再次运行本脚本。
+
 需要在整机重启后三机统一校时、共同重启采集服务并直接测量图像时间戳差时：
 
 ```bash
