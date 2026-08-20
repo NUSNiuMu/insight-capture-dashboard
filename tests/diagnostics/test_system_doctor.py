@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from insight_capture.diagnostics.system_doctor import (
+    _clock_offset_sample,
     _error_lines,
     _parse_compose_rows,
     parse_chrony_tracking,
@@ -26,6 +27,17 @@ Leap status     : Normal
     assert tracking["stratum"] == 4
     assert tracking["system_offset_seconds"] == -0.000014
     assert tracking["last_offset_seconds"] == -0.000002
+
+
+def test_clock_offset_sample_uses_request_midpoint() -> None:
+    offset_ns, rtt_ns = _clock_offset_sample(
+        {"timestampNanos": 1_003_000_000},
+        request_start_ns=999_000_000,
+        response_end_ns=1_001_000_000,
+    )
+
+    assert offset_ns == 3_000_000
+    assert rtt_ns == 2_000_000
 
 
 def test_parse_compose_rows_accepts_array_and_json_lines() -> None:

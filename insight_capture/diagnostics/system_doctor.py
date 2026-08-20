@@ -28,6 +28,11 @@ STATUS_LABEL = {
     "WARN": "警告",
     "FAIL": "故障",
 }
+CAMERA_TIME_ENDPOINTS = (
+    ("insight3_a", "http://169.254.10.1"),
+    ("insight3_b", "http://169.254.20.1"),
+    ("insight9_a", "http://169.254.30.1"),
+)
 
 
 @dataclasses.dataclass
@@ -163,6 +168,23 @@ def parse_chrony_tracking(text: str) -> dict[str, Any]:
     return parsed
 
 
+def _clock_offset_sample(
+    payload: Mapping[str, Any], *, request_start_ns: int, response_end_ns: int
+) -> tuple[int, int]:
+    """Return camera-minus-host offset and RTT for one read-only time query."""
+
+    timestamp_ns = payload.get("timestampNanos")
+    if timestamp_ns is None:
+        timestamp = payload.get("timestamp")
+        if timestamp is None:
+            raise ValueError("system-time response has no timestamp")
+        timestamp_ns = int(timestamp) * 1_000_000_000
+    midpoint_ns = (int(request_start_ns) + int(response_end_ns)) // 2
+    return int(timestamp_ns) - midpoint_ns, int(response_end_ns) - int(
+        request_start_ns
+    )
+
+
 def _parse_compose_rows(text: str) -> list[dict[str, Any]]:
     if not text.strip():
         return []
@@ -258,14 +280,12 @@ class SystemDoctor:
         log_since: str,
         sample_seconds: float,
         runner: Runner | None = None,
-        camera_ssh_identity: str | None = None,
     ) -> None:
         self.root = root
         self.api_url = api_url.rstrip("/")
         self.log_since = log_since
         self.sample_seconds = sample_seconds
         self.runner = runner or Runner()
-        self.camera_ssh_identity = camera_ssh_identity
         self.findings: list[Finding] = []
         self.context: dict[str, Any] = {}
 
@@ -294,8 +314,18 @@ class SystemDoctor:
 
     def fetch_json(self, path: str, *, timeout: float = 8.0) -> tuple[Any | None, str | None]:
         url = f"{self.api_url}{path}"
+        return self.fetch_url_json(url, timeout=timeout)
+
+    @staticmethod
+    def fetch_url_json(
+        url: str, *, timeout: float = 8.0
+    ) -> tuple[Any | None, str | None]:
         try:
-            request = Request(url, headers={"Accept": "application/json"})
+            request = Request(
+                url,
+                headers={"Accept": "application/json"},
+                method="GET",
+            )
             with urlopen(request, timeout=timeout) as response:
                 return json.load(response), None
         except HTTPError as exc:
@@ -1165,35 +1195,132 @@ class SystemDoctor:
             )
 
     def check_camera_clocks(self) -> None:
-        if not self.camera_ssh_identity:
-            self.add(
-                "time.camera_clocks",
-                "时间同步",
-                "INFO",
-                "未验证相机自身 NTP 偏差（需要相机 SSH 身份）",
-                impact="Dashboard 的 input_age 是消息新鲜度，包含采集/网络/处理延迟，不能当作纯时钟差。",
-                fixes=["需要真实相机时钟偏差时，加 --camera-ssh-identity <key>；或运行 scripts/sync_camera_restart.py --check-only。"],
+        def inspect_camera(name: str, endpoint: str) -> dict[str, Any]:
+            sync_payload, sync_error = self.fetch_url_json(
+                f"{endpoint}/api/time-sync-setting", timeout=3.0
             )
-            return
-        result = self.runner.run(
-            [
-                sys.executable,
-                str(self.root / "scripts/sync_camera_restart.py"),
-                "--check-only",
-                "--identity-file",
-                self.camera_ssh_identity,
-            ],
-            timeout=30,
-        )
-        status = "PASS" if result.returncode == 0 else "WARN"
-        lines = [line for line in result.stdout.splitlines() if line.strip()][-20:]
+            samples = []
+            sample_errors = []
+            for _ in range(5):
+                request_start_ns = time.time_ns()
+                time_payload, time_error = self.fetch_url_json(
+                    f"{endpoint}/api/system-time", timeout=3.0
+                )
+                response_end_ns = time.time_ns()
+                if time_error or not isinstance(time_payload, dict):
+                    sample_errors.append(time_error or "invalid system-time response")
+                    continue
+                try:
+                    offset_ns, rtt_ns = _clock_offset_sample(
+                        time_payload,
+                        request_start_ns=request_start_ns,
+                        response_end_ns=response_end_ns,
+                    )
+                except (TypeError, ValueError) as exc:
+                    sample_errors.append(str(exc))
+                    continue
+                samples.append((rtt_ns, offset_ns))
+            sync_data = {}
+            if isinstance(sync_payload, dict) and sync_payload.get("success"):
+                sync_data = sync_payload.get("data") or {}
+            best = min(samples) if samples else None
+            return {
+                "name": name,
+                "endpoint": endpoint,
+                "enabled": sync_data.get("enabled"),
+                "synced": sync_data.get("synced"),
+                "sync_error": sync_error,
+                "sample_error": sample_errors[-1] if sample_errors else None,
+                "sample_count": len(samples),
+                "rtt_ns": best[0] if best else None,
+                "offset_ns": best[1] if best else None,
+            }
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(CAMERA_TIME_ENDPOINTS)
+        ) as pool:
+            futures = [
+                pool.submit(inspect_camera, name, endpoint)
+                for name, endpoint in CAMERA_TIME_ENDPOINTS
+            ]
+            results = [future.result() for future in futures]
+
+        evidence = []
+        measured = []
+        unavailable = []
+        unsynchronized = []
+        slow_queries = []
+        for result in results:
+            offset_ns = result["offset_ns"]
+            rtt_ns = result["rtt_ns"]
+            if offset_ns is None or rtt_ns is None:
+                unavailable.append(result["name"])
+                evidence.append(
+                    f"{result['name']}: endpoint={result['endpoint']}, "
+                    f"error={result['sample_error'] or result['sync_error'] or 'no samples'}"
+                )
+                continue
+            offset_ms = float(offset_ns) / 1_000_000.0
+            rtt_ms = float(rtt_ns) / 1_000_000.0
+            measured.append((result["name"], offset_ms))
+            if result["enabled"] is not True or result["synced"] is not True:
+                unsynchronized.append(result["name"])
+            if rtt_ms > 20.0:
+                slow_queries.append(result["name"])
+            evidence.append(
+                f"{result['name']}: enabled={result['enabled']}, "
+                f"synced={result['synced']}, camera_minus_host={offset_ms:+.3f} ms, "
+                f"best_rtt={rtt_ms:.3f} ms, samples={result['sample_count']}"
+            )
+
+        offsets = [offset for _name, offset in measured]
+        max_host_offset = max((abs(offset) for offset in offsets), default=0.0)
+        camera_skew = max(offsets) - min(offsets) if len(offsets) > 1 else 0.0
+        if unavailable:
+            status = "WARN"
+            summary = "部分相机时间接口不可用：" + ", ".join(unavailable)
+        elif unsynchronized:
+            status = "FAIL"
+            summary = "相机 NTP 未同步或未启用：" + ", ".join(unsynchronized)
+        elif max_host_offset > 50.0 or camera_skew > 50.0:
+            status = "FAIL"
+            summary = (
+                f"相机 NTP 时差过大：最大主机时差 {max_host_offset:.3f} ms，"
+                f"相机间差 {camera_skew:.3f} ms"
+            )
+        elif max_host_offset > 10.0 or camera_skew > 10.0 or slow_queries:
+            status = "WARN"
+            summary = (
+                f"相机 NTP 已同步但时差偏大：最大主机时差 {max_host_offset:.3f} ms，"
+                f"相机间差 {camera_skew:.3f} ms"
+            )
+        else:
+            status = "PASS"
+            summary = (
+                f"三台相机 NTP 已同步：最大主机时差 {max_host_offset:.3f} ms，"
+                f"相机间差 {camera_skew:.3f} ms"
+            )
+
         self.add(
             "time.camera_clocks",
             "时间同步",
             status,
-            "已取得相机 NTP 偏差" if status == "PASS" else "相机 NTP 偏差检查失败",
-            evidence=lines + ([result.stderr] if result.stderr else []),
-            fixes=[] if status == "PASS" else ["确认 key、相机 SSH 连通性和设备端 NTP 服务。"],
+            summary,
+            evidence=evidence
+            + [
+                "offset_sign=正值表示相机快于宿主机；采用 5 次只读 HTTP GET 中最低 RTT 样本",
+                "actions=未执行时间同步、相机重启或相位调整",
+            ],
+            impact=(
+                "相机与宿主机时差会影响跨设备时间对齐；该数值不同于包含传输和处理耗时的消息新鲜度。"
+                if status != "PASS"
+                else None
+            ),
+            fixes=(
+                ["检查相机时间同步页面的 NTP 开关和服务器连通性；本诊断不会自动同步或重启相机。"]
+                if status != "PASS"
+                else []
+            ),
         )
 
     def run(self) -> dict[str, Any]:
@@ -1296,7 +1423,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-url", default="http://127.0.0.1:8765", help="Dashboard API base URL")
     parser.add_argument("--log-since", default="30m", help="Docker log window, for example 30m or 2h")
     parser.add_argument("--sample-seconds", type=float, default=2.0, help="Network drop counter sampling window")
-    parser.add_argument("--camera-ssh-identity", help="Optional SSH key for true camera NTP offset checks")
     parser.add_argument("--json", action="store_true", help="Print JSON instead of the human report")
     parser.add_argument("--output", type=Path, help="Also save the complete JSON report to this path")
     parser.add_argument("--verbose", action="store_true", help="Show evidence for successful checks too")
@@ -1316,7 +1442,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         api_url=args.api_url,
         log_since=args.log_since,
         sample_seconds=args.sample_seconds,
-        camera_ssh_identity=args.camera_ssh_identity,
     )
     report = doctor.run()
     if args.output:
