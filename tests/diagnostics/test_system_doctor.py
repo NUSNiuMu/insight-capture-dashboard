@@ -125,6 +125,8 @@ def test_shell_entrypoint_enables_verbose_timestamped_report() -> None:
     assert "--verbose" in script
     assert "--output" in script
     assert "date +%Y%m%d_%H%M%S" in script
+    assert "insight_camera_ed25519" in script
+    assert "INSIGHT_CAMERA_SSH_IDENTITY" in script
     assert "INSIGHT_CAMERA_SSH_PASSWORD" in script
     assert "不会同步或重启" in script
     assert '"$@"' in script
