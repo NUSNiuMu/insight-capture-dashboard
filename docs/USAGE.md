@@ -574,12 +574,13 @@ Dashboard/Preflight、三路相机输入帧率、建图定位、硬件图像管�
 异常项会同时给出原始证据、影响和按顺序执行的修复建议：
 
 ```bash
-python3 scripts/system_doctor.py --verbose \
-  --output /tmp/insight_system_$(date +%Y%m%d_%H%M%S).json
+./scripts/system_doctor.sh
 ```
 
-默认全程只读；有故障时退出码为 `2`，只有警告时默认仍为 `0`。自动巡检需要把警告也
-视为失败时增加 `--fail-on-warning`。纯 JSON 输出用 `--json`，日志范围可用
+Shell 入口会自动显示完整证据，并把 JSON 保存为带时间戳的
+`/tmp/insight_system_YYYYMMDD_HHMMSS.json`。默认全程只读；有故障时退出码为 `2`，
+只有警告时默认仍为 `0`。自动巡检需要把警告也视为失败时，可运行
+`./scripts/system_doctor.sh --fail-on-warning`。纯 JSON 输出用 `--json`，日志范围可用
 `--log-since 2h` 调整。真实的相机 NTP 偏差需要设备 SSH key，使用
 `--camera-ssh-identity <key>`；未提供时脚本会明确标记为“未验证”，不会把 ROS
 消息新鲜度误称为相机时钟差。

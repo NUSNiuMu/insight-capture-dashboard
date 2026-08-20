@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from insight_capture.diagnostics.system_doctor import (
     _error_lines,
@@ -6,6 +7,9 @@ from insight_capture.diagnostics.system_doctor import (
     parse_chrony_tracking,
     render_report,
 )
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_parse_chrony_tracking_preserves_signed_offset() -> None:
@@ -73,3 +77,12 @@ def test_render_report_shows_actionable_failure_details() -> None:
     assert "证据: input_age_sec=None" in rendered
     assert "修复 1: 检查 USB 线。" in rendered
     assert "当前正在录制" in rendered
+
+
+def test_shell_entrypoint_enables_verbose_timestamped_report() -> None:
+    script = (ROOT / "scripts/system_doctor.sh").read_text(encoding="utf-8")
+
+    assert "--verbose" in script
+    assert "--output" in script
+    assert "date +%Y%m%d_%H%M%S" in script
+    assert '"$@"' in script
