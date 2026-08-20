@@ -160,5 +160,8 @@ class CapturePreflight:
             if storage.get("using_fallback"):
                 return f"当前使用备用存储，剩余空间{free_gb:.0f}GB，可以开始采集。"
             return f"三台相机、定位和录制数据流正常，剩余空间{free_gb:.0f}GB，可以开始采集。"
+        codes = {str(item.get("code")) for item in failures}
+        if codes & {"mapping_not_ready", "localization_not_ready"}:
+            return "目前没有校准，请说开始校准。"
         messages = [str(item.get("message") or "未知异常") for item in failures[:3]]
         return "无法开始录制，" + "；".join(messages) + "。"
