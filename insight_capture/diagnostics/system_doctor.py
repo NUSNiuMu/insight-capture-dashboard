@@ -58,6 +58,7 @@ class Finding:
 class RepairOutcome:
     finding: Finding
     attempted: bool
+    target_check_ids: tuple[str, ...] = ()
 
 
 class Runner:
@@ -1424,7 +1425,7 @@ def repair_camera_timing(
         None,
     )
     before_summary = str(before.get("summary")) if before else "未取得修复前相机时钟结果"
-    scope = "scope=仅修复相机时钟和采集相位；不处理磁盘、容器、网络或定位故障"
+    scope = "scope=修复相机时钟和采集相位"
     if report.get("recording_active"):
         return RepairOutcome(
             finding=Finding(
@@ -1437,6 +1438,7 @@ def repair_camera_timing(
                 fixes=["停止录制并确认数据落盘完成后，再运行 --repair。"],
             ),
             attempted=False,
+            target_check_ids=("time.camera_clocks",),
         )
 
     identity = os.environ.get("INSIGHT_CAMERA_SSH_IDENTITY")
@@ -1454,6 +1456,7 @@ def repair_camera_timing(
                 ],
             ),
             attempted=False,
+            target_check_ids=("time.camera_clocks",),
         )
 
     command = [
@@ -1492,6 +1495,7 @@ def repair_camera_timing(
                 evidence=evidence,
             ),
             attempted=True,
+            target_check_ids=("time.camera_clocks",),
         )
 
     if verified_offsets and phase and phase["verdict"] == "FAIL":
@@ -1513,6 +1517,7 @@ def repair_camera_timing(
                 ],
             ),
             attempted=True,
+            target_check_ids=("time.camera_clocks",),
         )
 
     detail = _short_error(result)
@@ -1527,7 +1532,349 @@ def repair_camera_timing(
             fixes=["按上方错误检查 SSH、NTP、相机服务和 Dashboard 状态后再重试。"],
         ),
         attempted=True,
+        target_check_ids=("time.camera_clocks",),
     )
+
+
+def _problem_findings(report: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    return {
+        str(item.get("check_id")): item
+        for item in report.get("findings", [])
+        if item.get("status") in {"WARN", "FAIL"}
+    }
+
+
+def _bounded_command_evidence(result: CommandResult, *, limit: int = 16) -> list[str]:
+    lines = [line.strip() for line in (result.stdout + "\n" + result.stderr).splitlines() if line.strip()]
+    if len(lines) > limit:
+        half = limit // 2
+        lines = lines[:half] + [f"... omitted {len(lines) - limit} lines ..."] + lines[-half:]
+    return lines
+
+
+def _run_command_repair(
+    *,
+    action_id: str,
+    summary: str,
+    command: Sequence[str],
+    target_check_ids: Sequence[str],
+    before: Mapping[str, Mapping[str, Any]],
+    runner: Runner,
+    timeout: float,
+    failure_fix: str = "根据命令输出处理权限或服务错误后，再运行 --repair。",
+) -> RepairOutcome:
+    result = runner.run(command, timeout=timeout)
+    evidence = [
+        "targets=" + ", ".join(target_check_ids),
+        "command=" + " ".join(command),
+    ]
+    evidence.extend(
+        f"before[{check_id}]={before[check_id].get('summary')}"
+        for check_id in target_check_ids
+        if check_id in before
+    )
+    evidence.extend(_bounded_command_evidence(result))
+    if result.returncode == 0:
+        finding = Finding(
+            check_id=action_id,
+            section="自动修复",
+            status="PASS",
+            summary=f"{summary}命令执行完成，等待复检",
+            evidence=evidence,
+        )
+    else:
+        finding = Finding(
+            check_id=action_id,
+            section="自动修复",
+            status="FAIL",
+            summary=f"{summary}命令失败",
+            evidence=evidence + [f"exit={result.returncode}", f"error={_short_error(result)}"],
+            fixes=[failure_fix],
+        )
+    return RepairOutcome(
+        finding=finding,
+        attempted=True,
+        target_check_ids=tuple(target_check_ids),
+    )
+
+
+def repair_system(
+    *,
+    root: Path,
+    report: Mapping[str, Any],
+    runner: Runner | None = None,
+) -> list[RepairOutcome]:
+    """Run deterministic repair handlers for the problems found in a report."""
+
+    problems = _problem_findings(report)
+    all_findings = {
+        str(item.get("check_id")): item
+        for item in report.get("findings", [])
+    }
+    camera_timing_available = "time.camera_clocks" in all_findings
+    if not problems and not camera_timing_available:
+        return [
+            RepairOutcome(
+                finding=Finding(
+                    check_id="repair.none",
+                    section="自动修复",
+                    status="PASS",
+                    summary="本轮诊断没有需要修复的故障或警告",
+                ),
+                attempted=False,
+            )
+        ]
+    if report.get("recording_active"):
+        safety_targets = set(problems)
+        if camera_timing_available:
+            safety_targets.add("time.camera_clocks")
+        return [
+            RepairOutcome(
+                finding=Finding(
+                    check_id="repair.safety",
+                    section="自动修复",
+                    status="FAIL",
+                    summary="当前正在录制，已拒绝全部自动修复",
+                    evidence=["targets=" + ", ".join(sorted(safety_targets)), "actions=未执行"],
+                    impact="服务重启、网络参数变更或相机校时可能中断正在写入的数据。",
+                    fixes=["停止录制并确认数据落盘完成后，再运行 --repair。"],
+                ),
+                attempted=False,
+                target_check_ids=tuple(sorted(safety_targets)),
+            )
+        ]
+
+    command_runner = runner or Runner()
+    compose_file = str(root / "docker-compose.yml")
+    outcomes: list[RepairOutcome] = []
+    handled: set[str] = set()
+
+    network_ids = tuple(
+        check_id
+        for check_id in ("network.kernel_tuning", "network.rps", "network.drop_sample")
+        if check_id in problems
+    )
+    if network_ids:
+        outcomes.append(
+            _run_command_repair(
+                action_id="repair.host_setup",
+                summary="主机 DDS/RPS 配置修复",
+                command=["sudo", "-n", str(root / "deploy/host_setup.sh")],
+                target_check_ids=network_ids,
+                before=problems,
+                runner=command_runner,
+                timeout=120.0,
+                failure_fix="在交互终端先运行 sudo -v 取得主机权限，再重新运行 ./scripts/system_doctor.sh --repair。",
+            )
+        )
+        handled.update(network_ids)
+
+    if "time.host_ntp" in problems:
+        outcomes.append(
+            _run_command_repair(
+                action_id="repair.time.host_ntp",
+                summary="宿主机 chrony 服务修复",
+                command=["sudo", "-n", "systemctl", "restart", "chrony"],
+                target_check_ids=("time.host_ntp",),
+                before=problems,
+                runner=command_runner,
+                timeout=30.0,
+                failure_fix="在交互终端先运行 sudo -v，并确认 chrony.service 已安装后重试。",
+            )
+        )
+        handled.add("time.host_ntp")
+
+    core_containers_bad = "containers.required" in problems
+    if core_containers_bad:
+        outcomes.append(
+            _run_command_repair(
+                action_id="repair.containers.required",
+                summary="核心容器启动修复",
+                command=[
+                    "docker",
+                    "compose",
+                    "-f",
+                    compose_file,
+                    "up",
+                    "-d",
+                    "insight-dashboard",
+                    "superglue-inference",
+                    "insight9-sparse-mapper",
+                    "insight3-global-localizer",
+                ],
+                target_check_ids=("containers.required",),
+                before=problems,
+                runner=command_runner,
+                timeout=180.0,
+            )
+        )
+        handled.add("containers.required")
+
+    container_time_bad = "containers.start_time" in problems
+    if container_time_bad:
+        outcomes.append(
+            _run_command_repair(
+                action_id="repair.containers.start_time",
+                summary="容器启动时间元数据修复",
+                command=[
+                    "docker",
+                    "compose",
+                    "-f",
+                    compose_file,
+                    "up",
+                    "-d",
+                    "--force-recreate",
+                    "superglue-inference",
+                    "insight9-sparse-mapper",
+                    "insight3-global-localizer",
+                ],
+                target_check_ids=("containers.start_time",),
+                before=problems,
+                runner=command_runner,
+                timeout=180.0,
+            )
+        )
+        handled.add("containers.start_time")
+
+    dashboard_ids = tuple(
+        check_id
+        for check_id in problems
+        if check_id in {"dashboard.http", "camera.api", "media.webrtc_worker", "media.hardware"}
+        or check_id.startswith("camera.")
+    )
+    if dashboard_ids and not core_containers_bad:
+        outcomes.append(
+            _run_command_repair(
+                action_id="repair.dashboard.runtime",
+                summary="Dashboard 与图像运行态修复",
+                command=[
+                    "docker",
+                    "compose",
+                    "-f",
+                    compose_file,
+                    "up",
+                    "-d",
+                    "--force-recreate",
+                    "insight-dashboard",
+                ],
+                target_check_ids=dashboard_ids,
+                before=problems,
+                runner=command_runner,
+                timeout=120.0,
+            )
+        )
+        handled.update(dashboard_ids)
+
+    if "mapping.services" in problems and not core_containers_bad and not container_time_bad:
+        outcomes.append(
+            _run_command_repair(
+                action_id="repair.mapping.runtime",
+                summary="建图定位服务运行态修复",
+                command=[
+                    "docker",
+                    "compose",
+                    "-f",
+                    compose_file,
+                    "up",
+                    "-d",
+                    "--force-recreate",
+                    "superglue-inference",
+                    "insight9-sparse-mapper",
+                    "insight3-global-localizer",
+                ],
+                target_check_ids=("mapping.services",),
+                before=problems,
+                runner=command_runner,
+                timeout=180.0,
+            )
+        )
+        handled.add("mapping.services")
+
+    if "voice.service" in problems:
+        outcomes.append(
+            _run_command_repair(
+                action_id="repair.voice.service",
+                summary="语音控制服务修复",
+                command=["systemctl", "--user", "restart", "insight-voice-control.service"],
+                target_check_ids=("voice.service",),
+                before=problems,
+                runner=command_runner,
+                timeout=30.0,
+            )
+        )
+        handled.add("voice.service")
+
+    runtime_action_ids = {
+        "repair.containers.required",
+        "repair.containers.start_time",
+        "repair.dashboard.runtime",
+        "repair.mapping.runtime",
+    }
+    if any(outcome.finding.check_id in runtime_action_ids for outcome in outcomes):
+        time.sleep(8.0)
+
+    if camera_timing_available:
+        outcomes.append(
+            repair_camera_timing(root=root, report=report, runner=command_runner)
+        )
+        if "time.camera_clocks" in problems:
+            handled.add("time.camera_clocks")
+
+    manual_ids = sorted(set(problems) - handled)
+    if manual_ids:
+        outcomes.append(
+            RepairOutcome(
+                finding=Finding(
+                    check_id="repair.manual_required",
+                    section="自动修复",
+                    status="INFO",
+                    summary=f"{len(manual_ids)} 个问题没有安全、无歧义的自动修复",
+                    evidence=[
+                        f"{check_id}: {problems[check_id].get('summary')}"
+                        for check_id in manual_ids
+                    ],
+                    impact="这些问题涉及现场选择、物理操作、数据删除或根因分析，已保留原诊断建议。",
+                ),
+                attempted=False,
+                target_check_ids=tuple(manual_ids),
+            )
+        )
+    return outcomes
+
+
+def reconcile_repair_outcomes(
+    outcomes: Sequence[RepairOutcome],
+    report: Mapping[str, Any],
+) -> None:
+    """Attach post-check evidence and fail successful commands that did not fix state."""
+
+    post = {
+        str(item.get("check_id")): item
+        for item in report.get("findings", [])
+    }
+    for outcome in outcomes:
+        if not outcome.attempted or not outcome.target_check_ids:
+            continue
+        statuses = {
+            check_id: str(post.get(check_id, {}).get("status") or "MISSING")
+            for check_id in outcome.target_check_ids
+        }
+        outcome.finding.evidence.append(
+            "postcheck=" + ", ".join(f"{key}:{value}" for key, value in statuses.items())
+        )
+        remaining = {
+            key: value for key, value in statuses.items() if value not in {"PASS", "SKIP"}
+        }
+        if outcome.finding.status == "PASS" and remaining:
+            outcome.finding.status = "FAIL" if "FAIL" in remaining.values() else "WARN"
+            outcome.finding.summary = (
+                outcome.finding.summary.removesuffix("，等待复检")
+                + "，但复检仍异常："
+                + ", ".join(f"{key}={value}" for key, value in remaining.items())
+            )
+            outcome.finding.fixes = ["查看对应复检项的新证据，处理根因后再运行 --repair。"]
+        elif outcome.finding.status == "PASS":
+            outcome.finding.summary = outcome.finding.summary.removesuffix("，等待复检") + "，复检通过"
 
 
 def _append_finding(report: dict[str, Any], finding: Finding) -> None:
@@ -1622,7 +1969,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--repair",
         dest="repair",
         action="store_true",
-        help="Explicitly synchronize camera clocks/capture phase, then run diagnostics again",
+        help="Repair detected problems with registered safe actions, then run diagnostics again",
     )
     return parser
 
@@ -1642,17 +1989,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     report = doctor.run()
     if args.repair:
-        outcome = repair_camera_timing(root=root, report=report)
-        if outcome.attempted:
+        outcomes = repair_system(root=root, report=report)
+        attempted = any(outcome.attempted for outcome in outcomes)
+        if attempted:
             report = SystemDoctor(
                 root=root,
                 api_url=args.api_url,
                 log_since=args.log_since,
                 sample_seconds=args.sample_seconds,
             ).run()
+            reconcile_repair_outcomes(outcomes, report)
         report["repair_requested"] = True
-        report["repair_attempted"] = outcome.attempted
-        _append_finding(report, outcome.finding)
+        report["repair_attempted"] = attempted
+        report["repair_action_count"] = sum(outcome.attempted for outcome in outcomes)
+        for outcome in outcomes:
+            _append_finding(report, outcome.finding)
         report["duration_seconds"] = round(time.time() - workflow_started, 3)
     if args.output:
         try:

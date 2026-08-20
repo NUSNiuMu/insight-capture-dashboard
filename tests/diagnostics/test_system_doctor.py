@@ -11,6 +11,8 @@ from insight_capture.diagnostics.system_doctor import (
     parse_camera_ntp_offsets,
     parse_camera_phase_result,
     repair_camera_timing,
+    repair_system,
+    reconcile_repair_outcomes,
     render_report,
 )
 
@@ -157,6 +159,123 @@ Result: PASS (max observed skew 3.665 ms, limit 10.000 ms)
     assert "图像最大差 3.665 ms" in outcome.finding.summary
 
 
+def test_repair_system_runs_registered_actions_and_lists_manual_work() -> None:
+    report = {
+        "recording_active": False,
+        "findings": [
+            {"check_id": "network.rps", "status": "FAIL", "summary": "RPS 未启用"},
+            {"check_id": "voice.service", "status": "WARN", "summary": "语音未运行"},
+            {
+                "check_id": "recording.storage",
+                "status": "WARN",
+                "summary": "录制正在使用备用存储",
+            },
+        ],
+    }
+    runner = StubRunner(CommandResult([], 0, "repair complete", "", 100))
+
+    outcomes = repair_system(root=ROOT, report=report, runner=runner)
+
+    assert [outcome.finding.check_id for outcome in outcomes] == [
+        "repair.host_setup",
+        "repair.voice.service",
+        "repair.manual_required",
+    ]
+    assert runner.calls[0][0] == [
+        "sudo",
+        "-n",
+        str(ROOT / "deploy/host_setup.sh"),
+    ]
+    assert runner.calls[1][0] == [
+        "systemctl",
+        "--user",
+        "restart",
+        "insight-voice-control.service",
+    ]
+    assert "recording.storage" in outcomes[-1].finding.evidence[0]
+
+
+def test_repair_system_preserves_explicit_camera_calibration(monkeypatch) -> None:
+    monkeypatch.setenv("INSIGHT_CAMERA_SSH_IDENTITY", "/tmp/camera-key")
+    report = {
+        "recording_active": False,
+        "findings": [
+            {
+                "check_id": "time.camera_clocks",
+                "status": "PASS",
+                "summary": "三台相机 NTP 已同步",
+            },
+        ],
+    }
+    output = """Final NTP offsets
+  insight3_a     +0.112 ms
+  insight3_b     +0.103 ms
+  insight9_a     +0.022 ms
+Result: PASS (max observed skew 3.665 ms, limit 10.000 ms)
+"""
+    runner = StubRunner(CommandResult([], 0, output, "", 90000))
+
+    outcomes = repair_system(root=ROOT, report=report, runner=runner)
+
+    assert [outcome.finding.check_id for outcome in outcomes] == [
+        "repair.time.camera_timing"
+    ]
+    assert outcomes[0].finding.status == "PASS"
+    assert "sync_camera_restart.py" in runner.calls[0][0][1]
+
+
+def test_repair_system_refuses_all_actions_while_recording() -> None:
+    report = {
+        "recording_active": True,
+        "findings": [
+            {"check_id": "network.rps", "status": "FAIL", "summary": "RPS 未启用"},
+            {"check_id": "voice.service", "status": "WARN", "summary": "语音未运行"},
+        ],
+    }
+    runner = StubRunner(CommandResult([], 0, "", "", 0))
+
+    outcomes = repair_system(root=ROOT, report=report, runner=runner)
+
+    assert len(outcomes) == 1
+    assert outcomes[0].finding.check_id == "repair.safety"
+    assert outcomes[0].finding.status == "FAIL"
+    assert runner.calls == []
+
+
+def test_reconcile_marks_successful_command_failed_when_postcheck_fails() -> None:
+    report = {
+        "recording_active": False,
+        "findings": [
+            {"check_id": "network.rps", "status": "FAIL", "summary": "RPS 未启用"},
+        ],
+    }
+    runner = StubRunner(CommandResult([], 0, "repair complete", "", 100))
+    outcomes = repair_system(root=ROOT, report=report, runner=runner)
+
+    reconcile_repair_outcomes(outcomes, report)
+
+    assert outcomes[0].finding.status == "FAIL"
+    assert "复检仍异常" in outcomes[0].finding.summary
+    assert outcomes[0].finding.evidence[-1] == "postcheck=network.rps:FAIL"
+
+
+def test_host_setup_permission_failure_has_concrete_fix() -> None:
+    report = {
+        "recording_active": False,
+        "findings": [
+            {"check_id": "network.rps", "status": "FAIL", "summary": "RPS 未启用"},
+        ],
+    }
+    runner = StubRunner(CommandResult([], 1, "", "sudo: a password is required", 10))
+
+    outcomes = repair_system(root=ROOT, report=report, runner=runner)
+
+    assert outcomes[0].finding.status == "FAIL"
+    assert outcomes[0].finding.fixes == [
+        "在交互终端先运行 sudo -v 取得主机权限，再重新运行 ./scripts/system_doctor.sh --repair。"
+    ]
+
+
 def test_staging_check_uses_current_disk_state(tmp_path: Path) -> None:
     staging = tmp_path / "rosbags/_staging"
     staging.mkdir(parents=True)
@@ -238,5 +357,6 @@ def test_shell_entrypoint_enables_verbose_timestamped_report() -> None:
     assert "insight_camera_ed25519" in script
     assert "INSIGHT_CAMERA_SSH_IDENTITY" in script
     assert "INSIGHT_CAMERA_SSH_PASSWORD" in script
+    assert "sudo -v" in script
     assert "不会保存" in script
     assert '"$@"' in script
