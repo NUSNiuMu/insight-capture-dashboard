@@ -151,8 +151,14 @@ class CapturePreflight:
             },
         }
 
-    @staticmethod
-    def speech(report: Dict) -> str:
+    _CAMERA_SPEECH_NAMES = {
+        "insight3_a": "右手相机",
+        "insight3_b": "左手相机",
+        "insight9_a": "头部相机",
+    }
+
+    @classmethod
+    def speech(cls, report: Dict) -> str:
         failures = report.get("failures") or []
         if not failures:
             storage = report.get("storage") or {}
@@ -160,6 +166,14 @@ class CapturePreflight:
             if storage.get("using_fallback"):
                 return f"当前使用备用存储，剩余空间{free_gb:.0f}GB，可以开始采集。"
             return f"三台相机、定位和录制数据流正常，剩余空间{free_gb:.0f}GB，可以开始采集。"
+        stale_cameras = [
+            str(item.get("details", {}).get("camera"))
+            for item in failures
+            if item.get("code") == "camera_stale"
+        ]
+        if stale_cameras:
+            names = "、".join(cls._CAMERA_SPEECH_NAMES.get(name, name) for name in stale_cameras)
+            return f"{names}未连接，请检查相机。"
         codes = {str(item.get("code")) for item in failures}
         if codes & {"mapping_not_ready", "localization_not_ready"}:
             return "目前没有校准，请说开始校准。"
