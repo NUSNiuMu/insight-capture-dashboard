@@ -61,9 +61,8 @@ def test_parse_camera_phase_result() -> None:
     }
 
 
-def test_repare_is_alias_for_repair() -> None:
+def test_repair_flag_is_available() -> None:
     assert build_parser().parse_args(["--repair"]).repair is True
-    assert build_parser().parse_args(["--repare"]).repair is True
 
 
 class StubRunner:

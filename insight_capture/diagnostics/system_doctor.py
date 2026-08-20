@@ -1620,7 +1620,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fail-on-warning", action="store_true", help="Return nonzero when warnings exist")
     parser.add_argument(
         "--repair",
-        "--repare",
         dest="repair",
         action="store_true",
         help="Explicitly synchronize camera clocks/capture phase, then run diagnostics again",
