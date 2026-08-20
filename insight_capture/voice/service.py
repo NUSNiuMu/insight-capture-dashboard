@@ -42,326 +42,12 @@ DEFAULT_WAKE_ALIASES = (
     "陈静",
 )
 
-LOCAL_COMMAND_ALIASES = {
-    "recording_start": ("开始录制", "开始录像", "开始采集"),
-    "recording_stop": (
-        "结束录制",
-        "停止录制",
-        "结束录像",
-        "停止录像",
-        "结束采集",
-        "停止采集",
-    ),
-    "calibration_start": ("开始校准", "重新校准", "重置校准"),
-    "capture_check": ("检查相机", "开始检测", "位置检测", "检测相机"),
-    "capture_reference": ("设置检测位", "记录检测位", "保存检测位"),
-    "system_status": ("系统状态", "检查系统", "数采状态"),
-    "take_reject": ("本条作废", "这条作废", "作废本条"),
-}
-LOCAL_COMMAND_ENDPOINTS = {
-    "recording_start": "/api/automation/recording/start",
-    "recording_stop": "/api/automation/recording/stop",
-    "calibration_start": "/api/mapping/reset",
-    "capture_check": "/api/capture-check/run",
-    "capture_reference": "/api/capture-check/reference",
-    "system_status": "/api/system/status",
-    "take_reject": "/api/takes/current/reject",
-}
-LOCAL_COMMAND_REPLY_KEYS = {
-    "recording_start": "recording_started",
-    "recording_stop": "recording_stopped",
-    "calibration_start": "calibration_started",
-    "capture_check": "capture_check_not_ready",
-    "capture_reference": "capture_reference_saved",
-    "system_status": "dynamic_reply",
-    "take_reject": "dynamic_reply",
-}
-
-
-class LocalCommandFailure(RuntimeError):
-    """A deterministic command failure with operator-facing speech."""
-
-    def __init__(self, message: str, speech: Optional[str] = None) -> None:
-        super().__init__(message)
-        self.speech = str(speech or "").strip()
-
-
 VOLUME_SAMPLE_TEXT = "宸境科技"
-CANNED_REPLIES = {
-    "recording_starting": "初始化录制中，请稍等。",
-    "recording_started": "录制已经开始。",
-    "recording_stopping": "正在结束录制。",
-    "recording_stopped": "录制已经结束。请将左右手相机放回检测位，并用头部相机扫视已建图工作区，然后说检查相机。",
-    "calibration_started": "校准已经开始。",
-    "calibration_completed": "校准完成。",
-    "capture_check_started": "开始检测。",
-    "capture_reference_saved": "双手检测位和头部相机地图基准已经记录。",
-    "capture_check_pass": "双手相机位置和头部相机地图闭环正常，可以开始下一次采集。",
-    "capture_check_retry": "检测尚未通过。请确认左右手相机完全归位，并用头部相机扫视已建图工作区，然后再说检查相机。",
-    "capture_check_recalibrate": "相机位置或头部地图闭环异常。请说开始校准，完成后重新设置检测位。",
-    "capture_check_not_ready": "检测条件未满足。请确认左右手相机已经静止，头部相机和两路全局定位服务在线。",
-    "capture_check_no_reference": "还没有检测位基准。请放好左右手相机，确认建图完成，然后说设置检测位。",
-    "recording_already_active": "当前已经在录制。",
-    "command_failed": "指令执行失败，请检查数采服务。",
-}
 
 
-def normalize_transcript(text: object) -> str:
-    """Normalize a wake transcript without accepting substring matches."""
-    return " ".join(re.findall(r"[0-9a-zA-Z]+|[\u4e00-\u9fff]+", str(text or "").lower()))
-
-
-def wake_word_detected(text: object, wake_phrases: Iterable[str]) -> bool:
-    transcript = normalize_transcript(text)
-    if not transcript:
-        return False
-    compact = transcript.replace(" ", "")
-    for phrase in wake_phrases:
-        normalized = normalize_transcript(phrase)
-        if normalized and (
-            normalized in transcript.split() or normalized.replace(" ", "") == compact
-        ):
-            return True
-    return False
-
-
-def match_local_command(text: object) -> Optional[str]:
-    """Return an exact local action for a short deterministic command."""
-    normalized = normalize_transcript(text).replace(" ", "")
-    for prefix in ("请帮我", "帮我", "请"):
-        if normalized.startswith(prefix):
-            normalized = normalized[len(prefix) :]
-            break
-    for suffix in ("一下", "吧"):
-        if normalized.endswith(suffix):
-            normalized = normalized[: -len(suffix)]
-            break
-    for action, aliases in LOCAL_COMMAND_ALIASES.items():
-        if normalized in aliases:
-            return action
-    return None
-
-
-def calibration_is_complete(payload: object) -> bool:
-    """Return whether both Insight3 devices have a first global localization."""
-    if not isinstance(payload, dict):
-        return False
-    statuses = payload.get("statuses")
-    if not isinstance(statuses, dict):
-        return False
-    return all(
-        isinstance(statuses.get(name), dict)
-        and bool(statuses[name].get("localized"))
-        for name in ("insight3_a", "insight3_b")
-    )
-
-
-def capture_check_reply_key(payload: object, *, reference: bool = False) -> str:
-    """Map deterministic station-check states to pre-generated speech."""
-    if not isinstance(payload, dict):
-        return "capture_check_not_ready"
-    state = str(payload.get("state") or "not_ready")
-    if reference and state == "reference_saved":
-        return "capture_reference_saved"
-    return {
-        "pass": "capture_check_pass",
-        "retry": "capture_check_retry",
-        "recalibrate": "capture_check_recalibrate",
-        "no_reference": "capture_check_no_reference",
-    }.get(state, "capture_check_not_ready")
-
-
-def extract_openclaw_reply(payload: object) -> str:
-    if not isinstance(payload, dict):
-        raise ValueError("OpenClaw returned a non-object JSON payload")
-    result = payload.get("result")
-    if isinstance(result, dict):
-        payload = result
-    choices = payload.get("choices")
-    if isinstance(choices, list) and choices:
-        message = choices[0].get("message") if isinstance(choices[0], dict) else None
-        content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str) and content.strip():
-            return content.strip()
-    meta = payload.get("meta")
-    if isinstance(meta, dict):
-        visible = meta.get("finalAssistantVisibleText")
-        if isinstance(visible, str) and visible.strip():
-            return visible.strip()
-    texts = []
-    for item in payload.get("payloads", []):
-        if isinstance(item, dict) and isinstance(item.get("text"), str):
-            texts.append(item["text"].strip())
-    reply = "\n".join(text for text in texts if text).strip()
-    if not reply:
-        raise ValueError("OpenClaw returned no assistant text")
-    return reply
-
-
-def speech_text(text: object, max_chars: int = 240) -> str:
-    """Remove formatting that sounds unnatural when spoken."""
-    value = str(text or "")
-    value = re.sub(r"\[([^\]]+)]\([^)]+\)", r"\1", value)
-    value = re.sub(r"\[\[tts:[^\]]+]]", "", value)
-    value = value.replace("[[/tts:text]]", "").replace("[[tts:text]]", "")
-    value = re.sub(r"[`*_#>|]", "", value)
-    value = re.sub(r"\s+", " ", value).strip()
-    if len(value) <= max_chars:
-        return value
-    return value[: max(1, max_chars - 1)].rstrip("，。！？；：,.!?;:") + "。"
-
-
-def clean_utterance_transcript(text: object) -> str:
-    """Join CJK tokens and repair narrow, domain-specific homophones."""
-    value = str(text or "").strip()
-    value = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", value)
-    for homophone in ("素材", "素菜"):
-        value = value.replace(f"{homophone}状态", "数采状态")
-        value = value.replace(f"{homophone}系统", "数采系统")
-    return re.sub(r"\s+", " ", value).strip()
-
-
-def strip_wake_prefix(text: object, wake_phrases: Iterable[str]) -> str:
-    """Remove a leading wake phrase without touching the rest of the command."""
-    value = str(text or "").strip()
-    for phrase in sorted(wake_phrases, key=len, reverse=True):
-        value = re.sub(
-            rf"^\s*{re.escape(phrase)}(?:\s|[，。！？,.!?:：；;-])*",
-            "",
-            value,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    return value.strip()
-
-
-def wake_tone_wav(
-    sample_rate: int,
-    duration_ms: int,
-    frequency_hz: int,
-    volume: float,
-) -> bytes:
-    """Build a short in-memory WAV used as immediate wake feedback."""
-    frame_count = max(1, round(sample_rate * duration_ms / 1000))
-    fade_frames = max(1, min(frame_count // 2, round(sample_rate * 0.02)))
-    pcm = bytearray()
-    for index in range(frame_count):
-        envelope = min(1.0, index / fade_frames, (frame_count - index) / fade_frames)
-        sample = int(
-            32767
-            * volume
-            * envelope
-            * math.sin(2.0 * math.pi * frequency_hz * index / sample_rate)
-        )
-        pcm.extend(struct.pack("<h", sample))
-    output = io.BytesIO()
-    with wave.open(output, "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(sample_rate)
-        wav.writeframes(pcm)
-    return output.getvalue()
-
-
-def build_agent_command(
-    openclaw_bin: Path,
-    session_key: str,
-    utterance: str,
-    timeout_sec: int,
-    thinking_level: str = "off",
-    model: str = "openai/gpt-5.6-luna",
-) -> list[str]:
-    prompt = (
-        "以下内容由本地麦克风离线转写。按宸境语音助手规则处理；"
-        "除非用户明确要求详情，否则最多用两句简短中文回答。\n\n"
-        f"用户说：{utterance}"
-    )
-    return [
-        str(openclaw_bin),
-        "agent",
-        "--session-key",
-        session_key,
-        "--model",
-        model,
-        "--message",
-        prompt,
-        "--thinking",
-        thinking_level,
-        "--timeout",
-        str(timeout_sec),
-        "--json",
-    ]
-
-
-def discover_alsa_device(kind: str, preferred: str = "E3") -> str:
-    """Resolve a stable ALSA CARD identifier, falling back to the default."""
-    binary = "arecord" if kind == "capture" else "aplay"
-    try:
-        completed = subprocess.run(
-            [binary, "-L"], check=False, capture_output=True, text=True, timeout=3.0
-        )
-    except (OSError, subprocess.SubprocessError):
-        return "default"
-    candidates = [line.strip() for line in completed.stdout.splitlines() if line and not line[0].isspace()]
-    stable = [name for name in candidates if name.startswith("plughw:CARD=")]
-    hint = str(preferred or "").casefold()
-    if hint:
-        for name in stable:
-            if hint in name.casefold():
-                return name
-    return stable[0] if stable else "default"
-
-
-class AlsaCapture:
-    def __init__(self, device: str, sample_rate: int, chunk_frames: int) -> None:
-        self.device = device
-        self.sample_rate = sample_rate
-        self.chunk_frames = chunk_frames
-        self.process: Optional[subprocess.Popen] = None
-
-    def __enter__(self) -> "AlsaCapture":
-        self.process = subprocess.Popen(
-            [
-                "arecord",
-                "-q",
-                "-D",
-                self.device,
-                "-f",
-                "S16_LE",
-                "-r",
-                str(self.sample_rate),
-                "-c",
-                "1",
-                "-t",
-                "raw",
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
-        if self.process.stdout is None:
-            raise RuntimeError("ALSA capture stdout is unavailable")
-        return self
-
-    def read(self) -> bytes:
-        assert self.process is not None and self.process.stdout is not None
-        audio = self.process.stdout.read(self.chunk_frames * 2)
-        if not audio:
-            raise RuntimeError(f"ALSA capture stopped (exit {self.process.poll()})")
-        return audio
-
-    def __exit__(self, *_exc_info) -> None:
-        if self.process is None:
-            return
-        self.process.terminate()
-        try:
-            self.process.wait(timeout=2.0)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=2.0)
-
-
-# Keep the service focused on orchestration. These imports intentionally rebind
-# the legacy module-level names so existing callers keep a stable facade.
+# insight_capture.voice.{audio,commands,control,openclaw_adapter,replies} hold the
+# real implementations; this module only re-exports them as a stable facade for
+# existing callers of insight_capture.voice.service.
 from insight_capture.voice.audio import (
     AlsaCapture,
     configure_pulse_card_volume,
@@ -393,6 +79,8 @@ from insight_capture.voice.control import (
 from insight_capture.voice.openclaw_adapter import build_agent_command, extract_openclaw_reply
 from insight_capture.voice.replies import (
     CANNED_REPLIES,
+    MISHEARD_REPLY,
+    OPENCLAW_UNAVAILABLE_REPLY,
     clean_utterance_transcript,
     speech_text,
     strip_wake_prefix,
@@ -1143,7 +831,7 @@ class VoiceService:
             except LocalCommandFailure as exc:
                 self._emit("error", stage="local_command", message=str(exc))
                 reply_key = "dynamic_failure"
-                self._pending_spoken_reply = exc.speech or "指令执行失败，请检查数采服务。"
+                self._pending_spoken_reply = exc.speech or CANNED_REPLIES["command_failed"]
             except Exception as exc:  # noqa: BLE001 - keep voice control available
                 self._emit("error", stage="local_command", message=str(exc))
                 reply_key = "command_failed"
@@ -1212,7 +900,7 @@ class VoiceService:
             self._emit("error", stage="agent", message=str(exc))
             self._rollback_new_unconfirmed_recording(recording_before)
             with contextlib.suppress(Exception):
-                self.speak("OpenClaw 暂时不可用。")
+                self.speak(OPENCLAW_UNAVAILABLE_REPLY)
             return
         self._emit("reply", text=reply)
         try:
@@ -1251,7 +939,7 @@ class VoiceService:
             utterance = self.listen_for_utterance(self.args.command_timeout_sec)
             if not utterance:
                 try:
-                    self.speak("没听清。")
+                    self.speak(MISHEARD_REPLY)
                 except Exception as exc:  # noqa: BLE001 - keep the listener alive
                     self._emit("error", stage="no_speech_feedback", message=str(exc))
                 continue
@@ -1492,7 +1180,7 @@ def main() -> int:
                 bridge.wait_for_wake_word()
                 bridge.play_wake_feedback()
                 utterance = bridge.listen_for_utterance(args.command_timeout_sec)
-                bridge.speak(f"收到，{utterance}" if utterance else "没听清。")
+                bridge.speak(f"收到，{utterance}" if utterance else MISHEARD_REPLY)
             elif args.wake_only:
                 bridge.wait_for_wake_word()
             else:
