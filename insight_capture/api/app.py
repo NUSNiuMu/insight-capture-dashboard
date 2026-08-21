@@ -59,7 +59,6 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/mapping", mapping._handle_snapshot)
     app.router.add_post("/api/mapping/reset", mapping._handle_reset)
     app.router.add_get("/api/capture-check", capture_check._handle_status)
-    app.router.add_post("/api/capture-check/reference", capture_check._handle_reference)
     app.router.add_post("/api/capture-check/run", capture_check._handle_run)
     app.router.add_get("/api/cameras/{camera_name}/frame", cameras._handle_camera_frame)
     app.router.add_get("/api/images/capabilities", cameras._handle_image_capabilities)

@@ -6,24 +6,24 @@
 Insight3 localization、录制存储可写性和剩余空间，以及必要 recorder topics。只有结果
 通过时“开始录制”才会启动原生 MCAP recorder；失败原因直接由音响播报。
 
-## Session / Take
+## Task Set / Take
 
-数据按三级组织：Task 表示动作类型，Session 表示一次连续采集批次，Take 表示该批次中的
-一条录制。目前 Task 只有“叠杯子”，配置在 `config/capture_tasks.json`。当天服务重启会
-恢复未结束的 Session；明确结束 Task 后再次开始，才会创建新 Session 并从 Take 1 计数。
+数据按两级组织：Task Set 表示长期维护的动作任务集，Take 表示其中的一条录制。目前只有
+“叠杯子”，配置在 `config/capture_tasks.json`。任务集使用稳定的 `task_id` 文件夹，不随日期、
+服务重启或退出后重新进入而重建；Take 编号在同一任务集中持续递增。
 
-现场可直接说“开始任务叠杯子”“当前任务多少条”“结束当前任务”。开始同一个进行中的
-Task 不会清零计数；录制过程中不能切换或结束 Task。每次录制分配递增的 `take_id`，元数据
-保存在：
+Sessions 页面可选择并进入任务集；现场也可直接说“开始任务叠杯子”“当前任务多少条”
+“结束当前任务”。录制过程中不能切换或退出任务集。元数据保存在：
 
 ```text
-outputs/results/sessions/<session_id>/
+outputs/results/sessions/<task_id>/
   session.json
   takes/take_0001.json
 ```
 
-Session 名称形如 `20260818-cup_stacking-001`，对应的默认 bag 名包含
-`cup_stacking_take_0001`，方便从目录名判断任务和条次。
+对应 raw bag 写入当前 Recorder 存储根目录下的 `<task_id>/`，例如
+`rosbags/cup_stacking/cup_stacking_take_0001_.../`。旧版当前日期 Session 的轻量元数据会在
+升级后迁移到稳定任务集目录；已录制 raw bag 不移动、不改名。
 
 Take 包含 bag path、起止时间、trigger、quick QC、station check、operator accept/reject、
 reject reason 与 anomaly timeline。说“本条作废”只写入 operator reject，原始 MCAP 永远保留。

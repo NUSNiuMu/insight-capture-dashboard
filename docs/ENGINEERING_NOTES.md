@@ -175,7 +175,7 @@
   出现 67–119 ms 的 callback 间隔；固定 timer 在相同负载下维持约 30 Hz。
 - 3D 每帧只插值最新 pose；轨迹 mesh 最多 10 Hz 更新，避免轨迹几何重建与模型移动
   抢占同一帧。正常与回放模式的 Babylon hardware scaling 保持 1.0，按 canvas
-  CSS 尺寸原生渲染；只有显式开启 OBS mode 时才以 2.0 降载。
+  CSS 尺寸原生渲染；页面不再提供单独的 OBS 降载模式。
 - mapper 的大 point/descriptor cloud 发布曾在默认 ROS callback group 中阻塞 VIO
   relay，造成最长约 355 ms 的 pose 停顿。VIO 使用独立 callback group 和双线程
   executor 后，实测最长间隔降至约 69 ms；不得重新合并为单线程 executor。

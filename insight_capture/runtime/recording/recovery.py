@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -15,6 +16,9 @@ try:
     import yaml
 except Exception:  # pragma: no cover - recovery degrades gracefully
     yaml = None
+
+
+RECORDING_TARGET_NAME = ".recording_target.json"
 
 
 class RecordingRecovery:
@@ -63,9 +67,11 @@ class RecordingRecovery:
         if not good_parts:
             self.owner._recovery_log(f"{staging_dir.name}: nothing recoverable; staging dir kept")
             return
-        output_path = self.owner.rosbag_root / staging_dir.name
+        output_path = self._output_path_for_staging(staging_dir)
         if output_path.exists():
-            output_path = self.owner.rosbag_root / f"{staging_dir.name}_recovered_{time.strftime('%Y%m%d_%H%M%S')}"
+            output_path = output_path.with_name(
+                f"{staging_dir.name}_recovered_{time.strftime('%Y%m%d_%H%M%S')}"
+            )
         if any(list(part.glob("*.mcap")) for part in good_parts):
             self._publish_composite_recovery(staging_dir, good_parts, part_dirs, output_path)
             self.owner._recovery_log(
@@ -119,9 +125,9 @@ class RecordingRecovery:
                 f"{staging_dir.name}: MCAP reindex failed; staging dir kept"
             )
             return
-        output_path = self.owner.rosbag_root / staging_dir.name
+        output_path = self._output_path_for_staging(staging_dir)
         if output_path.exists():
-            output_path = self.owner.rosbag_root / (
+            output_path = output_path.with_name(
                 f"{staging_dir.name}_recovered_{time.strftime('%Y%m%d_%H%M%S')}"
             )
         info = read_metadata(staging_dir)
@@ -147,6 +153,19 @@ class RecordingRecovery:
             f"{staging_dir.name}: recovered standard MCAP -> {output_path.name}"
         )
         self.owner._notify_recording_completed(output_path)
+
+    def _output_path_for_staging(self, staging_dir: Path) -> Path:
+        output_root = self.owner.rosbag_root
+        marker_path = staging_dir / RECORDING_TARGET_NAME
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            marker = {}
+        subdirectory = str(marker.get("output_subdirectory") or "").strip()
+        if subdirectory and re.fullmatch(r"[0-9A-Za-z_-]+", subdirectory):
+            output_root = output_root / subdirectory
+        output_root.mkdir(parents=True, exist_ok=True)
+        return output_root / staging_dir.name
 
     def _part_converts_cleanly(self, part: Path) -> bool:
         probe_dir = part.parent / f".{part.name}.convert_probe"

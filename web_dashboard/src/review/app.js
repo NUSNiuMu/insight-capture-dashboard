@@ -1,5 +1,4 @@
 import {
-  setCameraCapturePerformanceMode,
   startPreparedCameraPlayback,
   startCameraDashboard,
   stopPreparedCameraPlayback,
@@ -13,7 +12,6 @@ import {
   endPreparedPlayback,
   queuePoseUpdate,
   setAvatarLoadStage,
-  setCapturePerformanceMode,
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
@@ -42,10 +40,7 @@ const captureCheckLine = document.getElementById("capture-check-line");
 const captureCheckStatus = document.getElementById("capture-check-status");
 const captureCheckMeta = document.getElementById("capture-check-meta");
 const captureCheckButton = document.getElementById("capture-check-button");
-const captureReferenceButton = document.getElementById("capture-reference-button");
-const obsModeToggle = document.getElementById("obs-mode-toggle");
 const POSE_STREAM_STALE_MS = 4000;
-const OBS_MODE_STORAGE_KEY = "insight.obs-performance-mode";
 const wsUrl = resolveWebSocketUrl();
 let playbackBusy = false;
 let playbackPollTimer = null;
@@ -56,7 +51,6 @@ let pageUnloading = false;
 let activeWs = null;
 let mappingResetBusy = false;
 let lastPoseMessageAt = 0;
-let obsModeEnabled = readInitialObsMode();
 let latestLivePosePayload = null;
 let preparedManifest = null;
 let preparedPosePayloadBuilder = null;
@@ -65,7 +59,6 @@ let preparedPlaybackStarting = false;
 let playbackRequested = false;
 const startupTimers = new Set();
 
-applyObsMode(obsModeEnabled);
 // The first WebSocket message is the only unconditional trace snapshot.
 // Enable trajectories before connecting so startup staging cannot discard it.
 setTrajectoriesEnabled(true);
@@ -143,16 +136,6 @@ if (newMapButton) {
 if (captureCheckButton) {
   captureCheckButton.addEventListener("click", () => { void runCaptureCheck(); });
 }
-if (captureReferenceButton) {
-  captureReferenceButton.addEventListener("click", () => { void setCaptureReference(); });
-}
-if (obsModeToggle) {
-  obsModeToggle.addEventListener("click", () => {
-    obsModeEnabled = !obsModeEnabled;
-    window.localStorage.setItem(OBS_MODE_STORAGE_KEY, obsModeEnabled ? "1" : "0");
-    applyObsMode(obsModeEnabled);
-  });
-}
 if (playbackPanel) {
   void refreshPlaybackStatus();
   playbackPollTimer = window.setInterval(() => { void refreshPlaybackStatus(); }, 1500);
@@ -167,25 +150,6 @@ function resolveWebSocketUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = window.location.host || "localhost:8765";
   return `${protocol}//${host}/ws`;
-}
-
-function readInitialObsMode() {
-  const query = new URLSearchParams(window.location.search);
-  if (query.has("obs")) {
-    return query.get("obs") !== "0";
-  }
-  return window.localStorage.getItem(OBS_MODE_STORAGE_KEY) === "1";
-}
-
-function applyObsMode(enabled) {
-  document.body.classList.toggle("capture-performance", enabled);
-  setCapturePerformanceMode(enabled);
-  setCameraCapturePerformanceMode(enabled);
-  if (obsModeToggle) {
-    obsModeToggle.classList.toggle("is-active", enabled);
-    obsModeToggle.setAttribute("aria-pressed", String(enabled));
-    obsModeToggle.textContent = enabled ? "OBS mode: on" : "OBS mode";
-  }
 }
 
 function connect() {
@@ -209,7 +173,7 @@ function connect() {
       return;
     }
     latestLivePosePayload = payload;
-    if (preparedPlaybackActive) return;
+    if (preparedPlaybackActive || preparedPlaybackStarting) return;
     if (!queuePoseUpdate(payload)) {
       ws.close();
     }
@@ -333,21 +297,6 @@ async function runCaptureCheck() {
   }
 }
 
-async function setCaptureReference() {
-  if (!captureReferenceButton || captureReferenceButton.disabled) return;
-  const prompt = "Freeze the current Insight9 natural map and save both stable hand-camera station poses? Only do this after calibration has been verified.";
-  if (!window.confirm(prompt)) return;
-  captureReferenceButton.disabled = true;
-  captureReferenceButton.textContent = "Saving...";
-  try {
-    const response = await fetch("/api/capture-check/reference", { method: "POST" });
-    renderCaptureCheck(await response.json());
-  } finally {
-    captureReferenceButton.disabled = false;
-    captureReferenceButton.textContent = "Set station";
-  }
-}
-
 function renderCaptureCheck(payload) {
   const result = payload.type === "capture_check_result" ? payload : payload.last_result;
   const state = String(result?.state || payload.state || "not_ready");
@@ -392,7 +341,6 @@ function renderCaptureCheck(payload) {
   if (captureCheckMeta) captureCheckMeta.textContent = detail;
   const enabled = payload.enabled !== false && state !== "disabled";
   if (captureCheckButton) captureCheckButton.disabled = !enabled;
-  if (captureReferenceButton) captureReferenceButton.disabled = !enabled;
 }
 
 window.setInterval(() => {
@@ -599,7 +547,6 @@ async function startPreparedPlayback(status) {
       preparedManifest,
       latestLivePosePayload
     );
-    beginPreparedPlayback(preparedPosePayloadBuilder(0, true));
     const activate = await fetch("/api/playback/activate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -610,6 +557,7 @@ async function startPreparedPlayback(status) {
       throw new Error(payload.error || "Could not activate prepared playback.");
     }
     preparedPlaybackActive = true;
+    beginPreparedPlayback(preparedPosePayloadBuilder(0, true));
     await startPreparedCameraPlayback(preparedManifest, {
       onTime: (mediaTime) => {
         if (preparedPlaybackActive && preparedPosePayloadBuilder) {

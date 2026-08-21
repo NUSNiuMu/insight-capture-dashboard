@@ -15,7 +15,6 @@ const WEBRTC_STATS_INTERVAL_MS = 1000;
 // the full-resolution camera wall with Babylon. Five frames of transport
 // headroom keep the visible cadence at 20 fps without changing resolution.
 const NORMAL_PREVIEW_FPS = 25;
-const CAPTURE_PREVIEW_FPS = 15;
 const cameraPanels = new Map();
 const cameraPollState = new Map();
 const cameraWebRtc = new Map();
@@ -23,7 +22,6 @@ let maximizedCameraName = null;
 let pageUnloading = false;
 let cameraStartupAt = 0;
 let cameraStaggerMs = 0;
-let capturePerformanceMode = false;
 let preparedPlaybackSession = null;
 
 export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
@@ -221,23 +219,6 @@ export function startCameraDashboard(options = {}) {
   cameraStartupAt = performance.now();
   cameraStaggerMs = Math.max(0, Number(options.cameraStaggerMs) || 0);
   startCameraPolling();
-}
-
-export function setCameraCapturePerformanceMode(enabled) {
-  const next = Boolean(enabled);
-  if (next === capturePerformanceMode) {
-    return;
-  }
-  capturePerformanceMode = next;
-  for (const cameraName of Array.from(cameraWebRtc.keys())) {
-    stopCameraWebRtc(cameraName);
-  }
-  for (const state of cameraPollState.values()) {
-    state.version = -1;
-  }
-  if (cameraStartupAt > 0) {
-    void pollCameraMetadata();
-  }
 }
 
 function startCameraPolling() {
@@ -522,9 +503,8 @@ function startCameraWebRtc(cameraName, panel, webrtcPort) {
   cameraWebRtc.set(cameraName, state);
   const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
   const hostname = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
-  const previewFps = capturePerformanceMode ? CAPTURE_PREVIEW_FPS : NORMAL_PREVIEW_FPS;
   const ws = new WebSocket(
-    `${wsProtocol}://${hostname}:${port}/ws/webrtc?camera=${encodeURIComponent(cameraName)}&fps=${previewFps}`
+    `${wsProtocol}://${hostname}:${port}/ws/webrtc?camera=${encodeURIComponent(cameraName)}&fps=${NORMAL_PREVIEW_FPS}`
   );
   const pc = new RTCPeerConnection();
   state.ws = ws;

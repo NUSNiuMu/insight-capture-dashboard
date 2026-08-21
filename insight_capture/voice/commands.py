@@ -14,7 +14,6 @@ LOCAL_COMMAND_ALIASES = {
     "recording_stop": ("结束录制", "停止录制", "结束录像", "停止录像", "结束采集", "停止采集"),
     "calibration_start": ("开始校准", "重新校准", "重置校准"),
     "capture_check": ("检查相机", "开始检测", "位置检测", "检测相机"),
-    "capture_reference": ("设置检测位", "记录检测位", "保存检测位"),
     "system_status": ("系统状态", "检查系统", "数采状态"),
     "take_reject": ("本条作废", "这条作废", "作废本条"),
     "task_cup_stacking_start": (
@@ -43,7 +42,6 @@ LOCAL_COMMAND_ENDPOINTS = {
     "recording_stop": "/api/automation/recording/stop",
     "calibration_start": "/api/mapping/reset",
     "capture_check": "/api/capture-check/run",
-    "capture_reference": "/api/capture-check/reference",
     "system_status": "/api/system/status",
     "take_reject": "/api/takes/current/reject",
     "task_cup_stacking_start": "/api/tasks/cup_stacking/activate",
@@ -57,7 +55,6 @@ LOCAL_COMMAND_REPLY_KEYS = {
     "recording_stop": "recording_stopped",
     "calibration_start": "calibration_started",
     "capture_check": "capture_check_not_ready",
-    "capture_reference": "capture_reference_saved",
     "system_status": "dynamic_reply",
     "take_reject": "dynamic_reply",
     "task_cup_stacking_start": "dynamic_reply",
@@ -110,12 +107,10 @@ def calibration_is_complete(payload: object) -> bool:
     return all(isinstance(statuses.get(name), dict) and bool(statuses[name].get("localized")) for name in ("insight3_a", "insight3_b"))
 
 
-def capture_check_reply_key(payload: object, *, reference: bool = False) -> str:
+def capture_check_reply_key(payload: object) -> str:
     if not isinstance(payload, dict):
         return "capture_check_not_ready"
     state = str(payload.get("state") or "not_ready")
-    if reference and state == "reference_saved":
-        return "capture_reference_saved"
     return {"pass": "capture_check_pass", "retry": "capture_check_retry", "recalibrate": "capture_check_recalibrate", "no_reference": "capture_check_no_reference"}.get(state, "capture_check_not_ready")
 
 
@@ -127,7 +122,7 @@ def capture_check_speech(payload: object) -> Optional[str]:
     if state == "pass":
         return None
     if state == "no_reference":
-        return "还没有检测位基准。请放好三台相机。然后说设置检测位。"
+        return "检测位基准没有配置。当前版本不提供现场设置入口，请跳过这项检查。"
 
     comparisons = payload.get("comparisons")
     comparisons = comparisons if isinstance(comparisons, dict) else {}

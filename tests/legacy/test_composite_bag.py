@@ -118,7 +118,9 @@ class CompositeBagTest(unittest.TestCase):
             with mock.patch(
                 "insight_capture.runtime.recording.manager.subprocess.Popen", return_value=process
             ) as popen, mock.patch("insight_capture.runtime.recording.manager.os.write"):
-                result = manager.start(bag_name="single")
+                result = manager.start(
+                    bag_name="single", output_subdirectory="cup_stacking"
+                )
 
             self.assertEqual(set(calls[0]), {"/camera"})
             self.assertEqual(len(set(calls[0].values())), 1)
@@ -128,6 +130,15 @@ class CompositeBagTest(unittest.TestCase):
             self.assertIn("/camera", command)
             self.assertIn("/imu", command)
             self.assertIn("--start-paused", command)
+            self.assertEqual(
+                result["output_path"],
+                str(Path(directory) / "cup_stacking" / "single"),
+            )
+            target = Path(command[command.index("--output") + 1])
+            self.assertEqual(
+                json.loads((target / ".recording_target.json").read_text()),
+                {"output_subdirectory": "cup_stacking"},
+            )
             self.assertEqual(
                 popen.call_args.kwargs["env"]["RMW_IMPLEMENTATION"],
                 "rmw_cyclonedds_cpp",

@@ -607,8 +607,6 @@ class VoiceService:
                 self._pending_spoken_reply = detail
                 return "dynamic_reply"
             return capture_check_reply_key(payload)
-        if action == "capture_reference":
-            return capture_check_reply_key(payload, reference=True)
         if (
             action == "recording_stop"
             and payload.get("recording_mode") == "vio_calibration"

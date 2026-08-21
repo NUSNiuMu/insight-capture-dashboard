@@ -4,22 +4,32 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from insight_capture.api.routes.tasks import TaskRoutes  # noqa: E402
+from insight_capture.api.routes.recording import RecordingRoutes  # noqa: E402
 from insight_capture.runtime.take import SessionTakeStore  # noqa: E402
 from insight_capture.runtime.tasks import CaptureTask, CaptureTaskCatalog  # noqa: E402
 
 
 class _RecordingManager:
-    def __init__(self) -> None:
+    def __init__(self, root: Path | None = None) -> None:
         self.recording = False
+        self.root = root
+        self.start_calls = []
 
     def status(self):
         return {"recording": self.recording}
+
+    def start(self, **kwargs):
+        self.start_calls.append(kwargs)
+        output_path = (self.root or Path("/bags")) / str(kwargs.get("output_subdirectory") or "") / kwargs["bag_name"]
+        self.recording = True
+        return {"recording": True, "output_path": str(output_path)}
 
 
 def _catalog() -> CaptureTaskCatalog:
@@ -79,6 +89,39 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(response.status, 409)
             self.assertIn("不能切换任务", json.loads(response.text)["speech"])
+
+    async def test_recording_is_routed_into_active_task_set_folder(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = SessionTakeStore(root, task_catalog=_catalog())
+            manager = _RecordingManager(root / "bags")
+            routes = RecordingRoutes(
+                SimpleNamespace(
+                    take_store=store,
+                    recording_manager=manager,
+                    capture_preflight=None,
+                )
+            )
+
+            async def direct(function, *args, **kwargs):
+                return function(*args, **kwargs)
+
+            with mock.patch(
+                "insight_capture.api.routes.recording.asyncio.to_thread",
+                side_effect=direct,
+            ):
+                response = await routes._start_with_preflight(
+                    topics=["/camera"], bag_name=None, automation=False
+                )
+            payload = json.loads(response.text)
+
+            self.assertEqual(response.status, 200)
+            self.assertEqual(
+                manager.start_calls[0]["output_subdirectory"], "cup_stacking"
+            )
+            self.assertEqual(
+                Path(payload["output_path"]).parent.name, "cup_stacking"
+            )
 
 
 if __name__ == "__main__":

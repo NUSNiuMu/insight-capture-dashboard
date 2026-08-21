@@ -30,13 +30,6 @@ class CaptureCheckRoutes:
             self.context.node.capture_check_status(bag_name=self._latest_bag_name())
         )
 
-    async def _handle_reference(self, _request: web.Request) -> web.Response:
-        guarded = self._recording_guard()
-        if guarded is not None:
-            return web.json_response(guarded)
-        result = self.context.node.set_capture_check_reference()
-        return web.json_response(result)
-
     async def _handle_run(self, _request: web.Request) -> web.Response:
         guarded = self._recording_guard()
         if guarded is not None:

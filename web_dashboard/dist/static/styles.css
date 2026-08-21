@@ -188,6 +188,9 @@ img.camera-frame:not([src]) { visibility: hidden; }
 
 /* Bags */
 .session-summary { display: grid; margin-bottom: 18px; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 10px; }
+.task-set-panel { margin-bottom: 18px; }
+.task-set-controls { display: flex; align-items: center; gap: 10px; }
+.task-set-controls .field-control { flex: 1; }
 .session-summary article { display: flex; min-width: 0; padding: 15px 16px; border: 1px solid var(--line); border-radius: 10px; flex-direction: column; gap: 6px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .session-summary span, .take-row span { color: var(--muted-light); font-family: var(--mono); font-size: 8px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
 .session-summary strong { overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
@@ -469,21 +472,6 @@ body[data-dashboard-view="3d"] .legend {
   background: rgba(255, 252, 245, 0.98);
 }
 body[data-dashboard-view="3d"] .camera-overlay {
-  background: rgba(13, 11, 7, 0.96);
-}
-body.capture-performance .spatial-playback,
-body.capture-performance .mapping-panel,
-body.capture-performance .legend,
-body.capture-performance .camera-overlay {
-  box-shadow: none;
-  backdrop-filter: none;
-}
-body.capture-performance .spatial-playback,
-body.capture-performance .mapping-panel,
-body.capture-performance .legend {
-  background: rgba(255, 252, 245, 0.98);
-}
-body.capture-performance .camera-overlay {
   background: rgba(13, 11, 7, 0.96);
 }
 body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }

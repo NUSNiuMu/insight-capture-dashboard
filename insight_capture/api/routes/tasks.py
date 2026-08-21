@@ -16,7 +16,7 @@ def task_status_speech(status: dict) -> str:
     rejected = int(stats.get("rejected_takes") or 0)
     next_take = int(stats.get("next_take_id") or recorded + 1)
     return (
-        f"当前任务是{name}，本批已录制{recorded}条，"
+        f"当前任务集是{name}，累计已录制{recorded}条，"
         f"有效{valid}条，作废{rejected}条，下一条是第{next_take}条。"
     )
 
@@ -26,7 +26,12 @@ class TaskRoutes:
         self.context = context
 
     async def _handle_list(self, _request: web.Request) -> web.Response:
-        return web.json_response({"tasks": self.context.take_store.list_tasks()})
+        status = self.context.take_store.task_status()
+        task = status.get("task") or {}
+        return web.json_response({
+            "tasks": self.context.take_store.list_tasks(),
+            "active_task_id": task.get("task_id") if status.get("active") else None,
+        })
 
     async def _handle_current(self, _request: web.Request) -> web.Response:
         status = self.context.take_store.task_status()
@@ -78,5 +83,5 @@ class TaskRoutes:
         recorded = int((previous.get("stats") or {}).get("recorded_takes") or 0)
         status = self.context.take_store.end_task()
         return web.json_response(
-            {**status, "speech": f"{name}任务已结束，本批共录制{recorded}条。"}
+            {**status, "speech": f"已退出{name}任务集，累计录制{recorded}条。"}
         )

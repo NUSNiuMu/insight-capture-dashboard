@@ -7,7 +7,6 @@ import re
 import threading
 import time
 from copy import deepcopy
-from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -79,6 +78,31 @@ class SessionTakeStore:
         self.takes_root.mkdir(parents=True, exist_ok=True)
         self._current_take_id = None
 
+    @staticmethod
+    def _task_set_id(task_id: str) -> str:
+        return _slug(task_id, "task")
+
+    def _migrate_active_task_set(self, previous_session_id: str, task_id: str) -> None:
+        """Move the active dated metadata folder to the stable task-set folder once."""
+
+        stable_id = self._task_set_id(task_id)
+        if not previous_session_id or previous_session_id == stable_id:
+            return
+        previous_root = self.sessions_root / previous_session_id
+        stable_root = self.sessions_root / stable_id
+        if not previous_root.is_dir() or stable_root.exists():
+            return
+        previous_root.replace(stable_root)
+        for path in [stable_root / "session.json", *(stable_root / "takes").glob("take_*.json")]:
+            if not path.is_file():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            payload["session_id"] = stable_id
+            self._write_json(path, payload)
+
     def _restore_task_session(self) -> None:
         state = None
         if self._active_state_path.is_file():
@@ -88,21 +112,22 @@ class SessionTakeStore:
                 state = None
         if isinstance(state, dict) and state.get("active"):
             task = self._task_catalog.get(str(state.get("task_id") or ""))
-            session_id = str(state.get("session_id") or "").strip()
-            if session_id and session_id.startswith(datetime.now().strftime("%Y%m%d-")):
-                self._configure_task_session(task, session_id)
-                self._write_session()
-                return
-            self.activate_task(task.task_id)
+            previous_session_id = str(state.get("session_id") or "").strip()
+            self._migrate_active_task_set(previous_session_id, task.task_id)
+            self._configure_task_session(task, self._task_set_id(task.task_id))
+            self._write_session()
+            self._write_active_state()
             return
         if isinstance(state, dict):
             task_id = str(state.get("task_id") or "").strip()
-            session_id = str(state.get("session_id") or "").strip()
-            if task_id and session_id:
+            previous_session_id = str(state.get("session_id") or "").strip()
+            if task_id:
+                self._migrate_active_task_set(previous_session_id, task_id)
                 self._configure_task_session(
-                    self._task_catalog.get(task_id), session_id
+                    self._task_catalog.get(task_id), self._task_set_id(task_id)
                 )
             self._active = False
+            self._write_active_state()
             return
         default_task = self._task_catalog.default()
         if default_task is not None:
@@ -154,15 +179,6 @@ class SessionTakeStore:
             },
         )
 
-    def _next_session_id(self, task_id: str) -> str:
-        prefix = f"{datetime.now().strftime('%Y%m%d')}-{_slug(task_id, 'task')}-"
-        numbers = []
-        for path in self.sessions_root.glob(f"{prefix}*"):
-            match = re.fullmatch(rf"{re.escape(prefix)}(\d+)", path.name)
-            if match:
-                numbers.append(int(match.group(1)))
-        return f"{prefix}{max(numbers, default=0) + 1:03d}"
-
     def activate_task(self, task_id: str) -> Dict[str, object]:
         if self._task_catalog is None:
             raise RuntimeError("Capture task switching is not configured.")
@@ -173,7 +189,7 @@ class SessionTakeStore:
             task = self._task_catalog.get(task_id)
             if self._active and self.task_id == task.task_id:
                 return self.task_status()
-            self._configure_task_session(task, self._next_session_id(task.task_id))
+            self._configure_task_session(task, self._task_set_id(task.task_id))
             self._write_session()
             self._write_active_state()
             return self.task_status()
@@ -192,7 +208,27 @@ class SessionTakeStore:
             return self.task_status()
 
     def list_tasks(self) -> list[Dict[str, object]]:
-        return self._task_catalog.list() if self._task_catalog is not None else []
+        if self._task_catalog is None:
+            return []
+        tasks = []
+        for item in self._task_catalog.list():
+            task_set_id = self._task_set_id(str(item.get("task_id") or ""))
+            takes_root = self.sessions_root / task_set_id / "takes"
+            takes = self._list_takes_from(takes_root)
+            tasks.append({
+                **item,
+                "task_set_id": task_set_id,
+                "recording_subdirectory": task_set_id,
+                "active": self._active and self.task_id == item.get("task_id"),
+                "stats": self._take_stats(takes, takes_root=takes_root),
+            })
+        return tasks
+
+    def recording_subdirectory(self) -> Optional[str]:
+        """Return the stable raw-data folder for the active task set."""
+
+        with self._lock:
+            return self._task_set_id(self.task_id) if self._active and self.task_id else None
 
     def _path(self, take_id: int) -> Path:
         return self.takes_root / f"take_{int(take_id):04d}.json"
@@ -201,8 +237,12 @@ class SessionTakeStore:
         return json.loads(self._path(take_id).read_text(encoding="utf-8"))
 
     def _next_take_id(self) -> int:
+        return self._next_take_id_from(self.takes_root)
+
+    @staticmethod
+    def _next_take_id_from(takes_root: Path) -> int:
         ids = []
-        for path in self.takes_root.glob("take_*.json"):
+        for path in takes_root.glob("take_*.json"):
             match = re.fullmatch(r"take_(\d+)\.json", path.name)
             if match:
                 ids.append(int(match.group(1)))
@@ -368,8 +408,12 @@ class SessionTakeStore:
                 return None
 
     def list_takes(self) -> list[Dict]:
+        return self._list_takes_from(self.takes_root)
+
+    @staticmethod
+    def _list_takes_from(takes_root: Path) -> list[Dict]:
         items = []
-        for path in sorted(self.takes_root.glob("take_*.json"), reverse=True):
+        for path in sorted(takes_root.glob("take_*.json"), reverse=True):
             try:
                 items.append(json.loads(path.read_text(encoding="utf-8")))
             except (OSError, ValueError):
@@ -388,6 +432,7 @@ class SessionTakeStore:
                 "capture_profile": self.capture_profile,
                 "operator": self.operator,
                 "station_check_after_take": self.station_check_after_take,
+                "recording_subdirectory": self.recording_subdirectory(),
                 "active": self._active,
             },
             "current_take": self.current(),
@@ -395,7 +440,9 @@ class SessionTakeStore:
             "stats": status.get("stats", {}),
         }
 
-    def _take_stats(self, takes: list[Dict]) -> Dict[str, int]:
+    def _take_stats(
+        self, takes: list[Dict], *, takes_root: Optional[Path] = None
+    ) -> Dict[str, int]:
         recorded = [take for take in takes if take.get("bag_path")]
         completed = [take for take in recorded if take.get("end_epoch_s")]
         rejected = [take for take in recorded if take.get("operator_valid") is False]
@@ -417,7 +464,7 @@ class SessionTakeStore:
             "valid_takes": len(valid),
             "rejected_takes": len(rejected),
             "suspect_takes": len(suspect),
-            "next_take_id": self._next_take_id(),
+            "next_take_id": self._next_take_id_from(takes_root or self.takes_root),
         }
 
     def task_status(self) -> Dict[str, object]:
@@ -437,6 +484,7 @@ class SessionTakeStore:
                 "instruction": self.task_instruction,
                 "capture_profile": self.capture_profile,
                 "station_check_after_take": self.station_check_after_take,
+                "recording_subdirectory": self.recording_subdirectory(),
             }
             return {
                 "active": True,

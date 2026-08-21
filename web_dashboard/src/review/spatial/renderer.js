@@ -29,7 +29,6 @@ const HAND_RIG_RADIUS = 0.004;
 const POSE_SMOOTHING_TIME_MS = 40;
 const TRAIL_RENDER_INTERVAL_MS = 100;
 const DEFAULT_HARDWARE_SCALING_LEVEL = 1.0;
-const CAPTURE_HARDWARE_SCALING_LEVEL = 2.0;
 const PREPARED_HARDWARE_SCALING_LEVEL = 1.0;
 const DEFAULT_TRAIL_ENABLED = {
   head: true,
@@ -66,7 +65,6 @@ let keepTrajectory = false;
 let stickFigureMode = false;
 let avatarLoadStage = 0;
 let trajectoriesEnabled = false;
-let capturePerformanceMode = false;
 let configuredDisplayFps = 30;
 let sceneFrameIntervalMs = 1000 / 30;
 let traceCapacity = 300;
@@ -147,20 +145,12 @@ export function setAvatarLoadStage(stage) {
   if (latestPosePayload) pendingPosePayload = latestPosePayload;
 }
 
-export function setCapturePerformanceMode(enabled) {
-  capturePerformanceMode = Boolean(enabled);
-  refreshHardwareScalingLevel();
-  refreshSceneFrameInterval();
-}
-
 function refreshHardwareScalingLevel() {
   if (!engine) return;
   engine.setHardwareScalingLevel(
-    capturePerformanceMode
-      ? CAPTURE_HARDWARE_SCALING_LEVEL
-      : (preparedPlaybackMode
-        ? PREPARED_HARDWARE_SCALING_LEVEL
-        : DEFAULT_HARDWARE_SCALING_LEVEL)
+    preparedPlaybackMode
+      ? PREPARED_HARDWARE_SCALING_LEVEL
+      : DEFAULT_HARDWARE_SCALING_LEVEL
   );
   engine.resize();
 }
@@ -175,6 +165,7 @@ export function setTrajectoriesEnabled(enabled) {
   pendingTrailPoses.clear();
   keptPoints.clear();
   for (const trail of trailStates.values()) clearTrail(trail);
+  publishTraceDiagnostics();
 }
 
 export function clearKeptTrajectory() {
@@ -187,6 +178,7 @@ export function clearRenderedTrajectories() {
   pendingPosePayload = null;
   pendingTrailPoses.clear();
   for (const trail of trailStates.values()) clearTrail(trail);
+  publishTraceDiagnostics();
 }
 
 export function beginPreparedPlayback(payload) {
@@ -300,10 +292,17 @@ export function queuePoseUpdate(payload) {
         mapDashboardPositionToScene
       ) && traceStateValid;
     }
+    publishTraceDiagnostics();
   }
   latestPosePayload = payload;
   pendingPosePayload = payload;
   return traceStateValid;
+}
+
+function publishTraceDiagnostics() {
+  window.__insightTracePointCounts = Object.fromEntries(
+    Array.from(traceCaches, ([role, trace]) => [role, trace.points.length])
+  );
 }
 
 function applyPoseUpdate(payload) {
@@ -434,10 +433,7 @@ function setDisplayFpsLimit(value) {
 }
 
 function refreshSceneFrameInterval() {
-  const fps = capturePerformanceMode
-    ? Math.min(12, configuredDisplayFps)
-    : configuredDisplayFps;
-  sceneFrameIntervalMs = 1000 / fps;
+  sceneFrameIntervalMs = 1000 / configuredDisplayFps;
 }
 
 function ensurePoseNode(pose) {

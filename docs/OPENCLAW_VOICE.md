@@ -13,10 +13,10 @@ Dashboard 容器不挂载 `/dev/snd`。固定命令的完整链路为：
 
 ## 固定离线命令
 
-- 开始任务叠杯子：进入当前唯一的“叠杯子” Task；若已经在该 Task 中，只播报当前进度，
-  不重置 Session 或 Take 编号；
-- 当前任务多少条：播报当前 Task、当前 Session 已录制/有效/作废条数，以及下一条编号；
-- 结束当前任务：结束本批 Session；录制中拒绝执行，再次开始同一 Task 会新建 Session；
+- 开始任务叠杯子：进入当前唯一的“叠杯子” Task Set；若已经在其中，只播报当前进度，
+  不重置 Take 编号；
+- 当前任务多少条：播报当前 Task Set 累计已录制/有效/作废条数，以及下一条编号；
+- 结束当前任务：退出当前 Task Set；录制中拒绝执行，再次进入后继续原编号；
 - 开始录制：先运行三相机、定位、存储、必要 topics 与数据新鲜度 Preflight；失败时
   拒绝开始并直接播报原因；
 - 录制校准模式：立即开始一条独立的 VIO 调试 bag，不占用 Task/Take 编号。固定录制
@@ -31,7 +31,6 @@ Dashboard 容器不挂载 `/dev/snd`。固定命令的完整链路为：
   发出后最多等待 12 秒接收新闭环，闭环结果有效 30 秒；
 - 系统状态：播报 Preflight、定位、存储与录制可用性；
 - 本条作废：只把最近 Take 标为 `operator_valid=false`，绝不删除原始 bag；
-- 设置检测位：供需要固定治具的 task profile 使用。
 
 采集中持续检测 camera stale、frame loss、mapping/localization、存储 fallback/低空间和
 recorder I/O。异常持续超过阈值后，Dashboard 写入当前 Take 的 `anomaly_timeline`，并由

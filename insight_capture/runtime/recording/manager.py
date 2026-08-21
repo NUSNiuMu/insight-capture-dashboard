@@ -26,7 +26,7 @@ from .recorder import (
     build_recording_topic_catalog,
     discover_live_topics,
 )
-from .recovery import RecordingRecovery
+from .recovery import RECORDING_TARGET_NAME, RecordingRecovery
 from .network_audit import (
     capture_network_snapshot,
     compare_network_snapshots,
@@ -513,6 +513,7 @@ class RecordingManager:
         topics: Optional[Sequence[str]] = None,
         bag_name: Optional[str] = None,
         recording_mode: str = "capture",
+        output_subdirectory: Optional[str] = None,
     ) -> Dict[str, object]:
         start_started = time.perf_counter()
         selected_topics = self.default_topics if topics is None else _normalize_topics(topics)
@@ -538,7 +539,15 @@ class RecordingManager:
                 name = safe or f"insight_record_{timestamp}"
             else:
                 name = f"insight_record_{timestamp}"
-            output_path = self.rosbag_root / name
+            safe_subdirectory = ""
+            if output_subdirectory:
+                candidate = str(output_subdirectory).strip()
+                if not re.fullmatch(r"[0-9A-Za-z_-]+", candidate):
+                    raise ValueError("Recording subdirectory must be a single safe task-set name.")
+                safe_subdirectory = candidate
+            output_root = self.rosbag_root / safe_subdirectory if safe_subdirectory else self.rosbag_root
+            output_root.mkdir(parents=True, exist_ok=True)
+            output_path = output_root / name
             staging_dir = self.rosbag_root / "_staging" / name
             staging_dir.parent.mkdir(parents=True, exist_ok=True)
             if staging_dir.exists():
@@ -637,6 +646,12 @@ class RecordingManager:
             if single_writer and not self._recorder_ready.wait(timeout=10.0):
                 abort_started_processes()
                 raise RuntimeError("Native MCAP recorder did not become ready within 10 seconds.")
+            if safe_subdirectory:
+                staging_dir.mkdir(parents=True, exist_ok=True)
+                (staging_dir / RECORDING_TARGET_NAME).write_text(
+                    json.dumps({"output_subdirectory": safe_subdirectory}, sort_keys=True),
+                    encoding="utf-8",
+                )
             ready_finished = time.perf_counter()
             if single_writer:
                 # CycloneDDS discovers each camera participant in a burst. Wait
@@ -705,6 +720,7 @@ class RecordingManager:
                 "storage_id": self.storage_id,
                 "rmw_implementation": self.recording_rmw_implementation,
                 "bag_name": name,
+                "task_set_id": safe_subdirectory or None,
                 "recording_mode": self.recording_mode,
                 "selected_topics": list(selected_topics),
                 "started_at_epoch_s": self.started_at,
@@ -919,6 +935,7 @@ class RecordingManager:
         )
         if output_path.exists():
             raise RuntimeError(f"recording output already exists: {output_path}")
+        (staging_dir / RECORDING_TARGET_NAME).unlink(missing_ok=True)
         os.replace(staging_dir, output_path)
         finalize_sec = round(time.perf_counter() - started, 3)
         with self._lock:
@@ -986,6 +1003,7 @@ class RecordingManager:
         )
         if output_path.exists():
             raise RuntimeError(f"recording output already exists: {output_path}")
+        (staging_dir / RECORDING_TARGET_NAME).unlink(missing_ok=True)
         os.replace(staging_dir, output_path)
         finalize_sec = round(time.perf_counter() - started, 3)
         with self._lock:

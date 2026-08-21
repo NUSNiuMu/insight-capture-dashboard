@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import threading
@@ -225,7 +226,7 @@ class CaptureRuntimeTest(unittest.TestCase):
             self.assertFalse(rejected["operator_valid"])
             self.assertTrue((bag / "data.mcap").is_file())
 
-    def test_capture_task_session_persists_counts_and_starts_new_batch(self):
+    def test_capture_task_set_persists_counts_across_days_and_reentry(self):
         catalog = CaptureTaskCatalog(
             [
                 CaptureTask(
@@ -244,7 +245,8 @@ class CaptureRuntimeTest(unittest.TestCase):
             root = Path(temporary)
             store = SessionTakeStore(root, task_catalog=catalog)
             first_session = store.session_id
-            self.assertRegex(first_session, r"^\d{8}-cup_stacking-001$")
+            self.assertEqual(first_session, "cup_stacking")
+            self.assertEqual(store.recording_subdirectory(), "cup_stacking")
             take = store.reserve_take()
             self.assertTrue(take["bag_name"].startswith("cup_stacking_take_0001_"))
             store.mark_recording(root / "bags" / take["bag_name"])
@@ -264,8 +266,55 @@ class CaptureRuntimeTest(unittest.TestCase):
                 restored.reserve_take()
 
             restarted = restored.activate_task("cup_stacking")
-            self.assertRegex(restarted["session_id"], r"^\d{8}-cup_stacking-002$")
-            self.assertEqual(restarted["stats"]["next_take_id"], 1)
+            self.assertEqual(restarted["session_id"], "cup_stacking")
+            self.assertEqual(restarted["stats"]["next_take_id"], 2)
+            task_set = restored.list_tasks()[0]
+            self.assertTrue(task_set["active"])
+            self.assertEqual(task_set["stats"]["recorded_takes"], 1)
+
+    def test_active_dated_session_metadata_migrates_to_stable_task_set(self):
+        catalog = CaptureTaskCatalog(
+            [
+                CaptureTask(
+                    task_id="cup_stacking",
+                    name="Cup stacking",
+                    speech_name="叠杯子",
+                    instruction="Stack the cups",
+                    capture_profile="dual_arm_umi",
+                    voice_aliases=("叠杯子",),
+                    station_check_after_take=False,
+                )
+            ],
+            default_task_id="cup_stacking",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions = root / "sessions"
+            legacy = sessions / "20260820-cup_stacking-003"
+            (legacy / "takes").mkdir(parents=True)
+            (legacy / "session.json").write_text(json.dumps({
+                "session_id": legacy.name,
+                "created_at_epoch_s": 1,
+            }))
+            (legacy / "takes" / "take_0001.json").write_text(json.dumps({
+                "session_id": legacy.name,
+                "take_id": 1,
+                "bag_path": "/bags/existing",
+                "state": "complete",
+                "end_epoch_s": 1,
+            }))
+            (sessions / "active_session.json").write_text(json.dumps({
+                "active": True,
+                "task_id": "cup_stacking",
+                "session_id": legacy.name,
+            }))
+
+            store = SessionTakeStore(root, task_catalog=catalog)
+
+            self.assertEqual(store.session_id, "cup_stacking")
+            self.assertFalse(legacy.exists())
+            self.assertEqual(store.list_takes()[0]["session_id"], "cup_stacking")
+            self.assertEqual(store.task_status()["stats"]["next_take_id"], 2)
 
     def test_sustained_camera_fault_records_anomaly_and_voice_alert(self):
         with tempfile.TemporaryDirectory() as temporary:

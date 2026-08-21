@@ -72,7 +72,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(match_local_command("请停止录制"), "recording_stop")
         self.assertEqual(match_local_command("帮我重新校准一下"), "calibration_start")
         self.assertEqual(match_local_command("检查相机"), "capture_check")
-        self.assertEqual(match_local_command("请设置检测位"), "capture_reference")
+        self.assertIsNone(match_local_command("请设置检测位"))
         self.assertEqual(match_local_command("系统状态"), "system_status")
         self.assertEqual(match_local_command("请本条作废"), "take_reject")
         self.assertEqual(
@@ -879,10 +879,6 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(
             capture_check_reply_key({"state": "recalibrate"}),
             "capture_check_recalibrate",
-        )
-        self.assertEqual(
-            capture_check_reply_key({"state": "reference_saved"}, reference=True),
-            "capture_reference_saved",
         )
 
     def test_capture_check_speech_names_each_failed_camera(self):

@@ -587,23 +587,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             return {"type": "capture_check", "enabled": False, "state": "disabled"}
         return manager.snapshot(bag_name=bag_name)
 
-    def set_capture_check_reference(self) -> Dict[str, object]:
-        manager = self._capture_check_manager
-        if manager is None:
-            return {"type": "capture_check_result", "state": "disabled"}
-        frozen = self._mapping_stream.freeze_capture_reference()
-        if not frozen.get("ok"):
-            return {
-                "type": "capture_check_result",
-                "state": "not_ready",
-                "reasons": [str(frozen.get("reason") or "could not freeze Insight9 map")],
-                "details": frozen.get("details"),
-            }
-        reference = frozen.get("reference")
-        return manager.set_reference(
-            insight9_reference=reference if isinstance(reference, dict) else None
-        )
-
     def run_capture_check(self, *, bag_name: Optional[str] = None) -> Dict[str, object]:
         manager = self._capture_check_manager
         if manager is None:

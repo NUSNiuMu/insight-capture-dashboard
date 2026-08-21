@@ -189,6 +189,10 @@ class RecordingRoutes:
             actual_name = time.strftime("looper_record_%Y%m%d_%H%M%S")
         try:
             start_arguments = {"topics": topics, "bag_name": actual_name}
+            if track_take and take_store is not None:
+                start_arguments["output_subdirectory"] = (
+                    take_store.recording_subdirectory()
+                )
             if preflight_mode != "capture":
                 start_arguments["recording_mode"] = preflight_mode
             status = await asyncio.to_thread(
