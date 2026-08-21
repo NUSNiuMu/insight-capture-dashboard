@@ -1,4 +1,9 @@
-"""Coordinate transforms, VIO interpolation, and rectified stereo geometry."""
+"""稀疏双目建图使用的几何、标定和坐标变换工具。
+
+本模块约定所有 4x4 矩阵均表示“把局部坐标中的点变换到目标坐标”的刚体变换。
+例如 ``odom_to_left`` 表示左目坐标到 odom 坐标的变换。双目输入已经由相机节点
+校正，因此三角化直接使用 CameraInfo 中的投影矩阵，不再次应用畸变参数。
+"""
 
 from __future__ import annotations
 
@@ -11,7 +16,7 @@ import numpy as np
 
 @dataclass(frozen=True)
 class PoseSample:
-    """A timestamped ``T_world_body`` pose."""
+    """带纳秒时间戳的 ``T_world_body``，用于把 VIO 插值到图像时刻。"""
 
     stamp_ns: int
     translation: np.ndarray
@@ -20,7 +25,7 @@ class PoseSample:
 
 @dataclass(frozen=True)
 class StereoCalibration:
-    """Projection matrices for an already-rectified stereo pair."""
+    """已校正双目的左右投影矩阵、图像尺寸及可推导基线。"""
 
     left_projection: np.ndarray
     right_projection: np.ndarray
@@ -57,7 +62,7 @@ class StereoCalibration:
 
 @dataclass(frozen=True)
 class TriangulationResult:
-    """Geometrically valid left-camera points and their source match indices."""
+    """通过几何门限的左目三维点，以及它们在原始匹配数组中的索引。"""
 
     points_left: np.ndarray
     source_indices: np.ndarray
@@ -76,7 +81,7 @@ def _normalized_quaternion(value: Sequence[float]) -> np.ndarray:
 def quaternion_slerp(
     first_xyzw: Sequence[float], second_xyzw: Sequence[float], fraction: float
 ) -> np.ndarray:
-    """Interpolate unit quaternions along their shortest arc."""
+    """沿四元数最短弧插值，避免 ``q`` 与 ``-q`` 等价造成长路径旋转。"""
 
     first = _normalized_quaternion(first_xyzw)
     second = _normalized_quaternion(second_xyzw)
@@ -96,7 +101,7 @@ def quaternion_slerp(
 
 
 def interpolate_pose(first: PoseSample, second: PoseSample, stamp_ns: int) -> PoseSample:
-    """Linearly interpolate translation and slerp orientation."""
+    """在两个 VIO 样本间对平移线性插值、对旋转球面插值。"""
 
     if second.stamp_ns <= first.stamp_ns:
         raise ValueError("pose interpolation requires increasing timestamps")
@@ -143,7 +148,7 @@ def matrix_from_transform(
 
 
 def compose_transform(first: np.ndarray, second: np.ndarray) -> np.ndarray:
-    """Compose ``T_a_b`` and ``T_b_c`` into ``T_a_c``."""
+    """组合 ``T_a_b`` 与 ``T_b_c`` 得到 ``T_a_c``。"""
 
     first = np.asarray(first, dtype=np.float64).reshape(4, 4)
     second = np.asarray(second, dtype=np.float64).reshape(4, 4)
@@ -151,11 +156,10 @@ def compose_transform(first: np.ndarray, second: np.ndarray) -> np.ndarray:
 
 
 def left_to_stereo_center(left_to_right: np.ndarray) -> np.ndarray:
-    """Return ``T_left_center`` for the midpoint of two optical origins.
+    """返回左目到双目光心中点的 ``T_left_center``。
 
-    The center frame keeps the left optical frame orientation. This avoids
-    introducing any small right-camera calibration rotation into the published
-    device pose while placing its origin halfway between both optical centers.
+    中点坐标系保持左目姿态，只把原点放到两个光心之间。这样不会把右目标定中的微小
+    旋转误差引入设备发布姿态。
     """
 
     transform = np.asarray(left_to_right, dtype=np.float64).reshape(4, 4)
@@ -198,7 +202,11 @@ def triangulate_rectified(
     max_depth_m: float = 8.0,
     max_reprojection_error_px: float = 1.5,
 ) -> TriangulationResult:
-    """Triangulate matched points and reject physically inconsistent results."""
+    """三角化双目匹配点，并剔除不满足成像物理约束的结果。
+
+    依次执行有限值、极线、正视差、深度和左右重投影检查。``source_indices`` 让调用方
+    能把保留的三维点精确对应回 SuperGlue 描述子与置信度。
+    """
 
     left = np.asarray(left_points, dtype=np.float64).reshape(-1, 2)
     right = np.asarray(right_points, dtype=np.float64).reshape(-1, 2)
@@ -212,6 +220,7 @@ def triangulate_rectified(
             np.empty((0,), dtype=np.float64),
         )
 
+    # 校正双目中同一空间点应位于近似相同的扫描线，且左目横坐标大于右目。
     disparity = left[:, 0] - right[:, 0]
     preliminary = (
         np.isfinite(left).all(axis=1)
@@ -231,6 +240,7 @@ def triangulate_rectified(
 
     filtered_left = left[source_indices]
     filtered_right = right[source_indices]
+    # OpenCV 返回齐次坐标；w 过小表示点在数值上接近无穷远，不能可靠归一化。
     homogeneous = cv2.triangulatePoints(
         calibration.left_projection,
         calibration.right_projection,
@@ -258,6 +268,7 @@ def triangulate_rectified(
         right_projected[projection_valid, :2]
         / right_projected[projection_valid, 2:3]
     )
+    # 取左右两侧较大的误差，避免单侧偶然拟合良好掩盖错误匹配。
     reprojection = np.maximum(
         np.linalg.norm(left_uv - filtered_left, axis=1),
         np.linalg.norm(right_uv - filtered_right, axis=1),

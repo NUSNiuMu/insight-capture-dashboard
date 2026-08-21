@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 
-"""Serve Magic Leap's official SuperPoint/SuperGlue over a local Unix socket."""
+"""通过本地 Unix socket 串行提供 SuperPoint/SuperGlue TensorRT 推理。
+
+该进程独占 TensorRT context 与 CUDA stream，mapper 和两路 localizer 通过短连接
+共享它。服务端一次只处理一个请求，避免多个进程并发操作同一执行上下文和显存缓冲。
+"""
 
 from __future__ import annotations
 
@@ -21,6 +25,8 @@ except ModuleNotFoundError:  # isolated SuperGlue runtime image
 
 
 class InferenceServer:
+    """无状态请求协议的单线程 Unix socket 服务。"""
+
     def __init__(self, socket_path: Path, matcher) -> None:
         self.socket_path = socket_path
         self.matcher = matcher
@@ -33,6 +39,8 @@ class InferenceServer:
             self._server.close()
 
     def run(self) -> None:
+        """创建 socket、串行接收请求，并在退出时清理 socket 文件。"""
+
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         if self.socket_path.exists():
             if not self.socket_path.is_socket():
@@ -62,6 +70,7 @@ class InferenceServer:
                     if self._stop:
                         break
                     raise
+                # TensorRT context 不是跨请求并行使用；连接在当前线程完整处理后关闭。
                 with connection:
                     connection.settimeout(30.0)
                     self._serve_one(connection)
@@ -72,6 +81,8 @@ class InferenceServer:
                 self.socket_path.unlink()
 
     def _serve_one(self, connection: socket.socket) -> None:
+        """验证一条请求，执行 health/extract/match 之一并返回裸数组。"""
+
         try:
             metadata, payloads = receive_message(connection)
             command = metadata.get("command")
@@ -91,6 +102,7 @@ class InferenceServer:
                 )
                 return
             if command == "extract":
+                # 单图提取供全局描述子地图回退路径使用。
                 if len(payloads) != 1:
                     raise ValueError("expected one grayscale image for extraction")
                 height = int(metadata["height"])
@@ -124,6 +136,7 @@ class InferenceServer:
                     ),
                 )
                 return
+            # 双图匹配同时服务 Insight9 双目和 Insight3→关键帧直接定位。
             if command != "match" or len(payloads) != 2:
                 raise ValueError("expected a match request with two grayscale images")
             height = int(metadata["height"])

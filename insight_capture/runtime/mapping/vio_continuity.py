@@ -1,4 +1,9 @@
-"""Keep a VIO trajectory continuous across isolated coordinate-frame resets."""
+"""在可观测的 VIO 坐标系重置前后保持局部轨迹连续。
+
+仅凭位姿突变无法区分“设备坐标重置”和“真实快速运动”，因此调用方必须额外提供
+``TRACKING_STATIC`` 等独立证据后才允许拼接。超过允许时间空洞或普通运动状态下的
+突变只记录诊断，不自动修改轨迹。
+"""
 
 from __future__ import annotations
 
@@ -152,7 +157,7 @@ def _sample_from_matrix(stamp_ns: int, transform: np.ndarray) -> PoseSample:
 
 @dataclass(frozen=True)
 class VioContinuityConfig:
-    """Innovation gates for a reset while an external source confirms static."""
+    """外部确认静止时，用于识别坐标重置的创新量和最大时间间隔门限。"""
 
     translation_threshold_m: float = 0.03
     rotation_threshold_deg: float = 5.0
@@ -169,13 +174,11 @@ class VioContinuityConfig:
 
 
 class VioContinuityStitcher:
-    """Map raw VIO into a continuous frame without withholding realtime poses.
+    """把原始 VIO 映射到连续局部坐标，且不缓存或中断实时输出。
 
-    Pose innovation alone cannot distinguish a coordinate reset from real abrupt
-    motion. The caller must therefore allow correction only when an independent
-    source, such as the device's ``TRACKING_STATIC`` state, makes it observable.
-    Timestamp gaps deliberately disable stitching because motion across an
-    unobserved interval is ambiguous.
+    位姿创新本身无法区分坐标重置和真实急动；调用方只有在设备 ``TRACKING_STATIC``
+    等独立来源使重置可观测时才能允许修正。时间戳空洞期间的运动不可知，因此明确
+    禁止跨空洞自动拼接。
     """
 
     def __init__(self, config: VioContinuityConfig) -> None:
@@ -241,8 +244,10 @@ class VioContinuityStitcher:
     ) -> list[PoseSample]:
         """Consume one raw pose and always return its realtime corrected pose."""
 
+        # 每个输入必须同步产生一个输出，这是实时路径不会因等待确认产生空洞的保证。
         self.input_samples += 1
         raw_transform = matrix_from_pose(sample)
+        # 时间戳回退代表新时间轴，旧刚体修正不能安全沿用。
         if self._last_raw is not None and sample.stamp_ns <= self._last_raw.stamp_ns:
             self.timestamp_resets += 1
             self._correction = np.eye(4, dtype=np.float64)
@@ -256,6 +261,7 @@ class VioContinuityStitcher:
         if self._last_raw is not None:
             gap_ms = (sample.stamp_ns - self._last_raw.stamp_ns) / 1e6
             if gap_ms > self.config.max_gap_ms:
+                # 空洞期间可能发生真实运动，不能用前后两点推断为坐标重置。
                 self.tracking_gaps += 1
                 self._history.clear()
                 self._last_raw = sample
@@ -280,6 +286,7 @@ class VioContinuityStitcher:
             or innovation_rotation >= self.config.rotation_threshold_deg
         ):
             if allow_stitch:
+                # 令 correction * 当前 raw pose 等于恒速预测得到的连续 pose。
                 self._correction = expected @ _rigid_inverse(raw_transform)
                 provisional = self._correction @ raw_transform
                 self.stitch_events += 1

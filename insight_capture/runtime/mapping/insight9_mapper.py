@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 
-"""Build a session-local Insight9 sparse stereo map and publish it for RViz."""
+"""建立当前会话的 Insight9 稀疏双目地图并发布统一世界系位姿。
+
+ROS 回调只负责缓存 VIO、同步左右图和发布轻量结果；耗时的 SuperPoint/SuperGlue、
+三角化、回环检测和地图融合都在单独 worker 线程串行执行。地图坐标由首个关键帧
+锚定，VIO 提供高频局部运动，历史三维地标 PnP 回环负责修正长期漂移。
+"""
 
 from __future__ import annotations
 
@@ -95,7 +100,7 @@ def ns_to_stamp(stamp_ns: int) -> TimeMsg:
 
 
 def image_to_gray(message: Image) -> np.ndarray:
-    """Decode common ROS encodings while respecting row stride."""
+    """按 ROS ``step`` 解码常见图像格式，返回连续灰度数组。"""
 
     height, width, step = int(message.height), int(message.width), int(message.step)
     raw = np.frombuffer(message.data, dtype=np.uint8)
@@ -252,7 +257,7 @@ def mono_image_message(header: Header, image: np.ndarray) -> Image:
 
 @dataclass(frozen=True)
 class MappingKeyframe:
-    """Compact stereo observations retained for map rebuilding after loops."""
+    """为回环后重建地图保留的紧凑双目局部观测。"""
 
     keyframe_id: int
     stamp_ns: int
@@ -264,7 +269,7 @@ class MappingKeyframe:
 
 @dataclass(frozen=True)
 class CalibrationKeyframe:
-    """One low-rate Insight9 image with triangulated points for direct matching."""
+    """供 Insight3 直接匹配的一帧 Insight9 图像及其已三角化 UV/XYZ。"""
 
     keyframe_id: int
     stamp_ns: int
@@ -274,7 +279,7 @@ class CalibrationKeyframe:
 
 
 class Insight9SparseMapper(Node):
-    """Coordinate lightweight ROS callbacks with a single inference worker."""
+    """协调轻量 ROS 回调、单推理线程、位姿图和地图发布。"""
 
     def __init__(self, args: argparse.Namespace) -> None:
         super().__init__("insight9_sparse_mapper")
@@ -293,10 +298,12 @@ class Insight9SparseMapper(Node):
             raise ValueError("pose graph scheduling thresholds must be positive")
         if args.calibration_keyframe_min_points < 4:
             raise ValueError("calibration keyframes require at least four points")
+        # VIO 与双目图像分别到达；每个图像对必须查到时间上紧邻的 VIO 位姿。
         self._pose_buffer = PoseBuffer(max_bracket_gap_ns=50_000_000)
         self._stereo_sync: StereoPairSynchronizer[Image] = StereoPairSynchronizer(
             tolerance_ns=int(args.stereo_tolerance_ms * 1_000_000)
         )
+        # 地标地图保存已确认世界点；位姿图额外保存关键帧局部观测以便回环后重建。
         self._landmark_config = LandmarkMapConfig(
             voxel_size_m=args.voxel_size_m,
             confirmation_observations=args.confirmation_observations,
@@ -326,6 +333,7 @@ class Insight9SparseMapper(Node):
         self._keyframe_storage_bytes = 0
         self._session_id = uuid.uuid4().hex
         self._session_generation = 0
+        # 录制批次冻结后，回环只面对这份不可变参考，避免“地图和被测对象一起漂移”。
         self._capture_reference_keyframe: Optional[int] = None
         self._capture_reference_points: Optional[np.ndarray] = None
         self._capture_reference_descriptors: Optional[np.ndarray] = None
@@ -366,6 +374,7 @@ class Insight9SparseMapper(Node):
         self._next_vio_buffer_stamp_ns = 0
         self._next_vio_publish_stamp_ns = 0
         self._vio_rate_lock = threading.Lock()
+        # 客户运行固定走独立 TensorRT IPC 服务；官方 Torch 后端仅供开发对照。
         if args.backend == "ipc":
             self._matcher = IpcSuperGlueBackend(Path(args.inference_socket))
         else:
@@ -386,6 +395,7 @@ class Insight9SparseMapper(Node):
         self._tf_buffer = Buffer(cache_time=Duration(seconds=10.0))
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._tf_broadcaster = TransformBroadcaster(self)
+        # 队列只保留最新一对图像，推理变慢时主动丢旧帧而不是积累无限延迟。
         self._work: queue.Queue[StereoPair[Image]] = queue.Queue(maxsize=1)
         self._stop = threading.Event()
         self._worker = threading.Thread(
@@ -404,9 +414,8 @@ class Insight9SparseMapper(Node):
         self._last_path_append_ns = 0
         self._last_pose_publish_ns = 0
         self._latest_stats = {"state": "waiting_for_inputs"}
-        # Point/descriptor cloud serialization can occupy the default callback
-        # group for hundreds of milliseconds. Keep the lightweight VIO relay
-        # on its own executor lane so visualization poses never queue behind it.
+        # 点云/描述子序列化可能占用默认回调组数百毫秒；VIO 单独使用执行通道，保证
+        # 可视化位姿不会排在大消息发布之后。
         self._vio_callback_group = MutuallyExclusiveCallbackGroup()
 
         self._pointcloud_publisher = (
@@ -493,6 +502,8 @@ class Insight9SparseMapper(Node):
             self.get_logger().info("debug PointCloud2 and Path topics disabled")
 
     def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
+        """原子地开启新建图会话，并使旧地图、回环和发布缓存同时失效。"""
+
         with self._vio_rate_lock:
             self._last_input_vio_stamp_ns = -1
             self._next_vio_buffer_stamp_ns = 0
@@ -519,7 +530,11 @@ class Insight9SparseMapper(Node):
     def _on_freeze_capture_reference(
         self, _request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
-        """Freeze the current natural-feature map for episode drift validation."""
+        """冻结当前自然特征地图，用于后续 episode 漂移验证。
+
+        冻结的是确认地标的副本和关键帧上界，不再随新观测更新；若参考特征不足则
+        明确拒绝，不能以空地图宣称批次基准已建立。
+        """
 
         with self._graph_lock:
             reference_keyframe = int(self._keyframe_id)
@@ -540,6 +555,7 @@ class Insight9SparseMapper(Node):
                 return response
             maximum_features = max(1, int(self._args.capture_reference_max_features))
             if len(reference_points) > maximum_features:
+                # 等间隔抽样保持地图顺序的确定性，避免每次冻结得到不同随机子集。
                 indices = np.linspace(
                     0, len(reference_points) - 1, maximum_features, dtype=np.int64
                 )
@@ -568,6 +584,8 @@ class Insight9SparseMapper(Node):
         return response
 
     def _reset_loop_closure(self) -> None:
+        """在持有 graph lock 时清除回环、图和冻结参考的会话状态。"""
+
         with self._graph_lock:
             self._pose_graph.clear()
             self._mapping_keyframes.clear()
@@ -599,6 +617,8 @@ class Insight9SparseMapper(Node):
                 self._last_calibration_keyframe_publish_monotonic = float("-inf")
 
     def _map_to_odom(self, *, smoothed: bool = True) -> np.ndarray:
+        """读取当前地图到 VIO odom 的修正；发布路径默认取平滑输出。"""
+
         with self._loop_lock:
             correction = (
                 self._loop_pose_filter.correction
@@ -617,6 +637,8 @@ class Insight9SparseMapper(Node):
         return super().destroy_node()
 
     def _resolve_extrinsic(self) -> None:
+        """从 TF 获取 IMU 到左目及双目中心外参，未就绪时保持等待。"""
+
         if self._imu_to_left is not None and self._imu_to_center is not None:
             return
         imu_to_left = self._imu_to_left
@@ -668,6 +690,8 @@ class Insight9SparseMapper(Node):
         )
 
     def _on_vio(self, message: PoseStamped) -> None:
+        """缓存高频 VIO，并以独立限频路径发布经回环修正的全局位姿。"""
+
         stamp_ns = stamp_to_ns(message.header.stamp)
         with self._vio_rate_lock:
             input_reset = (
@@ -678,6 +702,7 @@ class Insight9SparseMapper(Node):
             if input_reset:
                 self._next_vio_buffer_stamp_ns = 0
                 self._next_vio_publish_stamp_ns = 0
+            # 缓存频率高于发布频率，保证图像时刻通常能找到足够紧的插值括号。
             buffer_due, self._next_vio_buffer_stamp_ns = select_timestamp(
                 stamp_ns,
                 self._next_vio_buffer_stamp_ns,
@@ -690,6 +715,7 @@ class Insight9SparseMapper(Node):
                 self._next_vio_publish_stamp_ns,
                 self._args.pose_publish_hz,
             )
+        # Path 只保留低频历史点；最新 Pose 则按 pose_publish_hz 独立发布。
         path_due = (
             input_reset
             or stamp_ns - self._last_path_append_ns
@@ -770,6 +796,8 @@ class Insight9SparseMapper(Node):
             self._offer_pair(pair)
 
     def _offer_pair(self, pair: StereoPair[Image]) -> None:
+        """把最新同步双目对交给 worker，队列满时替换过时任务。"""
+
         try:
             self._work.put_nowait(pair)
         except queue.Full:
@@ -793,6 +821,8 @@ class Insight9SparseMapper(Node):
             self._refresh_calibration()
 
     def _refresh_calibration(self) -> None:
+        """在左右 CameraInfo 都可用后验证并缓存校正双目标定。"""
+
         if self._left_info is None or self._right_info is None:
             return
         try:
@@ -813,6 +843,12 @@ class Insight9SparseMapper(Node):
         self._calibration = calibration
 
     def _worker_main(self) -> None:
+        """串行执行关键帧选择、特征匹配、三角化、回环和地图写入。
+
+        单 worker 保证 TensorRT IPC 请求和地图写入有确定顺序。每次只处理队列中的
+        最新图像对；缺标定、外参或同步 VIO 时只更新状态，不生成不完整关键帧。
+        """
+
         period = 1.0 / max(self._args.mapping_hz, 0.1)
         while not self._stop.is_set():
             try:
@@ -825,9 +861,7 @@ class Insight9SparseMapper(Node):
             elapsed = now - self._last_mapping_attempt_monotonic
             if elapsed < period:
                 continue
-            # Limit attempts, not only successful keyframes. Missing poses and
-            # stationary cameras must not turn the 5 Hz mapper into a full-rate
-            # retry loop with a pose wait on every stereo pair.
+            # 限制所有尝试而非仅成功关键帧；缺位姿或静止时也不能退化成全帧率重试。
             self._last_mapping_attempt_monotonic = now
             calibration = self._calibration
             imu_to_left = self._imu_to_left
@@ -851,6 +885,7 @@ class Insight9SparseMapper(Node):
                     "pose_ready": pose is not None,
                 }
                 continue
+            # T_odom_left = T_odom_imu * T_imu_left；关键帧判定使用未回环修正的局部运动。
             odom_to_left = compose_transform(matrix_from_pose(pose), imu_to_left)
             if not self._is_keyframe(odom_to_left):
                 continue
@@ -865,6 +900,7 @@ class Insight9SparseMapper(Node):
                         f"left image shape {left.shape} differs from CameraInfo "
                         f"{(calibration.height, calibration.width)}"
                     )
+                # SuperGlue 先建立左右目 2D-2D 对应；几何模块再决定哪些匹配可形成 3D。
                 matches = self._matcher.match(left, right)
                 triangulated = triangulate_rectified(
                     matches.left_points,
@@ -878,6 +914,7 @@ class Insight9SparseMapper(Node):
                 )
                 source = triangulated.source_indices
                 next_keyframe_id = self._keyframe_id + 1
+                # 局部三维观测不立即写成世界点，保留后可在图优化位姿下重新投放。
                 keyframe = MappingKeyframe(
                     keyframe_id=next_keyframe_id,
                     stamp_ns=pair.stamp_ns,
@@ -926,9 +963,8 @@ class Insight9SparseMapper(Node):
                         map_to_left = compose_transform(
                             self._map_to_odom(smoothed=False), odom_to_left
                         )
-                    # The graph/keyframe retention above is durable even if a later
-                    # loop solve fails; advance the ID so the next frame cannot
-                    # collide with a partially processed node.
+                    # 图节点和观测一旦写入即持久有效；即使后续回环失败也先推进 ID，
+                    # 防止下一帧与部分处理的节点编号冲突。
                     self._keyframe_id = next_keyframe_id
                     loop_diagnostics, graph_optimized = self._detect_loop_closure(
                         next_keyframe_id,
@@ -942,12 +978,14 @@ class Insight9SparseMapper(Node):
                     )
                     map_rebuild_ms = 0.0
                     if graph_optimized:
+                        # 位姿图改变了历史关键帧，必须用全部局部观测重建世界地标。
                         rebuild_started = time.perf_counter()
                         update = self._rebuild_landmarks_from_keyframes()
                         map_rebuild_ms = (
                             time.perf_counter() - rebuild_started
                         ) * 1000.0
                     else:
+                        # 没有图优化时只把当前帧局部点变换到地图系并增量融合。
                         map_points = transform_points(
                             map_to_left, triangulated.points_left
                         )
@@ -968,6 +1006,8 @@ class Insight9SparseMapper(Node):
                     anchor_map_points = transform_points(
                         anchor_map_to_left, triangulated.points_left
                     )
+                    # 校准关键帧保留当前图像及精确 UV/XYZ，不必等待地标三帧确认即可
+                    # 让 Insight3 尝试直接 SuperGlue + PnP 初始化。
                     if (
                         len(anchor_map_points)
                         >= self._args.calibration_keyframe_min_points
@@ -1050,11 +1090,19 @@ class Insight9SparseMapper(Node):
         *,
         graph_target_id: Optional[int],
     ) -> tuple[dict[str, object], bool]:
+        """用当前左目特征对历史三维地图做 PnP，并按需触发位姿图优化。
+
+        最近关键帧被排除，防止把正常连续跟踪误作回环；PnP 候选还需经过多帧共识。
+        接受后的全局位姿先写成回环边，再根据限流间隔或修正幅度决定立即优化还是
+        标记 pending，返回值说明本次是否真的改变了历史图位姿。
+        """
+
         diagnostics: dict[str, object] = {
             "loop_checked": False,
             "loop_closures": self._loop_closure_count,
             "pose_graph_optimized": False,
         }
+        # 限流期间积累的边必须在后续关键帧补做，不能永久停留在 pending。
         if (
             graph_target_id is not None
             and self._pose_graph_pending
@@ -1086,6 +1134,7 @@ class Insight9SparseMapper(Node):
         ):
             return diagnostics, False
 
+        # 只允许匹配足够久以前建立的地标，避免把相邻视角当作“闭环”。
         historical_cutoff = keyframe_id - self._args.loop_exclude_recent_keyframes
         capture_reference_keyframe = self._capture_reference_keyframe
         if capture_reference_keyframe is not None:
@@ -1095,6 +1144,7 @@ class Insight9SparseMapper(Node):
             and self._capture_reference_points is not None
             and self._capture_reference_descriptors is not None
         ):
+            # 批次冻结后始终对固定参考求误差，后续新增地图点不能改变验收基准。
             map_points = self._capture_reference_points
             map_descriptors = self._capture_reference_descriptors
         else:
@@ -1122,7 +1172,7 @@ class Insight9SparseMapper(Node):
             odom_to_left,
             image_shape,
             self._loop_config,
-            # LandmarkMap normalizes every descriptor on insert and merge.
+            # LandmarkMap 在插入和融合时已经归一化描述子，避免在每次回环重复计算。
             map_descriptors_normalized=True,
         )
         measurement: Optional[np.ndarray] = None
@@ -1165,9 +1215,8 @@ class Insight9SparseMapper(Node):
         if measurement is not None and graph_target_id is not None:
             accepted_map_pose = compose_transform(measurement, odom_to_left)
             current_graph_pose = self._pose_graph.pose(graph_target_id)
-            # Keep the published pose and landmark map in the same geometry
-            # while a newly accepted loop edge waits for the rate-limited
-            # optimizer. The accepted PnP measurement remains in the graph.
+            # 新边等待限流优化期间，发布位姿和地标仍沿用同一份旧图几何；PnP 测量
+            # 已保存在图中，后续优化不会丢失。
             applied_measurement = self._pose_graph.correction_for_keyframe(
                 graph_target_id
             )
@@ -1283,7 +1332,7 @@ class Insight9SparseMapper(Node):
     def _optimize_pose_graph(
         self, diagnostics: dict[str, object], *, trigger: str
     ) -> PoseGraphOptimizationResult:
-        """Run one pending graph solve and expose bounded runtime diagnostics."""
+        """执行一次 pending 图求解，并把耗时和修正幅度写入诊断字段。"""
 
         result = self._pose_graph.optimize()
         self._last_pose_graph_optimization_monotonic = time.monotonic()
@@ -1310,7 +1359,11 @@ class Insight9SparseMapper(Node):
         return result
 
     def _rebuild_landmarks_from_keyframes(self):
-        """Re-fuse retained stereo observations using optimized keyframe poses."""
+        """按优化后的关键帧位姿重新融合全部保留的双目观测。
+
+        这里重算的是体素归属、位置和描述子运行均值，不会重新运行 SuperPoint、
+        SuperGlue 或三角化，因此结果可确定且成本受关键帧上限约束。
+        """
 
         poses = self._pose_graph.pose_snapshot()
         rebuilt = LandmarkMap(self._landmark_config)
@@ -1335,6 +1388,8 @@ class Insight9SparseMapper(Node):
         return update
 
     def _is_keyframe(self, transform: np.ndarray) -> bool:
+        """平移或旋转任一变化达到门限时选择新关键帧。"""
+
         previous = self._last_keyframe_transform
         if previous is None:
             return True

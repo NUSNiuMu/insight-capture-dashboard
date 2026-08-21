@@ -1,4 +1,10 @@
-"""Realtime sparse stereo mapping primitives for Insight9."""
+"""Insight9 实时稀疏建图与 Insight3 全局重定位的公共接口。
+
+生产系统由三个进程组成：SuperPoint/SuperGlue 推理服务、Insight9 稀疏建图器和
+Insight3 全局定位器。本模块只负责集中导出它们共享的数据结构与算法，不持有 ROS
+状态，也不会自行启动线程或订阅话题。阅读主流程时应从 ``insight9_mapper`` 和
+``insight3_localizer`` 开始，再根据这里的导入关系进入具体算法模块。
+"""
 
 from .adaptive_relocalization import (
     AdaptiveRelocalizationConfig,

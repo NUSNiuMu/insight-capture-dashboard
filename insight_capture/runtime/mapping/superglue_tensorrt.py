@@ -1,4 +1,10 @@
-"""Builder-only ONNX export for the pinned official feature models."""
+"""镜像构建阶段使用的固定官方模型 ONNX 导出代码。
+
+生产容器运行时不导入本文件，也不携带 PyTorch。前半部分把官方 SuperPoint 的
+后处理一起封装进固定输出 ONNX，并把 SuperGlue 导出为动态点数图；后半部分保留的
+PyTorch-CUDA TensorRT 执行器仅用于早期开发对照，当前生产调用
+``superglue_tensorrt_runtime.py`` 中的纯 NumPy/CUDA 实现。
+"""
 
 from __future__ import annotations
 
@@ -21,7 +27,7 @@ OFFICIAL_COMMIT = "ddcf11f42e7e0732a0c4607648f9448ea8d73590"
 
 
 class SuperPointEndToEnd(nn.Module):
-    """Export fixed-size keypoints and descriptors without runtime Torch."""
+    """把 SuperPoint 主干和后处理导出成固定数量输出，运行时无需 Torch。"""
 
     def __init__(
         self,
@@ -56,6 +62,8 @@ class SuperPointEndToEnd(nn.Module):
 
     @staticmethod
     def _simple_nms(scores: torch.Tensor, radius: int = 4) -> torch.Tensor:
+        """复现官方两轮 max-pool NMS，并保持可导出为 ONNX 算子。"""
+
         def max_pool(value: torch.Tensor) -> torch.Tensor:
             return F.max_pool2d(
                 value, kernel_size=radius * 2 + 1, stride=1, padding=radius
@@ -74,6 +82,8 @@ class SuperPointEndToEnd(nn.Module):
     def _sample_descriptors(
         keypoints: torch.Tensor, descriptors: torch.Tensor, scale: int = 8
     ) -> torch.Tensor:
+        """在 1/8 分辨率描述子图上按关键点位置双线性采样并归一化。"""
+
         batch, channels, height, width = descriptors.shape
         keypoints = keypoints - scale / 2 + 0.5
         normalizer = torch.tensor(
@@ -108,6 +118,7 @@ class SuperPointEndToEnd(nn.Module):
         score_logits = self.convPb(self.relu(self.convPa(features)))
         dense_descriptors = self.convDb(self.relu(self.convDa(features)))
 
+        # 65 类中的最后一类是 dustbin；其余 64 类重排回每个 8x8 网格的像素热图。
         scores = F.softmax(score_logits, dim=1)[:, :-1]
         batch, _, height, width = scores.shape
         scores = scores.permute(0, 2, 3, 1).reshape(
@@ -120,6 +131,7 @@ class SuperPointEndToEnd(nn.Module):
         top_scores, flat_indices = torch.topk(
             scores.flatten(1), self.max_keypoints, dim=1
         )
+        # Top-K 热图索引直接换算成整像素 (x, y)；这里没有亚像素位置细化。
         keypoints = torch.stack(
             (
                 torch.remainder(flat_indices, IMAGE_WIDTH),
@@ -129,6 +141,7 @@ class SuperPointEndToEnd(nn.Module):
         ).float()
         dense_descriptors = F.normalize(dense_descriptors, p=2, dim=1)
         descriptors = self._sample_descriptors(keypoints, dense_descriptors)
+        # 固定输出形状便于 TensorRT 建引擎；低于阈值的槽位置零，运行时再过滤。
         top_scores = torch.where(
             top_scores > self.keypoint_threshold,
             top_scores,
@@ -138,7 +151,7 @@ class SuperPointEndToEnd(nn.Module):
 
 
 class SuperGlueCore(nn.Module):
-    """Present tensor-only inputs while retaining the official matching module."""
+    """把官方 SuperGlue 包装为纯张量输入输出，同时保留原始匹配计算。"""
 
     def __init__(self, superglue: nn.Module) -> None:
         super().__init__()
@@ -219,7 +232,7 @@ def export_onnx(
     match_threshold: float,
     sinkhorn_iterations: int,
 ) -> None:
-    """Export fixed-output SuperPoint and dynamic SuperGlue graphs."""
+    """导出固定输出 SuperPoint 与动态关键点数量的 SuperGlue 图。"""
 
     matching = _load_matching(
         checkout,
@@ -248,6 +261,7 @@ def export_onnx(
         do_constant_folding=True,
     )
 
+    # 示例点数只用于 tracing；dynamic_axes 允许最终 TensorRT profile 接受 1..1024 点。
     count0, count1 = 256, 320
     superglue = SuperGlueCore(matching.superglue).eval()
     inputs = (
@@ -309,7 +323,10 @@ def _torch_dtype(tensorrt: Any, dtype: Any) -> torch.dtype:
 
 
 class TensorRTEngine:
-    """Execute one TensorRT 10 engine directly on PyTorch CUDA tensors."""
+    """开发期辅助：在 PyTorch CUDA tensor 上直接执行 TensorRT 10 engine。
+
+    当前生产镜像不含 PyTorch，实际运行实现位于 ``superglue_tensorrt_runtime.py``。
+    """
 
     def __init__(self, plan_path: Path) -> None:
         import tensorrt as trt
@@ -369,7 +386,7 @@ class TensorRTEngine:
 
 
 class TensorRTMatcher:
-    """Run dense networks in TensorRT and exact dynamic post-processing in Torch."""
+    """开发期旧对照实现：TensorRT 主干加 Torch 动态后处理，生产路径不调用。"""
 
     def __init__(
         self,

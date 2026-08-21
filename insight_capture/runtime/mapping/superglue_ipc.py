@@ -1,4 +1,8 @@
-"""Small length-prefixed protocol for local SuperGlue inference IPC."""
+"""SuperGlue 本地推理使用的长度前缀 IPC 协议。
+
+每条消息由“大端 32 位 JSON 头长度 + JSON 元数据 + 若干裸二进制数组”组成。显式
+大小上限既防止损坏元数据导致无界分配，也让 healthcheck 与生产请求复用同一协议。
+"""
 
 from __future__ import annotations
 
@@ -29,7 +33,7 @@ def send_message(
     metadata: Dict[str, object],
     payloads: Iterable[bytes] = (),
 ) -> None:
-    """Send JSON metadata followed by binary payloads described by their sizes."""
+    """发送 JSON 元数据，以及由 ``payload_sizes`` 描述的连续二进制载荷。"""
 
     binary = tuple(bytes(payload) for payload in payloads)
     metadata = dict(metadata)
@@ -48,7 +52,7 @@ def send_message(
 def receive_message(
     connection: socket.socket,
 ) -> Tuple[Dict[str, object], List[bytes]]:
-    """Receive and validate one metadata + binary-payload message."""
+    """完整接收并验证一条元数据与二进制载荷消息。"""
 
     header_size = _LENGTH.unpack(_recv_exact(connection, _LENGTH.size))[0]
     if header_size <= 0 or header_size > _MAX_HEADER_BYTES:
@@ -65,7 +69,7 @@ def receive_message(
 
 
 def main() -> int:
-    """Probe a worker socket for container health checks."""
+    """通过真实协议探测 worker socket，供容器 healthcheck 使用。"""
 
     if len(sys.argv) != 2:
         print(f"usage: {sys.argv[0]} SOCKET", file=sys.stderr)

@@ -1,4 +1,9 @@
-"""SuperPoint descriptor-map matching and confirmed 2D-3D localization."""
+"""SuperPoint 描述子地图匹配、PnP 几何验证和多帧定位确认。
+
+``localize_features`` 先把查询描述子与全局三维地标匹配，再转成 2D-3D 对应；
+``localize_correspondences`` 接受外部已经建立好的 2D-3D 对应，用于 Insight3 与
+校准关键帧直接 SuperGlue 匹配。两条路径最终共用相同的 PnP 和空间覆盖门限。
+"""
 
 from __future__ import annotations
 
@@ -15,7 +20,7 @@ from .geometry import rotation_distance_deg
 
 @dataclass(frozen=True)
 class GlobalLocalizationConfig:
-    """Acceptance and temporal-consistency thresholds for global PnP."""
+    """描述子、PnP 几何质量和跨帧一致性门限。"""
 
     ratio_test: float = 0.80
     min_similarity: float = 0.65
@@ -32,7 +37,7 @@ class GlobalLocalizationConfig:
 
 @dataclass(frozen=True)
 class LocalizationCandidate:
-    """One geometrically accepted map-to-camera and map-to-odom solution."""
+    """一次通过几何检查、但尚未通过多帧共识的定位候选。"""
 
     map_to_camera: np.ndarray
     map_to_odom: np.ndarray
@@ -63,7 +68,11 @@ def match_descriptors(
     map_descriptors_normalized: bool = False,
     query_block_size: int = DESCRIPTOR_QUERY_BLOCK_SIZE,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return mutual query/map indices passing cosine similarity and ratio tests."""
+    """返回通过余弦相似度、比率测试和双向最近邻检查的匹配。
+
+    查询按块计算只是为了限制临时相似度矩阵内存，不使用近似索引，也不改变全量
+    精确最近邻的结果。
+    """
 
     query = normalize_descriptors(query_descriptors)
     mapped = (
@@ -85,8 +94,7 @@ def match_descriptors(
     mutual_best_similarity = np.full((len(mapped),), -np.inf, dtype=np.float32)
     map_indices = np.arange(len(mapped), dtype=np.int64)
 
-    # Query blocking bounds the temporary similarity matrix while preserving
-    # the exact ratio test and first-query tie behavior of a full matrix.
+    # 查询分块限制临时矩阵内存，同时保持完整矩阵的比率测试和并列处理行为。
     for start in range(0, len(query), block_size):
         end = min(start + block_size, len(query))
         similarity = query[start:end] @ mapped.T
@@ -105,6 +113,7 @@ def match_descriptors(
         mutual_best_similarity[update] = block_best_similarity[update]
         mutual_best_query[update] = start + block_best_local[update]
 
+    # 单位描述子的欧氏距离平方为 2-2*cos，在距离域执行标准 Lowe ratio test。
     best_distance_sq = np.maximum(0.0, 2.0 - 2.0 * best_similarity)
     second_distance_sq = np.maximum(1e-12, 2.0 - 2.0 * second_similarity)
     ratio_ok = best_distance_sq < float(ratio_test) ** 2 * second_distance_sq
@@ -129,7 +138,7 @@ def localize_features(
     *,
     map_descriptors_normalized: bool = False,
 ) -> tuple[Optional[LocalizationCandidate], dict[str, object]]:
-    """Match a query image to the 3D descriptor map and solve global PnP."""
+    """将查询特征匹配到三维描述子地图，并求解全局 PnP。"""
 
     match_started = time.perf_counter()
     query_indices, map_indices, similarities = match_descriptors(
@@ -182,7 +191,11 @@ def localize_correspondences(
     *,
     diagnostics: Optional[dict[str, object]] = None,
 ) -> tuple[Optional[LocalizationCandidate], dict[str, object]]:
-    """Geometrically validate known 2D-to-3D correspondences with PnP."""
+    """用 PnP-RANSAC 和重投影门限验证给定的 2D-3D 对应。
+
+    EPNP 在 RANSAC 中快速提出位姿，只对内点使用 LM 做最终细化。这里优化的只有
+    当前相机六自由度，不修改地图三维点，因此不等同于 Bundle Adjustment。
+    """
 
     image_points = np.asarray(image_points, dtype=np.float32).reshape(-1, 2)
     object_points = np.asarray(object_points, dtype=np.float32).reshape(-1, 3)
@@ -206,6 +219,7 @@ def localize_correspondences(
         diagnostics["rejection"] = "insufficient_correspondences"
         return None, diagnostics
 
+    # 全局重定位不能无条件信任上一帧初值，因此采用无初值的高置信度 RANSAC。
     ok, rvec, tvec, inlier_payload = cv2.solvePnPRansac(
         object_points,
         image_points,
@@ -231,6 +245,7 @@ def localize_correspondences(
         diagnostics["rejection"] = "low_pnp_inlier_ratio"
         return None, diagnostics
 
+    # RANSAC 负责挑选内点；LM 在固定内点集合上降低最终像素重投影误差。
     rvec, tvec = cv2.solvePnPRefineLM(
         object_points[inlier_indices],
         image_points[inlier_indices],
@@ -257,6 +272,7 @@ def localize_correspondences(
 
     height, width = image_shape
     inlier_pixels = image_points[inlier_indices]
+    # 点数很多仍可能全部挤在一个角落；4x4 网格门限用于排除这种退化构型。
     grid_x = np.clip((inlier_pixels[:, 0] * 4 / width).astype(int), 0, 3)
     grid_y = np.clip((inlier_pixels[:, 1] * 4 / height).astype(int), 0, 3)
     grid_cells = len(set(zip(grid_x.tolist(), grid_y.tolist())))
@@ -266,6 +282,7 @@ def localize_correspondences(
         return None, diagnostics
 
     rotation, _ = cv2.Rodrigues(rvec)
+    # OpenCV PnP 返回 T_camera_map；系统发布需要其逆变换 T_map_camera。
     camera_from_map = np.eye(4, dtype=np.float64)
     camera_from_map[:3, :3] = rotation
     camera_from_map[:3, 3] = tvec.reshape(3)
@@ -294,7 +311,11 @@ def associate_reference_points(
     *,
     max_distance_px: float = 0.75,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Map direct image matches back to a reference keyframe's 3D points."""
+    """把直接图像匹配中的参考端 UV 关联回关键帧已有的三维点。
+
+    关键帧 UV/XYZ 来自更早的左右目三角化，而当前 SuperGlue 会重新提取同一参考
+    图像的关键点。坐标通常一致，但仍以小像素半径最近邻容忍数值差异。
+    """
 
     query = np.asarray(query_points, dtype=np.float32).reshape(-1, 2)
     matched_reference = np.asarray(
@@ -322,8 +343,7 @@ def associate_reference_points(
     nearest_distance_sq = distances_sq[np.arange(len(query)), nearest]
     within = nearest_distance_sq <= float(max_distance_px) ** 2
 
-    # SuperGlue normally returns unique reference keypoints. Retain only the
-    # closest match if numerical association maps two results onto one point.
+    # SuperGlue 通常返回唯一参考点；若数值关联把两项落到同一三维点，只保留最近项。
     selected: dict[int, int] = {}
     for match_index in np.flatnonzero(within):
         reference_index = int(nearest[match_index])
@@ -343,7 +363,11 @@ def associate_reference_points(
 
 
 class LocalizationConsensus:
-    """Accept a correction from a consistent quorum in a bounded attempt window."""
+    """在有限尝试窗口内，以多次相互一致的候选确认全局修正。
+
+    单次 PnP 即使通过 RANSAC 仍可能因重复纹理产生错误解，因此要求最近若干次尝试
+    中存在足够大的相近位姿簇；失败帧只占用窗口，不会立刻清空已有进度。
+    """
 
     def __init__(self, config: GlobalLocalizationConfig) -> None:
         self.config = config

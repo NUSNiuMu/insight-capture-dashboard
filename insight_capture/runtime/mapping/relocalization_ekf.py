@@ -1,4 +1,9 @@
-"""Error-state EKF for a continuous map-to-VIO-odometry correction."""
+"""低频全局重定位修正使用的六自由度误差状态 EKF。
+
+滤波状态不是相机自身位姿，而是连接全局地图与设备局部 VIO 的 ``T_map_odom``。
+高频 VIO 负责相机相对运动，本滤波器只随时间增加该坐标关系的不确定度；低频 PnP
+则提供绝对观测。内部目标估计与对外输出分离，使可靠修正也能按时间常数平滑注入。
+"""
 
 from __future__ import annotations
 
@@ -63,6 +68,8 @@ def _valid_transform(transform: np.ndarray) -> np.ndarray:
 
 @dataclass(frozen=True)
 class RelocalizationEkfConfig:
+    """地图到 odom 修正的过程噪声、测量噪声和输出平滑参数。"""
+
     process_translation_std_m_sqrt_s: float = 0.02
     process_rotation_std_deg_sqrt_s: float = 0.5
     measurement_translation_std_m: float = 0.10
@@ -82,14 +89,11 @@ class RelocalizationEkfConfig:
 
 
 class RelocalizationEkf:
-    """Fuse absolute relocalization with continuous VIO motion.
+    """融合绝对重定位与连续 VIO 运动。
 
-    The state is ``T_map_odom``. VIO supplies the high-rate motion through
-    ``T_map_odom @ T_odom_camera`` and therefore only adds process uncertainty
-    here. Relocalization supplies an absolute observation of ``T_map_odom``.
-    The first observation initializes both states exactly; later EKF updates
-    are injected into the published correction with a time constant so a
-    low-rate observation cannot create a visible one-frame pose jump.
+    状态是 ``T_map_odom``。VIO 通过 ``T_map_odom @ T_odom_camera`` 提供高频运动，
+    所以这里只累计过程不确定度；重定位提供 ``T_map_odom`` 的绝对观测。第一次观测
+    精确初始化状态，后续更新按时间常数注入发布值，避免低频观测产生单帧跳变。
     """
 
     def __init__(self, config: RelocalizationEkfConfig) -> None:
@@ -126,7 +130,7 @@ class RelocalizationEkf:
         self.last_innovation_rotation_deg = 0.0
 
     def reinitialize(self, map_to_odom: np.ndarray) -> None:
-        """Immediately replace the estimate and published correction."""
+        """立即替换内部估计和发布修正，用于首次定位或确认的大幅跳变。"""
 
         measurement = _valid_transform(map_to_odom)
         self._estimate = measurement
@@ -138,6 +142,7 @@ class RelocalizationEkf:
     def predict(self, dt_sec: float) -> None:
         if not self.initialized or not np.isfinite(dt_sec) or dt_sec <= 0.0:
             return
+        # 长时间停顿不应一次性把协方差膨胀到无界，最多累计一秒过程噪声。
         process_dt = min(float(dt_sec), 1.0)
         translation_variance = (
             self.config.process_translation_std_m_sqrt_s**2 * process_dt
@@ -150,8 +155,7 @@ class RelocalizationEkf:
             [translation_variance] * 3 + [rotation_variance] * 3
         )
 
-        # Bound the elapsed time used for correction injection. A resumed VIO
-        # stream must not consume a long pause as one large correction step.
+        # 输出平滑步长限制为 0.1 秒，恢复的数据流不能把停顿当成一次巨大修正。
         smoothing_dt = min(float(dt_sec), 0.1)
         alpha = 1.0 - math.exp(
             -smoothing_dt / self.config.correction_time_constant_sec
@@ -178,6 +182,7 @@ class RelocalizationEkf:
             self.reinitialize(measurement)
             return True
 
+        # 平移直接相减；旋转创新在当前估计的局部切空间中表示为旋转向量。
         innovation = np.empty(6, dtype=np.float64)
         innovation[:3] = measurement[:3, 3] - self._estimate[:3, 3]
         innovation[3:] = _so3_log(
@@ -206,6 +211,7 @@ class RelocalizationEkf:
         self._estimate[:3, :3] = (
             self._estimate[:3, :3] @ _so3_exp(delta[3:])
         )
+        # Joseph 形式比简化的 (I-K)P 更能在浮点误差下保持协方差半正定。
         identity_minus_gain = np.eye(6) - gain
         self._covariance = (
             identity_minus_gain

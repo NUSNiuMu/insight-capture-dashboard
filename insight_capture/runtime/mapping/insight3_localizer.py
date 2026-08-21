@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 
-"""Localize both Insight3 cameras from Insight9 keyframes and the sparse map."""
+"""把两路 Insight3 定位到 Insight9 建立的同一稀疏地图。
+
+每路相机保留独立的 VIO、PnP 共识、EKF 和轨迹状态，但共享 Insight9 描述子地图与
+校准关键帧。首次定位优先执行“Insight3 图像到关键帧图像”的 SuperGlue 直接匹配；
+失败或后续重定位再使用查询 SuperPoint 描述子到全局三维地图的匹配。
+"""
 
 from __future__ import annotations
 
@@ -84,7 +89,7 @@ def stamp_to_ns(stamp) -> int:
 
 
 def grayscale_image(message: Image) -> np.ndarray:
-    """Return a contiguous luma image from mono8 or NV12 ROS payloads."""
+    """从 mono8 或 NV12 ROS 消息提取连续亮度平面。"""
 
     height, width, step = int(message.height), int(message.width), int(message.step)
     raw = np.frombuffer(message.data, dtype=np.uint8)
@@ -110,7 +115,7 @@ def static_gripper_feature_keep_mask(
     image_shape: tuple[int, int],
     mask_height_ratio: float,
 ) -> np.ndarray:
-    """Return features outside the static gripper strip at the image bottom."""
+    """返回不在图像底部静态夹爪区域内的特征选择掩码。"""
 
     points = np.asarray(keypoints)
     if points.ndim != 2 or points.shape[1] != 2:
@@ -183,7 +188,7 @@ def pose_message(transform: np.ndarray, stamp, frame_id: str) -> PoseStamped:
 
 
 def parse_feature_cloud(message: PointCloud2) -> tuple[np.ndarray, np.ndarray]:
-    """Decode the mapper's XYZ + float descriptor PointCloud2 payload."""
+    """解码 mapper 发布的 XYZ 与浮点描述子 PointCloud2。"""
 
     fields = {field.name: field for field in message.fields}
     required = ("x", "y", "z", "descriptor")
@@ -213,7 +218,7 @@ def parse_feature_cloud(message: PointCloud2) -> tuple[np.ndarray, np.ndarray]:
 def parse_calibration_keyframe_cloud(
     message: PointCloud2,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Decode map XYZ and reference-image UV from a calibration keyframe."""
+    """解码校准关键帧中的地图 XYZ 与参考图像 UV 对应。"""
 
     fields = {field.name: field for field in message.fields}
     required = ("x", "y", "z", "u", "v")
@@ -238,7 +243,7 @@ def parse_calibration_keyframe_cloud(
 def static_gripper_image_mask(
     image_shape: tuple[int, int], mask_height_ratio: float
 ) -> np.ndarray:
-    """Return a pixel mask for the static bottom gripper strip."""
+    """生成底部静态夹爪区域的像素掩码，供直接 SuperGlue 匹配使用。"""
 
     height, width = int(image_shape[0]), int(image_shape[1])
     if height <= 0 or width <= 0:
@@ -254,7 +259,7 @@ def static_gripper_image_mask(
 
 @dataclass(frozen=True)
 class CalibrationReference:
-    """A paired Insight9 image and its triangulated map points."""
+    """时间戳一致的 Insight9 图像及其已三角化 UV/地图 XYZ。"""
 
     stamp_ns: int
     image: np.ndarray
@@ -263,6 +268,8 @@ class CalibrationReference:
 
 
 class CameraState:
+    """单路 Insight3 的同步、定位、滤波、连续性和发布状态。"""
+
     def __init__(
         self,
         name: str,
@@ -307,7 +314,7 @@ class CameraState:
 
 
 class Insight3GlobalLocalizer(Node):
-    """Match both Insight3 streams to the shared Insight9 3D descriptor map."""
+    """把两路 Insight3 流匹配到共享的 Insight9 三维描述子地图。"""
 
     def __init__(self, args: argparse.Namespace) -> None:
         super().__init__("insight3_global_localizer")
@@ -323,6 +330,7 @@ class Insight3GlobalLocalizer(Node):
         self._settings_config_path = Path(args.settings_config)
         self._settings_config_mtime_ns: Optional[int] = None
         self._refresh_gripper_mask_setting(force=True)
+        # 两路相机使用相同几何门限，但各自维护独立的候选窗口和滤波状态。
         config = GlobalLocalizationConfig(
             ratio_test=args.ratio_test,
             min_similarity=args.min_similarity,
@@ -352,11 +360,13 @@ class Insight3GlobalLocalizer(Node):
             rotation_threshold_deg=args.vio_stitch_rotation_deg,
             max_gap_ms=args.vio_stitch_max_gap_ms,
         )
+        # 与 Insight9 mapper 共享同一个串行 TensorRT worker，避免重复加载 GPU 引擎。
         self._matcher = IpcSuperGlueBackend(Path(args.inference_socket))
         self._map_lock = threading.Lock()
         self._map_points = np.empty((0, 3), dtype=np.float32)
         self._normalized_map_descriptors = np.empty((0, 256), dtype=np.float32)
         self._calibration_reference_lock = threading.Lock()
+        # 图像和 UV/XYZ 通过两个 latched 话题到达，以时间戳为键等待配成完整参考。
         self._calibration_images: dict[int, np.ndarray] = {}
         self._calibration_points: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         self._calibration_reference: Optional[CalibrationReference] = None
@@ -481,6 +491,8 @@ class Insight3GlobalLocalizer(Node):
             self.get_logger().info("debug Path topics disabled")
 
     def _publish_tcp_static_transforms(self) -> None:
+        """只发布配置中真实存在的相机中心到 TCP 静态标定。"""
+
         stamp = self.get_clock().now().to_msg()
         transforms = []
         for calibration in self._tcp_calibrations.values():
@@ -504,6 +516,8 @@ class Insight3GlobalLocalizer(Node):
             self._static_tf_broadcaster.sendTransform(transforms)
 
     def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
+        """清除两路全局修正与历史轨迹，但不修改共享 Insight9 地图。"""
+
         with self._map_lock:
             self._map_points = np.empty((0, 3), dtype=np.float32)
             self._normalized_map_descriptors = np.empty(
@@ -549,6 +563,8 @@ class Insight3GlobalLocalizer(Node):
         return super().destroy_node()
 
     def _on_feature_map(self, message: PointCloud2) -> None:
+        """原子替换共享三维描述子地图，并预归一化供重复查询使用。"""
+
         try:
             points, descriptors = parse_feature_cloud(message)
         except ValueError as exc:
@@ -570,6 +586,8 @@ class Insight3GlobalLocalizer(Node):
             self._normalized_map_descriptors = normalized_descriptors
 
     def _on_calibration_keyframe_image(self, message: Image) -> None:
+        """缓存校准关键帧图像，等待同时间戳的 UV/XYZ 点云。"""
+
         stamp_ns = stamp_to_ns(message.header.stamp)
         try:
             image = grayscale_image(message)
@@ -581,6 +599,8 @@ class Insight3GlobalLocalizer(Node):
             self._assemble_calibration_reference(stamp_ns)
 
     def _on_calibration_keyframe_points(self, message: PointCloud2) -> None:
+        """缓存校准关键帧 UV/XYZ，等待同时间戳的图像。"""
+
         stamp_ns = stamp_to_ns(message.header.stamp)
         try:
             pixels, map_points = parse_calibration_keyframe_cloud(message)
@@ -597,6 +617,8 @@ class Insight3GlobalLocalizer(Node):
             self._assemble_calibration_reference(stamp_ns)
 
     def _assemble_calibration_reference(self, stamp_ns: int) -> None:
+        """仅在图像和点云齐备时发布新的不可变校准参考。"""
+
         """Pair image and geometry callbacks while holding the reference lock."""
 
         image = self._calibration_images.get(stamp_ns)
@@ -650,6 +672,8 @@ class Insight3GlobalLocalizer(Node):
         return callback
 
     def _vio_callback(self, name: str):
+        """生成单路 VIO 回调：先做连续性拼接，再外推并发布全局位姿。"""
+
         def callback(message: PoseStamped) -> None:
             stamp_ns = stamp_to_ns(message.header.stamp)
             state = self._cameras[name]
@@ -784,6 +808,8 @@ class Insight3GlobalLocalizer(Node):
         return callback
 
     def _resolve_extrinsics(self) -> None:
+        """分别解析两路 IMU→左目→双目中心外参。"""
+
         for name, state in self._cameras.items():
             with state.lock:
                 imu_to_left = state.imu_to_left
@@ -837,6 +863,12 @@ class Insight3GlobalLocalizer(Node):
             )
 
     def _worker_main(self) -> None:
+        """低频轮询两路最新图像，执行直接关键帧或描述子地图定位。
+
+        worker 不处理高频 VIO；它只更新低频 ``T_map_odom`` 观测。VIO 回调随后把该
+        修正与每个局部位姿组合，形成连续高频全局输出。
+        """
+
         period = 1.0 / max(self._args.localization_hz, 0.1)
         while not self._stop.wait(0.05):
             self._refresh_gripper_mask_setting()
@@ -867,6 +899,7 @@ class Insight3GlobalLocalizer(Node):
                         else state.imu_to_center.copy()
                     )
                     localized_before = state.pose_filter.initialized
+                # 首次定位可由单个高质量校准关键帧启动，不必等待三帧确认地图成熟。
                 descriptor_map_ready = (
                     len(map_points) >= self._args.min_map_features
                 )
@@ -925,6 +958,7 @@ class Insight3GlobalLocalizer(Node):
                 started = time.perf_counter()
                 try:
                     image = grayscale_image(message)
+                    # PnP 使用左目成像模型；最终发布时再转换到双目中心设备坐标。
                     odom_to_left = compose_transform(
                         matrix_from_pose(pose), imu_to_left
                     )
@@ -932,6 +966,8 @@ class Insight3GlobalLocalizer(Node):
                     diagnostics: dict[str, object] = {}
                     inference_ms: Optional[float] = None
                     direct_summary: dict[str, object] = {}
+                    # 尚未全局初始化时优先做图像到图像 SuperGlue：它保留关键点上下文，
+                    # 通常比把查询描述子直接扫全局地图更适合跨设备首次校准。
                     if (
                         not localized_before
                         and calibration_reference_ready
@@ -946,6 +982,7 @@ class Insight3GlobalLocalizer(Node):
                                     self._gripper_mask_height_ratio,
                                 ),
                             )
+                            # 参考端匹配坐标关联到同帧已三角化 XYZ，形成 2D-3D PnP 输入。
                             direct_image_points, direct_object_points = (
                                 associate_reference_points(
                                     direct_matches.left_points,
@@ -1016,9 +1053,11 @@ class Insight3GlobalLocalizer(Node):
                                 "direct_accepted": False,
                                 "direct_rejection": "image_shape_mismatch",
                             }
+                    # 直接匹配不可用或未通过几何门限时，回退到全局描述子地图。
                     if candidate is None and descriptor_map_ready:
                         features = self._matcher.extract(image)
                         inference_ms = features.backend_inference_ms
+                        # 固定夹爪属于相机自身而非环境，参与地图匹配会制造稳定假内点。
                         feature_keep = static_gripper_feature_keep_mask(
                             features.keypoints,
                             image.shape,
@@ -1075,6 +1114,7 @@ class Insight3GlobalLocalizer(Node):
                         self._gripper_mask_height_ratio
                     )
                     with state.lock:
+                        # 单帧 PnP 只进入候选窗口；达到多帧一致性后才更新全局修正。
                         transition = state.consensus.observe(candidate)
                         measurement = state.consensus.correction
                         measurement_changed = (
@@ -1088,6 +1128,7 @@ class Insight3GlobalLocalizer(Node):
                             )
                         )
                         if measurement_changed:
+                            # 小漂移由 EKF 平滑吸收，大漂移立即跳转并切分显示轨迹。
                             correction_update = state.relocalization_policy.apply(
                                 state.pose_filter, measurement
                             )
@@ -1120,6 +1161,7 @@ class Insight3GlobalLocalizer(Node):
                         )
                         localized = state.pose_filter.initialized
                         transition["localized"] = localized
+                        # map_matched 表示本次确有地图观测；vio_only 仅表示沿用旧修正外推。
                         if diagnostics["accepted"]:
                             tracking_mode = (
                                 "map_matched" if localized else "verifying"

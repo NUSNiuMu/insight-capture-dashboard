@@ -1,4 +1,8 @@
-"""Bridge sparse mapping status into compact web snapshots."""
+"""把独立 ROS 建图进程的状态桥接为 Dashboard 使用的轻量快照。
+
+Dashboard 不订阅稀疏点云和完整 Path，只接收三个 JSON 状态话题并调用 reset/freeze
+服务。这样网页状态查询不会复制高维描述子点云，也不会给录制主进程增加几何负载。
+"""
 
 from __future__ import annotations
 
@@ -22,7 +26,7 @@ STATUS_TOPICS = {
     "insight3_b": "/insight_global/insight3_b/status",
 }
 class MappingStream:
-    """Hold lightweight map counters and status without forwarding geometry."""
+    """保存地图计数与在线状态，不转发三维几何数据。"""
 
     def __init__(self, owner) -> None:
         self.owner = owner
@@ -42,6 +46,7 @@ class MappingStream:
     def start(self) -> None:
         if String is None or Empty is None or Trigger is None:
             return
+        # 与 Dashboard 其余 ROS 实体共用 callback group 和订阅事件诊断。
         kwargs = {
             "callback_group": self.owner.ros_callback_group,
             "event_callbacks": self.owner.subscription_event_callbacks,
@@ -95,6 +100,7 @@ class MappingStream:
             statuses = {}
             for name, value in self._statuses.items():
                 status = dict(value)
+                # “进程曾发过状态”不等于当前在线；超过两秒即标记离线。
                 age = now - self._last_received[name]
                 status["online"] = self._last_received[name] > 0.0 and age <= 2.0
                 statuses[name] = status
@@ -108,8 +114,7 @@ class MappingStream:
     def request_reset(self) -> Dict[str, object]:
         requested = []
         unavailable = []
-        # Clear the localizer first so an empty/new mapper publication cannot race
-        # with stale corrections left from the preceding session.
+        # 先清 localizer，避免新空地图发布时仍短暂沿用上一会话的全局修正。
         for name, client in (
             ("localizer", self._localizer_reset_client),
             ("mapper", self._mapper_reset_client),
@@ -131,7 +136,7 @@ class MappingStream:
         }
 
     def freeze_capture_reference(self, timeout_sec: float = 3.0) -> Dict[str, object]:
-        """Ask the mapper to pin a natural-feature map for batch validation."""
+        """请求 mapper 冻结当前自然特征地图，作为本批采集的固定验证参考。"""
 
         client = self._capture_reference_client
         if client is None or not client.service_is_ready():

@@ -1,4 +1,9 @@
-"""Sparse SE(3) keyframe pose graph with robust loop-closure optimization."""
+"""带鲁棒回环约束的稀疏 SE(3) 关键帧位姿图。
+
+图节点只包含关键帧位姿，边包括相邻关键帧的 VIO 相对运动和 PnP 给出的全局回环。
+优化变量不包含三维地标和像素观测，所以这是位姿图优化而非 Bundle Adjustment。
+首个关键帧固定以消除全局规范自由度，其余节点以右乘 SE(3) 增量迭代更新。
+"""
 
 from __future__ import annotations
 
@@ -57,7 +62,7 @@ def _so3_log(rotation: np.ndarray) -> np.ndarray:
 
 
 def se3_exp(tangent: np.ndarray) -> np.ndarray:
-    """Return an SE(3) transform from ``[translation, rotation]`` tangent."""
+    """把 ``[平移, 旋转向量]`` 六维切向量映射为 SE(3) 变换。"""
 
     value = np.asarray(tangent, dtype=np.float64).reshape(6)
     rho = value[:3]
@@ -80,7 +85,7 @@ def se3_exp(tangent: np.ndarray) -> np.ndarray:
 
 
 def se3_log(transform: np.ndarray) -> np.ndarray:
-    """Return the ``[translation, rotation]`` tangent of an SE(3) transform."""
+    """把 SE(3) 变换映射为 ``[平移, 旋转向量]`` 六维切向量。"""
 
     value = np.asarray(transform, dtype=np.float64).reshape(4, 4)
     phi = _so3_log(value[:3, :3])
@@ -127,7 +132,7 @@ def _rotation_distance_deg(first: np.ndarray, second: np.ndarray) -> float:
 
 @dataclass(frozen=True)
 class PoseGraphConfig:
-    """Noise, robustness, and resource limits for pose graph optimization."""
+    """各类边的噪声、鲁棒核参数和在线图资源上限。"""
 
     odometry_translation_std_m: float = 0.025
     odometry_rotation_std_deg: float = 0.75
@@ -153,6 +158,8 @@ class PoseGraphConfig:
 
 @dataclass(frozen=True)
 class PoseGraphEdge:
+    """一条相对位姿约束；标准差决定平移与旋转残差的归一化权重。"""
+
     source_id: int
     target_id: int
     source_to_target: np.ndarray
@@ -163,6 +170,8 @@ class PoseGraphEdge:
 
 @dataclass(frozen=True)
 class PoseGraphOptimizationResult:
+    """一次优化的收敛、代价、耗时和最大位姿改变量。"""
+
     optimized: bool
     success: bool
     iterations: int
@@ -174,7 +183,7 @@ class PoseGraphOptimizationResult:
 
 
 class KeyframePoseGraph:
-    """Keep VIO keyframes and distribute accepted global loop corrections."""
+    """保存 VIO 关键帧，并把已接受的全局回环修正分布到整段轨迹。"""
 
     def __init__(self, config: Optional[PoseGraphConfig] = None) -> None:
         self.config = config or PoseGraphConfig()
@@ -217,7 +226,7 @@ class KeyframePoseGraph:
         *,
         initial_map_pose: Optional[np.ndarray] = None,
     ) -> np.ndarray:
-        """Add one node and a VIO relative-pose edge from its predecessor."""
+        """新增节点，并从前一节点添加一条 VIO 相对位姿边。"""
 
         keyframe_id = int(keyframe_id)
         stamp_ns = int(stamp_ns)
@@ -229,6 +238,7 @@ class KeyframePoseGraph:
             raise ValueError("pose graph keyframe timestamps must increase")
         odom = _valid_transform(odom_pose)
         if not self._ids:
+            # 首节点作为固定锚点；后续优化不会为它分配变量块。
             mapped = _valid_transform(
                 odom if initial_map_pose is None else initial_map_pose
             )
@@ -256,7 +266,7 @@ class KeyframePoseGraph:
     def add_global_loop_edge(
         self, target_id: int, target_map_pose: np.ndarray
     ) -> PoseGraphEdge:
-        """Constrain a keyframe absolute pose through an edge from the fixed anchor."""
+        """把 PnP 全局位姿改写为固定首节点到当前节点的回环边。"""
 
         if not self._ids:
             raise ValueError("cannot add a loop edge to an empty pose graph")
@@ -292,7 +302,7 @@ class KeyframePoseGraph:
         )
 
     def correction_at(self, stamp_ns: int) -> Optional[np.ndarray]:
-        """Interpolate optimized map-to-odom corrections along graph time."""
+        """沿关键帧时间轴在 SE(3) 上插值优化后的 ``T_map_odom``。"""
 
         if not self._ids:
             return None
@@ -313,7 +323,11 @@ class KeyframePoseGraph:
         return first @ se3_exp(fraction * delta)
 
     def optimize(self) -> PoseGraphOptimizationResult:
-        """Run sparse robust least squares while keeping the first pose fixed."""
+        """固定首节点，运行稀疏鲁棒最小二乘。
+
+        每次迭代重新线性化所有边，通过 Cauchy IRLS 降低异常回环权重，再用稀疏
+        LSMR 求解增量。候选步长必须实际降低鲁棒代价才会被接受。
+        """
 
         started = time.perf_counter()
         if len(self._ids) < 2 or self._loop_edges == 0:
@@ -328,6 +342,7 @@ class KeyframePoseGraph:
                 max_rotation_correction_deg=0.0,
             )
 
+        # 首节点固定后，每个剩余节点对应连续六列优化变量。
         variable_ids = self._ids[1:]
         offsets = {
             keyframe_id: index * 6
@@ -337,6 +352,7 @@ class KeyframePoseGraph:
         optimized_poses = self.pose_snapshot()
 
         def edge_error(edge: PoseGraphEdge, poses: dict[int, np.ndarray]) -> np.ndarray:
+            # 比较图中当前预测相对位姿与边测量，并映射到六维切空间。
             predicted = _inverse_transform(poses[edge.source_id]) @ poses[edge.target_id]
             return se3_log(_inverse_transform(edge.source_to_target) @ predicted)
 
@@ -379,19 +395,16 @@ class KeyframePoseGraph:
                 )
                 normalized = error * scale
                 norm = float(np.linalg.norm(normalized) / math.sqrt(6.0))
-                # Cauchy IRLS suppresses a geometrically accepted but globally
-                # inconsistent loop more strongly than Huber. This is a second
-                # line of defense behind descriptor, PnP, and temporal gates.
+                # Cauchy IRLS 比 Huber 更强地抑制“局部 PnP 通过但全图不一致”的回环；
+                # 这是描述子、PnP 和时序门限之后的第二道防线。
                 robust_weight = 1.0 / math.sqrt(
                     1.0 + (norm / self.config.robust_delta) ** 2
                 )
                 weighted_scale = robust_weight * scale
                 target[row : row + 6] = -weighted_scale * error
 
-                # Right-pose perturbations give these first-order SE(3)
-                # Jacobians near a satisfied edge. Re-linearizing after every
-                # solve handles larger loop corrections without a dense finite-
-                # difference pass over the full graph.
+                # 右乘位姿扰动在已接近满足的边附近给出以下一阶 Jacobian。每轮重新
+                # 线性化可处理较大修正，同时避免对全图做稠密有限差分。
                 relative_inverse = _inverse_transform(edge.source_to_target)
                 rotation = relative_inverse[:3, :3]
                 translation = relative_inverse[:3, 3]
@@ -429,6 +442,7 @@ class KeyframePoseGraph:
                 )
             )
             accepted = False
+            # 简单回溯线搜索防止一阶线性化在大回环下跨过局部最优点。
             for step_scale in (1.0, 0.5, 0.25, 0.125):
                 candidate = {self._ids[0]: optimized_poses[self._ids[0]]}
                 for keyframe_id in variable_ids:
@@ -457,9 +471,8 @@ class KeyframePoseGraph:
         if improved:
             for keyframe_id in variable_ids:
                 before = base[keyframe_id]
-                # SE(3) right updates preserve an orthonormal rotation; avoid a
-                # per-node SVD here because it dominates loop-closure latency on
-                # Jetson for large graphs.
+                # SE(3) 右乘更新天然保持旋转正交；不再逐节点 SVD，因为大图上该操作
+                # 会主导 Jetson 的回环延迟。
                 after = optimized_poses[keyframe_id].copy()
                 after[3] = (0.0, 0.0, 0.0, 1.0)
                 max_translation = max(

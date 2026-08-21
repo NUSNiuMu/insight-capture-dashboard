@@ -1,4 +1,9 @@
-"""Feature-matcher interface and adapter for Magic Leap's official models."""
+"""SuperPoint/SuperGlue 的业务数据结构、Torch 对照后端和生产 IPC 客户端。
+
+mapper 与 localizer 只依赖本文件的统一接口。客户运行使用 ``IpcSuperGlueBackend``
+访问独立 TensorRT 服务；``OfficialSuperGlueBackend`` 保留用于开发环境与官方
+PyTorch 实现做数值对照，不应在客户镜像里临时安装 PyTorch 启用。
+"""
 
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ OFFICIAL_SUPERGLUE_COMMIT = "ddcf11f42e7e0732a0c4607648f9448ea8d73590"
 
 @dataclass(frozen=True)
 class StereoMatches:
-    """Matched keypoints and left-image descriptors."""
+    """左右匹配坐标、左图描述子、匹配分数及推理诊断。"""
 
     left_points: np.ndarray
     right_points: np.ndarray
@@ -32,7 +37,7 @@ class StereoMatches:
 
 @dataclass(frozen=True)
 class ImageFeatures:
-    """SuperPoint features extracted from one grayscale image."""
+    """单张灰度图提取的 SuperPoint 坐标、描述子和检测分数。"""
 
     keypoints: np.ndarray
     descriptors: np.ndarray
@@ -41,7 +46,7 @@ class ImageFeatures:
 
 
 class OfficialSuperGlueBackend:
-    """Run the pinned official SuperPoint + SuperGlue PyTorch implementation."""
+    """运行固定提交的官方 PyTorch 实现，仅用于开发基线对照。"""
 
     def __init__(
         self,
@@ -176,7 +181,7 @@ class OfficialSuperGlueBackend:
 
 
 class IpcSuperGlueBackend:
-    """Use the isolated feature inference worker through a local Unix socket."""
+    """通过本地 Unix socket 使用隔离的 TensorRT 推理 worker。"""
 
     def __init__(self, socket_path: Path, *, timeout_sec: float = 30.0) -> None:
         self._socket_path = Path(socket_path)
@@ -186,6 +191,7 @@ class IpcSuperGlueBackend:
             raise RuntimeError(f"SuperGlue inference worker is unhealthy: {health}")
 
     def _request(self, metadata, payloads=()):
+        # 每个请求单独建短连接；worker 串行处理，协议无需连接级会话状态。
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         connection.settimeout(self._timeout_sec)
         try:
@@ -223,6 +229,7 @@ class IpcSuperGlueBackend:
             raise RuntimeError("invalid extraction response from SuperPoint worker")
         count = int(metadata["keypoints"])
         descriptor_dim = int(metadata["descriptor_dim"])
+        # IPC 中的 ndarray 没有自描述头，必须用元数据严格校验字节数后再 reshape。
         expected_sizes = (
             count * 2 * 4,
             count * descriptor_dim * 4,
@@ -279,6 +286,7 @@ class IpcSuperGlueBackend:
         )
         scores = np.frombuffer(payloads[3], dtype=np.float32).copy()
         if left_mask is not None and count:
+            # mask 在客户端执行，避免让通用推理服务耦合具体相机的夹爪区域配置。
             mask = np.asarray(left_mask, dtype=bool)
             pixels = np.rint(left_points).astype(np.int64)
             inside = (

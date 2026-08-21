@@ -1,4 +1,9 @@
-"""Dense rectified-stereo reconstruction and bounded voxel fusion."""
+"""内部验证使用的校正双目稠密重建与有界体素融合。
+
+该模块只被 ``tools/mapping_validation/dense_mapper.py`` 调用，不参与客户在线稀疏
+建图。它使用 CPU StereoSGBM 验证标定、视差和空间几何，不能与生产 SuperPoint/
+SuperGlue 稀疏地标路径混为一谈。
+"""
 
 from __future__ import annotations
 
@@ -16,7 +21,7 @@ VoxelKey = Tuple[int, int, int]
 
 @dataclass(frozen=True)
 class DenseStereoConfig:
-    """Parameters for CPU StereoSGBM reconstruction."""
+    """CPU StereoSGBM 的视差范围、块大小、深度范围和输出采样上限。"""
 
     min_disparity_px: float = 1.0
     num_disparities: int = 128
@@ -39,7 +44,7 @@ class DenseStereoConfig:
 
 @dataclass(frozen=True)
 class DenseStereoResult:
-    """Dense points in the rectified left-camera frame."""
+    """左目坐标系中的稠密点及本帧视差/深度诊断。"""
 
     points_left: np.ndarray
     valid_pixels: int
@@ -48,7 +53,7 @@ class DenseStereoResult:
 
 
 class DenseStereoEstimator:
-    """Estimate a filtered dense cloud from rectified mono8 images."""
+    """从已校正 mono8 双目图估计经过深度过滤的稠密点云。"""
 
     def __init__(self, config: DenseStereoConfig | None = None) -> None:
         self.config = config or DenseStereoConfig()
@@ -84,6 +89,7 @@ class DenseStereoEstimator:
                 f"dense stereo images must have shape {expected_shape}, "
                 f"got {left.shape} and {right.shape}"
             )
+        # 红外图局部对比度差异会削弱块匹配，CLAHE 只用于视差计算而不改原图。
         enhanced_left = self._clahe.apply(left)
         enhanced_right = self._clahe.apply(right)
         disparity = self._matcher.compute(enhanced_left, enhanced_right).astype(
@@ -104,6 +110,7 @@ class DenseStereoEstimator:
         cx = float(left_projection[0, 2])
         cy = float(left_projection[1, 2])
         right_cx = float(right_projection[0, 2])
+        # 两个投影矩阵主点不完全一致时，深度公式必须使用修正后的有效视差。
         effective_disparity = sampled_disparity - (cx - right_cx)
         disparity_valid = (
             np.isfinite(effective_disparity)
@@ -152,7 +159,7 @@ class DenseStereoEstimator:
 
 
 class DenseVoxelMap:
-    """Accumulate dense world points into a bounded running-mean voxel map."""
+    """把稠密世界点按体素运行均值融合，并限制总内存。"""
 
     def __init__(self, *, voxel_size_m: float = 0.04, max_voxels: int = 300_000) -> None:
         if voxel_size_m <= 0.0 or max_voxels <= 0:
@@ -174,6 +181,7 @@ class DenseVoxelMap:
         if not len(points):
             return 0
         keys = np.floor(points / self.voxel_size_m).astype(np.int32)
+        # 同一帧每体素最多贡献一个样本，避免近距离密集像素支配运行均值。
         _, representative_indices = np.unique(keys, axis=0, return_index=True)
         added = 0
         for index in representative_indices:

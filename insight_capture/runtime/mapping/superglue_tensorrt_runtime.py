@@ -1,4 +1,9 @@
-"""Pure TensorRT/CUDA runtime for the pinned feature models."""
+"""固定 SuperPoint/SuperGlue 模型的纯 TensorRT/CUDA 生产运行时。
+
+最终镜像不含 PyTorch。本模块用 ctypes 直接调用 CUDA runtime/driver API，用 NumPy
+提供主机数组，并为两个 TensorRT engine 维护可增长复用的显存缓冲。一个 matcher
+只拥有一个 CUDA stream，由外层单线程 worker 保证串行调用。
+"""
 
 from __future__ import annotations
 
@@ -16,11 +21,11 @@ OFFICIAL_COMMIT = "ddcf11f42e7e0732a0c4607648f9448ea8d73590"
 
 
 class CudaError(RuntimeError):
-    """Report a CUDA driver or runtime API failure."""
+    """带具体 CUDA 操作名称的 driver/runtime API 异常。"""
 
 
 class CudaRuntime:
-    """Manage one CUDA stream and raw device allocations through ctypes."""
+    """通过 ctypes 管理一个 CUDA stream、设备信息和裸显存。"""
 
     HOST_TO_DEVICE = 1
     DEVICE_TO_HOST = 2
@@ -201,7 +206,7 @@ class CudaRuntime:
 
 
 class DeviceBuffer:
-    """Grow-only allocation reused across inference requests."""
+    """跨请求复用、只在容量不足时扩大的设备缓冲。"""
 
     def __init__(self, cuda: CudaRuntime) -> None:
         self._cuda = cuda
@@ -209,6 +214,7 @@ class DeviceBuffer:
         self.capacity = 0
 
     def reserve(self, size: int) -> ctypes.c_void_p:
+        # 不因下一请求变小而收缩，避免动态关键点数量造成反复 cudaMalloc/free。
         if size > self.capacity:
             self.close()
             self.pointer = self._cuda.allocate(size)
@@ -227,7 +233,7 @@ def _numpy_dtype(dtype: trt.DataType) -> np.dtype:
 
 
 class TensorRTEngine:
-    """Execute a TensorRT 10 engine using raw CUDA buffers."""
+    """以 NumPy 主机数组和裸 CUDA 缓冲执行一个 TensorRT 10 engine。"""
 
     def __init__(self, cuda: CudaRuntime, plan_path: Path) -> None:
         self._cuda = cuda
@@ -262,6 +268,7 @@ class TensorRTEngine:
                 f"TensorRT inputs {sorted(inputs)} differ from {sorted(self.input_names)}"
             )
 
+        # TensorRT 要求绑定类型和形状与 engine profile 一致，先统一连续内存与 dtype。
         contiguous: dict[str, np.ndarray] = {}
         for name in self.input_names:
             expected = _numpy_dtype(self._engine.get_tensor_dtype(name))
@@ -289,6 +296,7 @@ class TensorRTEngine:
             if not self._context.set_tensor_address(name, pointer.value):
                 raise RuntimeError(f"could not bind TensorRT output {name}")
 
+        # H2D、engine、D2H 全部排入同一 stream，最后一次同步保证返回数组已经可读。
         if not self._context.execute_async_v3(self._cuda.stream.value):
             raise RuntimeError("TensorRT execution failed")
         for name, value in outputs.items():
@@ -302,7 +310,7 @@ class TensorRTEngine:
 
 
 class TensorRTMatcher:
-    """Run SuperPoint and SuperGlue without importing PyTorch."""
+    """不导入 PyTorch，串联 SuperPoint 与 SuperGlue 两个生产 engine。"""
 
     def __init__(
         self,
@@ -335,6 +343,8 @@ class TensorRTMatcher:
         )
 
     def extract(self, image: np.ndarray):
+        """提取有效 SuperPoint 槽位；低分固定输出槽在此过滤。"""
+
         output = self._superpoint({"image": self._image_tensor(image)})
         scores = output["scores"]
         keep = scores > self._keypoint_threshold
@@ -345,6 +355,8 @@ class TensorRTMatcher:
         )
 
     def warmup(self, height: int = 640, width: int = 544, runs: int = 2) -> None:
+        """在 worker 宣告健康前预热 context、CUDA kernel 和显存缓冲。"""
+
         yy, xx = np.indices((height, width))
         left = (((xx // 32 + yy // 32) % 2) * 180 + 35).astype(np.uint8)
         right = np.roll(left, -8, axis=1).copy()
@@ -359,6 +371,8 @@ class TensorRTMatcher:
             )
 
     def match(self, left: np.ndarray, right: np.ndarray):
+        """分别提取两图特征，运行 SuperGlue，并返回左端有效匹配子集。"""
+
         keypoints0, descriptors0, scores0 = self.extract(left)
         keypoints1, descriptors1, scores1 = self.extract(right)
         if not len(keypoints0) or not len(keypoints1):

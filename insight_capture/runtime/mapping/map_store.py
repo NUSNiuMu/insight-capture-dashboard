@@ -1,4 +1,9 @@
-"""Session-local landmark confirmation and bounded voxel storage."""
+"""当前会话内的稀疏地标确认、体素去重和有界存储。
+
+每帧双目都可能产生动态物体、误匹配或深度抖动点。本模块不做跨帧描述子跟踪，
+而是用世界坐标体素作为轻量关联：同一体素在不同关键帧重复出现达到门限后才成为
+确认地标。该设计适合 Jetson 在线运行，但只是观测融合，不是联合优化三维点的 BA。
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ VoxelKey = Tuple[int, int, int]
 
 @dataclass(frozen=True)
 class LandmarkMapConfig:
-    """Thresholds for rejecting transient and duplicate stereo points."""
+    """瞬态点过滤、体素尺寸和地图资源上限。"""
 
     voxel_size_m: float = 0.04
     confirmation_observations: int = 3
@@ -33,6 +38,8 @@ class LandmarkMapConfig:
 
 @dataclass
 class _Landmark:
+    """体素内的位置、描述子运行均值及观测生命周期。"""
+
     position: np.ndarray
     descriptor: Optional[np.ndarray]
     observations: int
@@ -43,7 +50,7 @@ class _Landmark:
 
 @dataclass(frozen=True)
 class MapUpdate:
-    """Summary of one keyframe insertion."""
+    """一次关键帧写入后的统计摘要，用于 mapper 状态诊断。"""
 
     input_points: int
     unique_voxels: int
@@ -53,7 +60,7 @@ class MapUpdate:
 
 
 class LandmarkMap:
-    """Confirm only points that recur in the same world-space voxel."""
+    """只确认在多个关键帧中落入同一世界体素的点。"""
 
     def __init__(self, config: Optional[LandmarkMapConfig] = None) -> None:
         self.config = config or LandmarkMapConfig()
@@ -92,6 +99,7 @@ class LandmarkMap:
         if descriptors is not None:
             descriptors = descriptors[finite]
 
+        # 单帧同一体素最多计一次观测，防止密集纹理在一帧内伪造“重复确认”。
         representatives: Dict[VoxelKey, int] = {}
         if len(points):
             keys = np.floor(points / self.config.voxel_size_m).astype(np.int64)
@@ -105,6 +113,7 @@ class LandmarkMap:
         for key, index in representatives.items():
             descriptor = None if descriptors is None else descriptors[index]
             if key in self._confirmed:
+                # 已确认地标继续更新运行均值，但不会重新计入 promoted。
                 self._merge(
                     self._confirmed[key],
                     points[index],
@@ -114,6 +123,7 @@ class LandmarkMap:
                 )
                 continue
 
+            # 首次出现先进入候选区；只有不同关键帧的重复观测才能晋升。
             candidate = self._candidates.get(key)
             if candidate is None:
                 self._candidates[key] = _Landmark(
@@ -140,6 +150,7 @@ class LandmarkMap:
                     promoted += 1
                 del self._candidates[key]
 
+        # 长时间未复现的候选大概率是动态物体或偶发误匹配，主动释放内存。
         oldest = int(keyframe_id) - self.config.candidate_ttl_keyframes
         self._candidates = {
             key: value
@@ -170,6 +181,7 @@ class LandmarkMap:
         score: float,
         keyframe_id: int,
     ) -> None:
+        # 位置采用在线算术平均；描述子逐次归一化，避免观测数增加导致模长漂移。
         next_count = landmark.observations + 1
         landmark.position += (position - landmark.position) / next_count
         normalized = self._normalized_descriptor(descriptor)
