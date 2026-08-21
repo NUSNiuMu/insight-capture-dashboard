@@ -515,6 +515,8 @@ U 盘后重启 Dashboard，才会重新选择 U 盘。录制过程中断盘无�
   存储不可写/空间不足或必要 topics 缺失的录制；
 - 注意：录制进行中**不要**执行 `docker restart`，会中断录制。
   `run_dashboard.sh` 已内置保护（检测到录制中不重启），手动 docker 命令没有。
+  该保护会在每一次 DDS 恢复重试前重新读取录制状态；两路 Insight3 同时处于校正图 stale、
+  原生 VIO fresh 时按 raw-only 校准状态处理，不会因等待校正预览而循环重启 Dashboard。
 
 ### 6.5 画面卡顿 / 帧率低
 

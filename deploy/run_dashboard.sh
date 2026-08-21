@@ -12,6 +12,12 @@ PORT="${DASHBOARD_PORT:-8765}"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
+recording_is_active() {
+    curl -sf "http://localhost:${PORT}/api/recording/status" 2>/dev/null \
+        | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("recording") else 1)' \
+        2>/dev/null
+}
+
 # Standard Docker marker file -- present in every container, regardless of
 # how it was started (compose, devcontainer, plain `docker run`).
 in_container=false
@@ -45,12 +51,7 @@ elif [[ -n "$(docker compose ps --status running --services 2>/dev/null)" ]]; th
     # Already running: restart for a guaranteed-clean launch (picks up any
     # git-pulled code, clears whatever state accumulated) -- unless a
     # recording is in flight, in which case restarting would kill it.
-    recording_in_progress=false
-    if curl -sf "http://localhost:${PORT}/api/recording/status" 2>/dev/null \
-            | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("recording") else 1)' 2>/dev/null; then
-        recording_in_progress=true
-    fi
-    if [[ "${recording_in_progress}" == "true" ]]; then
+    if recording_is_active; then
         log "Backend is already running with a recording in progress -- not restarting (would kill it). Using the running backend as-is."
     else
         # Reconcile changed commands, mounts, and environment before reloading
@@ -86,7 +87,22 @@ camera_links_present() {
 
 all_cameras_live() {
     curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
-        | python3 -c 'import json,sys; c=json.load(sys.stdin).get("cameras", []); sys.exit(0 if c and all(not x.get("stale", True) for x in c) else 1)' \
+        | python3 -c '
+import json, sys
+cameras = json.load(sys.stdin).get("cameras", [])
+by_name = {str(item.get("name")): item for item in cameras}
+raw_only = all(
+    by_name.get(name, {}).get("stale", True)
+    and by_name.get(name, {}).get("native_vio_fresh", False)
+    for name in ("insight3_a", "insight3_b")
+)
+healthy = cameras and all(
+    not item.get("stale", True)
+    or (raw_only and item.get("name") in {"insight3_a", "insight3_b"})
+    for item in cameras
+)
+sys.exit(0 if healthy else 1)
+' \
         2>/dev/null
 }
 
@@ -137,6 +153,10 @@ while true; do
     if (( data_restarts >= ALL_LIVE_MAX_RESTARTS )); then
         log "WARNING: not all cameras live after ${ALL_LIVE_MAX_RESTARTS} backend restart(s) (stale: $(stale_camera_names)) -- continuing anyway."
         log "         If a stale camera answers HTTP but its interface shows no traffic, its stream is wedged -- reboot it: curl -X POST http://<camera-ip>/api/reboot"
+        break
+    fi
+    if recording_is_active; then
+        log "A recording started while waiting for camera data -- not restarting the backend."
         break
     fi
     data_restarts=$(( data_restarts + 1 ))

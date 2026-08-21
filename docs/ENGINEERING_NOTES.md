@@ -22,6 +22,8 @@
   相机 raw-only 模式会主动停止 Dashboard 的 rectified preview 和依赖它的全局定位，
   因此校准预检、录制中 QC 都不得使用这两条路径判离线；participant watchdog 以每台相机
   的原生 `vio_100hz` 作为轻量链路存活信号，只有图像、展示 Pose 与原生 VIO 全部停止才重启；
+  `run_dashboard.sh` 的 DDS 恢复循环也必须复用该 raw-only 判定，并在每次重启前重新查询
+  录制状态，不能只在脚本刚启动时检查一次，否则稍后开始的校准录制仍会被 SIGTERM 中断；
   “宸境”只打开 OpenClaw 模式，随后一句固定发送给 OpenClaw。自动停止接口只允许结束
   `looper_record_*` 或当前标记为 `vio_calibration` 的录制，避免误停网页、
   手势或其他控制器创建的录制。
