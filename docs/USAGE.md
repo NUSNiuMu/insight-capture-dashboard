@@ -574,6 +574,31 @@ curl -s localhost:8765/api/images/capabilities | python3 -m json.tool
 
 ## 7. 报障信息收集
 
+需要保留下次相机掉线前后的完整时间线时，在 Jetson 宿主机仓库目录常驻运行：
+
+```bash
+python3 tests/diagnostics/monitor_camera_failures.py
+```
+
+日志默认写入 `outputs/camera_diagnostics/camera-monitor-*.jsonl`，单文件达到 100 MiB
+后自动分卷。脚本每秒只读检查 Dashboard 相机 API、三台相机 HTTP 和 USB 网卡计数，
+每 30 秒保存完整快照；同时跟随内核 USB journal。`fault_started`/`fault_resolved`
+记录异常起止，`cause` 给出跨层归因，重点区分：
+
+- 多路 USB 同时断开：Hub、供电或 USB 控制器复位；
+- 网卡和相机 HTTP 仍正常、有接收流量但没有图像：相机图像发布或 DDS 大包链路停滞；
+- 网卡仍在但相机 HTTP 不通：相机启动、服务或 IP 链路异常；
+- 相机升级或重连后 IP 改变：按实际 `cameraNamespace` 重新识别，只记录地址迁移，不按固定 IP 误报；
+- 两个在线地址同时报告同一个 `cameraNamespace`：相机身份配置冲突；
+- 相机可达但 Dashboard API 不通：Dashboard 后端退出或不可达；
+- 帧率连续低于配置值的 80%：USB 带宽、CPU 或图像管线开始退化。
+
+脚本不会重启服务、修改相机或停止录制。短时验证可加 `--duration 30`；查看关键事件可用：
+
+```bash
+rg '"event": "(fault_|usb_|camera_peer_)' outputs/camera_diagnostics/camera-monitor-*.jsonl
+```
+
 优先运行只读的深度诊断脚本。它会检查 NTP 实际选中源和偏差、CPU/内存/温度、
 系统盘与录制盘、相机网卡、DDS/UDP 内核参数、RPS 与短时丢包增量、核心容器、
 Dashboard/Preflight、三路相机输入帧率、建图定位、硬件图像管线、近期日志和语音服务。
