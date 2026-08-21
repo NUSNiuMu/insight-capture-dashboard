@@ -158,6 +158,14 @@ class PayloadBuilder:
                     fps = (len(recent_times) - 1) / span
                 input_age = None if not input_times else now - input_times[-1]
                 stale = input_age is None or input_age > self.owner.camera_stale_timeout_sec
+                liveness_seen = float(
+                    getattr(self.owner, "camera_liveness_times", {}).get(
+                        camera.name, 0.0
+                    )
+                )
+                liveness_age = (
+                    None if liveness_seen <= 0.0 else max(0.0, now - liveness_seen)
+                )
                 browser = browser_stats.get(camera.name, {})
                 browser_age_sec = now - float(
                     browser.pop("updated_monotonic", 0.0)
@@ -174,6 +182,11 @@ class PayloadBuilder:
                         "visible": frame is not None,
                         "stale": stale,
                         "input_age_sec": input_age,
+                        "native_vio_age_sec": liveness_age,
+                        "native_vio_fresh": (
+                            liveness_age is not None
+                            and liveness_age <= self.owner.camera_stale_timeout_sec
+                        ),
                         "fps": fps,
                         "webrtc_stats": {
                             "input_fps": input_fps,

@@ -72,13 +72,16 @@ class CapturePreflight:
             failures.append(self._failure(
                 "camera_count", f"应有三台相机，当前配置{len(self.node.cameras)}台"
             ))
-        camera_health, camera_failures = evaluate_cameras(
-            self.node,
-            self.camera_stale_sec,
-            now=now,
-            camera_names=(VIO_CALIBRATION_CAMERA_NAMES if calibration_mode else None),
-        )
-        failures.extend(camera_failures)
+        if not calibration_mode:
+            camera_health, camera_failures = evaluate_cameras(
+                self.node,
+                self.camera_stale_sec,
+                now=now,
+            )
+            failures.extend(camera_failures)
+        # Raw-only calibration intentionally stops the rectified Dashboard
+        # streams. Its route verifies all raw topics and consumes one payload
+        # from each stereo image topic before starting the recorder.
 
         mapping = {} if calibration_mode else self.node.build_mapping_payload()
         statuses = mapping.get("statuses") if isinstance(mapping, dict) else {}
@@ -197,6 +200,8 @@ class CapturePreflight:
         if not failures:
             storage = report.get("storage") or {}
             free_gb = float(storage.get("free_bytes", 0)) / 1024**3
+            if report.get("mode") == "vio_calibration":
+                return f"两台Insight3未校正图像和录制数据流正常，剩余空间{free_gb:.0f}GB，可以开始校准录制。"
             if storage.get("using_fallback"):
                 return f"当前使用备用存储，剩余空间{free_gb:.0f}GB，可以开始采集。"
             return f"三台相机、定位和录制数据流正常，剩余空间{free_gb:.0f}GB，可以开始采集。"

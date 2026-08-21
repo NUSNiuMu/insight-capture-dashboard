@@ -64,6 +64,46 @@ def test_stale_image_without_usb_traffic_is_attributed_to_ros_data_path() -> Non
     )
 
 
+def test_vio_calibration_recording_ignores_expected_rectified_staleness() -> None:
+    snapshot = _snapshot(stale=True, rx_delta=12000)
+    snapshot["recording"] = {
+        "recording": True,
+        "recording_mode": "vio_calibration",
+    }
+
+    conditions = derive_conditions(snapshot)
+
+    assert "camera.insight3_a.image_stale" not in conditions
+
+
+def test_raw_only_mode_is_detected_before_recording_from_native_vio() -> None:
+    snapshot = _snapshot(stale=True, rx_delta=12000)
+    snapshot["dashboard"]["cameras"]["insight3_a"]["native_vio_fresh"] = True
+    snapshot["dashboard"]["cameras"]["insight3_b"] = {
+        "name": "insight3_b",
+        "stale": True,
+        "input_age_sec": None,
+        "native_vio_fresh": True,
+        "version": 0,
+    }
+    snapshot["cameras"]["insight3_b"] = {
+        "http_ok": True,
+        "ros_domain_id": 20,
+        "expected_fps": 30.0,
+        "interface": {
+            "name": "enx020000001401",
+            "present": True,
+            "carrier": 1,
+            "rx_bytes_delta": 12000,
+        },
+    }
+
+    conditions = derive_conditions(snapshot)
+
+    assert "camera.insight3_a.image_stale" not in conditions
+    assert "camera.insight3_b.image_stale" not in conditions
+
+
 def test_multiple_missing_interfaces_identify_shared_usb_failure() -> None:
     snapshot = _snapshot()
     snapshot["cameras"]["insight3_b"] = {

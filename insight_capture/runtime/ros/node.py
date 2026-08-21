@@ -168,6 +168,18 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self.trace_generation = 0
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
+        pose_topics = {pose.name: pose.topic for pose in self.poses}
+        self._native_vio_pose_names = {
+            camera.name
+            for camera in self.cameras
+            if pose_topics.get(camera.name)
+            == f"/{camera.namespace}/camera/vio_100hz"
+        }
+        # Native VIO stays available when a camera is switched to raw-only
+        # calibration output, unlike the rectified preview/global pose path.
+        self.camera_liveness_times: Dict[str, float] = {
+            camera.name: 0.0 for camera in self.cameras
+        }
         self.pose_lock = threading.Lock()
         self.camera_frame_lock = threading.Lock()
         self.camera_input_lock = threading.Lock()
@@ -298,6 +310,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
 
     def _create_pose_subscriptions(self) -> None:
         pose_qos = make_qos()
+        liveness_qos = make_image_qos(depth=5, reliability="best_effort")
         for pose in self.poses:
             sub = self.create_subscription(
                 PoseStamped,
@@ -320,6 +333,23 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             )
             self.dashboard_subscriptions.append(playback_sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
+
+        for camera in self.cameras:
+            native_vio_topic = f"/{camera.namespace}/camera/vio_100hz"
+            if camera.name in self._native_vio_pose_names:
+                continue
+            liveness_sub = self.create_subscription(
+                PoseStamped,
+                native_vio_topic,
+                self._make_camera_liveness_callback(camera.name),
+                liveness_qos,
+                callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
+            )
+            self.dashboard_subscriptions.append(liveness_sub)
+            self.get_logger().info(
+                f"Camera liveness: {camera.name} <- {native_vio_topic}"
+            )
 
     def _create_dashboard_image_subscriptions(self) -> None:
         # Depth 20 absorbs executor stalls without overwriting recording frames.
@@ -458,6 +488,13 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 ),
             )
             self._record_pose_sample(pose_name, pose_sample)
+
+        return callback
+
+    def _make_camera_liveness_callback(self, camera_name: str):
+        def callback(_msg: PoseStamped) -> None:
+            if not self._playback_mode:
+                self.camera_liveness_times[camera_name] = time.monotonic()
 
         return callback
 
@@ -612,6 +649,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
 
     def _record_pose_sample(self, pose_name: str, pose_sample: PoseSample) -> None:
         received = time.monotonic()
+        if pose_name in self._native_vio_pose_names:
+            self.camera_liveness_times[pose_name] = received
         with self.pose_lock:
             self.latest_pose_sample[pose_name] = pose_sample
             self.last_pose_received_time[pose_name] = received

@@ -17,9 +17,25 @@ class ParticipantWatchdog:
     def _any_ros_data_received(self) -> bool:
         # Capture Mode intentionally leaves latest_camera_frames empty. Probe
         # the raw image-reader timestamps that exist before preview encoding.
-        return any(self.owner.camera_input_times.get(name) for name in self.owner.camera_input_times) or any(
-            t > 0.0 for t in self.owner.last_pose_received_time.values()
+        return (
+            any(self.owner.camera_input_times.get(name) for name in self.owner.camera_input_times)
+            or any(t > 0.0 for t in self.owner.last_pose_received_time.values())
+            or any(
+                t > 0.0
+                for t in getattr(self.owner, "camera_liveness_times", {}).values()
+            )
         )
+
+    def _camera_last_seen(self, camera_name: str) -> float:
+        input_times = self.owner.camera_input_times.get(camera_name) or ()
+        image_seen = float(input_times[-1]) if input_times else 0.0
+        pose_seen = float(
+            getattr(self.owner, "last_pose_received_time", {}).get(camera_name, 0.0)
+        )
+        native_vio_seen = float(
+            getattr(self.owner, "camera_liveness_times", {}).get(camera_name, 0.0)
+        )
+        return max(image_seen, pose_seen, native_vio_seen)
 
     @staticmethod
     def _camera_link_up() -> bool:
@@ -109,11 +125,11 @@ class ParticipantWatchdog:
                 continue
 
             for camera in self.owner.cameras:
-                input_times = self.owner.camera_input_times[camera.name]
-                if not input_times or now - input_times[-1] <= camera_stall_grace_sec:
+                last_seen = self._camera_last_seen(camera.name)
+                if last_seen <= 0.0 or now - last_seen <= camera_stall_grace_sec:
                     continue
                 self.owner._restart_for_stale_participant(
-                    f"Camera '{camera.name}' produced no frames for over "
+                    f"Camera '{camera.name}' produced no image, pose, or native VIO for over "
                     f"{camera_stall_grace_sec:.0f}s after previously streaming "
                     "(likely a USB/link drop)"
                 )

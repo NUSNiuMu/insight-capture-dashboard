@@ -27,6 +27,7 @@ class _Manager:
         self.default_topics = ["/cam/a", "/cam/b", "/cam/c", "/tf_static"]
         self.storage_status = {"using_fallback": False, "active_path": str(root)}
         self.recording = False
+        self.recording_mode = "capture"
 
     def current_topic_catalog(self, refresh=True):
         return {"topics": list(self.default_topics)}
@@ -35,7 +36,12 @@ class _Manager:
         return self.recording
 
     def status(self):
-        return {"recording": self.recording, "storage": self.storage_status, "recent_output": []}
+        return {
+            "recording": self.recording,
+            "recording_mode": self.recording_mode,
+            "storage": self.storage_status,
+            "recent_output": [],
+        }
 
 
 class CaptureRuntimeTest(unittest.TestCase):
@@ -297,6 +303,53 @@ class CaptureRuntimeTest(unittest.TestCase):
             timeline = store.current()["anomaly_timeline"]
             self.assertEqual(timeline[0]["code"], "camera_stale:a")
             self.assertTrue(timeline[0]["affects_quality"])
+
+    def test_vio_calibration_qc_ignores_missing_rectified_dashboard_streams(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manager = _Manager(root)
+            manager.recording = True
+            manager.recording_mode = "vio_calibration"
+            node = SimpleNamespace(
+                cameras=[
+                    SimpleNamespace(name="insight3_a", label="Insight3 A"),
+                    SimpleNamespace(name="insight3_b", label="Insight3 B"),
+                    SimpleNamespace(name="insight9_a", label="Insight9 A"),
+                ],
+                camera_input_lock=threading.Lock(),
+                camera_input_times={
+                    "insight3_a": deque(maxlen=10),
+                    "insight3_b": deque(maxlen=10),
+                    "insight9_a": deque(maxlen=10),
+                },
+                build_mapping_payload=lambda: (_ for _ in ()).throw(
+                    AssertionError("mapping must not be checked")
+                ),
+                _recording_bridge=SimpleNamespace(
+                    snapshot_image_header_audit=lambda: {"topics": {}}
+                ),
+            )
+            alerts = VoiceAlertQueue()
+            store = SimpleNamespace(
+                add_anomaly=lambda _item: (_ for _ in ()).throw(
+                    AssertionError("rectified stream must not create an anomaly")
+                )
+            )
+            monitor = ActiveQcMonitor(
+                node,
+                manager,
+                store,
+                alerts,
+                {"sustain_sec": 0.5, "minimum_free_gb": 0},
+            )
+            monitor._pending_since["camera_stale:insight3_a"] = 1.0
+            monitor._active.add("localization:insight3_b")
+
+            monitor.poll()
+
+            self.assertEqual(alerts.since(0), [])
+            self.assertNotIn("camera_stale:insight3_a", monitor._pending_since)
+            self.assertNotIn("localization:insight3_b", monitor._active)
 
     def test_fallback_storage_warning_does_not_make_take_suspect(self):
         with tempfile.TemporaryDirectory() as temporary:

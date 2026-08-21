@@ -58,7 +58,11 @@ class VioCalibrationRecordingTest(unittest.TestCase):
             poses=[],
             camera_input_lock=threading.Lock(),
             camera_input_times={
-                camera.name: deque([now - 0.1, now], maxlen=10)
+                camera.name: (
+                    deque(maxlen=10)
+                    if camera.name.startswith("insight3")
+                    else deque([now - 0.1, now], maxlen=10)
+                )
                 for camera in cameras
             },
             build_mapping_payload=lambda: (_ for _ in ()).throw(
@@ -74,7 +78,11 @@ class VioCalibrationRecordingTest(unittest.TestCase):
         self.assertTrue(report["ok"], report)
         self.assertEqual(report["mode"], "vio_calibration")
         self.assertEqual(len(report["topics"]["required"]), 16)
-        self.assertNotIn("insight9_a", report["camera_health"])
+        self.assertEqual(report["camera_health"], {})
+        self.assertNotIn(
+            "camera_stale", {item["code"] for item in report["failures"]}
+        )
+        self.assertIn("未校正图像", preflight.speech(report))
 
     def test_payload_probe_uses_dashboard_rmw_instead_of_recorder_override(self):
         manager = RecordingManager(

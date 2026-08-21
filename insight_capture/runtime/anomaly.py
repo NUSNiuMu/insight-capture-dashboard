@@ -117,21 +117,31 @@ class ActiveQcMonitor:
         status = self.recording_manager.status()
         calibration_mode = status.get("recording_mode") == "vio_calibration"
         now = time.monotonic()
-        for camera in self.node.cameras:
-            if calibration_mode and camera.name not in {"insight3_a", "insight3_b"}:
-                continue
-            with self.node.camera_input_lock:
-                samples = list(self.node.camera_input_times.get(camera.name, []))
-            age = None if not samples else now - samples[-1]
-            self._observe(
-                f"camera_stale:{camera.name}",
-                age is None or age > self.camera_stale_sec,
-                f"{camera.label}图像中断，本条已记录异常。",
-                camera=camera.name,
-                age_sec=age,
-            )
+        if calibration_mode:
+            # Dashboard rectified streams are intentionally absent. The
+            # calibration start route already proves all four raw image
+            # payloads, so stale rectified callbacks are not a camera fault.
+            for code in list(self._pending_since):
+                if code.startswith(("camera_stale:", "localization:")):
+                    self._pending_since.pop(code, None)
+            self._active = {
+                code
+                for code in self._active
+                if not code.startswith(("camera_stale:", "localization:"))
+            }
+        else:
+            for camera in self.node.cameras:
+                with self.node.camera_input_lock:
+                    samples = list(self.node.camera_input_times.get(camera.name, []))
+                age = None if not samples else now - samples[-1]
+                self._observe(
+                    f"camera_stale:{camera.name}",
+                    age is None or age > self.camera_stale_sec,
+                    f"{camera.label}图像中断，本条已记录异常。",
+                    camera=camera.name,
+                    age_sec=age,
+                )
 
-        if not calibration_mode:
             mapping = self.node.build_mapping_payload()
             statuses = mapping.get("statuses") if isinstance(mapping, dict) else {}
             statuses = statuses if isinstance(statuses, dict) else {}

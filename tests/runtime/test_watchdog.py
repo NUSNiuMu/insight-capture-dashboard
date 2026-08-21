@@ -30,6 +30,26 @@ class ParticipantWatchdogTest(unittest.TestCase):
         owner.last_pose_received_time = {"a": 0.0, "b": 0.0, "c": 0.0}
         self.assertTrue(ParticipantWatchdog(owner)._any_ros_data_received())
 
+    def test_native_vio_keeps_raw_only_calibration_camera_alive(self) -> None:
+        owner = mock.MagicMock()
+        owner.camera_input_times = {"insight3_a": deque([10.0])}
+        owner.last_pose_received_time = {"insight3_a": 10.0}
+        owner.camera_liveness_times = {"insight3_a": 40.0}
+
+        watchdog = ParticipantWatchdog(owner)
+
+        self.assertEqual(watchdog._camera_last_seen("insight3_a"), 40.0)
+
+    def test_camera_is_stale_only_after_all_live_paths_stop(self) -> None:
+        owner = mock.MagicMock()
+        owner.camera_input_times = {"insight3_a": deque([10.0])}
+        owner.last_pose_received_time = {"insight3_a": 20.0}
+        owner.camera_liveness_times = {"insight3_a": 30.0}
+
+        watchdog = ParticipantWatchdog(owner)
+
+        self.assertEqual(watchdog._camera_last_seen("insight3_a"), 30.0)
+
     def test_prepared_playback_suspends_stale_participant_checks(self) -> None:
         watchdog = ParticipantWatchdog(_PlaybackOwner())
         with mock.patch(

@@ -481,6 +481,20 @@ def derive_conditions(snapshot: Mapping[str, Any], *, low_fps_ratio: float = 0.8
 
     api_cameras = dashboard.get("cameras")
     api_cameras = api_cameras if isinstance(api_cameras, Mapping) else {}
+    recording = snapshot.get("recording")
+    recording = recording if isinstance(recording, Mapping) else {}
+    calibration_recording = (
+        bool(recording.get("recording"))
+        and recording.get("recording_mode") == "vio_calibration"
+    )
+    raw_only_detected = all(
+        isinstance(api_cameras.get(name), Mapping)
+        and bool(api_cameras[name].get("stale"))
+        and bool(api_cameras[name].get("native_vio_fresh"))
+        and isinstance(camera_rows.get(name), Mapping)
+        and bool(camera_rows[name].get("http_ok"))
+        for name in ("insight3_a", "insight3_b")
+    )
     expected_domain = snapshot.get("expected_ros_domain_id")
     for name, camera in camera_rows.items():
         if not isinstance(camera, Mapping):
@@ -562,6 +576,15 @@ def derive_conditions(snapshot: Mapping[str, Any], *, low_fps_ratio: float = 0.8
                 summary=f"{name} is absent from the Dashboard camera API.",
                 evidence={"api_cameras": sorted(str(item) for item in api_cameras)},
             )
+            continue
+
+        if (
+            (calibration_recording or raw_only_detected)
+            and name in {"insight3_a", "insight3_b"}
+        ):
+            # The cameras intentionally publish raw stereo only. The start
+            # route validates those payloads before recording begins. Native
+            # VIO plus live HTTP distinguishes this from a camera-link loss.
             continue
 
         age = row.get("input_age_sec")
@@ -742,6 +765,10 @@ class CameraFailureMonitor:
             f"{self.args.api_url.rstrip('/')}/api/cameras",
             self.args.http_timeout,
         )
+        recording_payload, recording_error = _get_json(
+            f"{self.args.api_url.rstrip('/')}/api/recording/status",
+            self.args.http_timeout,
+        )
         dashboard_rows: dict[str, Any] = {}
         if dashboard_payload:
             for row in dashboard_payload.get("cameras", []):
@@ -843,8 +870,31 @@ class CameraFailureMonitor:
                 "error": dashboard_error,
                 "runtime": dashboard_payload.get("runtime") if dashboard_payload else None,
                 "cameras": dashboard_rows,
+                "insight3_raw_only_detected": all(
+                    isinstance(dashboard_rows.get(name), Mapping)
+                    and bool(dashboard_rows[name].get("stale"))
+                    and bool(dashboard_rows[name].get("native_vio_fresh"))
+                    for name in ("insight3_a", "insight3_b")
+                ),
             },
             "cameras": cameras,
+            "recording": {
+                "recording": bool(
+                    recording_payload and recording_payload.get("recording")
+                ),
+                "recording_mode": (
+                    recording_payload.get("recording_mode")
+                    if recording_payload
+                    else None
+                ),
+                "output_path": (
+                    recording_payload.get("output_path")
+                    if recording_payload
+                    else None
+                ),
+                "api_ok": recording_payload is not None,
+                "api_error": recording_error,
+            },
             "camera_identity_conflicts": identity_conflicts,
             "probed_peers": {
                 ip: {

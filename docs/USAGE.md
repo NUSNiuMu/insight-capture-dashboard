@@ -299,6 +299,9 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 只录 Insight3 A/B 的左右未校正图像、两路 CameraInfo、IMU、原生 VIO 诊断和
 `/tf_static`，固定为 17 个 topic，不包含 `/insight_global/.../pose`，也不计入当前
 Task/Take。开始前会逐路读取一帧原图；任一路只有 publisher 而没有 payload 时拒绝录制。
+相机切到只发未校正图像后，网页校正预览为空属于预期现象，不表示相机断开；校准录制以
+16 个非 latched topic 的发布者和四路原图实际 payload 为准。Dashboard 另用原生
+`vio_100hz` 判断相机链路存活，不能因校正预览停止而重启。
 完成后仍说“停止录制”。
 叠杯等重复任务在每条录制停止后，应将左右手两台 Insight3 放回固定治具，然后说“检查相机”。
 系统播报“开始检测”后进入 12 秒检测窗口；让头戴 Insight9 对准设置检测位时的工作区方向并
