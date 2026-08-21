@@ -32,6 +32,7 @@ REVIEW_WIDTH = 1280
 REVIEW_HEIGHT = 720
 REVIEW_BITRATE = 6_000_000
 MAX_TRAJECTORY_POINTS = 600
+VIO_CALIBRATION_MODE = "vio_calibration"
 
 
 class _Cancelled(RuntimeError):
@@ -433,9 +434,43 @@ def _select_recorded_streams(
     recorded_topics: Iterable[str],
     cameras: list[dict[str, object]],
     poses: list[dict[str, object]],
+    *,
+    recording_mode: str = "",
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """Keep configured playback streams that are actually present in the bag."""
     topics = {str(topic) for topic in recorded_topics}
+    if recording_mode == VIO_CALIBRATION_MODE:
+        selected_cameras = []
+        selected_poses = []
+        for camera in cameras:
+            name = str(camera.get("name", ""))
+            if name not in {"insight3_a", "insight3_b"}:
+                continue
+            left_raw_topic = f"/{name}/camera/infra1/image_raw"
+            if left_raw_topic in topics:
+                selected = dict(camera)
+                selected["topic"] = left_raw_topic
+                selected["calibration_eye"] = "left"
+                selected_cameras.append(selected)
+        if not selected_cameras:
+            raise ValueError(
+                "calibration bag contains no Insight3 left raw image topic for playback"
+            )
+        selected_names = {str(camera["name"]) for camera in selected_cameras}
+        pose_by_name = {str(pose.get("name", "")): pose for pose in poses}
+        for name in ("insight3_a", "insight3_b"):
+            native_vio_topic = f"/{name}/camera/vio_100hz"
+            configured = pose_by_name.get(name)
+            if (
+                name in selected_names
+                and configured is not None
+                and native_vio_topic in topics
+            ):
+                selected = dict(configured)
+                selected["topic"] = native_vio_topic
+                selected["coordinate_frame"] = "native_vio"
+                selected_poses.append(selected)
+        return selected_cameras, selected_poses
     selected_cameras = [
         dict(camera) for camera in cameras if str(camera.get("topic", "")) in topics
     ]
@@ -445,6 +480,15 @@ def _select_recorded_streams(
         dict(pose) for pose in poses if str(pose.get("topic", "")) in topics
     ]
     return selected_cameras, selected_poses
+
+
+def _recording_mode(bag_path: Path) -> str:
+    """Read the capture mode without making a damaged manifest break normal playback."""
+    try:
+        payload = json.loads((bag_path / MANIFEST_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return ""
+    return str(payload.get("recording_mode") or "") if isinstance(payload, dict) else ""
 
 
 def _bag_topic_stamps(
@@ -590,11 +634,19 @@ class PreparedPlaybackManager:
             recording_manager._cleanup_if_exited_unlocked()
             if recording_manager.processes:
                 raise RuntimeError("Cannot prepare playback while recording is active.")
+        recording_mode = _recording_mode(bag_path)
         cameras, poses = _select_recorded_streams(
-            _read_bag_topics(bag_path), cameras, poses
+            _read_bag_topics(bag_path),
+            cameras,
+            poses,
+            recording_mode=recording_mode,
         )
         signature = _source_signature(bag_path)
-        configuration = {"cameras": cameras, "poses": poses}
+        configuration = {
+            "recording_mode": recording_mode,
+            "cameras": cameras,
+            "poses": poses,
+        }
         if self._cache_valid(bag_name, signature, configuration):
             cached = json.loads(
                 (self._review_dir(bag_name) / "manifest.json").read_text(encoding="utf-8")

@@ -23,6 +23,7 @@ from insight_capture.postprocess.bags.synchronization import (  # noqa: E402
     _decode_review_image,
     _nearest_indices,
     _playback_frame,
+    _recording_mode,
     _review_cells,
     _review_content_size,
     _select_recorded_streams,
@@ -200,6 +201,86 @@ class PreparedPlaybackTest(unittest.TestCase):
                 [{"name": "left", "topic": "/left/image"}],
                 [{"name": "left", "topic": "/left/pose"}],
             )
+
+    def test_calibration_stream_selection_uses_left_raw_and_native_vio(self) -> None:
+        cameras = [
+            {
+                "name": "insight3_a",
+                "topic": "/insight3_a/camera/infra1/image_rect_raw",
+            },
+            {
+                "name": "insight3_b",
+                "topic": "/insight3_b/camera/infra1/image_rect_raw",
+            },
+            {
+                "name": "insight9_a",
+                "topic": "/insight9_a/camera/color/image_rect_raw/compressed",
+            },
+        ]
+        poses = [
+            {"name": "insight3_a", "topic": "/insight_global/insight3_a/pose"},
+            {"name": "insight3_b", "topic": "/insight_global/insight3_b/pose"},
+            {"name": "insight9_a", "topic": "/insight9_sparse_map/pose"},
+        ]
+        recorded = {
+            "/insight3_a/camera/infra1/image_raw",
+            "/insight3_a/camera/infra2/image_raw",
+            "/insight3_a/camera/vio_100hz",
+            "/insight3_b/camera/infra1/image_raw",
+            "/insight3_b/camera/infra2/image_raw",
+            "/insight3_b/camera/vio_100hz",
+        }
+
+        selected_cameras, selected_poses = _select_recorded_streams(
+            recorded, cameras, poses, recording_mode="vio_calibration"
+        )
+
+        self.assertEqual(
+            [item["topic"] for item in selected_cameras],
+            [
+                "/insight3_a/camera/infra1/image_raw",
+                "/insight3_b/camera/infra1/image_raw",
+            ],
+        )
+        self.assertEqual(
+            [item["calibration_eye"] for item in selected_cameras], ["left", "left"]
+        )
+        self.assertEqual(
+            [item["topic"] for item in selected_poses],
+            [
+                "/insight3_a/camera/vio_100hz",
+                "/insight3_b/camera/vio_100hz",
+            ],
+        )
+
+    def test_normal_stream_selection_does_not_substitute_raw_images(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no configured camera image topic"):
+            _select_recorded_streams(
+                {"/insight3_a/camera/infra1/image_raw"},
+                [
+                    {
+                        "name": "insight3_a",
+                        "topic": "/insight3_a/camera/infra1/image_rect_raw",
+                    }
+                ],
+                [],
+            )
+
+    def test_recording_mode_reads_calibration_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bag = Path(directory)
+            (bag / "recording_manifest.json").write_text(
+                json.dumps({"recording_mode": "vio_calibration"}), encoding="utf-8"
+            )
+
+            self.assertEqual(_recording_mode(bag), "vio_calibration")
+
+    def test_recording_mode_ignores_invalid_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bag = Path(directory)
+            (bag / "recording_manifest.json").write_text("{", encoding="utf-8")
+
+            self.assertEqual(_recording_mode(bag), "")
 
     def test_cache_key_includes_playback_schema(self) -> None:
         signature = [{"name": "bag.db3", "size": 10, "mtime_ns": 20}]

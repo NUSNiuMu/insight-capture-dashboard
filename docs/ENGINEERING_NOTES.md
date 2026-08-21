@@ -95,6 +95,9 @@
 - Prepared playback 必须使用 rosbag record timestamp 对齐图像与 Pose。不同相机的
   `header.stamp` 可能分别来自 Unix/NTP 和设备启动时钟，只能用于各 topic 内的节拍审计，
   不能直接求跨相机共同时间段；修改该规则时必须保留跨 header 时钟域回归测试。
+- `vio_calibration` 回放不复用正常采集的 rectified/global stream 配置；它固定将
+  Insight3 A/B 映射到各自 `infra1/image_raw` 左目图像和原生 `vio_100hz` Pose。右目仍是
+  校准 MCAP 的源数据，但不进入浏览器审阅合成视频。
 - 人工质检使用每个 rosbag 自带的 `review/` 派生包：三路图像只扫描一次并拼成一个
   1280×720、30 Hz H.264 视频，Pose 保持固定 30 Hz 清单。浏览器只解码一个视频并以
   `video.currentTime` 驱动 3D，禁止重新引入三路 `<video>` 的独立时钟和变速追赶。
