@@ -8,18 +8,23 @@ Insight3 localization、录制存储可写性和剩余空间，以及必要 reco
 
 ## Task Set / Take
 
-数据按两级组织：Task Set 表示长期维护的动作任务集，Take 表示其中的一条录制。目前只有
-“叠杯子”，配置在 `config/capture_tasks.json`。任务集使用稳定的 `task_id` 文件夹，不随日期、
-服务重启或退出后重新进入而重建；Take 编号在同一任务集中持续递增。
+数据按两级组织：Task Set 表示长期维护的动作任务集，Take 表示其中的一条录制。内置默认
+任务配置在 `config/capture_tasks.json`；数采员可在 Sessions 页面新建和编辑任务，不需要改
+配置或重启服务。任务集使用稳定的 `task_id` 文件夹，不随日期、服务重启或退出后重新进入
+而重建；Task ID 创建后不可修改，Take 编号在同一任务集中持续递增。
 
-Sessions 页面可选择并进入任务集；现场也可直接说“开始任务叠杯子”“当前任务多少条”
-“结束当前任务”。录制过程中不能切换或退出任务集。元数据保存在：
+Sessions 页面可新建、编辑、选择、进入和结束任务集；现场也可直接说“开始任务叠杯子”
+“当前任务多少条”“结束当前任务”。录制过程中不能新建、编辑、切换或退出任务集。没有
+当前任务时，网页和语音录制都会被拒绝，不会产生非任务 bag。元数据保存在：
 
 ```text
 outputs/results/sessions/<task_id>/
+  task.json
   session.json
   takes/take_0001.json
 ```
+
+`task.json` 是前端管理的持久任务定义，与发布镜像中的默认配置分离，因此升级后仍会保留。
 
 对应 raw bag 写入当前 Recorder 存储根目录下的 `<task_id>/`，例如
 `rosbags/cup_stacking/cup_stacking_take_0001_.../`。旧版当前日期 Session 的轻量元数据会在

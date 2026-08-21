@@ -189,8 +189,16 @@ img.camera-frame:not([src]) { visibility: hidden; }
 /* Bags */
 .session-summary { display: grid; margin-bottom: 18px; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 10px; }
 .task-set-panel { margin-bottom: 18px; }
-.task-set-controls { display: flex; align-items: center; gap: 10px; }
+.task-set-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
 .task-set-controls .field-control { flex: 1; }
+.task-editor-dialog { width: min(760px, calc(100vw - 36px)); padding: 0; border: 1px solid var(--line-dark); border-radius: 14px; color: var(--ink); background: var(--surface); box-shadow: 0 28px 90px rgba(42, 35, 24, .28); }
+.task-editor-dialog::backdrop { background: rgba(42, 35, 24, .42); backdrop-filter: blur(3px); }
+.task-editor-dialog form { padding: 22px; }
+.task-editor-heading, .task-editor-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.task-editor-heading h2 { margin: 2px 0 0; }
+.task-editor-grid { display: grid; margin-top: 8px; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 14px; }
+.task-editor-wide { grid-column: 1 / -1; }
+.task-editor-actions { margin-top: 20px; justify-content: flex-end; }
 .session-summary article { display: flex; min-width: 0; padding: 15px 16px; border: 1px solid var(--line); border-radius: 10px; flex-direction: column; gap: 6px; background: var(--surface); box-shadow: var(--shadow-sm); }
 .session-summary span, .take-row span { color: var(--muted-light); font-family: var(--mono); font-size: 8px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
 .session-summary strong { overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
@@ -579,6 +587,10 @@ body[data-dashboard-view="3d"] .section-kicker { color: var(--accent); }
   .record-hero { padding: 20px; }
   .bag-row { grid-template-columns: 1fr; }
   .session-summary, .take-row { grid-template-columns: 1fr; }
+  .task-set-controls { align-items: stretch; flex-direction: column; }
+  .task-set-controls > * { width: 100%; }
+  .task-editor-grid { grid-template-columns: 1fr; }
+  .task-editor-wide { grid-column: auto; }
   .umi-schema-grid, .umi-result { grid-template-columns: 1fr; }
   .umi-result-item { grid-template-columns: 1fr; }
   .bag-row-stats, .bag-row-badges, .bag-badges, .bag-row-actions { grid-column: auto; justify-content: flex-start; }

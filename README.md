@@ -214,7 +214,7 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 | `insight_capture.postprocess.quality.trajectory_score` | 对一份 rosbag 做轨迹评分（命令行工具，`--help` 看参数） |
 | `web_dashboard/` | Babylon.js Web 前端源码，`npm run build` 生成 `dist/` 静态页面 |
 | `config/runtime.json` | 录制、Preflight、Session/Take 和主动 QC 配置 |
-| `config/capture_tasks.json` | Task 名称、导出指令、采集 profile 与默认任务 |
+| `config/capture_tasks.json` | 内置 Task 名称、导出指令、采集 profile 与默认任务；前端新增任务持久化到 `outputs/results/sessions/<task_id>/task.json` |
 
 新增功能和迁移规则见 [项目结构规范](docs/PROJECT_STRUCTURE.md)。
 

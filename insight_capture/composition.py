@@ -118,7 +118,10 @@ def build_runtime_services(
 
     project_root = project_root.resolve()
     results_root = results_root.resolve()
-    task_catalog = CaptureTaskCatalog.load(project_root / "config" / "capture_tasks.json")
+    task_catalog = CaptureTaskCatalog.load(
+        project_root / "config" / "capture_tasks.json",
+        managed_root=results_root / "sessions",
+    )
     take_store = SessionTakeStore(
         results_root,
         runtime_config.get("capture_session"),

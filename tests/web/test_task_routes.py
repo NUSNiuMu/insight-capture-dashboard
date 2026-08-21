@@ -32,6 +32,17 @@ class _RecordingManager:
         return {"recording": True, "output_path": str(output_path)}
 
 
+class _JsonRequest:
+    can_read_body = True
+
+    def __init__(self, payload, *, task_id="") -> None:
+        self.payload = payload
+        self.match_info = {"task_id": task_id}
+
+    async def json(self):
+        return self.payload
+
+
 def _catalog() -> CaptureTaskCatalog:
     return CaptureTaskCatalog(
         [
@@ -122,6 +133,86 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 Path(payload["output_path"]).parent.name, "cup_stacking"
             )
+
+    async def test_created_and_edited_task_is_persisted_in_its_task_folder(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sessions_root = root / "sessions"
+            catalog = CaptureTaskCatalog(
+                [_catalog().get("cup_stacking")],
+                default_task_id="cup_stacking",
+                managed_root=sessions_root,
+            )
+            store = SessionTakeStore(root, task_catalog=catalog)
+            routes = TaskRoutes(
+                SimpleNamespace(
+                    take_store=store,
+                    recording_manager=_RecordingManager(),
+                )
+            )
+
+            created = await routes._handle_create(
+                _JsonRequest(
+                    {
+                        "id": "fold_towel",
+                        "name": "Fold towel",
+                        "speech_name": "叠毛巾",
+                        "instruction": "Fold the towel in half",
+                        "capture_profile": "dual_arm_umi",
+                        "voice_aliases": ["叠毛巾", "折毛巾"],
+                    }
+                )
+            )
+            updated = await routes._handle_update(
+                _JsonRequest(
+                    {"name": "Fold the towel", "instruction": "Fold once"},
+                    task_id="fold_towel",
+                )
+            )
+
+            self.assertEqual(created.status, 201)
+            self.assertEqual(json.loads(updated.text)["task"]["name"], "Fold the towel")
+            task_path = sessions_root / "fold_towel" / "task.json"
+            self.assertTrue(task_path.is_file())
+            persisted = json.loads(task_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["instruction"], "Fold once")
+            self.assertEqual(persisted["voice_aliases"], ["叠毛巾", "折毛巾"])
+            config_path = root / "capture_tasks.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "default_task_id": "cup_stacking",
+                        "tasks": [_catalog().get("cup_stacking").as_config_dict()],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            reloaded = CaptureTaskCatalog.load(
+                config_path, managed_root=sessions_root
+            )
+            self.assertEqual(reloaded.get("fold_towel").name, "Fold the towel")
+
+    async def test_recording_is_blocked_without_an_active_task(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = SessionTakeStore(root, task_catalog=_catalog())
+            store.end_task()
+            manager = _RecordingManager(root / "bags")
+            routes = RecordingRoutes(
+                SimpleNamespace(
+                    take_store=store,
+                    recording_manager=manager,
+                    capture_preflight=None,
+                )
+            )
+
+            response = await routes._start_with_preflight(
+                topics=["/camera"], bag_name=None, automation=False
+            )
+
+            self.assertEqual(response.status, 409)
+            self.assertEqual(manager.start_calls, [])
+            self.assertIn("No capture task", json.loads(response.text)["error"])
 
 
 if __name__ == "__main__":

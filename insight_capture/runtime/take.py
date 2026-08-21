@@ -8,7 +8,7 @@ import threading
 import time
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Mapping, Optional
 
 from .session import SessionMetadata
 from .tasks import CaptureTask, CaptureTaskCatalog
@@ -193,6 +193,33 @@ class SessionTakeStore:
             self._write_session()
             self._write_active_state()
             return self.task_status()
+
+    def create_task(self, payload: Mapping[str, object]) -> Dict[str, object]:
+        if self._task_catalog is None:
+            raise RuntimeError("Capture task management is not configured.")
+        with self._lock:
+            task = self._task_catalog.create(payload)
+            return task.as_dict()
+
+    def update_task(
+        self, task_id: str, payload: Mapping[str, object]
+    ) -> Dict[str, object]:
+        if self._task_catalog is None:
+            raise RuntimeError("Capture task management is not configured.")
+        with self._lock:
+            current = self.current()
+            if current and current.get("state") in {"starting", "recording", "finalizing"}:
+                raise RuntimeError("Cannot edit a task while a take is active.")
+            task = self._task_catalog.update(task_id, payload)
+            if self.task_id == task.task_id:
+                self.task = task.name
+                self.task_instruction = task.instruction
+                self.task_speech_name = task.speech_name
+                self.capture_profile = task.capture_profile
+                self.station_check_after_take = task.station_check_after_take
+                self._write_session()
+                self._write_active_state()
+            return task.as_dict()
 
     def end_task(self) -> Dict[str, object]:
         with self._lock:

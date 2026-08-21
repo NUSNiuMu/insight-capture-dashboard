@@ -3,6 +3,7 @@
 from aiohttp import web
 
 from insight_capture.api.context import DashboardContext
+from insight_capture.api.support import read_json_body
 
 
 def task_status_speech(status: dict) -> str:
@@ -36,6 +37,34 @@ class TaskRoutes:
     async def _handle_current(self, _request: web.Request) -> web.Response:
         status = self.context.take_store.task_status()
         return web.json_response({**status, "speech": task_status_speech(status)})
+
+    def _recording_conflict(self, action: str) -> web.Response | None:
+        if not self.context.recording_manager.status().get("recording"):
+            return None
+        return web.json_response(
+            {
+                "error": f"Cannot {action} a task while recording.",
+                "speech": "正在录制，不能修改任务。",
+            },
+            status=409,
+        )
+
+    async def _handle_create(self, request: web.Request) -> web.Response:
+        conflict = self._recording_conflict("create")
+        if conflict is not None:
+            return conflict
+        task = self.context.take_store.create_task(await read_json_body(request))
+        return web.json_response({"task": task}, status=201)
+
+    async def _handle_update(self, request: web.Request) -> web.Response:
+        conflict = self._recording_conflict("edit")
+        if conflict is not None:
+            return conflict
+        task_id = request.match_info.get("task_id", "").strip()
+        task = self.context.take_store.update_task(
+            task_id, await read_json_body(request)
+        )
+        return web.json_response({"task": task})
 
     async def _handle_activate(self, request: web.Request) -> web.Response:
         if self.context.recording_manager.status().get("recording"):
