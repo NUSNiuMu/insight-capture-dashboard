@@ -114,8 +114,12 @@ class ActiveQcMonitor:
             self._pending_since.clear()
             self._active.clear()
             return
+        status = self.recording_manager.status()
+        calibration_mode = status.get("recording_mode") == "vio_calibration"
         now = time.monotonic()
         for camera in self.node.cameras:
+            if calibration_mode and camera.name not in {"insight3_a", "insight3_b"}:
+                continue
             with self.node.camera_input_lock:
                 samples = list(self.node.camera_input_times.get(camera.name, []))
             age = None if not samples else now - samples[-1]
@@ -127,18 +131,26 @@ class ActiveQcMonitor:
                 age_sec=age,
             )
 
-        mapping = self.node.build_mapping_payload()
-        statuses = mapping.get("statuses") if isinstance(mapping, dict) else {}
-        statuses = statuses if isinstance(statuses, dict) else {}
-        for name in ("insight9", "insight3_a", "insight3_b"):
-            status = statuses.get(name) if isinstance(statuses.get(name), dict) else {}
-            broken = not status.get("online") or status.get("state") == "error"
-            if name.startswith("insight3"):
-                broken = broken or not status.get("localized")
-            self._observe(
-                f"localization:{name}", broken,
-                f"{name}定位异常，本条已标记复检。", service=name
-            )
+        if not calibration_mode:
+            mapping = self.node.build_mapping_payload()
+            statuses = mapping.get("statuses") if isinstance(mapping, dict) else {}
+            statuses = statuses if isinstance(statuses, dict) else {}
+            for name in ("insight9", "insight3_a", "insight3_b"):
+                mapping_status = (
+                    statuses.get(name)
+                    if isinstance(statuses.get(name), dict)
+                    else {}
+                )
+                broken = (
+                    not mapping_status.get("online")
+                    or mapping_status.get("state") == "error"
+                )
+                if name.startswith("insight3"):
+                    broken = broken or not mapping_status.get("localized")
+                self._observe(
+                    f"localization:{name}", broken,
+                    f"{name}定位异常，本条已标记复检。", service=name
+                )
 
         bridge = getattr(self.node, "_recording_bridge", None)
         audit = bridge.snapshot_image_header_audit() if bridge is not None else {}
@@ -149,7 +161,6 @@ class ActiveQcMonitor:
                 "检测到持续丢帧，本条已标记复检。", topic=topic, missing=missing
             )
 
-        status = self.recording_manager.status()
         storage = status.get("storage") or {}
         self._observe(
             "storage_fallback", bool(storage.get("using_fallback")),

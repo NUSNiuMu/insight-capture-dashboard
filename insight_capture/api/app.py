@@ -91,6 +91,10 @@ def create_app(context: DashboardContext) -> web.Application:
         recording._handle_automation_recording_start,
     )
     app.router.add_post(
+        "/api/automation/recording/vio-calibration/start",
+        recording._handle_automation_vio_calibration_start,
+    )
+    app.router.add_post(
         "/api/automation/recording/stop",
         recording._handle_automation_recording_stop,
     )

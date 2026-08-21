@@ -13,6 +13,10 @@ from aiohttp import web
 from insight_capture.postprocess.bags.integrity import analyze_bag
 from insight_capture.postprocess.bags import BagLibrary, list_rosbag_locations
 from insight_capture.api.support import read_disk_space, read_json_body, read_system_load
+from insight_capture.runtime.recording import (
+    build_vio_calibration_topics,
+    vio_calibration_raw_image_topics,
+)
 
 from insight_capture.api.context import DashboardContext
 
@@ -82,14 +86,32 @@ class RecordingRoutes:
         return await self._start_with_preflight(topics=topics, bag_name=bag_name, automation=False)
 
     async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
+        current = self.context.recording_manager.status()
         status = self.context.recording_manager.stop()
         take_store = getattr(self.context, "take_store", None)
-        take = take_store.complete_current(status) if take_store is not None else None
+        take = (
+            take_store.complete_current(status)
+            if take_store is not None
+            and current.get("recording_mode") != "vio_calibration"
+            else None
+        )
         return web.json_response({**status, "take": take})
 
-    async def _start_with_preflight(self, *, topics, bag_name, automation: bool) -> web.Response:
+    async def _start_with_preflight(
+        self,
+        *,
+        topics,
+        bag_name,
+        automation: bool,
+        preflight_mode: str = "capture",
+        track_take: bool = True,
+    ) -> web.Response:
         take_store = getattr(self.context, "take_store", None)
-        if take_store is not None and not take_store.task_status().get("active"):
+        if (
+            track_take
+            and take_store is not None
+            and not take_store.task_status().get("active")
+        ):
             return web.json_response(
                 {
                     "error": "No capture task is active.",
@@ -100,7 +122,10 @@ class RecordingRoutes:
         preflight_service = getattr(self.context, "capture_preflight", None)
         if preflight_service is not None:
             report = await asyncio.to_thread(
-                preflight_service.evaluate, topics, refresh_topics=True
+                preflight_service.evaluate,
+                topics,
+                refresh_topics=True,
+                mode=preflight_mode,
             )
             if not report.get("ok"):
                 speech = preflight_service.speech(report)
@@ -110,12 +135,38 @@ class RecordingRoutes:
                 )
         else:
             report = None
+        if preflight_mode == "vio_calibration":
+            probe = getattr(
+                self.context.recording_manager, "probe_topic_payloads", None
+            )
+            if not callable(probe):
+                return web.json_response(
+                    {
+                        "error": "Raw stereo payload check is unavailable.",
+                        "speech": "无法检查未校正双目图像，请检查数采服务。",
+                    },
+                    status=500,
+                )
+            payload_report = await asyncio.to_thread(
+                probe, vio_calibration_raw_image_topics()
+            )
+            if report is not None:
+                report["raw_image_payloads"] = payload_report
+            if not payload_report.get("ok"):
+                return web.json_response(
+                    {
+                        "error": "Raw stereo image payloads are missing.",
+                        "speech": "未校正双目图像没有数据，无法开始校准录制。",
+                        "preflight": report,
+                    },
+                    status=422,
+                )
         try:
             take = (
                 take_store.reserve_take(
                     bag_name, trigger="voice" if automation else "web"
                 )
-                if take_store is not None
+                if track_take and take_store is not None
                 else None
             )
         except RuntimeError as exc:
@@ -137,21 +188,23 @@ class RecordingRoutes:
         if automation and not actual_name:
             actual_name = time.strftime("looper_record_%Y%m%d_%H%M%S")
         try:
+            start_arguments = {"topics": topics, "bag_name": actual_name}
+            if preflight_mode != "capture":
+                start_arguments["recording_mode"] = preflight_mode
             status = await asyncio.to_thread(
-                self.context.recording_manager.start,
-                topics=topics,
-                bag_name=actual_name,
+                self.context.recording_manager.start, **start_arguments
             )
-            if take_store is not None:
+            if track_take and take_store is not None:
                 take = take_store.mark_recording(status.get("output_path"))
         except Exception as exc:
-            if take_store is not None:
+            if track_take and take_store is not None:
                 take_store.fail_start(exc)
             raise
         return web.json_response({
             **status,
             "automation": "openclaw" if automation else None,
             "trigger": "voice" if automation else "web",
+            "recording_mode": preflight_mode,
             "preflight": report,
             "take": take,
         })
@@ -176,6 +229,29 @@ class RecordingRoutes:
             automation=True,
         )
 
+    async def _handle_automation_vio_calibration_start(
+        self, _request: web.Request
+    ) -> web.Response:
+        """Start the fixed 17-topic raw stereo VIO calibration recording."""
+
+        current = self.context.recording_manager.status()
+        if current.get("recording"):
+            return web.json_response(
+                {
+                    "error": "Recording is already active.",
+                    "recording": True,
+                    "output_path": current.get("output_path"),
+                },
+                status=409,
+            )
+        return await self._start_with_preflight(
+            topics=build_vio_calibration_topics(),
+            bag_name=time.strftime("vio_calibration_%Y%m%d_%H%M%S"),
+            automation=True,
+            preflight_mode="vio_calibration",
+            track_take=False,
+        )
+
     async def _handle_automation_recording_stop(
         self, _request: web.Request
     ) -> web.Response:
@@ -186,12 +262,17 @@ class RecordingRoutes:
         output_path = str(current.get("output_path") or "")
         take_store = getattr(self.context, "take_store", None)
         current_take = take_store.current() if take_store is not None else None
+        calibration_owned = current.get("recording_mode") == "vio_calibration"
         voice_owned = (
             isinstance(current_take, dict)
             and current_take.get("trigger") == "voice"
             and Path(str(current_take.get("bag_path") or "")).name == Path(output_path).name
         )
-        if not voice_owned and not Path(output_path).name.startswith("looper_record_"):
+        if (
+            not calibration_owned
+            and not voice_owned
+            and not Path(output_path).name.startswith("looper_record_")
+        ):
             return web.json_response(
                 {
                     "error": "A manual recording is active; voice stop refused.",
@@ -201,7 +282,11 @@ class RecordingRoutes:
                 status=409,
             )
         status = self.context.recording_manager.stop()
-        take = take_store.complete_current(status) if take_store is not None else None
+        take = (
+            take_store.complete_current(status)
+            if take_store is not None and not calibration_owned
+            else None
+        )
         return web.json_response({"automation": "openclaw", "trigger": "voice", **status, "take": take})
 
     async def _handle_rosbag_list(self, request: web.Request) -> web.Response:

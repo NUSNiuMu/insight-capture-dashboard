@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Optional, Sequence
 
 from insight_capture.runtime.recording.storage import probe_recording_root
+from insight_capture.runtime.recording.recorder import VIO_CALIBRATION_CAMERA_NAMES
 from insight_capture.runtime.camera_health import evaluate_cameras
 
 
@@ -27,8 +28,15 @@ class CapturePreflight:
     def _failure(code: str, message: str, **details: object) -> Dict:
         return {"code": code, "message": message, "details": details}
 
-    def evaluate(self, topics: Optional[Sequence[str]] = None, *, refresh_topics: bool = True) -> Dict:
+    def evaluate(
+        self,
+        topics: Optional[Sequence[str]] = None,
+        *,
+        refresh_topics: bool = True,
+        mode: str = "capture",
+    ) -> Dict:
         now = time.monotonic()
+        calibration_mode = mode == "vio_calibration"
         failures = []
         warnings = []
         camera_health = {}
@@ -44,24 +52,45 @@ class CapturePreflight:
                 "storage": {},
                 "topics": {},
                 "fake": True,
+                "mode": mode,
             }
 
-        if len(self.node.cameras) != 3:
+        configured_camera_names = {camera.name for camera in self.node.cameras}
+        if calibration_mode:
+            missing_cameras = sorted(
+                set(VIO_CALIBRATION_CAMERA_NAMES) - configured_camera_names
+            )
+            if missing_cameras:
+                failures.append(
+                    self._failure(
+                        "camera_count",
+                        "Insight3校准相机配置不完整",
+                        cameras=missing_cameras,
+                    )
+                )
+        elif len(self.node.cameras) != 3:
             failures.append(self._failure(
                 "camera_count", f"应有三台相机，当前配置{len(self.node.cameras)}台"
             ))
         camera_health, camera_failures = evaluate_cameras(
-            self.node, self.camera_stale_sec, now=now
+            self.node,
+            self.camera_stale_sec,
+            now=now,
+            camera_names=(VIO_CALIBRATION_CAMERA_NAMES if calibration_mode else None),
         )
         failures.extend(camera_failures)
 
-        mapping = self.node.build_mapping_payload()
+        mapping = {} if calibration_mode else self.node.build_mapping_payload()
         statuses = mapping.get("statuses") if isinstance(mapping, dict) else {}
         statuses = statuses if isinstance(statuses, dict) else {}
         insight9 = statuses.get("insight9") if isinstance(statuses.get("insight9"), dict) else {}
-        if self.require_mapping and (not insight9.get("online") or insight9.get("state") == "error"):
+        if (
+            not calibration_mode
+            and self.require_mapping
+            and (not insight9.get("online") or insight9.get("state") == "error")
+        ):
             failures.append(self._failure("mapping_not_ready", "Insight9建图状态未就绪"))
-        if self.require_localization:
+        if not calibration_mode and self.require_localization:
             for name in ("insight3_a", "insight3_b"):
                 status = statuses.get(name) if isinstance(statuses.get(name), dict) else {}
                 if not status.get("online") or not status.get("localized"):
@@ -69,7 +98,7 @@ class CapturePreflight:
                         "localization_not_ready", f"{name}全局定位未就绪", camera=name
                     ))
 
-        for pose in self.node.poses:
+        for pose in (() if calibration_mode else self.node.poses):
             received = float(self.node.last_pose_received_time.get(pose.name, 0.0))
             age = None if received <= 0 else max(0.0, now - received)
             if age is None or age > self.pose_stale_sec:
@@ -116,11 +145,15 @@ class CapturePreflight:
             catalog = {"topics": []}
             failures.append(self._failure("topic_discovery_failed", f"录制话题检查失败：{exc}"))
         available = set(catalog.get("topics") or [])
-        required_topics = {
-            *(camera.topic for camera in self.node.cameras),
-            *(pose.topic for pose in self.node.poses),
-            *(topic for topic in selected if topic.endswith(("/imu", "/vio_100hz"))),
-        }
+        required_topics = (
+            {topic for topic in selected if topic != "/tf_static"}
+            if calibration_mode
+            else {
+                *(camera.topic for camera in self.node.cameras),
+                *(pose.topic for pose in self.node.poses),
+                *(topic for topic in selected if topic.endswith(("/imu", "/vio_100hz"))),
+            }
+        )
         missing = sorted(
             topic for topic in required_topics
             if topic != "/tf_static" and topic not in available
@@ -136,6 +169,7 @@ class CapturePreflight:
 
         return {
             "type": "capture_preflight",
+            "mode": mode,
             "ok": not failures,
             "checked_at_epoch_s": time.time(),
             "failures": failures,

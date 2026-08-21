@@ -17,19 +17,27 @@ class _RecordingManager:
         self.output_path = output_path
         self.start_calls = []
         self.stop_calls = 0
+        self.recording_mode = None
+        self.payload_report = {"ok": True, "topics": {}, "missing": []}
 
     def status(self):
         return {
             "recording": self.recording,
             "output_path": self.output_path,
             "merge_state": "idle",
+            "recording_mode": self.recording_mode,
         }
 
-    def start(self, *, topics, bag_name):
+    def start(self, *, topics, bag_name, recording_mode="capture"):
         self.start_calls.append((topics, bag_name))
         self.recording = True
+        self.recording_mode = recording_mode
         self.output_path = f"/bags/{bag_name}"
         return self.status()
+
+    def probe_topic_payloads(self, topics):
+        self.probed_topics = list(topics)
+        return self.payload_report
 
     def stop(self):
         self.stop_calls += 1
@@ -78,6 +86,35 @@ class OpenClawAutomationRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 409)
         self.assertEqual(manager.start_calls, [])
 
+    async def test_vio_calibration_start_uses_fixed_17_topic_contract(self):
+        manager = _RecordingManager()
+        routes = RecordingRoutes(_Context(manager))
+
+        response = await routes._handle_automation_vio_calibration_start(None)
+
+        self.assertEqual(response.status, 200)
+        topics, bag_name = manager.start_calls[0]
+        self.assertEqual(len(topics), 17)
+        self.assertEqual(topics[-1], "/tf_static")
+        self.assertNotIn("/insight_global/insight3_a/pose", topics)
+        self.assertTrue(bag_name.startswith("vio_calibration_"))
+        self.assertEqual(manager.recording_mode, "vio_calibration")
+        self.assertEqual(len(manager.probed_topics), 4)
+
+    async def test_vio_calibration_start_rejects_source_silent_raw_images(self):
+        manager = _RecordingManager()
+        manager.payload_report = {
+            "ok": False,
+            "topics": {},
+            "missing": ["/insight3_b/camera/infra2/image_raw"],
+        }
+        routes = RecordingRoutes(_Context(manager))
+
+        response = await routes._handle_automation_vio_calibration_start(None)
+
+        self.assertEqual(response.status, 422)
+        self.assertEqual(manager.start_calls, [])
+
     async def test_stop_refuses_manual_recording(self):
         manager = _RecordingManager(
             recording=True,
@@ -102,6 +139,19 @@ class OpenClawAutomationRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(manager.stop_calls, 1)
         self.assertFalse(_payload(response)["recording"])
+
+    async def test_stop_accepts_vio_calibration_recording(self):
+        manager = _RecordingManager(
+            recording=True,
+            output_path="/bags/vio_calibration_20260821_100000",
+        )
+        manager.recording_mode = "vio_calibration"
+        routes = RecordingRoutes(_Context(manager))
+
+        response = await routes._handle_automation_recording_stop(None)
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(manager.stop_calls, 1)
 
 
 if __name__ == "__main__":

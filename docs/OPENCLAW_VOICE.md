@@ -19,6 +19,11 @@ Dashboard 容器不挂载 `/dev/snd`。固定命令的完整链路为：
 - 结束当前任务：结束本批 Session；录制中拒绝执行，再次开始同一 Task 会新建 Session；
 - 开始录制：先运行三相机、定位、存储、必要 topics 与数据新鲜度 Preflight；失败时
   拒绝开始并直接播报原因；
+- 录制校准模式：立即开始一条独立的 VIO 调试 bag，不占用 Task/Take 编号。固定录制
+  Insight3 A/B 的左右未校正图像、左右 CameraInfo、IMU、`vio_100hz`、`vio_image`、
+  `vio_status` 和公共 `/tf_static`，合计 17 个 topic；不录 `/insight_global/.../pose`，
+  也不要求 Insight9 建图或 Insight3 全局定位。开始前必须确认四路 `image_raw` 均收到
+  实际消息，而不只是存在 publisher；
 - 停止录制：等待原生 MCAP recorder 排空，并写入 Take quick QC；
 - 开始校准：清空 Insight9 sparse map 与两路 Insight3 global localization 状态；
 - 检查相机：运行可选的固定检测位检查，并写入最近 Take；未通过时按右手、左手、头部

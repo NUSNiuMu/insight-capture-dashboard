@@ -557,7 +557,10 @@ class VoiceService:
             ) as response:
                 payload = json.loads(response.read())
         except urllib.error.HTTPError as exc:
-            if action == "recording_start" and exc.code == 409:
+            if action in {
+                "recording_start",
+                "vio_calibration_recording_start",
+            } and exc.code == 409:
                 return "recording_already_active"
             try:
                 error_payload = json.loads(exc.read())
@@ -570,7 +573,10 @@ class VoiceService:
         if not isinstance(payload, dict):
             raise RuntimeError("Dashboard API returned a non-object payload")
         request_sec = time.monotonic() - request_started
-        if action == "recording_start" and not payload.get("recording"):
+        if action in {
+            "recording_start",
+            "vio_calibration_recording_start",
+        } and not payload.get("recording"):
             raise RuntimeError("Dashboard did not start recording")
         if action == "recording_stop" and payload.get("recording"):
             raise RuntimeError("Dashboard did not stop recording")
@@ -579,7 +585,7 @@ class VoiceService:
             raise RuntimeError(str(message))
         dashboard_start_timings = (
             dict(payload.get("start_timings") or {})
-            if action == "recording_start"
+            if action in {"recording_start", "vio_calibration_recording_start"}
             else {}
         )
         self._last_local_command_timing = {
@@ -603,6 +609,11 @@ class VoiceService:
             return capture_check_reply_key(payload)
         if action == "capture_reference":
             return capture_check_reply_key(payload, reference=True)
+        if (
+            action == "recording_stop"
+            and payload.get("recording_mode") == "vio_calibration"
+        ):
+            return "vio_calibration_recording_stopped"
         if action in {
             "system_status",
             "take_reject",
@@ -806,6 +817,9 @@ class VoiceService:
             immediate_feedback_sec = 0.0
             immediate_feedback = {
                 "recording_start": "recording_starting",
+                "vio_calibration_recording_start": (
+                    "vio_calibration_recording_starting"
+                ),
                 "recording_stop": "recording_stopping",
                 "capture_check": "capture_check_started",
             }.get(local_action)
@@ -884,9 +898,13 @@ class VoiceService:
                 **timing,
             )
             if (
-                local_action == "recording_start"
+                local_action
+                in {"recording_start", "vio_calibration_recording_start"}
                 and command_succeeded
-                and reply_key == "recording_started"
+                and reply_key in {
+                    "recording_started",
+                    "vio_calibration_recording_started",
+                }
                 and not feedback_played
             ):
                 self._rollback_unconfirmed_recording()

@@ -286,7 +286,7 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
      不对外说明，仅看结果即可。
 
 设备可以直接说“开始任务叠杯子”“当前任务多少条”“结束当前任务”“开始录制”、
-“停止录制”“开始校准”“检查相机”“系统状态”或“本条作废”，无需先说唤醒词；
+“录制校准模式”“停止录制”“开始校准”“检查相机”“系统状态”或“本条作废”，无需先说唤醒词；
 这些固定短指令调用本机 Dashboard 并播放本地确认语音，
 不依赖 OpenClaw、Gateway 或网络。
 开始/停止录制在识别后会立即播报“初始化录制中，请稍等”/“正在结束录制”，待 rosbag 真正就绪或
@@ -294,6 +294,12 @@ docker exec -w /workspaces/insight_capture insight-dashboard \
 需要自然语言操作时，单独说“宸境”并停顿 0.5 秒，听到“我在”后再说下一句话；这句话
 固定交给 OpenClaw。这里的“开始校准”会清空旧地图和全局定位状态，开始新一轮在线校准。
 当两路 Insight3 首次都完成全局定位时，音响会再播报一次“校准完成”。
+
+“录制校准模式”与“开始校准”不同：前者直接开始一条 `vio_calibration_时间戳` MCAP，
+只录 Insight3 A/B 的左右未校正图像、两路 CameraInfo、IMU、原生 VIO 诊断和
+`/tf_static`，固定为 17 个 topic，不包含 `/insight_global/.../pose`，也不计入当前
+Task/Take。开始前会逐路读取一帧原图；任一路只有 publisher 而没有 payload 时拒绝录制。
+完成后仍说“停止录制”。
 叠杯等重复任务在每条录制停止后，应将左右手两台 Insight3 放回固定治具，然后说“检查相机”。
 系统播报“开始检测”后进入 12 秒检测窗口；让头戴 Insight9 对准设置检测位时的工作区方向并
 小范围缓慢扫动。系统同时比较两台 Insight3 的固定 Pose，并要求 Insight9 相对批次开始时冻结

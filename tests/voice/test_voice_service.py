@@ -65,6 +65,10 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
 
     def test_local_command_matching_is_exact_and_accepts_polite_forms(self):
         self.assertEqual(match_local_command("开始录制。"), "recording_start")
+        self.assertEqual(
+            match_local_command("录制校准模式。"),
+            "vio_calibration_recording_start",
+        )
         self.assertEqual(match_local_command("请停止录制"), "recording_stop")
         self.assertEqual(match_local_command("帮我重新校准一下"), "calibration_start")
         self.assertEqual(match_local_command("检查相机"), "capture_check")
@@ -452,6 +456,37 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         ask_openclaw.assert_not_called()
         rollback.assert_not_called()
 
+    def test_vio_calibration_command_uses_dedicated_feedback(self):
+        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        events = []
+
+        def execute(action):
+            events.append(("execute", action))
+            return "vio_calibration_recording_started"
+
+        def speak(key):
+            events.append(("speak", key))
+            return True
+
+        with (
+            mock.patch.object(
+                bridge, "execute_local_command", side_effect=execute
+            ),
+            mock.patch.object(bridge, "speak_canned", side_effect=speak),
+            mock.patch.object(bridge, "ask_openclaw") as ask_openclaw,
+        ):
+            bridge.handle_utterance("录制校准模式")
+
+        self.assertEqual(
+            events,
+            [
+                ("speak", "vio_calibration_recording_starting"),
+                ("execute", "vio_calibration_recording_start"),
+                ("speak", "vio_calibration_recording_started"),
+            ],
+        )
+        ask_openclaw.assert_not_called()
+
     def test_recording_is_rolled_back_when_start_feedback_fails(self):
         bridge = OpenClawVoiceBridge(SimpleNamespace())
         with (
@@ -638,6 +673,28 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(
             bridge._last_local_command_timing["dashboard_start_timings"]["total_sec"],
             2.7,
+        )
+
+    def test_vio_calibration_command_calls_dedicated_endpoint(self):
+        bridge = OpenClawVoiceBridge(
+            SimpleNamespace(
+                dashboard_url="http://127.0.0.1:8765/",
+                dashboard_timeout_sec=7.0,
+            )
+        )
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = (
+            b'{"recording": true, "recording_mode": "vio_calibration"}'
+        )
+        with mock.patch("urllib.request.urlopen", return_value=response) as urlopen:
+            reply_key = bridge.execute_local_command(
+                "vio_calibration_recording_start"
+            )
+
+        self.assertEqual(reply_key, "vio_calibration_recording_started")
+        self.assertEqual(
+            urlopen.call_args.args[0].full_url,
+            "http://127.0.0.1:8765/api/automation/recording/vio-calibration/start",
         )
 
     def test_task_status_uses_deterministic_local_endpoint_and_dynamic_reply(self):

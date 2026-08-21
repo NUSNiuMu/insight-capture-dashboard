@@ -6,6 +6,11 @@ from typing import Iterable, Optional
 
 LOCAL_COMMAND_ALIASES = {
     "recording_start": ("开始录制", "开始录像", "开始采集"),
+    "vio_calibration_recording_start": (
+        "录制校准模式",
+        "开始录制校准模式",
+        "开始校准录制",
+    ),
     "recording_stop": ("结束录制", "停止录制", "结束录像", "停止录像", "结束采集", "停止采集"),
     "calibration_start": ("开始校准", "重新校准", "重置校准"),
     "capture_check": ("检查相机", "开始检测", "位置检测", "检测相机"),
@@ -32,6 +37,9 @@ LOCAL_COMMAND_ALIASES = {
 
 LOCAL_COMMAND_ENDPOINTS = {
     "recording_start": "/api/automation/recording/start",
+    "vio_calibration_recording_start": (
+        "/api/automation/recording/vio-calibration/start"
+    ),
     "recording_stop": "/api/automation/recording/stop",
     "calibration_start": "/api/mapping/reset",
     "capture_check": "/api/capture-check/run",
@@ -45,6 +53,7 @@ LOCAL_COMMAND_ENDPOINTS = {
 
 LOCAL_COMMAND_REPLY_KEYS = {
     "recording_start": "recording_started",
+    "vio_calibration_recording_start": "vio_calibration_recording_started",
     "recording_stop": "recording_stopped",
     "calibration_start": "calibration_started",
     "capture_check": "capture_check_not_ready",

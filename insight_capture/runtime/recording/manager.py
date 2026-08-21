@@ -1,6 +1,7 @@
 """Recording lifecycle, crash recovery, and composite-session publishing."""
 
 import contextlib
+import concurrent.futures
 import json
 import os
 import pty
@@ -180,6 +181,7 @@ class RecordingManager:
         self._staging_dir: Optional[Path] = None
         self.output_path: Optional[str] = None
         self.started_at: Optional[float] = None
+        self.recording_mode: Optional[str] = None
         self.current_topics: List[str] = []
         self.topic_catalog = build_recording_topic_catalog(raw_config, [], self.default_topics)
         self._output_lines: Deque[str] = deque(maxlen=200)
@@ -447,10 +449,70 @@ class RecordingManager:
         with self._lock:
             return self.topic_catalog
 
+    def probe_topic_payloads(
+        self, topics: Sequence[str], *, timeout_sec: float = 5.0
+    ) -> Dict[str, object]:
+        """Read one header from each topic so advertised-only streams fail closed."""
+
+        selected = _normalize_topics(topics)
+        env = os.environ.copy()
+        env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
+        env["ROS2CLI_NO_DAEMON"] = "1"
+        # Use the Dashboard's default RMW for the temporary probes. The native
+        # recorder may deliberately use a different implementation that is
+        # installed only inside the release container.
+        env.pop("RMW_IMPLEMENTATION", None)
+
+        def probe(topic: str) -> tuple[str, Dict[str, object]]:
+            started = time.monotonic()
+            try:
+                completed = subprocess.run(
+                    [
+                        "ros2",
+                        "topic",
+                        "echo",
+                        "--once",
+                        topic,
+                        "--field",
+                        "header",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=max(0.2, float(timeout_sec)),
+                    env=env,
+                    check=False,
+                )
+                ok = completed.returncode == 0
+                error = (
+                    ""
+                    if ok
+                    else (completed.stderr or "topic returned no payload").strip()
+                )
+            except subprocess.TimeoutExpired:
+                ok = False
+                error = f"no payload within {float(timeout_sec):g}s"
+            except OSError as exc:
+                ok = False
+                error = str(exc)
+            return topic, {
+                "ok": ok,
+                "elapsed_sec": round(time.monotonic() - started, 3),
+                "error": error,
+            }
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, min(4, len(selected)))
+        ) as executor:
+            results = dict(executor.map(probe, selected))
+        missing = [topic for topic in selected if not results[topic]["ok"]]
+        return {"ok": not missing, "topics": results, "missing": missing}
+
     def start(
         self,
         topics: Optional[Sequence[str]] = None,
         bag_name: Optional[str] = None,
+        recording_mode: str = "capture",
     ) -> Dict[str, object]:
         start_started = time.perf_counter()
         selected_topics = self.default_topics if topics is None else _normalize_topics(topics)
@@ -635,6 +697,7 @@ class RecordingManager:
             self._network_audit = None
             self.output_path = str(output_path)
             self.started_at = time.time()
+            self.recording_mode = str(recording_mode or "capture")
             self.current_topics = list(selected_topics)
             self._recording_manifest = {
                 "version": 3 if single_writer else 2,
@@ -642,6 +705,7 @@ class RecordingManager:
                 "storage_id": self.storage_id,
                 "rmw_implementation": self.recording_rmw_implementation,
                 "bag_name": name,
+                "recording_mode": self.recording_mode,
                 "selected_topics": list(selected_topics),
                 "started_at_epoch_s": self.started_at,
             }
@@ -1058,6 +1122,7 @@ class RecordingManager:
             recording = bool(self.processes) or self._image_writer_active
             return {
                 "recording": recording,
+                "recording_mode": self.recording_mode,
                 "output_path": self.output_path,
                 "topic_catalog": catalog,
                 "recent_output": output_lines,

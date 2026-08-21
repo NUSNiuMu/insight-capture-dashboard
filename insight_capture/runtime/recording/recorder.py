@@ -6,6 +6,42 @@ from typing import Callable, Dict, List, Optional, Sequence, Set
 
 from insight_capture.core.config import camera_base, camera_info_topic, enabled_cameras, image_topic
 
+
+VIO_CALIBRATION_CAMERA_NAMES = ("insight3_a", "insight3_b")
+
+
+def build_vio_calibration_topics() -> List[str]:
+    """Return the fixed raw stereo and VIO diagnostic recording contract."""
+
+    topics: List[str] = []
+    for name in VIO_CALIBRATION_CAMERA_NAMES:
+        base = camera_base(name)
+        topics.extend(
+            [
+                f"{base}/infra1/image_raw",
+                f"{base}/infra2/image_raw",
+                f"{base}/infra1/camera_info",
+                f"{base}/infra2/camera_info",
+                f"{base}/imu",
+                f"{base}/vio_100hz",
+                f"{base}/vio_image",
+                f"{base}/vio_status",
+            ]
+        )
+    topics.append("/tf_static")
+    return topics
+
+
+def vio_calibration_raw_image_topics() -> List[str]:
+    """Return raw stereo topics that must deliver payload before capture."""
+
+    return [
+        f"{camera_base(name)}/{stream}/image_raw"
+        for name in VIO_CALIBRATION_CAMERA_NAMES
+        for stream in ("infra1", "infra2")
+    ]
+
+
 def _normalize_topic_name(topic: str) -> str:
     value = str(topic or "").strip()
     if not value:

@@ -15,8 +15,12 @@
   直接访问 loopback Dashboard API，并播放服务启动时生成的缓存回复，不需要唤醒；
   固定开始/停止录制在调用 API 前先播放缓存的处理中提示，DDS 订阅或 writer 排空完成后
   再播放最终结果，不能让同步 HTTP 等待表现成语音无响应；
+  “录制校准模式”使用独立 `vio_calibration` 路径，固定选择 Insight3 A/B 原始双目、
+  CameraInfo、IMU、原生 VIO 诊断与 `/tf_static` 共 17 个 topic。它不依赖全局定位或
+  Insight9 建图，不创建普通 Task/Take；开始前通过短生命周期订阅确认四路 raw image
+  均有实际 payload，探针沿用 Dashboard 默认 RMW，正式 MCAP recorder 仍使用 CycloneDDS；
   “宸境”只打开 OpenClaw 模式，随后一句固定发送给 OpenClaw。自动停止接口只允许结束
-  `looper_record_*`，避免误停网页、
+  `looper_record_*` 或当前标记为 `vio_calibration` 的录制，避免误停网页、
   手势或其他控制器创建的录制。
 - 语音“开始校准”成功 reset 后，后台监控必须先观察到本轮未完成状态，再以 Insight3 A、B
   首次同时 `localized=true` 作为完成条件并只播报一次。所有语音播放共用进程锁，避免

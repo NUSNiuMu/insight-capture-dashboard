@@ -7,8 +7,11 @@ from typing import Iterable
 CANNED_REPLIES = {
     "recording_starting": "初始化录制中，请稍等。",
     "recording_started": "录制已经开始。",
+    "vio_calibration_recording_starting": "初始化校准录制中，请稍等。",
+    "vio_calibration_recording_started": "校准数据录制已经开始。",
     "recording_stopping": "正在结束录制。",
     "recording_stopped": "录制已经结束，请重新校准。",
+    "vio_calibration_recording_stopped": "校准数据录制已经结束。",
     "calibration_started": "校准已经开始。",
     "calibration_completed": "校准完成。",
     "capture_check_started": "开始检测。",

@@ -1,14 +1,22 @@
 """Low-cost camera freshness checks shared by preflight and active QC."""
 
 import time
-from typing import Dict, Tuple
+from typing import Collection, Dict, Optional, Tuple
 
 
-def evaluate_cameras(node, stale_sec: float, *, now: float | None = None) -> Tuple[Dict, list[Dict]]:
+def evaluate_cameras(
+    node,
+    stale_sec: float,
+    *,
+    now: float | None = None,
+    camera_names: Optional[Collection[str]] = None,
+) -> Tuple[Dict, list[Dict]]:
     current = time.monotonic() if now is None else float(now)
     health: Dict[str, Dict] = {}
     failures: list[Dict] = []
     for camera in node.cameras:
+        if camera_names is not None and camera.name not in camera_names:
+            continue
         with node.camera_input_lock:
             samples = list(node.camera_input_times.get(camera.name, []))
         age = None if not samples else max(0.0, current - samples[-1])
