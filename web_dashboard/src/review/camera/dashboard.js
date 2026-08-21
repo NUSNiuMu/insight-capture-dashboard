@@ -39,6 +39,7 @@ export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
     cameraNames: new Set(entries.map((camera) => camera.name)),
     videos: new Map(),
     statsTimer: null,
+    animationFrame: null,
     stopped: false,
   };
   preparedPlaybackSession = session;
@@ -139,6 +140,14 @@ export async function startPreparedCameraPlayback(manifest, callbacks = {}) {
     }
   }, { once: true });
   await Promise.all(Array.from(session.videos.values(), (video) => video.play()));
+  const updatePlaybackTimeline = () => {
+    if (preparedPlaybackSession !== session || session.stopped) return;
+    if (typeof callbacks.onTime === "function") {
+      callbacks.onTime(Number(master.currentTime || 0));
+    }
+    session.animationFrame = window.requestAnimationFrame(updatePlaybackTimeline);
+  };
+  session.animationFrame = window.requestAnimationFrame(updatePlaybackTimeline);
   session.statsTimer = window.setInterval(() => {
     if (preparedPlaybackSession !== session || session.stopped) return;
     const playbackQuality = samplePreparedPlaybackQuality(masterName, master);
@@ -164,6 +173,10 @@ export function stopPreparedCameraPlayback() {
   if (!session) return;
   session.stopped = true;
   if (session.statsTimer) window.clearInterval(session.statsTimer);
+  if (session.animationFrame !== null) {
+    window.cancelAnimationFrame(session.animationFrame);
+    session.animationFrame = null;
+  }
   for (const [name, video] of session.videos) {
     video.pause();
     video.playbackRate = 1;

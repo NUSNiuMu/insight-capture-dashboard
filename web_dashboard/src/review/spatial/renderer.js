@@ -70,14 +70,13 @@ let capturePerformanceMode = false;
 let configuredDisplayFps = 30;
 let sceneFrameIntervalMs = 1000 / 30;
 let traceCapacity = 300;
-let sceneRenderTimer = null;
+let sceneRenderFrame = null;
 let viewportResizeObserver = null;
 const sceneFrameTimes = [];
 const sceneWorkSamples = [];
 const legendPoseLabels = new Map();
 let lastTrailRenderAt = 0;
 let preparedPlaybackMode = false;
-let preparedTrailsRendered = false;
 
 if (engine && scene) {
   engine.setHardwareScalingLevel(DEFAULT_HARDWARE_SCALING_LEVEL);
@@ -85,13 +84,8 @@ if (engine && scene) {
   let lastSceneRenderAt = nextSceneFrameAt;
   const renderSceneFrame = () => {
     const now = performance.now();
-    if (now < nextSceneFrameAt) {
-      sceneRenderTimer = window.setTimeout(
-        renderSceneFrame,
-        Math.max(0, nextSceneFrameAt - now)
-      );
-      return;
-    }
+    sceneRenderFrame = window.requestAnimationFrame(renderSceneFrame);
+    if (now + 0.5 < nextSceneFrameAt) return;
     if (now - nextSceneFrameAt >= sceneFrameIntervalMs) {
       nextSceneFrameAt = now;
     }
@@ -106,12 +100,8 @@ if (engine && scene) {
     scene.render();
     engine.endFrame();
     recordSceneFrame(workStartedAt);
-    sceneRenderTimer = window.setTimeout(
-      renderSceneFrame,
-      Math.max(0, nextSceneFrameAt - performance.now())
-    );
   };
-  sceneRenderTimer = window.setTimeout(renderSceneFrame, sceneFrameIntervalMs);
+  sceneRenderFrame = window.requestAnimationFrame(renderSceneFrame);
   window.addEventListener("resize", () => engine.resize());
   if (window.ResizeObserver) {
     viewportResizeObserver = new ResizeObserver(() => engine.resize());
@@ -201,7 +191,6 @@ export function clearRenderedTrajectories() {
 
 export function beginPreparedPlayback(payload) {
   preparedPlaybackMode = true;
-  preparedTrailsRendered = false;
   dashboardOrigin = null;
   refreshHardwareScalingLevel();
   clearRenderedTrajectories();
@@ -210,16 +199,15 @@ export function beginPreparedPlayback(payload) {
 
 export function endPreparedPlayback() {
   preparedPlaybackMode = false;
-  preparedTrailsRendered = false;
   dashboardOrigin = null;
   refreshHardwareScalingLevel();
   clearRenderedTrajectories();
 }
 
 export function stopSpatialRenderer() {
-  if (sceneRenderTimer !== null) {
-    window.clearTimeout(sceneRenderTimer);
-    sceneRenderTimer = null;
+  if (sceneRenderFrame !== null) {
+    window.cancelAnimationFrame(sceneRenderFrame);
+    sceneRenderFrame = null;
   }
   if (viewportResizeObserver) {
     viewportResizeObserver.disconnect();
@@ -388,7 +376,7 @@ function applyPoseUpdate(payload) {
       visible,
     });
     node.setEnabled(visible);
-    if (trajectoriesEnabled && (!preparedPlaybackMode || !preparedTrailsRendered)) {
+    if (trajectoriesEnabled) {
       pendingTrailPoses.set(pose.role, {
         pose,
         tracePoints: traceCaches.get(pose.role)?.points || [],
@@ -411,7 +399,6 @@ function applyPoseUpdate(payload) {
       }
     }
   }
-  if (preparedPlaybackMode && trajectoriesEnabled) preparedTrailsRendered = true;
 }
 
 function interpolatePoseNodes(elapsedMs) {

@@ -3,7 +3,7 @@ import {
   startPreparedCameraPlayback,
   startCameraDashboard,
   stopPreparedCameraPlayback,
-} from "../camera/dashboard.js?v=20260813-playback-wall";
+} from "../camera/dashboard.js?v=20260821-smooth-playback";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js?v=20260818-bag-library";
 import {
@@ -17,7 +17,8 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260813-native-spatial-resolution";
+} from "../spatial/renderer.js?v=20260821-smooth-playback";
+import { createPreparedPosePayloadBuilder } from "../spatial/prepared-playback.js?v=20260821-progressive-trails";
 
 const modelStatus = document.getElementById("model-status");
 const playbackPanel = document.getElementById("playback-panel");
@@ -58,6 +59,7 @@ let lastPoseMessageAt = 0;
 let obsModeEnabled = readInitialObsMode();
 let latestLivePosePayload = null;
 let preparedManifest = null;
+let preparedPosePayloadBuilder = null;
 let preparedPlaybackActive = false;
 let preparedPlaybackStarting = false;
 let playbackRequested = false;
@@ -461,6 +463,7 @@ async function stopPlayback() {
   preparedPlaybackStarting = false;
   preparedPlaybackActive = false;
   preparedManifest = null;
+  preparedPosePayloadBuilder = null;
   stopPreparedCameraPlayback();
   endPreparedPlayback();
   if (stopPlaybackButton) stopPlaybackButton.disabled = true;
@@ -484,6 +487,7 @@ async function goLive() {
   preparedPlaybackStarting = false;
   preparedPlaybackActive = false;
   preparedManifest = null;
+  preparedPosePayloadBuilder = null;
   stopPreparedCameraPlayback();
   endPreparedPlayback();
   if (goLiveButton) goLiveButton.disabled = true;
@@ -591,7 +595,11 @@ async function startPreparedPlayback(status) {
     const response = await fetch(status.manifest_url, { cache: "force-cache" });
     if (!response.ok) throw new Error("Prepared playback manifest is unavailable.");
     preparedManifest = await response.json();
-    beginPreparedPlayback(buildPreparedPosePayload(0, true));
+    preparedPosePayloadBuilder = createPreparedPosePayloadBuilder(
+      preparedManifest,
+      latestLivePosePayload
+    );
+    beginPreparedPlayback(preparedPosePayloadBuilder(0, true));
     const activate = await fetch("/api/playback/activate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -603,14 +611,22 @@ async function startPreparedPlayback(status) {
     }
     preparedPlaybackActive = true;
     await startPreparedCameraPlayback(preparedManifest, {
-      onFrame: (frameIndex) => {
-        if (preparedPlaybackActive) queuePoseUpdate(buildPreparedPosePayload(frameIndex, false));
+      onTime: (mediaTime) => {
+        if (preparedPlaybackActive && preparedPosePayloadBuilder) {
+          queuePoseUpdate(
+            preparedPosePayloadBuilder(
+              mediaTime * Number(preparedManifest.fps || 30),
+              false
+            )
+          );
+        }
       },
       onEnded: () => { void stopPlayback(); },
     });
     renderPlaybackStatus({ state: "playing", bag_name: preparedManifest.bag_ref || preparedManifest.bag_name, bag_label: preparedManifest.bag_name });
   } catch (error) {
     preparedPlaybackActive = false;
+    preparedPosePayloadBuilder = null;
     playbackRequested = false;
     stopPreparedCameraPlayback();
     endPreparedPlayback();
@@ -621,45 +637,6 @@ async function startPreparedPlayback(status) {
   } finally {
     preparedPlaybackStarting = false;
   }
-}
-
-function buildPreparedPosePayload(frameIndex, snapshot) {
-  const manifest = preparedManifest;
-  const baseByName = new Map((latestLivePosePayload?.poses || []).map((pose) => [pose.name, pose]));
-  const poses = (manifest.poses || []).map((pose) => {
-    const base = baseByName.get(pose.name) || {};
-    const trace = Array.isArray(pose.trajectory) ? pose.trajectory : [];
-    const toSeq = trace.length;
-    return {
-      ...base,
-      name: pose.name,
-      role: pose.role,
-      visible: Boolean(pose.valid?.[frameIndex]),
-      position: pose.positions?.[frameIndex] || [0, 0, 0],
-      quaternion_xyzw: pose.quaternions_xyzw?.[frameIndex] || [0, 0, 0, 1],
-      avatar_model: pose.avatar_model,
-      avatar_scale: pose.avatar_scale,
-      avatar_rotation_deg_xyz: pose.avatar_rotation_deg_xyz,
-      avatar_offset_xyz: pose.avatar_offset_xyz,
-      asset_url: pose.avatar_model ? `/asset?path=${encodeURIComponent(pose.avatar_model)}` : null,
-      trace_update: {
-        mode: snapshot ? "snapshot" : "delta",
-        generation: 1,
-        from_seq: snapshot ? 1 : toSeq + 1,
-        to_seq: toSeq,
-        drop_before_seq: 1,
-        points: snapshot ? trace : [],
-      },
-    };
-  });
-  return {
-    type: "pose_update",
-    stick_figure_mode: Boolean(latestLivePosePayload?.stick_figure_mode),
-    display_fps_limit: Number(manifest.fps || 30),
-    trace_capacity: Math.max(2, ...poses.map((pose) => pose.trace_update.to_seq)),
-    trace_generation: 1,
-    poses,
-  };
 }
 
 async function clearAllTrajectories() {
