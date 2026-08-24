@@ -2,9 +2,10 @@
 
 """建立当前会话的 Insight9 稀疏双目地图并发布统一世界系位姿。
 
-ROS 回调只负责缓存 VIO、同步左右图和发布轻量结果；耗时的 SuperPoint/SuperGlue、
-三角化、回环检测和地图融合都在单独 worker 线程串行执行。地图坐标由首个关键帧
-锚定，VIO 提供高频局部运动，历史三维地标 PnP 回环负责修正长期漂移。
+ROS 回调只负责缓存 VIO、同步左右图和发布轻量结果；SuperPoint/SuperGlue、
+三角化、回环检测和地图融合在 mapping worker 串行执行，局部 Bundle Adjustment
+在第二个有界后台 worker 上运行。地图坐标由首个关键帧锚定，VIO 提供高频局部
+运动，历史三维地标 PnP 回环负责修正长期漂移。
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +52,12 @@ from insight_capture.runtime.mapping import (  # noqa: E402
     select_timestamp,
     transform_points,
     triangulate_rectified,
+)
+from insight_capture.runtime.mapping.bundle_adjustment import (  # noqa: E402
+    BundleAdjustmentConfig,
+    BundleAdjustmentFrame,
+    BundleAdjustmentResult,
+    optimize_local_bundle,
 )
 from insight_capture.runtime.mapping.pose_graph import (  # noqa: E402
     KeyframePoseGraph,
@@ -263,8 +270,21 @@ class MappingKeyframe:
     stamp_ns: int
     odom_to_left: np.ndarray
     points_left: np.ndarray
+    left_pixels: np.ndarray
+    right_pixels: np.ndarray
     descriptors: np.ndarray
     scores: np.ndarray
+
+
+@dataclass(frozen=True)
+class BundleAdjustmentTask:
+    """Snapshot metadata used to reject stale background BA results."""
+
+    session_generation: int
+    pose_revision: int
+    frames: tuple[BundleAdjustmentFrame, ...]
+    left_projection: np.ndarray
+    right_projection: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -330,6 +350,46 @@ class Insight9SparseMapper(Node):
         self._pose_graph_pending = False
         self._pose_graph_optimization_count = 0
         self._last_pose_graph_optimization_monotonic = float("-inf")
+        if args.bundle_adjustment_window_keyframes < args.bundle_adjustment_min_keyframes:
+            raise ValueError("bundle adjustment window must cover its minimum keyframes")
+        if args.bundle_adjustment_interval_keyframes <= 0:
+            raise ValueError("bundle adjustment interval must be positive")
+        self._bundle_adjustment_config = BundleAdjustmentConfig(
+            min_keyframes=args.bundle_adjustment_min_keyframes,
+            min_track_observations=args.bundle_adjustment_min_track_observations,
+            min_landmarks=args.bundle_adjustment_min_landmarks,
+            max_points_per_keyframe=args.bundle_adjustment_max_points_per_keyframe,
+            max_landmarks=args.bundle_adjustment_max_landmarks,
+            association_radius_m=args.bundle_adjustment_association_radius_m,
+            descriptor_ratio_test=args.bundle_adjustment_descriptor_ratio_test,
+            descriptor_min_similarity=args.bundle_adjustment_descriptor_min_similarity,
+            odometry_translation_std_m=args.bundle_adjustment_odometry_translation_std,
+            odometry_rotation_std_deg=args.bundle_adjustment_odometry_rotation_std_deg,
+            robust_loss_px=args.bundle_adjustment_robust_loss_px,
+            max_iterations=args.bundle_adjustment_max_iterations,
+            max_pose_translation_correction_m=(
+                args.bundle_adjustment_max_pose_translation_correction_m
+            ),
+            max_pose_rotation_correction_deg=(
+                args.bundle_adjustment_max_pose_rotation_correction_deg
+            ),
+            max_landmark_correction_m=(
+                args.bundle_adjustment_max_landmark_correction_m
+            ),
+        )
+        self._pose_revision = 0
+        self._bundle_adjustment_count = 0
+        self._bundle_adjustment_rejections = 0
+        self._last_bundle_scheduled_keyframe = 0
+        self._bundle_stats_lock = threading.Lock()
+        self._bundle_adjustment_stats: dict[str, object] = {
+            "bundle_adjustment_enabled": bool(args.bundle_adjustment_enabled),
+            "bundle_adjustment_state": (
+                "idle" if args.bundle_adjustment_enabled else "disabled"
+            ),
+            "bundle_adjustment_runs": 0,
+            "bundle_adjustment_rejections": 0,
+        }
         self._keyframe_storage_bytes = 0
         self._session_id = uuid.uuid4().hex
         self._session_generation = 0
@@ -400,6 +460,18 @@ class Insight9SparseMapper(Node):
         self._stop = threading.Event()
         self._worker = threading.Thread(
             target=self._worker_main, name="superglue-mapping", daemon=True
+        )
+        self._bundle_work: queue.Queue[Optional[BundleAdjustmentTask]] = queue.Queue(
+            maxsize=1
+        )
+        self._bundle_worker = (
+            threading.Thread(
+                target=self._bundle_adjustment_main,
+                name="insight9-local-ba",
+                daemon=True,
+            )
+            if args.bundle_adjustment_enabled
+            else None
         )
         self._last_mapping_attempt_monotonic = 0.0
         self._last_pointcloud_publish_monotonic = float("-inf")
@@ -494,6 +566,8 @@ class Insight9SparseMapper(Node):
         )
         self.create_timer(0.5, self._resolve_extrinsic)
         self._worker.start()
+        if self._bundle_worker is not None:
+            self._bundle_worker.start()
         self.get_logger().info(
             "official SuperPoint/SuperGlue validation mapper started; "
             "the licensed model image is internal-validation only"
@@ -593,6 +667,25 @@ class Insight9SparseMapper(Node):
             self._pose_graph_pending = False
             self._pose_graph_optimization_count = 0
             self._last_pose_graph_optimization_monotonic = float("-inf")
+            self._pose_revision += 1
+            self._bundle_adjustment_count = 0
+            self._bundle_adjustment_rejections = 0
+            self._last_bundle_scheduled_keyframe = 0
+            try:
+                self._bundle_work.get_nowait()
+            except queue.Empty:
+                pass
+            with self._bundle_stats_lock:
+                self._bundle_adjustment_stats = {
+                    "bundle_adjustment_enabled": bool(
+                        self._args.bundle_adjustment_enabled
+                    ),
+                    "bundle_adjustment_state": (
+                        "idle" if self._args.bundle_adjustment_enabled else "disabled"
+                    ),
+                    "bundle_adjustment_runs": 0,
+                    "bundle_adjustment_rejections": 0,
+                }
             self._keyframe_storage_bytes = 0
             self._session_generation += 1
             self._capture_reference_keyframe = None
@@ -633,7 +726,14 @@ class Insight9SparseMapper(Node):
             self._work.put_nowait(None)  # type: ignore[arg-type]
         except queue.Full:
             pass
+        if self._bundle_worker is not None:
+            try:
+                self._bundle_work.put_nowait(None)
+            except queue.Full:
+                pass
         self._worker.join(timeout=3.0)
+        if self._bundle_worker is not None:
+            self._bundle_worker.join(timeout=3.0)
         return super().destroy_node()
 
     def _resolve_extrinsic(self) -> None:
@@ -922,6 +1022,12 @@ class Insight9SparseMapper(Node):
                     points_left=np.asarray(
                         triangulated.points_left, dtype=np.float32
                     ).copy(),
+                    left_pixels=np.asarray(
+                        matches.left_points[source], dtype=np.float32
+                    ).copy(),
+                    right_pixels=np.asarray(
+                        matches.right_points[source], dtype=np.float32
+                    ).copy(),
                     descriptors=np.asarray(
                         matches.descriptors[source], dtype=np.float16
                     ).copy(),
@@ -954,6 +1060,8 @@ class Insight9SparseMapper(Node):
                             for value in (
                                 keyframe.odom_to_left,
                                 keyframe.points_left,
+                                keyframe.left_pixels,
+                                keyframe.right_pixels,
                                 keyframe.descriptors,
                                 keyframe.scores,
                             )
@@ -1027,6 +1135,7 @@ class Insight9SparseMapper(Node):
                             self._calibration_keyframe_dirty = True
                             self._calibration_keyframe_clear_dirty = False
                 self._last_keyframe_transform = odom_to_left
+                self._schedule_bundle_adjustment(calibration)
                 self._latest_stats = {
                     "state": "mapping",
                     "keyframe": self._keyframe_id,
@@ -1077,6 +1186,230 @@ class Insight9SparseMapper(Node):
             except Exception as exc:
                 self._latest_stats = {"state": "error", "error": str(exc)}
                 self.get_logger().error(f"mapping frame failed: {exc}")
+
+    def _schedule_bundle_adjustment(self, calibration: StereoCalibration) -> None:
+        """Queue one immutable recent-keyframe snapshot without blocking mapping."""
+
+        if (
+            not self._args.bundle_adjustment_enabled
+            or not self._pose_graph_active
+        ):
+            return
+        with self._graph_lock:
+            current_keyframe = int(self._keyframe_id)
+            if (
+                current_keyframe - self._last_bundle_scheduled_keyframe
+                < self._args.bundle_adjustment_interval_keyframes
+                or len(self._mapping_keyframes)
+                < self._bundle_adjustment_config.min_keyframes
+            ):
+                return
+            poses = self._pose_graph.pose_snapshot()
+            keyframes = self._mapping_keyframes[
+                -self._args.bundle_adjustment_window_keyframes :
+            ]
+            frames = tuple(
+                BundleAdjustmentFrame(
+                    keyframe_id=keyframe.keyframe_id,
+                    pose=poses[keyframe.keyframe_id],
+                    points_left=np.asarray(keyframe.points_left, dtype=np.float32).copy(),
+                    left_pixels=np.asarray(keyframe.left_pixels, dtype=np.float32).copy(),
+                    right_pixels=np.asarray(keyframe.right_pixels, dtype=np.float32).copy(),
+                    descriptors=np.asarray(keyframe.descriptors, dtype=np.float32).copy(),
+                    scores=np.asarray(keyframe.scores, dtype=np.float32).copy(),
+                )
+                for keyframe in keyframes
+                if keyframe.keyframe_id in poses
+            )
+            if len(frames) < self._bundle_adjustment_config.min_keyframes:
+                return
+            task = BundleAdjustmentTask(
+                session_generation=self._session_generation,
+                pose_revision=self._pose_revision,
+                frames=frames,
+                left_projection=calibration.left_projection.copy(),
+                right_projection=calibration.right_projection.copy(),
+            )
+            try:
+                self._bundle_work.put_nowait(task)
+            except queue.Full:
+                return
+            self._last_bundle_scheduled_keyframe = current_keyframe
+        with self._bundle_stats_lock:
+            self._bundle_adjustment_stats = {
+                **self._bundle_adjustment_stats,
+                "bundle_adjustment_state": "queued",
+                "bundle_adjustment_queued_keyframe": current_keyframe,
+                "bundle_adjustment_window_keyframes": len(frames),
+            }
+
+    def _bundle_adjustment_main(self) -> None:
+        """Solve and apply local BA snapshots on a dedicated bounded worker."""
+
+        while not self._stop.is_set():
+            try:
+                task = self._bundle_work.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if task is None:
+                return
+            with self._bundle_stats_lock:
+                self._bundle_adjustment_stats = {
+                    **self._bundle_adjustment_stats,
+                    "bundle_adjustment_state": "optimizing",
+                    "bundle_adjustment_window_keyframes": len(task.frames),
+                }
+            try:
+                result = optimize_local_bundle(
+                    list(task.frames),
+                    task.left_projection,
+                    task.right_projection,
+                    self._bundle_adjustment_config,
+                )
+                if self._stop.is_set():
+                    return
+                applied, outcome, rebuild_ms = self._apply_bundle_adjustment(
+                    task, result
+                )
+                with self._graph_lock:
+                    if applied:
+                        self._bundle_adjustment_count += 1
+                    else:
+                        self._bundle_adjustment_rejections += 1
+                    runs = self._bundle_adjustment_count
+                    rejections = self._bundle_adjustment_rejections
+                with self._bundle_stats_lock:
+                    self._bundle_adjustment_stats = {
+                        "bundle_adjustment_enabled": True,
+                        "bundle_adjustment_state": outcome,
+                        "bundle_adjustment_runs": runs,
+                        "bundle_adjustment_rejections": rejections,
+                        "bundle_adjustment_success": result.success,
+                        "bundle_adjustment_reason": (
+                            "optimized" if applied else outcome
+                        ),
+                        "bundle_adjustment_keyframes": result.keyframes,
+                        "bundle_adjustment_landmarks": result.landmarks,
+                        "bundle_adjustment_observations": result.observations,
+                        "bundle_adjustment_initial_rmse_px": round(
+                            result.initial_reprojection_rmse_px, 3
+                        ),
+                        "bundle_adjustment_final_rmse_px": round(
+                            result.final_reprojection_rmse_px, 3
+                        ),
+                        "bundle_adjustment_ms": round(result.elapsed_ms, 1),
+                        "bundle_adjustment_map_rebuild_ms": round(rebuild_ms, 1),
+                        "bundle_adjustment_max_pose_translation_m": round(
+                            result.max_pose_translation_correction_m, 4
+                        ),
+                        "bundle_adjustment_max_pose_rotation_deg": round(
+                            result.max_pose_rotation_correction_deg, 3
+                        ),
+                        "bundle_adjustment_max_landmark_correction_m": round(
+                            result.max_landmark_correction_m, 4
+                        ),
+                    }
+                if applied:
+                    self.get_logger().info(
+                        "applied local stereo BA: %d keyframes, %d landmarks, "
+                        "RMSE %.3f -> %.3f px in %.1f ms"
+                        % (
+                            result.keyframes,
+                            result.landmarks,
+                            result.initial_reprojection_rmse_px,
+                            result.final_reprojection_rmse_px,
+                            result.elapsed_ms,
+                        )
+                    )
+            except Exception as exc:
+                with self._graph_lock:
+                    self._bundle_adjustment_rejections += 1
+                    rejections = self._bundle_adjustment_rejections
+                with self._bundle_stats_lock:
+                    self._bundle_adjustment_stats = {
+                        **self._bundle_adjustment_stats,
+                        "bundle_adjustment_state": "error",
+                        "bundle_adjustment_reason": str(exc),
+                        "bundle_adjustment_rejections": rejections,
+                    }
+                self.get_logger().error(f"background bundle adjustment failed: {exc}")
+
+    def _apply_bundle_adjustment(
+        self, task: BundleAdjustmentTask, result: BundleAdjustmentResult
+    ) -> tuple[bool, str, float]:
+        """Validate a solution, update the graph, and rebuild refined landmarks."""
+
+        if not result.optimized:
+            return False, result.reason, 0.0
+        with self._graph_lock:
+            if task.session_generation != self._session_generation:
+                return False, "stale_session", 0.0
+            if task.pose_revision != self._pose_revision:
+                return False, "stale_pose_revision", 0.0
+            graph_ids = self._pose_graph.keyframe_ids()
+            if not graph_ids or any(key not in graph_ids for key in result.poses):
+                return False, "missing_graph_keyframe", 0.0
+            window_end = task.frames[-1].keyframe_id
+            base_end = task.frames[-1].pose
+            optimized_end = result.poses.get(window_end)
+            if optimized_end is None:
+                return False, "missing_window_end_pose", 0.0
+            # Frames may arrive while BA runs. Carry the optimized end-frame map
+            # correction over the appended tail so the graph remains continuous.
+            tail_correction = optimized_end @ np.linalg.inv(base_end)
+            current_poses = self._pose_graph.pose_snapshot()
+            updates = {key: value.copy() for key, value in result.poses.items()}
+            for keyframe_id in graph_ids:
+                if keyframe_id > window_end:
+                    updates[keyframe_id] = tail_correction @ current_poses[keyframe_id]
+            self._pose_graph.apply_pose_updates(updates)
+
+            refined = result.refined_points_left
+            self._mapping_keyframes = [
+                replace(
+                    keyframe,
+                    points_left=np.asarray(
+                        refined[keyframe.keyframe_id], dtype=np.float32
+                    ).copy(),
+                )
+                if keyframe.keyframe_id in refined
+                else keyframe
+                for keyframe in self._mapping_keyframes
+            ]
+            self._pose_revision += 1
+            rebuild_started = time.perf_counter()
+            self._rebuild_landmarks_from_keyframes()
+            rebuild_ms = (time.perf_counter() - rebuild_started) * 1000.0
+
+            latest_id = graph_ids[-1]
+            correction = self._pose_graph.correction_for_keyframe(latest_id)
+            with self._loop_lock:
+                self._loop_pose_filter.observe(correction)
+            with self._calibration_keyframe_lock:
+                calibration_keyframe = self._calibration_keyframe
+                if calibration_keyframe is not None:
+                    mapping_keyframe = next(
+                        (
+                            item
+                            for item in self._mapping_keyframes
+                            if item.keyframe_id == calibration_keyframe.keyframe_id
+                        ),
+                        None,
+                    )
+                    if mapping_keyframe is not None:
+                        pose = self._pose_graph.pose(mapping_keyframe.keyframe_id)
+                        self._calibration_keyframe = CalibrationKeyframe(
+                            keyframe_id=calibration_keyframe.keyframe_id,
+                            stamp_ns=calibration_keyframe.stamp_ns,
+                            image=calibration_keyframe.image,
+                            pixels=mapping_keyframe.left_pixels.copy(),
+                            map_points=np.asarray(
+                                transform_points(pose, mapping_keyframe.points_left),
+                                dtype=np.float32,
+                            ),
+                        )
+                        self._calibration_keyframe_dirty = True
+            return True, "applied", rebuild_ms
 
     def _detect_loop_closure(
         self,
@@ -1339,6 +1672,7 @@ class Insight9SparseMapper(Node):
         self._pose_graph_pending = False
         if result.optimized:
             self._pose_graph_optimization_count += 1
+            self._pose_revision += 1
         diagnostics.update(
             {
                 "pose_graph_trigger": trigger,
@@ -1443,6 +1777,8 @@ class Insight9SparseMapper(Node):
         self._publish_calibration_keyframe(now)
         status = String()
         status_payload = dict(self._latest_stats)
+        with self._bundle_stats_lock:
+            status_payload.update(self._bundle_adjustment_stats)
         status_payload["map_point_count"] = point_count
         status_payload["center_extrinsic_ready"] = self._imu_to_center is not None
         status_payload["pose_frame"] = self._camera_frame
@@ -1682,6 +2018,54 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pose-graph-min-interval-sec", type=float, default=5.0)
     parser.add_argument("--pose-graph-force-translation-m", type=float, default=0.10)
     parser.add_argument("--pose-graph-force-rotation-deg", type=float, default=5.0)
+    parser.add_argument(
+        "--bundle-adjustment-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument("--bundle-adjustment-window-keyframes", type=int, default=12)
+    parser.add_argument("--bundle-adjustment-interval-keyframes", type=int, default=10)
+    parser.add_argument("--bundle-adjustment-min-keyframes", type=int, default=4)
+    parser.add_argument(
+        "--bundle-adjustment-min-track-observations", type=int, default=3
+    )
+    parser.add_argument("--bundle-adjustment-min-landmarks", type=int, default=20)
+    parser.add_argument(
+        "--bundle-adjustment-max-points-per-keyframe", type=int, default=200
+    )
+    parser.add_argument("--bundle-adjustment-max-landmarks", type=int, default=250)
+    parser.add_argument(
+        "--bundle-adjustment-association-radius-m", type=float, default=0.12
+    )
+    parser.add_argument(
+        "--bundle-adjustment-descriptor-ratio-test", type=float, default=0.80
+    )
+    parser.add_argument(
+        "--bundle-adjustment-descriptor-min-similarity", type=float, default=0.78
+    )
+    parser.add_argument(
+        "--bundle-adjustment-odometry-translation-std", type=float, default=0.03
+    )
+    parser.add_argument(
+        "--bundle-adjustment-odometry-rotation-std-deg", type=float, default=1.0
+    )
+    parser.add_argument("--bundle-adjustment-robust-loss-px", type=float, default=2.0)
+    parser.add_argument("--bundle-adjustment-max-iterations", type=int, default=10)
+    parser.add_argument(
+        "--bundle-adjustment-max-pose-translation-correction-m",
+        type=float,
+        default=0.10,
+    )
+    parser.add_argument(
+        "--bundle-adjustment-max-pose-rotation-correction-deg",
+        type=float,
+        default=5.0,
+    )
+    parser.add_argument(
+        "--bundle-adjustment-max-landmark-correction-m",
+        type=float,
+        default=0.20,
+    )
     return parser
 
 

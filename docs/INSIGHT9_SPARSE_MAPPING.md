@@ -36,6 +36,7 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图；两路 Insight3 �
   -> 关键帧 VIO 边 + 全局回环边
   -> 鲁棒 SE(3) 位姿图优化
   -> 优化位姿下重融合历史双目观测
+  -> 后台滑窗双目 BA 联合优化关键帧 Pose 与重复 3D 地标
   -> T_map_odom * T_odom_imu * T_imu_left
   -> 世界坐标体素确认或重建
   -> features PointCloud2 + Pose + TF
@@ -64,9 +65,18 @@ SE(3) 位姿图。优化结果沿整段轨迹分配校正，并用所有保留�
 
 每个会话最多保留 600 个图节点。局部三维观测使用 FP32，描述子与分数以 FP16
 保留，达到上限后冻结已建图图结构并继续使用当前全局校正，避免长会话无界占用
-内存。历史 Path 仍保留已经求得的分段图校正。本阶段是“位姿图优化 + 地标
-重融合”，不是联合优化像素重投影误差的完整 Bundle Adjustment；后续若需要把
-标定残差和每个地标观测一并优化，还需增加显式的 2D 观测边和局部 BA 窗口。
+内存。历史 Path 仍保留已经求得的分段图校正。
+
+位姿图之外还启用有界局部 Bundle Adjustment：每个关键帧保留通过双目几何门限的
+左右 2D 像素、局部 3D 点和 SuperPoint 描述子；后台线程在最近 12 个关键帧中，
+通过描述子互检和 12 cm 世界坐标门限建立重复地标，固定窗口首帧，并以左右目
+重投影误差和相邻 Pose 先验联合优化关键帧 Pose 与统一 3D 地标。默认每 10 个
+关键帧调度一次；少于 20 个重复地标不求解，每帧最多取 200 个高置信点、最多
+优化 250 个地标和 10 次迭代。
+求解快照带会话代次和 Pose 修订号：VIO reset 或新的回环图优化会使旧结果失效；
+求解期间新增的尾段关键帧会继承窗口末端的刚体修正，避免轨迹断层。只有重投影
+误差确实下降，且 Pose/地标修正未超过安全门限时才原子应用并重建地图。这里不优化
+相机内参、双目外参或时间偏移，它们仍由标定和同步门限保证。
 
 ## 构建和启动官方 GPU 服务
 
@@ -240,6 +250,9 @@ docker compose stop insight3-global-localizer insight9-sparse-mapper superglue-i
   全局 Pose 被拉回历史地图。
 - 回环优化后 `pose_graph_optimizations` 增加，`map_rebuild_ms` 非零；旧地标、
   历史 Path 与当前 Pose 处于同一优化后坐标，不只修正后续输出。
+- 稳定多视角运动后 `bundle_adjustment_runs` 增加，
+  `bundle_adjustment_final_rmse_px` 小于 `bundle_adjustment_initial_rmse_px`；无重复
+  地标、求解过期或超过修正门限时只增加 rejection，不覆盖当前 Pose 或地图。
 - 无回环和重复纹理数据中不接受错误回环。
 - 记录 `stereo_matches`、`triangulated`、`confirmed` 和
   `inference_and_geometry_ms`，再判断 5 Hz 目标是否成立。

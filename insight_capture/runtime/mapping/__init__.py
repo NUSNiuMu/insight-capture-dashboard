@@ -11,6 +11,12 @@ from .adaptive_relocalization import (
     AdaptiveRelocalizationPolicy,
     AdaptiveRelocalizationUpdate,
 )
+from .bundle_adjustment import (
+    BundleAdjustmentConfig,
+    BundleAdjustmentFrame,
+    BundleAdjustmentResult,
+    optimize_local_bundle,
+)
 from .geometry import (
     PoseSample,
     StereoCalibration,
@@ -61,6 +67,9 @@ __all__ = [
     "AdaptiveRelocalizationConfig",
     "AdaptiveRelocalizationPolicy",
     "AdaptiveRelocalizationUpdate",
+    "BundleAdjustmentConfig",
+    "BundleAdjustmentFrame",
+    "BundleAdjustmentResult",
     "LandmarkMap",
     "LandmarkMapConfig",
     "GlobalLocalizationConfig",
@@ -96,6 +105,7 @@ __all__ = [
     "localize_correspondences",
     "match_descriptors",
     "normalize_descriptors",
+    "optimize_local_bundle",
     "rotation_distance_deg",
     "select_timestamp",
     "transform_points",

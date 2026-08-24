@@ -295,6 +295,28 @@ class KeyframePoseGraph:
     def pose_snapshot(self) -> dict[int, np.ndarray]:
         return {key: value.copy() for key, value in self._map_poses.items()}
 
+    def keyframe_ids(self) -> tuple[int, ...]:
+        """Return graph node IDs in timestamp order."""
+
+        return tuple(self._ids)
+
+    def apply_pose_updates(self, poses: dict[int, np.ndarray]) -> None:
+        """Apply externally optimized map poses without changing graph measurements.
+
+        Local bundle adjustment works on a background snapshot. The mapper validates
+        that snapshot before using this method, while this class validates node IDs
+        and rigid transforms so a malformed solution cannot partially update the graph.
+        """
+
+        unknown = set(int(key) for key in poses) - set(self._map_poses)
+        if unknown:
+            raise KeyError(f"unknown pose graph keyframes: {sorted(unknown)}")
+        validated = {
+            int(keyframe_id): _valid_transform(pose)
+            for keyframe_id, pose in poses.items()
+        }
+        self._map_poses.update(validated)
+
     def correction_for_keyframe(self, keyframe_id: int) -> np.ndarray:
         keyframe_id = int(keyframe_id)
         return self._map_poses[keyframe_id] @ _inverse_transform(
