@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 import wave
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 from insight_capture.voice.service import (  # noqa: E402
     CANNED_REPLIES,
+    LocalCommandFailure,
     OpenClawVoiceBridge,
     build_agent_command,
     calibration_is_complete,
@@ -774,6 +776,31 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             urlopen.call_args.args[0].full_url,
             "http://127.0.0.1:8765/api/mapping/reset",
         )
+
+    def test_calibration_camera_failure_uses_dashboard_speech(self):
+        bridge = OpenClawVoiceBridge(
+            SimpleNamespace(
+                dashboard_url="http://127.0.0.1:8765",
+                dashboard_timeout_sec=7.0,
+            )
+        )
+        speech = "无法开始校准：头部相机没有图像和VIO数据。请检查相机连接。"
+        error = urllib.error.HTTPError(
+            "http://127.0.0.1:8765/api/mapping/reset",
+            409,
+            "Conflict",
+            {},
+            io.BytesIO(json.dumps({"speech": speech}).encode()),
+        )
+        with (
+            mock.patch("urllib.request.urlopen", side_effect=error),
+            mock.patch.object(bridge, "_start_calibration_monitor") as monitor,
+            self.assertRaises(LocalCommandFailure) as raised,
+        ):
+            bridge.execute_local_command("calibration_start")
+
+        self.assertEqual(raised.exception.speech, speech)
+        monitor.assert_not_called()
 
     def test_capture_check_command_calls_local_quality_gate(self):
         bridge = OpenClawVoiceBridge(

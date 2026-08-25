@@ -210,7 +210,11 @@ async function resetMapping() {
     const payload = await response.json();
     if (!response.ok) {
       const unavailable = (payload.unavailable || []).join(", ");
-      throw new Error(`Mapping service unavailable: ${unavailable || "unknown"}`);
+      throw new Error(
+        payload.speech
+          || payload.error
+          || `Mapping service unavailable: ${unavailable || "unknown"}`,
+      );
     }
     if (payload.mapping) renderMappingStatus(payload.mapping);
   } catch (error) {
