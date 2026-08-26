@@ -90,7 +90,6 @@ except ImportError as exc:  # pragma: no cover - exercised inside the ROS image
     raise SystemExit(f"ROS 2 Python dependencies are unavailable: {exc}") from exc
 
 
-POINTCLOUD_MIN_PUBLISH_INTERVAL_SEC = 1.0
 POINTCLOUD_REFRESH_INTERVAL_SEC = 10.0
 CALIBRATION_KEYFRAME_PUBLISH_INTERVAL_SEC = 0.5
 
@@ -306,6 +305,9 @@ class Insight9SparseMapper(Node):
         self._args = args
         self._map_frame = args.map_frame
         self._camera_frame = args.mapping_camera_frame
+        self._pointcloud_min_publish_interval_sec = 1.0 / max(
+            args.pointcloud_publish_hz, 0.1
+        )
         pose_graph_runtime_limits = (
             args.pose_graph_min_interval_sec,
             args.pose_graph_force_translation_m,
@@ -1799,7 +1801,7 @@ class Insight9SparseMapper(Node):
                 )
                 and (
                     now - self._last_pointcloud_publish_monotonic
-                    >= POINTCLOUD_MIN_PUBLISH_INTERVAL_SEC
+                    >= self._pointcloud_min_publish_interval_sec
                 )
             )
             points = self._landmarks.points() if pointcloud_due else None
@@ -2017,6 +2019,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
     parser.add_argument("--path-publish-hz", type=float, default=2.0)
+    parser.add_argument(
+        "--pointcloud-publish-hz",
+        type=float,
+        default=1.0,
+        help="maximum RViz sparse point-cloud update rate while debug topics are enabled",
+    )
     parser.add_argument(
         "--publish-debug-topics",
         action="store_true",

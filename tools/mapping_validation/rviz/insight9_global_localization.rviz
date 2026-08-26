@@ -14,6 +14,60 @@ Visualization Manager:
       Reference Frame: insight9_map
       Value: true
     - Alpha: 1
+      Axes Length: 0.1
+      Axes Radius: 0.01
+      Class: rviz_default_plugins/Pose
+      Color: 255; 180; 30
+      Head Length: 0.08
+      Head Radius: 0.025
+      Name: Insight9 current pose (30 Hz)
+      Shaft Length: 0.12
+      Shaft Radius: 0.01
+      Shape: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /insight9_sparse_map/pose
+      Value: true
+    - Alpha: 1
+      Axes Length: 0.1
+      Axes Radius: 0.01
+      Class: rviz_default_plugins/Pose
+      Color: 255; 70; 210
+      Head Length: 0.08
+      Head Radius: 0.025
+      Name: Insight3 A current pose (30 Hz)
+      Shaft Length: 0.12
+      Shaft Radius: 0.01
+      Shape: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /insight_global/insight3_a/pose
+      Value: true
+    - Alpha: 1
+      Axes Length: 0.1
+      Axes Radius: 0.01
+      Class: rviz_default_plugins/Pose
+      Color: 80; 255; 100
+      Head Length: 0.08
+      Head Radius: 0.025
+      Name: Insight3 B current pose (30 Hz)
+      Shaft Length: 0.12
+      Shaft Radius: 0.01
+      Shape: Arrow
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /insight_global/insight3_b/pose
+      Value: true
+    - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
         Max Value: 10

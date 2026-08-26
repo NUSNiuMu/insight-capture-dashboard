@@ -105,10 +105,11 @@ VIO，避免模型在两套坐标源之间跳变。
 网页不渲染稀疏特征点云，只显示点数统计和三条全局轨迹。模型位姿使用独立的
 高频全局 Pose 话题，唯一的 dashboard WebSocket 以 30 Hz 发送最新位姿，
 前端用同一份 Pose 增量绘制轨迹。完整 ROS Path 限制为 200 点，仅供 RViz 和
-显式调试选择；这些 Path 和稀疏点云默认不创建 publisher，显式传入
-`--publish-debug-topics` 后才以 2 Hz/按变化发布。网页和默认录制只使用 30 Hz
-Pose，也不再建立第二条 mapping WebSocket。建图状态通过 500 ms 的轻量 REST
-轮询显示。
+显式调试选择；这些 Path 和稀疏点云默认不创建 publisher。RViz 验证模式同时显示
+三路 30 Hz 当前 Pose，将历史 Path 以 5 Hz 发布，并将变化点云限制在最高 2 Hz；
+直接传入 `--publish-debug-topics` 时仍可分别通过 `--path-publish-hz` 和
+`--pointcloud-publish-hz` 调整。网页和默认录制只使用 30 Hz Pose，也不再建立第二条
+mapping WebSocket。建图状态通过 500 ms 的轻量 REST 轮询显示。
 
 新录制默认保存三路全局 Pose；回放时三路全局 Pose 经 `/bagplay/...`
 remap 后继续驱动同一套模型和轨迹。旧 rosbag 如果没有这些全局话题，将不显示
@@ -197,7 +198,8 @@ tools/mapping_validation/run_validation.sh
 临时创建点云和 Path publisher，再清空 mapper/localizer 状态开始新会话；不会为
 开关 RViz 重启核心服务。关闭 RViz 后会销毁调试 publisher 和 Path timer，恢复默认
 低负载模式，同时保留刚建立的地图供网页继续查看。
-当前 RViz 验证配置只显示稀疏确认地图和三条全局轨迹，不启动稠密 mapper。
+当前 RViz 验证配置显示稀疏确认地图、三条全局轨迹和三路 30 Hz 当前 Pose，
+不启动稠密 mapper。
 
 网页接口：
 

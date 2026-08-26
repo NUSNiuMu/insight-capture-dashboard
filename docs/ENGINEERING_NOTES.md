@@ -240,6 +240,9 @@
   通过两个 `set_debug_topics` ROS service 在 RViz 生命周期内动态创建和销毁，也可用
   `--publish-debug-topics` 从进程启动起保持开启。内部重定位所需 feature map、30 Hz
   Pose、5 Hz TF、status 和网页基于 Pose 累积的轨迹不受影响。
+- 动态开关落地后，开发 compose 的 RViz 验证窗口可把 Path 临时提高到 5 Hz、变化点云
+  提高到最高 2 Hz，并直接订阅三路 30 Hz Pose 显示当前箭头；关闭窗口后这些 publisher
+  和 timer 仍全部销毁，不改变上述生产默认值。
 
 ## 训练数据导出
 

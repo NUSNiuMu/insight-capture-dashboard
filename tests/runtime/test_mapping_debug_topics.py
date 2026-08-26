@@ -15,6 +15,7 @@ from insight_capture.runtime.mapping.insight3_localizer import (  # noqa: E402
 )
 from insight_capture.runtime.mapping.insight9_mapper import (  # noqa: E402
     Insight9SparseMapper,
+    build_parser as build_mapper_parser,
 )
 
 
@@ -80,6 +81,15 @@ class _FakeNode:
 
 
 class MappingDebugTopicsTest(unittest.TestCase):
+    def test_mapper_pointcloud_rate_is_configurable(self):
+        defaults = build_mapper_parser().parse_args([])
+        configured = build_mapper_parser().parse_args(
+            ["--pointcloud-publish-hz", "2.5"]
+        )
+
+        self.assertEqual(defaults.pointcloud_publish_hz, 1.0)
+        self.assertEqual(configured.pointcloud_publish_hz, 2.5)
+
     def test_mapper_creates_and_removes_debug_resources(self):
         node = _FakeNode()
 
