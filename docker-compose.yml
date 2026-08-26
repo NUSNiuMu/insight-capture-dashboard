@@ -148,8 +148,6 @@ services:
       - --backend
       - ipc
       - --path-publish-hz
-      - "5"
-      - --pointcloud-publish-hz
       - "2"
       - --pose-publish-hz
       - "30"
@@ -197,7 +195,7 @@ services:
       - --path-points
       - "200"
       - --path-publish-hz
-      - "5"
+      - "2"
       - --pose-publish-hz
       - "30"
       - --ekf-correction-time-constant-sec

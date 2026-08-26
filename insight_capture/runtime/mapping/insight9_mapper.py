@@ -84,12 +84,13 @@ try:
     from sensor_msgs.msg import CameraInfo, Image, PointCloud2, PointField
     from sensor_msgs_py import point_cloud2
     from std_msgs.msg import Header, String
-    from std_srvs.srv import Empty, SetBool, Trigger
+    from std_srvs.srv import Empty, Trigger
     from tf2_ros import Buffer, TransformBroadcaster, TransformListener
 except ImportError as exc:  # pragma: no cover - exercised inside the ROS image
     raise SystemExit(f"ROS 2 Python dependencies are unavailable: {exc}") from exc
 
 
+POINTCLOUD_MIN_PUBLISH_INTERVAL_SEC = 1.0
 POINTCLOUD_REFRESH_INTERVAL_SEC = 10.0
 CALIBRATION_KEYFRAME_PUBLISH_INTERVAL_SEC = 0.5
 
@@ -305,9 +306,6 @@ class Insight9SparseMapper(Node):
         self._args = args
         self._map_frame = args.map_frame
         self._camera_frame = args.mapping_camera_frame
-        self._pointcloud_min_publish_interval_sec = 1.0 / max(
-            args.pointcloud_publish_hz, 0.1
-        )
         pose_graph_runtime_limits = (
             args.pose_graph_min_interval_sec,
             args.pose_graph_force_translation_m,
@@ -492,8 +490,11 @@ class Insight9SparseMapper(Node):
         # 可视化位姿不会排在大消息发布之后。
         self._vio_callback_group = MutuallyExclusiveCallbackGroup()
 
-        self._debug_topics_lock = threading.Lock()
-        self._pointcloud_publisher = None
+        self._pointcloud_publisher = (
+            self.create_publisher(PointCloud2, "insight9_sparse_map/points", 1)
+            if args.publish_debug_topics
+            else None
+        )
         self._feature_map_publisher = self.create_publisher(
             PointCloud2, "insight9_sparse_map/features", 1
         )
@@ -517,8 +518,11 @@ class Insight9SparseMapper(Node):
         self._calibration_keyframe_dirty = False
         self._calibration_keyframe_clear_dirty = False
         self._last_calibration_keyframe_publish_monotonic = float("-inf")
-        self._path_publisher = None
-        self._path_timer = None
+        self._path_publisher = (
+            self.create_publisher(PathMsg, "insight9_sparse_map/path", 1)
+            if args.publish_debug_topics
+            else None
+        )
         self._pose_publisher = self.create_publisher(
             PoseStamped, "insight9_sparse_map/pose", 1
         )
@@ -527,11 +531,6 @@ class Insight9SparseMapper(Node):
         )
         self._reset_service = self.create_service(
             Empty, "insight9_sparse_map/reset", self._on_reset
-        )
-        self._debug_topics_service = self.create_service(
-            SetBool,
-            "insight9_sparse_map/set_debug_topics",
-            self._on_set_debug_topics,
         )
         self._capture_reference_service = self.create_service(
             Trigger,
@@ -559,7 +558,9 @@ class Insight9SparseMapper(Node):
         )
         self.create_timer(0.5, self._publish_map)
         if args.publish_debug_topics:
-            self._set_debug_topics_enabled(True)
+            self.create_timer(
+                1.0 / max(args.path_publish_hz, 0.1), self._publish_path
+            )
         self.create_timer(
             1.0 / max(args.tf_publish_hz, 0.1), self._publish_latest_tf
         )
@@ -573,62 +574,6 @@ class Insight9SparseMapper(Node):
         )
         if not args.publish_debug_topics:
             self.get_logger().info("debug PointCloud2 and Path topics disabled")
-
-    def _set_debug_topics_enabled(self, enabled: bool) -> bool:
-        """Create or remove RViz-only publishers without restarting the mapper."""
-
-        with self._debug_topics_lock:
-            currently_enabled = self._pointcloud_publisher is not None
-            if enabled == currently_enabled:
-                return False
-            if enabled:
-                self._pointcloud_publisher = self.create_publisher(
-                    PointCloud2, "insight9_sparse_map/points", 1
-                )
-                self._path_publisher = self.create_publisher(
-                    PathMsg, "insight9_sparse_map/path", 1
-                )
-                self._path_timer = self.create_timer(
-                    1.0 / max(self._args.path_publish_hz, 0.1),
-                    self._publish_path,
-                )
-                with self._map_lock:
-                    self._pointcloud_dirty = True
-                    self._last_pointcloud_publish_monotonic = float("-inf")
-            else:
-                path_timer = self._path_timer
-                pointcloud_publisher = self._pointcloud_publisher
-                path_publisher = self._path_publisher
-                self._path_timer = None
-                self._pointcloud_publisher = None
-                self._path_publisher = None
-                if path_timer is not None:
-                    path_timer.cancel()
-                    self.destroy_timer(path_timer)
-                if pointcloud_publisher is not None:
-                    self.destroy_publisher(pointcloud_publisher)
-                if path_publisher is not None:
-                    self.destroy_publisher(path_publisher)
-        state = "enabled" if enabled else "disabled"
-        self.get_logger().info(f"RViz debug PointCloud2 and Path topics {state}")
-        return True
-
-    def _on_set_debug_topics(
-        self, request: SetBool.Request, response: SetBool.Response
-    ) -> SetBool.Response:
-        """Toggle the expensive RViz outputs while preserving the active map."""
-
-        changed = self._set_debug_topics_enabled(bool(request.data))
-        response.success = True
-        response.message = (
-            f"debug topics {'enabled' if request.data else 'disabled'}"
-            if changed
-            else f"debug topics already {'enabled' if request.data else 'disabled'}"
-        )
-        if request.data:
-            self._publish_map()
-            self._publish_path()
-        return response
 
     def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
         """原子地开启新建图会话，并使旧地图、回环和发布缓存同时失效。"""
@@ -1801,7 +1746,7 @@ class Insight9SparseMapper(Node):
                 )
                 and (
                     now - self._last_pointcloud_publish_monotonic
-                    >= self._pointcloud_min_publish_interval_sec
+                    >= POINTCLOUD_MIN_PUBLISH_INTERVAL_SEC
                 )
             )
             points = self._landmarks.points() if pointcloud_due else None
@@ -1837,7 +1782,6 @@ class Insight9SparseMapper(Node):
         status_payload["map_point_count"] = point_count
         status_payload["center_extrinsic_ready"] = self._imu_to_center is not None
         status_payload["pose_frame"] = self._camera_frame
-        status_payload["debug_topics_enabled"] = self._pointcloud_publisher is not None
         with self._graph_lock:
             status_payload["capture_validation"] = (
                 self._capture_validation_status_unlocked()
@@ -2019,12 +1963,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
     parser.add_argument("--path-publish-hz", type=float, default=2.0)
-    parser.add_argument(
-        "--pointcloud-publish-hz",
-        type=float,
-        default=1.0,
-        help="maximum RViz sparse point-cloud update rate while debug topics are enabled",
-    )
     parser.add_argument(
         "--publish-debug-topics",
         action="store_true",
