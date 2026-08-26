@@ -70,7 +70,7 @@ try:
     from rclpy.time import Time
     from sensor_msgs.msg import CameraInfo, Image, PointCloud2
     from std_msgs.msg import String
-    from std_srvs.srv import Empty
+    from std_srvs.srv import Empty, SetBool
     from tf2_ros import (
         Buffer,
         StaticTransformBroadcaster,
@@ -381,16 +381,9 @@ class Insight3GlobalLocalizer(Node):
             )
             for name in CAMERAS
         }
-        self._path_publishers = (
-            {
-                name: self.create_publisher(
-                    PathMsg, f"insight_global/{name}/path", 1
-                )
-                for name in CAMERAS
-            }
-            if args.publish_debug_topics
-            else {}
-        )
+        self._debug_topics_lock = threading.Lock()
+        self._path_publishers = {}
+        self._path_timer = None
         self._pose_publishers = {
             name: self.create_publisher(
                 PoseStamped, f"insight_global/{name}/pose", 1
@@ -405,6 +398,11 @@ class Insight3GlobalLocalizer(Node):
         }
         self._reset_service = self.create_service(
             Empty, "insight_global/reset", self._on_reset
+        )
+        self._debug_topics_service = self.create_service(
+            SetBool,
+            "insight_global/set_debug_topics",
+            self._on_set_debug_topics,
         )
         self._tcp_calibrations = load_tcp_frame_calibrations(
             Path(args.camera_config), CAMERAS
@@ -476,9 +474,7 @@ class Insight3GlobalLocalizer(Node):
         self._worker.start()
         self.create_timer(0.5, self._resolve_extrinsics)
         if args.publish_debug_topics:
-            self.create_timer(
-                1.0 / max(args.path_publish_hz, 0.1), self._publish_paths
-            )
+            self._set_debug_topics_enabled(True)
         self.create_timer(
             1.0 / max(args.tf_publish_hz, 0.1), self._publish_tfs
         )
@@ -489,6 +485,54 @@ class Insight3GlobalLocalizer(Node):
         )
         if not args.publish_debug_topics:
             self.get_logger().info("debug Path topics disabled")
+
+    def _set_debug_topics_enabled(self, enabled: bool) -> bool:
+        """Create or remove RViz-only Path publishers without losing localization."""
+
+        with self._debug_topics_lock:
+            currently_enabled = bool(self._path_publishers)
+            if enabled == currently_enabled:
+                return False
+            if enabled:
+                self._path_publishers = {
+                    name: self.create_publisher(
+                        PathMsg, f"insight_global/{name}/path", 1
+                    )
+                    for name in CAMERAS
+                }
+                self._path_timer = self.create_timer(
+                    1.0 / max(self._args.path_publish_hz, 0.1),
+                    self._publish_paths,
+                )
+            else:
+                path_timer = self._path_timer
+                path_publishers = self._path_publishers
+                self._path_timer = None
+                self._path_publishers = {}
+                if path_timer is not None:
+                    path_timer.cancel()
+                    self.destroy_timer(path_timer)
+                for publisher in path_publishers.values():
+                    self.destroy_publisher(publisher)
+        state = "enabled" if enabled else "disabled"
+        self.get_logger().info(f"RViz debug Path topics {state}")
+        return True
+
+    def _on_set_debug_topics(
+        self, request: SetBool.Request, response: SetBool.Response
+    ) -> SetBool.Response:
+        """Toggle historical paths while preserving both localization filters."""
+
+        changed = self._set_debug_topics_enabled(bool(request.data))
+        response.success = True
+        response.message = (
+            f"debug topics {'enabled' if request.data else 'disabled'}"
+            if changed
+            else f"debug topics already {'enabled' if request.data else 'disabled'}"
+        )
+        if request.data:
+            self._publish_paths()
+        return response
 
     def _publish_tcp_static_transforms(self) -> None:
         """只发布配置中真实存在的相机中心到 TCP 静态标定。"""
@@ -1371,6 +1415,7 @@ class Insight3GlobalLocalizer(Node):
                 status["vio_continuity"] = vio_continuity
             status["gripper_mask_height_ratio"] = self._gripper_mask_height_ratio
             status["pose_frame"] = f"{name}_global_camera_center"
+            status["debug_topics_enabled"] = bool(self._path_publishers)
             calibration = self._tcp_calibrations.get(name)
             status["tcp_frame"] = (
                 calibration.child_frame_id if calibration is not None else None

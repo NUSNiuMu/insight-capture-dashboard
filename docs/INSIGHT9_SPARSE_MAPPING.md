@@ -193,9 +193,10 @@ RViz 仅保留为调试工具。每次清空旧地图并打开 RViz：
 tools/mapping_validation/run_validation.sh
 ```
 
-脚本保持在前台，关闭 RViz 后自动收回临时 X11 授权。它会先重建 mapper 和
-localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后三个核心服务继续
-运行，网页仍可查看和新建地图。
+脚本保持在前台，关闭 RViz 后自动收回临时 X11 授权。它通过运行时 ROS service
+临时创建点云和 Path publisher，再清空 mapper/localizer 状态开始新会话；不会为
+开关 RViz 重启核心服务。关闭 RViz 后会销毁调试 publisher 和 Path timer，恢复默认
+低负载模式，同时保留刚建立的地图供网页继续查看。
 当前 RViz 验证配置只显示稀疏确认地图和三条全局轨迹，不启动稠密 mapper。
 
 网页接口：
@@ -216,8 +217,10 @@ localizer，确保不继续显示上一会话的内存地图；关闭 RViz 后�
 - TF `insight9_map -> insight9_mapping_camera_center`：位于左右目光心中点，
   姿态沿用左目；使用独立命名避免与设备 TF 多父冲突。
 
-以下 RViz 调试输出默认关闭；同时为 mapper 和 localizer 传入
-`--publish-debug-topics` 后才创建 publisher：
+以下 RViz 调试输出默认关闭；`run_validation.sh` 只在 RViz 运行期间通过
+`/insight9_sparse_map/set_debug_topics` 和 `/insight_global/set_debug_topics` 两个
+`std_srvs/srv/SetBool` service 创建 publisher，退出后自动销毁。也可为 mapper 和
+localizer 传入 `--publish-debug-topics`，让对应输出从进程启动起保持开启：
 
 - `/insight9_sparse_map/points`：经过多关键帧确认的稀疏地图。
 - `/insight9_sparse_map/path`：2 Hz、最多 200 点的 Insight9 调试轨迹。
