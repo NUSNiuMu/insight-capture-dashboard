@@ -49,13 +49,22 @@ class AdaptiveRelocalizationPolicy:
         self.config = config
 
     def apply(
-        self, pose_filter: RelocalizationEkf, measurement: np.ndarray
+        self,
+        pose_filter: RelocalizationEkf,
+        measurement: np.ndarray,
+        *,
+        translation_std_m: float | None = None,
+        rotation_std_deg: float | None = None,
     ) -> AdaptiveRelocalizationUpdate:
         value = np.asarray(measurement, dtype=np.float64).reshape(4, 4)
         current = pose_filter.correction
         if current is None:
             # 第一次全局定位没有可平滑过渡的旧世界系，必须直接建立坐标关系。
-            pose_filter.observe(value)
+            pose_filter.observe(
+                value,
+                translation_std_m=translation_std_m,
+                rotation_std_deg=rotation_std_deg,
+            )
             return AdaptiveRelocalizationUpdate("initialize", 0.0, 0.0)
 
         translation_m = float(np.linalg.norm(value[:3, 3] - current[:3, 3]))
@@ -68,6 +77,10 @@ class AdaptiveRelocalizationPolicy:
             pose_filter.reinitialize(value)
             mode = "jump"
         else:
-            pose_filter.observe(value)
+            pose_filter.observe(
+                value,
+                translation_std_m=translation_std_m,
+                rotation_std_deg=rotation_std_deg,
+            )
             mode = "ekf"
         return AdaptiveRelocalizationUpdate(mode, translation_m, rotation_deg)

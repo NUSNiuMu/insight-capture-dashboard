@@ -190,6 +190,8 @@ services:
       - -u
       - -m
       - insight_capture.runtime.mapping.insight3_localizer
+      - --settings-config
+      - /workspaces/insight_capture/config/runtime.json
       - --image-topic-template
       - /insight_mapping/{name}/infra1/image_rect_raw
       - --path-points

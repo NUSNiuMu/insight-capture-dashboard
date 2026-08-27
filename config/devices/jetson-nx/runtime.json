@@ -8,6 +8,55 @@
   "insight3_global_localizer": {
     "gripper_mask_height_ratio": 0.2
   },
+  "cube_marker_relative_localization": {
+    "enabled": true,
+    "apply_corrections": true,
+    "dictionary": "DICT_4X4_50",
+    "image_topic": "/insight9_a/camera/color/image_rect_raw/compressed",
+    "camera_info_topic": "/insight9_a/camera/color/camera_info",
+    "head_pose_topic": "/insight9_sparse_map/pose",
+    "detection_hz": 10.0,
+    "pose_wait_ms": 50.0,
+    "min_markers": 1,
+    "min_inlier_ratio": 0.75,
+    "max_reprojection_error_px": 2.5,
+    "min_depth_m": 0.1,
+    "max_depth_m": 3.0,
+    "confirmation_frames": 3,
+    "confirmation_window": 5,
+    "confirmation_translation_m": 0.03,
+    "confirmation_rotation_deg": 3.0,
+    "measurement_translation_std_m": 0.01,
+    "measurement_rotation_std_deg": 1.0,
+    "targets": [
+      {
+        "camera": "insight3_a",
+        "cube_from_camera_center": {
+          "translation_m": [0.0, -0.058, 0.09],
+          "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]
+        },
+        "markers": [
+          {"id": 8, "corners_cube_m": [[-0.03, -0.035, 0.03], [0.03, -0.035, 0.03], [0.03, -0.035, -0.03], [-0.03, -0.035, -0.03]]},
+          {"id": 9, "corners_cube_m": [[-0.03, -0.03, -0.035], [0.03, -0.03, -0.035], [0.03, 0.03, -0.035], [-0.03, 0.03, -0.035]]},
+          {"id": 10, "corners_cube_m": [[-0.035, -0.03, 0.03], [-0.035, -0.03, -0.03], [-0.035, 0.03, -0.03], [-0.035, 0.03, 0.03]]},
+          {"id": 11, "corners_cube_m": [[0.035, -0.03, -0.03], [0.035, -0.03, 0.03], [0.035, 0.03, 0.03], [0.035, 0.03, -0.03]]}
+        ]
+      },
+      {
+        "camera": "insight3_b",
+        "cube_from_camera_center": {
+          "translation_m": [0.0, -0.053, 0.093],
+          "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]
+        },
+        "markers": [
+          {"id": 2, "corners_cube_m": [[-0.03, -0.035, 0.03], [0.03, -0.035, 0.03], [0.03, -0.035, -0.03], [-0.03, -0.035, -0.03]]},
+          {"id": 3, "corners_cube_m": [[-0.03, -0.03, -0.035], [0.03, -0.03, -0.035], [0.03, 0.03, -0.035], [-0.03, 0.03, -0.035]]},
+          {"id": 4, "corners_cube_m": [[-0.035, -0.03, 0.03], [-0.035, -0.03, -0.03], [-0.035, 0.03, -0.03], [-0.035, 0.03, 0.03]]},
+          {"id": 5, "corners_cube_m": [[0.035, -0.03, -0.03], [0.035, -0.03, 0.03], [0.035, 0.03, 0.03], [0.035, 0.03, -0.03]]}
+        ]
+      }
+    ]
+  },
   "capture_session": {
     "task": "unspecified",
     "operator": "unknown",

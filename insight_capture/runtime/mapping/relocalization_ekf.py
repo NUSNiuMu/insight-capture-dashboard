@@ -170,11 +170,19 @@ class RelocalizationEkf:
             self._output[:3, :3] @ _so3_exp(alpha * rotation_error)
         )
 
-    def observe(self, map_to_odom: np.ndarray) -> bool:
+    def observe(
+        self,
+        map_to_odom: np.ndarray,
+        *,
+        translation_std_m: Optional[float] = None,
+        rotation_std_deg: Optional[float] = None,
+    ) -> bool:
         """Apply a relocalization observation.
 
         Returns ``True`` only for the first observation, which intentionally
-        initializes (and therefore jumps) to the real global pose.
+        initializes (and therefore jumps) to the real global pose.  Callers
+        with independently characterized sensors may override the default
+        measurement noise without changing the filter's process model.
         """
 
         measurement = _valid_transform(map_to_odom)
@@ -195,10 +203,25 @@ class RelocalizationEkf:
             float(np.linalg.norm(innovation[3:]))
         )
 
-        translation_variance = self.config.measurement_translation_std_m**2
-        rotation_variance = math.radians(
+        translation_std = (
+            self.config.measurement_translation_std_m
+            if translation_std_m is None
+            else float(translation_std_m)
+        )
+        rotation_std = (
             self.config.measurement_rotation_std_deg
-        ) ** 2
+            if rotation_std_deg is None
+            else float(rotation_std_deg)
+        )
+        if (
+            not np.isfinite(translation_std)
+            or translation_std <= 0.0
+            or not np.isfinite(rotation_std)
+            or rotation_std <= 0.0
+        ):
+            raise ValueError("measurement standard deviations must be positive")
+        translation_variance = translation_std**2
+        rotation_variance = math.radians(rotation_std) ** 2
         measurement_covariance = np.diag(
             [translation_variance] * 3 + [rotation_variance] * 3
         )

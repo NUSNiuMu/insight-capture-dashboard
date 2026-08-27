@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import sys
 import threading
 import time
@@ -29,9 +30,12 @@ if str(SCRIPT_DIR) not in sys.path:
 from insight_capture.runtime.mapping import (  # noqa: E402
     AdaptiveRelocalizationConfig,
     AdaptiveRelocalizationPolicy,
+    CubeMarkerConfig,
     GlobalLocalizationConfig,
     IpcSuperGlueBackend,
     LocalizationConsensus,
+    LocalizationCandidate,
+    MultiCubeMarkerEstimator,
     PoseBuffer,
     PoseSample,
     RelocalizationEkf,
@@ -40,13 +44,17 @@ from insight_capture.runtime.mapping import (  # noqa: E402
     VioContinuityStitcher,
     associate_reference_points,
     compose_transform,
+    grayscale_marker_image,
     left_to_stereo_center,
     load_tcp_frame_calibrations,
+    load_cube_marker_config,
     localize_correspondences,
     localize_features,
     matrix_from_pose,
     matrix_from_transform,
+    marker_map_to_odom,
     normalize_descriptors,
+    rotation_distance_deg,
     select_timestamp,
 )
 from insight_capture.core.localization_settings import (  # noqa: E402
@@ -68,7 +76,7 @@ try:
         qos_profile_sensor_data,
     )
     from rclpy.time import Time
-    from sensor_msgs.msg import CameraInfo, Image, PointCloud2
+    from sensor_msgs.msg import CameraInfo, CompressedImage, Image, PointCloud2
     from std_msgs.msg import String
     from std_srvs.srv import Empty
     from tf2_ros import (
@@ -289,12 +297,17 @@ class CameraState:
         self.imu_to_left: Optional[np.ndarray] = None
         self.imu_to_center: Optional[np.ndarray] = None
         self.consensus = LocalizationConsensus(config)
+        self.marker_consensus: Optional[LocalizationConsensus] = None
         self.pose_filter = RelocalizationEkf(ekf_config)
         self.relocalization_policy = AdaptiveRelocalizationPolicy(adaptive_config)
         self.vio_stitcher = VioContinuityStitcher(vio_continuity_config)
         self.vio_tracking_status = "UNKNOWN"
         self.vio_tracking_status_monotonic = 0.0
         self.last_relocalization_measurement: Optional[np.ndarray] = None
+        self.last_marker_measurement: Optional[np.ndarray] = None
+        self.marker_observations = 0
+        self.marker_updates = 0
+        self.marker_status: dict[str, object] = {"state": "disabled"}
         self.hard_relocalizations = 0
         self.last_vio_stamp_ns = -1
         self.last_input_vio_stamp_ns = -1
@@ -330,6 +343,15 @@ class Insight3GlobalLocalizer(Node):
         self._settings_config_path = Path(args.settings_config)
         self._settings_config_mtime_ns: Optional[int] = None
         self._refresh_gripper_mask_setting(force=True)
+        self._cube_marker_config = load_cube_marker_config(
+            self._settings_config_path
+        )
+        unknown_marker_cameras = set(self._cube_marker_config.targets) - set(CAMERAS)
+        if unknown_marker_cameras:
+            raise ValueError(
+                "cube marker targets reference unsupported cameras: "
+                + ", ".join(sorted(unknown_marker_cameras))
+            )
         # 两路相机使用相同几何门限，但各自维护独立的候选窗口和滤波状态。
         config = GlobalLocalizationConfig(
             ratio_test=args.ratio_test,
@@ -381,6 +403,38 @@ class Insight3GlobalLocalizer(Node):
             )
             for name in CAMERAS
         }
+        marker_consensus_config = GlobalLocalizationConfig(
+            min_matches=4,
+            min_inliers=4,
+            min_inlier_ratio=self._cube_marker_config.min_inlier_ratio,
+            max_reprojection_error_px=(
+                self._cube_marker_config.max_reprojection_error_px
+            ),
+            min_grid_cells=1,
+            confirmation_frames=self._cube_marker_config.confirmation_frames,
+            confirmation_window=self._cube_marker_config.confirmation_window,
+            confirmation_translation_m=(
+                self._cube_marker_config.confirmation_translation_m
+            ),
+            confirmation_rotation_deg=(
+                self._cube_marker_config.confirmation_rotation_deg
+            ),
+        )
+        for name in self._cube_marker_config.targets:
+            state = self._cameras[name]
+            state.marker_consensus = LocalizationConsensus(marker_consensus_config)
+            state.marker_status = {"state": "waiting_for_inputs"}
+        self._marker_estimator = (
+            MultiCubeMarkerEstimator(self._cube_marker_config)
+            if self._cube_marker_config.enabled
+            else None
+        )
+        self._head_pose_buffer = PoseBuffer(max_bracket_gap_ns=50_000_000)
+        self._head_marker_lock = threading.Lock()
+        self._head_marker_camera_matrix: Optional[np.ndarray] = None
+        self._head_center_to_rgb: Optional[np.ndarray] = None
+        self._marker_work: queue.Queue[object] = queue.Queue(maxsize=1)
+        self._marker_last_processed_stamp_ns = -1
         self._path_publishers = (
             {
                 name: self.create_publisher(
@@ -469,11 +523,46 @@ class Insight3GlobalLocalizer(Node):
                 ]
             )
             self.get_logger().info(f"{name} localization image <- {image_topic}")
+        if self._cube_marker_config.enabled:
+            self.create_subscription(
+                PoseStamped,
+                self._cube_marker_config.head_pose_topic,
+                self._head_pose_callback,
+                qos_profile_sensor_data,
+            )
+            self.create_subscription(
+                CameraInfo,
+                self._cube_marker_config.camera_info_topic,
+                self._head_marker_camera_info_callback,
+                qos_profile_sensor_data,
+            )
+            marker_image_type = (
+                CompressedImage
+                if self._cube_marker_config.image_topic.endswith("/compressed")
+                else Image
+            )
+            self.create_subscription(
+                marker_image_type,
+                self._cube_marker_config.image_topic,
+                self._head_marker_image_callback,
+                qos_profile_sensor_data,
+            )
         self._stop = threading.Event()
         self._worker = threading.Thread(
             target=self._worker_main, name="insight3-global-localization", daemon=True
         )
         self._worker.start()
+        self._marker_worker = (
+            threading.Thread(
+                target=self._marker_worker_main,
+                name="cube-marker-relative-localization",
+                daemon=True,
+            )
+            if self._cube_marker_config.enabled
+            else None
+        )
+        if self._marker_worker is not None:
+            self._marker_worker.start()
         self.create_timer(0.5, self._resolve_extrinsics)
         if args.publish_debug_topics:
             self.create_timer(
@@ -489,6 +578,11 @@ class Insight3GlobalLocalizer(Node):
         )
         if not args.publish_debug_topics:
             self.get_logger().info("debug Path topics disabled")
+        if self._cube_marker_config.enabled:
+            self.get_logger().info(
+                "cube marker relative localization enabled for "
+                + ", ".join(sorted(self._cube_marker_config.targets))
+            )
 
     def _publish_tcp_static_transforms(self) -> None:
         """只发布配置中真实存在的相机中心到 TCP 静态标定。"""
@@ -535,6 +629,14 @@ class Insight3GlobalLocalizer(Node):
                 state.consensus = LocalizationConsensus(state.consensus.config)
                 state.pose_filter.reset()
                 state.last_relocalization_measurement = None
+                state.last_marker_measurement = None
+                state.marker_observations = 0
+                state.marker_updates = 0
+                if state.marker_consensus is not None:
+                    state.marker_consensus = LocalizationConsensus(
+                        state.marker_consensus.config
+                    )
+                    state.marker_status = {"state": "waiting_for_inputs"}
                 state.hard_relocalizations = 0
                 state.last_vio_stamp_ns = -1
                 state.last_input_vio_stamp_ns = -1
@@ -554,12 +656,21 @@ class Insight3GlobalLocalizer(Node):
                     "localized": False,
                     "tracking_mode": "unlocalized",
                 }
+        self._head_pose_buffer.clear()
+        self._marker_last_processed_stamp_ns = -1
+        while True:
+            try:
+                self._marker_work.get_nowait()
+            except queue.Empty:
+                break
         self.get_logger().info("Cleared Insight3 global corrections for a new map")
         return response
 
     def destroy_node(self) -> bool:
         self._stop.set()
         self._worker.join(timeout=3.0)
+        if self._marker_worker is not None:
+            self._marker_worker.join(timeout=3.0)
         return super().destroy_node()
 
     def _on_feature_map(self, message: PointCloud2) -> None:
@@ -661,6 +772,291 @@ class Insight3GlobalLocalizer(Node):
 
         return callback
 
+    def _head_pose_callback(self, message: PoseStamped) -> None:
+        pose = message.pose
+        sample = PoseSample(
+            stamp_ns=stamp_to_ns(message.header.stamp),
+            translation=np.array(
+                [pose.position.x, pose.position.y, pose.position.z],
+                dtype=np.float64,
+            ),
+            orientation_xyzw=np.array(
+                [
+                    pose.orientation.x,
+                    pose.orientation.y,
+                    pose.orientation.z,
+                    pose.orientation.w,
+                ],
+                dtype=np.float64,
+            ),
+        )
+        try:
+            matrix_from_pose(sample)
+        except ValueError:
+            return
+        reset = self._head_pose_buffer.append(sample)
+        if reset:
+            for state in self._cameras.values():
+                with state.lock:
+                    if state.marker_consensus is not None:
+                        state.marker_consensus = LocalizationConsensus(
+                            state.marker_consensus.config
+                        )
+                        state.last_marker_measurement = None
+                        state.marker_status = {"state": "head_pose_reset"}
+
+    def _head_marker_camera_info_callback(self, message: CameraInfo) -> None:
+        projection = np.asarray(message.p, dtype=np.float64).reshape(3, 4)
+        matrix = projection[:, :3]
+        if (
+            matrix[0, 0] <= 0.0
+            or matrix[1, 1] <= 0.0
+            or not np.all(np.isfinite(matrix))
+        ):
+            return
+        with self._head_marker_lock:
+            self._head_marker_camera_matrix = matrix
+
+    def _head_marker_image_callback(self, message: object) -> None:
+        try:
+            self._marker_work.put_nowait(message)
+        except queue.Full:
+            try:
+                self._marker_work.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._marker_work.put_nowait(message)
+            except queue.Full:
+                pass
+
+    def _set_marker_rejection(
+        self, name: str, rejection: str, stamp_ns: int
+    ) -> None:
+        state = self._cameras[name]
+        with state.lock:
+            progress = {}
+            if state.marker_consensus is not None:
+                progress = state.marker_consensus.observe(None)
+            state.marker_status = {
+                "state": "waiting",
+                "rejection": rejection,
+                "image_stamp_ns": int(stamp_ns),
+                **progress,
+            }
+
+    def _marker_worker_main(self) -> None:
+        estimator = self._marker_estimator
+        if estimator is None:
+            return
+        period_sec = 1.0 / self._cube_marker_config.detection_hz
+        next_process_monotonic = 0.0
+        while not self._stop.is_set():
+            try:
+                message = self._marker_work.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            delay_sec = next_process_monotonic - time.monotonic()
+            if delay_sec > 0.0 and self._stop.wait(delay_sec):
+                break
+            while True:
+                try:
+                    message = self._marker_work.get_nowait()
+                except queue.Empty:
+                    break
+            next_process_monotonic = time.monotonic() + period_sec
+            stamp_ns = stamp_to_ns(message.header.stamp)
+            if stamp_ns <= self._marker_last_processed_stamp_ns:
+                continue
+            self._marker_last_processed_stamp_ns = stamp_ns
+            with self._head_marker_lock:
+                camera_matrix = (
+                    None
+                    if self._head_marker_camera_matrix is None
+                    else self._head_marker_camera_matrix.copy()
+                )
+                head_center_to_rgb = (
+                    None
+                    if self._head_center_to_rgb is None
+                    else self._head_center_to_rgb.copy()
+                )
+            if camera_matrix is None:
+                for name in self._cube_marker_config.targets:
+                    self._set_marker_rejection(name, "missing_camera_info", stamp_ns)
+                continue
+            if head_center_to_rgb is None:
+                for name in self._cube_marker_config.targets:
+                    self._set_marker_rejection(name, "missing_head_rgb_extrinsic", stamp_ns)
+                continue
+            deadline = (
+                time.monotonic() + self._cube_marker_config.pose_wait_ms / 1000.0
+            )
+            head_pose = self._head_pose_buffer.lookup(stamp_ns)
+            while head_pose is None and time.monotonic() < deadline:
+                if self._stop.wait(0.005):
+                    return
+                head_pose = self._head_pose_buffer.lookup(stamp_ns)
+            if head_pose is None:
+                for name in self._cube_marker_config.targets:
+                    self._set_marker_rejection(name, "missing_head_pose_bracket", stamp_ns)
+                continue
+            try:
+                gray = grayscale_marker_image(message)
+                estimates = estimator.detect(gray, camera_matrix)
+            except Exception as exc:
+                for name in self._cube_marker_config.targets:
+                    self._set_marker_rejection(
+                        name, f"detection_error:{exc}", stamp_ns
+                    )
+                continue
+            map_from_head_center = matrix_from_pose(head_pose)
+            for name, target in self._cube_marker_config.targets.items():
+                estimate = estimates.get(name)
+                if estimate is None:
+                    self._set_marker_rejection(name, "marker_not_detected", stamp_ns)
+                    continue
+                state = self._cameras[name]
+                with state.lock:
+                    vio_sample = state.pose_buffer.lookup(stamp_ns)
+                    imu_to_center = (
+                        None
+                        if state.imu_to_center is None
+                        else state.imu_to_center.copy()
+                    )
+                    consensus = state.marker_consensus
+                    if vio_sample is None or imu_to_center is None or consensus is None:
+                        rejection = (
+                            "missing_gripper_vio_bracket"
+                            if vio_sample is None
+                            else "missing_gripper_extrinsic"
+                        )
+                        progress = (
+                            consensus.observe(None) if consensus is not None else {}
+                        )
+                        state.marker_status = {
+                            "state": "waiting",
+                            "rejection": rejection,
+                            "image_stamp_ns": int(stamp_ns),
+                            **progress,
+                        }
+                        continue
+                    odom_from_camera_center = (
+                        matrix_from_pose(vio_sample) @ imu_to_center
+                    )
+                    map_from_camera, map_from_odom = marker_map_to_odom(
+                        map_from_head_center,
+                        head_center_to_rgb,
+                        estimate.rgb_from_cube,
+                        target.cube_from_camera_center,
+                        odom_from_camera_center,
+                    )
+                    candidate = LocalizationCandidate(
+                        map_to_camera=map_from_camera,
+                        map_to_odom=map_from_odom,
+                        matches=estimate.corners,
+                        inliers=estimate.inliers,
+                        inlier_ratio=estimate.inlier_ratio,
+                        median_reprojection_error_px=(
+                            estimate.median_reprojection_error_px
+                        ),
+                        grid_cells=len(estimate.marker_ids),
+                    )
+                    transition = consensus.observe(candidate)
+                    measurement = consensus.correction
+                    measurement_changed = (
+                        measurement is not None
+                        and (
+                            state.last_marker_measurement is None
+                            or not np.array_equal(
+                                measurement, state.last_marker_measurement
+                            )
+                        )
+                    )
+                    correction_mode = "none"
+                    if measurement_changed:
+                        state.last_marker_measurement = measurement.copy()
+                        state.marker_observations += 1
+                        if self._cube_marker_config.apply_corrections:
+                            correction_update = state.relocalization_policy.apply(
+                                state.pose_filter,
+                                measurement,
+                                translation_std_m=(
+                                    self._cube_marker_config.measurement_translation_std_m
+                                ),
+                                rotation_std_deg=(
+                                    self._cube_marker_config.measurement_rotation_std_deg
+                                ),
+                            )
+                            state.marker_updates += 1
+                            state.path_dirty = True
+                            correction_mode = correction_update.mode
+                            transition["correction_translation_m"] = round(
+                                correction_update.translation_m, 4
+                            )
+                            transition["correction_rotation_deg"] = round(
+                                correction_update.rotation_deg, 3
+                            )
+                            if correction_mode in {"initialize", "jump"}:
+                                self._start_new_path_segment(state)
+                            if correction_mode == "jump":
+                                state.hard_relocalizations += 1
+                                self.get_logger().warning(
+                                    "%s cube marker hard relocalization %d: %.3f m / %.2f deg"
+                                    % (
+                                        name,
+                                        state.hard_relocalizations,
+                                        correction_update.translation_m,
+                                        correction_update.rotation_deg,
+                                    )
+                                )
+                        else:
+                            correction_mode = "shadow"
+                            current = state.pose_filter.correction
+                            if current is not None:
+                                transition["shadow_translation_delta_m"] = round(
+                                    float(
+                                        np.linalg.norm(
+                                            measurement[:3, 3] - current[:3, 3]
+                                        )
+                                    ),
+                                    4,
+                                )
+                                transition["shadow_rotation_delta_deg"] = round(
+                                    rotation_distance_deg(current, measurement), 3
+                                )
+                    transition["correction_mode"] = correction_mode
+                    state.marker_status = {
+                        "state": "matched",
+                        "rejection": None,
+                        "image_stamp_ns": int(stamp_ns),
+                        "marker_ids": list(estimate.marker_ids),
+                        "corners": estimate.corners,
+                        "inliers": estimate.inliers,
+                        "inlier_ratio": round(estimate.inlier_ratio, 4),
+                        "median_reprojection_error_px": round(
+                            estimate.median_reprojection_error_px, 3
+                        ),
+                        "max_reprojection_error_px": round(
+                            estimate.max_reprojection_error_px, 3
+                        ),
+                        "apply_corrections": (
+                            self._cube_marker_config.apply_corrections
+                        ),
+                        "observations": state.marker_observations,
+                        "updates": state.marker_updates,
+                        **transition,
+                    }
+                    if (
+                        measurement_changed
+                        and self._cube_marker_config.apply_corrections
+                    ):
+                        state.status = {
+                            **state.status,
+                            "state": "localized",
+                            "localized": state.pose_filter.initialized,
+                            "tracking_mode": "marker_matched",
+                        }
+
     def _vio_status_callback(self, name: str):
         def callback(message: String) -> None:
             value = str(message.data).strip().upper() or "UNKNOWN"
@@ -739,6 +1135,14 @@ class Insight3GlobalLocalizer(Node):
                         )
                         state.pose_filter.reset()
                         state.last_relocalization_measurement = None
+                        state.last_marker_measurement = None
+                        if state.marker_consensus is not None:
+                            state.marker_consensus = LocalizationConsensus(
+                                state.marker_consensus.config
+                            )
+                            state.marker_status = {
+                                "state": "waiting_for_vio_relocalization"
+                            }
                         state.hard_relocalizations = 0
                         state.last_vio_stamp_ns = -1
                         state.last_input_vio_stamp_ns = sample.stamp_ns
@@ -861,6 +1265,61 @@ class Insight3GlobalLocalizer(Node):
             self.get_logger().info(
                 f"resolved {name} stereo center from {baseline_m:.4f} m baseline"
             )
+        if not self._cube_marker_config.enabled:
+            return
+        with self._head_marker_lock:
+            if self._head_center_to_rgb is not None:
+                return
+        try:
+            left_to_right_msg = self._tf_buffer.lookup_transform(
+                self._cube_marker_config.head_left_frame,
+                self._cube_marker_config.head_right_frame,
+                Time(),
+                timeout=Duration(seconds=0.05),
+            )
+            left_to_rgb_msg = self._tf_buffer.lookup_transform(
+                self._cube_marker_config.head_left_frame,
+                self._cube_marker_config.head_rgb_frame,
+                Time(),
+                timeout=Duration(seconds=0.05),
+            )
+        except Exception:
+            return
+        right_value = left_to_right_msg.transform
+        left_to_right = matrix_from_transform(
+            (
+                right_value.translation.x,
+                right_value.translation.y,
+                right_value.translation.z,
+            ),
+            (
+                right_value.rotation.x,
+                right_value.rotation.y,
+                right_value.rotation.z,
+                right_value.rotation.w,
+            ),
+        )
+        rgb_value = left_to_rgb_msg.transform
+        left_to_rgb = matrix_from_transform(
+            (
+                rgb_value.translation.x,
+                rgb_value.translation.y,
+                rgb_value.translation.z,
+            ),
+            (
+                rgb_value.rotation.x,
+                rgb_value.rotation.y,
+                rgb_value.rotation.z,
+                rgb_value.rotation.w,
+            ),
+        )
+        left_to_center = left_to_stereo_center(left_to_right)
+        head_center_to_rgb = np.linalg.inv(left_to_center) @ left_to_rgb
+        with self._head_marker_lock:
+            self._head_center_to_rgb = head_center_to_rgb
+        self.get_logger().info(
+            "resolved Insight9 stereo-center to RGB extrinsic for cube markers"
+        )
 
     def _worker_main(self) -> None:
         """低频轮询两路最新图像，执行直接关键帧或描述子地图定位。
@@ -1369,7 +1828,17 @@ class Insight3GlobalLocalizer(Node):
                     and vio_status_age_sec <= 1.0
                 )
                 status["vio_continuity"] = vio_continuity
+                status["cube_marker"] = dict(state.marker_status)
             status["gripper_mask_height_ratio"] = self._gripper_mask_height_ratio
+            status["cube_marker_enabled"] = (
+                self._cube_marker_config.enabled
+                and name in self._cube_marker_config.targets
+            )
+            status["cube_marker_apply_corrections"] = (
+                self._cube_marker_config.enabled
+                and self._cube_marker_config.apply_corrections
+                and name in self._cube_marker_config.targets
+            )
             status["pose_frame"] = f"{name}_global_camera_center"
             calibration = self._tcp_calibrations.get(name)
             status["tcp_frame"] = (
