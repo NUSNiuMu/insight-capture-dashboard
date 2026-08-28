@@ -14,6 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from insight_capture.runtime.anomaly import ActiveQcMonitor, VoiceAlertQueue
 from insight_capture.media.image_pipeline import ImagePipeline
 from insight_capture.runtime.preflight import CapturePreflight
+from insight_capture.runtime.recording.header_audit import RecordingBridge
 from insight_capture.media.preview_manager import PreviewManager
 from insight_capture.runtime.payloads import PayloadBuilder
 from insight_capture.runtime.ros.node import PoseBridgeNode
@@ -148,6 +149,27 @@ class CaptureRuntimeTest(unittest.TestCase):
             self.assertTrue(manager.requested())
         finally:
             manager.close()
+
+    def test_dashboard_header_audit_is_not_recording_quality_authority(self):
+        topic = "/insight3_a/camera/infra1/image_rect_raw"
+        owner = SimpleNamespace(
+            _recording_header_audit={
+                topic: {
+                    "count": 2,
+                    "first_ns": 1_000_000_000,
+                    "last_ns": 2_000_000_000,
+                    "missing": 29,
+                    "gap_events": 1,
+                    "worst_gap_ns": 1_000_000_000,
+                }
+            }
+        )
+
+        audit = RecordingBridge(owner)._finalize_image_header_audit()
+
+        self.assertEqual(audit["scope"], "dashboard_subscription")
+        self.assertFalse(audit["recording_quality_authoritative"])
+        self.assertFalse(audit["ok"])
 
     def test_preflight_checks_camera_mapping_storage_and_topics(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -352,6 +374,102 @@ class CaptureRuntimeTest(unittest.TestCase):
             timeline = store.current()["anomaly_timeline"]
             self.assertEqual(timeline[0]["code"], "camera_stale:a")
             self.assertTrue(timeline[0]["affects_quality"])
+
+    def test_dashboard_reader_gap_does_not_alert_or_mark_take_suspect(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = SessionTakeStore(root, {"session_id": "s1"})
+            store.reserve_take()
+            store.mark_recording(root / "bag")
+            manager = _Manager(root)
+            manager.recording = True
+            manager.image_header_audit = {
+                "scope": "dashboard_subscription",
+                "recording_quality_authoritative": False,
+                "ok": False,
+                "topics": {"/cam/a": {"missing": 100}},
+            }
+            manager.status = lambda: {
+                "recording": manager.recording,
+                "recording_mode": manager.recording_mode,
+                "storage": manager.storage_status,
+                "recent_output": [],
+                "merge_state": "done",
+                "network_audit": {"ok": True},
+                "image_header_audit": manager.image_header_audit,
+                "output_path": str(root / "bag"),
+            }
+            now = time.monotonic()
+            node = SimpleNamespace(
+                cameras=[SimpleNamespace(name="a", label="A camera")],
+                camera_input_lock=threading.Lock(),
+                camera_input_times={"a": deque([now], maxlen=10)},
+                build_mapping_payload=lambda: {
+                    "statuses": {
+                        "insight9": {"online": True},
+                        "insight3_a": {"online": True, "localized": True},
+                        "insight3_b": {"online": True, "localized": True},
+                    }
+                },
+                _recording_bridge=SimpleNamespace(
+                    snapshot_image_header_audit=lambda: manager.image_header_audit
+                ),
+            )
+            alerts = VoiceAlertQueue()
+            monitor = ActiveQcMonitor(
+                node, manager, store, alerts,
+                {"sustain_sec": 0.5, "minimum_free_gb": 0},
+            )
+
+            monitor.poll()
+            monitor.poll()
+
+            self.assertEqual(alerts.since(0), [])
+            self.assertEqual(store.current()["anomaly_timeline"], [])
+            manager.recording = False
+            completed = store.complete_current(manager.status())
+            self.assertEqual(completed["quick_qc"]["state"], "pass")
+
+    def test_one_off_authoritative_gap_is_not_sustained(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = SessionTakeStore(root, {"session_id": "s1"})
+            store.reserve_take()
+            store.mark_recording(root / "bag")
+            manager = _Manager(root)
+            manager.recording = True
+            now = time.monotonic()
+            audit = {
+                "recording_quality_authoritative": True,
+                "topics": {"/cam/a": {"missing": 1}},
+            }
+            node = SimpleNamespace(
+                cameras=[SimpleNamespace(name="a", label="A camera")],
+                camera_input_lock=threading.Lock(),
+                camera_input_times={"a": deque([now], maxlen=10)},
+                build_mapping_payload=lambda: {
+                    "statuses": {
+                        "insight9": {"online": True},
+                        "insight3_a": {"online": True, "localized": True},
+                        "insight3_b": {"online": True, "localized": True},
+                    }
+                },
+                _recording_bridge=SimpleNamespace(
+                    snapshot_image_header_audit=lambda: audit
+                ),
+            )
+            alerts = VoiceAlertQueue()
+            monitor = ActiveQcMonitor(
+                node, manager, store, alerts,
+                {"sustain_sec": 0.5, "minimum_free_gb": 0},
+            )
+
+            monitor.poll()
+            monitor._pending_since["frame_loss:/cam/a"] = now - 1.0
+            monitor.poll()
+
+            self.assertEqual(alerts.since(0), [])
+            self.assertEqual(store.current()["anomaly_timeline"], [])
 
     def test_vio_calibration_qc_ignores_missing_rectified_dashboard_streams(self):
         with tempfile.TemporaryDirectory() as temporary:

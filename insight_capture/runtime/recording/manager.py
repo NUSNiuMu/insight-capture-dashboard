@@ -789,7 +789,7 @@ class RecordingManager:
                 "network_audit": "recording_network_audit.json" if self._network_audit else None,
             })
 
-        # Stop the native writer and the independent live audit at one boundary.
+        # Stop the native writer and Dashboard-side live audit at one boundary.
         for process in processes.values():
             try:
                 os.killpg(os.getpgid(process.pid), signal.SIGINT)
@@ -813,14 +813,16 @@ class RecordingManager:
                 self._image_header_audit = result.get("image_header_audit") if result else None
                 if self._image_header_audit:
                     audit_topics = self._image_header_audit.get("topics", {})
-                    verdict = "PASS" if self._image_header_audit.get("ok") else "FAIL"
+                    verdict = "PASS" if self._image_header_audit.get("ok") else "GAPS"
                     details = ", ".join(
                         f"{topic}: {item.get('frames', 0)} frames, "
                         f"{item.get('missing', 0)} missing, "
                         f"{item.get('writer_queue_dropped', 0)} writer drops"
                         for topic, item in sorted(audit_topics.items())
                     )
-                    self._output_lines.append(f"[images] live header audit {verdict} -- {details}")
+                    self._output_lines.append(
+                        f"[images] dashboard subscription header audit {verdict} -- {details}"
+                    )
             except Exception as exc:  # noqa: BLE001 - finalization is rejected below
                 image_writer_error = str(exc)
                 self._output_lines.append(f"[images] ERROR stopping live audit: {exc}")

@@ -352,7 +352,11 @@ class SessionTakeStore:
             if isinstance(network, dict) and network.get("ok") is False:
                 reasons.append("recording network audit failed")
             image_audit = recording_status.get("image_header_audit") or {}
-            if isinstance(image_audit, dict) and image_audit.get("ok") is False:
+            if (
+                isinstance(image_audit, dict)
+                and image_audit.get("recording_quality_authoritative") is True
+                and image_audit.get("ok") is False
+            ):
                 reasons.append("image continuity audit failed")
             anomalies = payload.get("anomaly_timeline") or []
             quality_anomalies = [

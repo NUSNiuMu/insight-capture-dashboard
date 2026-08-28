@@ -15,8 +15,8 @@ class RecordingBridge:
         """Start auditing images already received by the dashboard.
 
         The native rosbag2 process owns all storage writes. Reusing the existing
-        image callbacks here gives us an independent source-timestamp continuity
-        check without putting serialization or disk I/O in a ROS callback.
+        image callbacks gives us a lightweight Dashboard-reader diagnostic, but
+        it cannot prove recorder loss because rosbag2 has a separate DDS reader.
         """
         topics = set(topic_output_paths)
         with self.owner._recording_writer_lock:
@@ -80,6 +80,8 @@ class RecordingBridge:
             }
         return {
             "method": "live_image_header_audit",
+            "scope": "dashboard_subscription",
+            "recording_quality_authoritative": False,
             "topics": topics,
             "ok": bool(topics) and all(item["ok"] for item in topics.values()),
         }
@@ -88,7 +90,13 @@ class RecordingBridge:
         """Return an in-flight copy for active QC without stopping capture."""
         with self.owner._recording_writer_lock:
             if not self.owner._recording_header_audit:
-                return {"method": "live_image_header_audit", "topics": {}, "ok": True}
+                return {
+                    "method": "live_image_header_audit",
+                    "scope": "dashboard_subscription",
+                    "recording_quality_authoritative": False,
+                    "topics": {},
+                    "ok": True,
+                }
             return self._finalize_image_header_audit()
 
     def _feed_recording_writer(self, topic: str, msg: object) -> None:

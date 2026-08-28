@@ -47,6 +47,7 @@ class ActiveQcMonitor:
         self.minimum_free_gb = max(0.0, float(settings.get("minimum_free_gb", 2.0)))
         self._pending_since: Dict[str, float] = {}
         self._active: set[str] = set()
+        self._frame_missing_seen: Dict[str, int] = {}
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -113,6 +114,7 @@ class ActiveQcMonitor:
         if not self.recording_manager.is_recording():
             self._pending_since.clear()
             self._active.clear()
+            self._frame_missing_seen.clear()
             return
         status = self.recording_manager.status()
         calibration_mode = status.get("recording_mode") == "vio_calibration"
@@ -164,12 +166,35 @@ class ActiveQcMonitor:
 
         bridge = getattr(self.node, "_recording_bridge", None)
         audit = bridge.snapshot_image_header_audit() if bridge is not None else {}
-        for topic, stat in (audit.get("topics") or {}).items():
-            missing = int(stat.get("missing", 0))
-            self._observe(
-                f"frame_loss:{topic}", missing > 0,
-                "检测到持续丢帧，本条已标记复检。", topic=topic, missing=missing
-            )
+        if audit.get("recording_quality_authoritative") is True:
+            current_topics = set()
+            for topic, stat in (audit.get("topics") or {}).items():
+                current_topics.add(topic)
+                missing = int(stat.get("missing", 0))
+                previous = self._frame_missing_seen.get(topic, 0)
+                self._frame_missing_seen[topic] = missing
+                self._observe(
+                    f"frame_loss:{topic}", missing > previous,
+                    "检测到持续丢帧，本条已标记复检。",
+                    topic=topic,
+                    missing=missing,
+                    missing_delta=max(0, missing - previous),
+                )
+            self._frame_missing_seen = {
+                topic: missing
+                for topic, missing in self._frame_missing_seen.items()
+                if topic in current_topics
+            }
+        else:
+            # The Dashboard and native rosbag2 use separate DDS readers. A gap
+            # here diagnoses Dashboard scheduling, not recorded-bag loss.
+            self._frame_missing_seen.clear()
+            for code in list(self._pending_since):
+                if code.startswith("frame_loss:"):
+                    self._pending_since.pop(code, None)
+            self._active = {
+                code for code in self._active if not code.startswith("frame_loss:")
+            }
 
         storage = status.get("storage") or {}
         self._observe(
