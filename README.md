@@ -179,6 +179,8 @@ Docker 宿主机目录由 `INSIGHT_ROSBAG_HOST_DIR` 控制；例如在 `.env` �
 导致录制根目录来回切换。可写且空间充足的 fallback 只产生 warning，不会阻止录制或将
 Take 标成 suspect；目录不可写或空间不足仍会拒绝开始。录制状态的 `storage.active_path`、
 `storage.using_fallback` 和 `storage.fallback_reason` 会显示实际写入位置与回退原因。
+`run_dashboard.sh` 还会在 Compose 创建容器前检查宿主机录制盘；设备缺失或挂载不匹配时，
+先用稳定的 NVMe 路径建立容器，让上述应用层 fallback 能够正常生效。
 
 声控统一使用宿主机上的 [Insight 离线语音控制](docs/OPENCLAW_VOICE.md)。SenseVoice、
 VAD 与 Piper 在本地完成“开始任务叠杯子、当前任务多少条、结束当前任务、开始/停止录制、

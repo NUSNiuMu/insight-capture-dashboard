@@ -376,6 +376,8 @@ INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1
 `true`。一次回退后本进程固定使用 NVMe；修复或更换
 U 盘后重启 Dashboard，才会重新选择 U 盘。录制过程中断盘无法迁移已经写出的同一段数据，
 应停止该段并在下一段录制前确认状态已回退。
+`run_dashboard.sh` 会在 Compose 启动前检查录制盘；设备缺失或挂载来源不匹配时，会使用稳定的
+NVMe 目录创建容器，再由后端按上述状态明确报告回退，避免自动挂载失败阻止 Dashboard 启动。
 
 ---
 

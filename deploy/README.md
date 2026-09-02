@@ -99,7 +99,8 @@ LeRobot/UMI 数据集、轨迹评分、Hand pose、轨迹优化和设置。
   `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`。服务启动及每次开始录制前会验证挂载源和
   `_staging` 写入，U 盘未挂载、只读或 I/O 异常时自动回退到本机 NVMe 的 `rosbags/`；
   录制状态会显示实际路径与回退原因。一次回退后需重启 Dashboard 才会重新选择 U 盘；
-  `update.sh` 升级时会保留这些设置。
+  `run_dashboard.sh` 会在 Compose 创建容器前避开不可用的 U 盘绑定，确保 Dashboard 仍能以
+  NVMe fallback 启动；`update.sh` 升级时会保留这些设置。
 
 ## 回滚
 
