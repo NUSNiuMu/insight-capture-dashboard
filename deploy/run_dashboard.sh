@@ -236,14 +236,29 @@ if [[ "${jetson_mode}" == "true" ]]; then
     fi
 fi
 
-host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+# Prefer the routed LAN interface over Docker bridges and camera USB links.
+host_ip="${DASHBOARD_ADVERTISE_HOST:-}"
+if [[ -z "${host_ip}" ]]; then
+    host_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") {print $(i+1); exit}}' || true)"
+fi
+if [[ -z "${host_ip}" ]]; then
+    host_ip="<this-jetson-ip>"
+fi
 cat <<EOF
 
 Dashboard backend is running on this machine's port ${PORT}.
 
-From your own laptop, open an SSH tunnel and browse locally:
-  ssh -L ${PORT}:localhost:${PORT} $(whoami)@${host_ip:-<this-jetson-ip>}
-  then open http://localhost:${PORT}/ in your browser
+From your laptop on the same LAN, open directly (H.264 WebRTC preview):
+  http://${host_ip}:${PORT}/3d
+
+On this Jetson's own browser:
+  http://localhost:${PORT}/3d
+
+WebRTC uses a separate signaling port (default 8766) and ICE media connections.
+A webpage-only SSH tunnel falls back to slow JPEG polling. Do not run an SSH
+tunnel to this Jetson on the Jetson itself: it can occupy the WebRTC port.
+For remote networks, use a routed VPN or configure TURN for WebRTC media.
+Set DASHBOARD_ADVERTISE_HOST to override the displayed LAN address.
 
 (Pass --jetson to launch the on-device kiosk window here, --logs to follow
 backend logs -- including the perf_tracker CPU breakdown -- instead of

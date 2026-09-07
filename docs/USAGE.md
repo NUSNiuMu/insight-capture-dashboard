@@ -57,12 +57,17 @@ Insight 相机 ×3 ──USB 网口──> Jetson 主机 ──docker 容器─�
 
 ### 2.2 浏览器访问
 
-- 同一局域网：`http://<设备IP>:8765/`
-- 或 SSH 隧道（不依赖局域网可达）：
-  ```bash
-  ssh -L 8765:localhost:8765 <用户名>@<设备IP>
-  # 然后浏览器打开 http://localhost:8765/
-  ```
+- 同一局域网：`http://<设备IP>:8765/`；实时预览直接打开 `/3d`。
+  启动脚本优先显示默认路由对应的地址，避免误选相机 USB 或 Docker 网卡。
+  多网卡环境可用 `DASHBOARD_ADVERTISE_HOST=<设备IP> ./scripts/run_dashboard.sh`
+  覆盖显示地址（不改变服务监听配置）。
+- Jetson 本机浏览器：`http://localhost:8765/3d`，无需 SSH 转发。
+- 实时预览使用 H.264 WebRTC，默认信令端口为 `8766`，媒体通过 ICE 协商连接。
+  电脑需要能访问该信令端口和媒体地址；worker 在打开预览时按需启动。
+- 只转发 `8765` 的 SSH 隧道可访问网页，但视频会降级为 JPEG 轮询
+  （250 ms 一次，名义上约 4 fps）。补转发 `8766` 只解决信令，不保证媒体可达；
+  跨网络 WebRTC 应使用可路由 VPN 或配置 TURN 中继。
+  不要在 Jetson 上向自身建立转发：占用 `8766` 会阻止 WebRTC worker 启动。
 
 ---
 
