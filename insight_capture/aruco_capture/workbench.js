@@ -138,10 +138,8 @@ function videoCards(streams) {
     label.append(el("strong", title(name)), el("span", "未连接", "video-rate"));
     const expand = el("button", "⛶", "quiet");
     expand.setAttribute("aria-label", "全屏查看" + title(name));
-    expand.onclick = () =>
-      card
-        .requestFullscreen()
-        .catch(() => notice("浏览器暂不支持全屏查看", true));
+    expand.dataset.fullscreen = "";
+    expand.onclick = () => toggleFullscreen(card);
     label.append(expand);
     card.append(wrap, label);
     $("videos").append(card);
@@ -975,11 +973,34 @@ document
   .forEach((b) => (b.onclick = () => scene.view(b.dataset.view)));
 $("zoomIn").onclick = () => scene.zoom(0.8);
 $("zoomOut").onclick = () => scene.zoom(1.25);
+async function toggleFullscreen(node) {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await node.requestFullscreen();
+  } catch {
+    notice("浏览器暂不支持全屏查看", true);
+  }
+}
 $("sceneFullscreen").onclick = () =>
-  document
-    .querySelector(".scene-panel")
-    .requestFullscreen()
-    .catch(() => notice("浏览器暂不支持全屏查看", true));
+  toggleFullscreen(document.querySelector(".scene-panel"));
+document.addEventListener("fullscreenchange", () => {
+  const sceneActive =
+    document.fullscreenElement === document.querySelector(".scene-panel");
+  $("sceneFullscreen").textContent = sceneActive ? "退出全屏" : "全屏";
+  $("sceneFullscreen").setAttribute(
+    "aria-label",
+    sceneActive ? "退出三维轨迹全屏" : "全屏查看三维轨迹",
+  );
+  for (const card of $("videos").children) {
+    const b = card.querySelector("[data-fullscreen]");
+    const active = document.fullscreenElement === card;
+    b.textContent = active ? "退出全屏" : "⛶";
+    b.setAttribute(
+      "aria-label",
+      active ? "退出相机全屏" : "全屏查看" + title(card.dataset.stream),
+    );
+  }
+});
 window.addEventListener("hashchange", changeMode);
 window.addEventListener("beforeunload", (e) => {
   if (dirty || editorDirty) {
