@@ -211,7 +211,9 @@ class SourceManager:
             capture.queue.join()
             with capture.lock:
                 capture.config.update(settings)
-                capture.source_states.clear()
+                for key in list(capture.source_states):
+                    if key not in ("image/head", "vio/head", "calibration"):
+                        capture.source_states.pop(key, None)
                 capture.grippers.clear()
                 for key in list(capture.latest):
                     if key != "image/head" and key != "vio/head":
