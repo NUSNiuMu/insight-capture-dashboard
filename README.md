@@ -24,6 +24,8 @@ QC 为核心；采后才打开本机 Firefox/Kiosk 或 Web Dashboard 查看三�
 `ROS_DOMAIN_ID` 从当前未跟踪的 `config/cameras.json` 读取；jetson-nx profile
 默认值为 20。
 
+独立的 **x86 ArUco 最小数采版**（Insight9 VIO + cube 定位、普通 RGB、串口夹爪、手动标注与 LeRobot v3）见 [部署与使用说明](docs/X86_ARUCO_CAPTURE.md)。
+
 ## 快速开始
 
 ### 方式一：docker compose（推荐，持久化服务）

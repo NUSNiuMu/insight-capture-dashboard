@@ -1,0 +1,16 @@
+services:
+  aruco-capture:
+    build:
+      context: ../..
+      dockerfile: deploy/aruco/Dockerfile
+    network_mode: host
+    init: true
+    stop_signal: SIGINT
+    stop_grace_period: 15s
+    environment:
+      RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+    volumes:
+      - ../../config/devices/x86-aruco/capture.json:/app/config/devices/x86-aruco/capture.json:ro
+      - ../../outputs/aruco-capture:/app/outputs/aruco-capture
+    # Add only the devices in capture.json, e.g. /dev/video0 and /dev/ttyUSB0.
+    # devices: ["/dev/video0:/dev/video0", "/dev/ttyUSB0:/dev/ttyUSB0"]
