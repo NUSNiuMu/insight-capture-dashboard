@@ -62,6 +62,24 @@
           </div>
         </div>
         <div id="readiness" class="readiness"></div>
+        <div id="sourceAlerts" class="source-alerts" role="status" hidden></div>
+        <details id="devicePanel" class="panel device-panel">
+          <summary>
+            设备连接与端口 <span>扫描相机与编码器，重新选择输入</span>
+          </summary>
+          <div class="device-toolbar">
+            <p id="deviceHint">自动重连已启用。更换设备绑定请先停止录制。</p>
+            <button id="scanDevices" type="button">扫描设备</button>
+          </div>
+          <form id="deviceForm">
+            <div id="deviceFields"></div>
+            <div class="device-actions">
+              <button id="applyDevices" type="submit" class="primary" disabled>
+                应用设备选择</button
+              ><span id="deviceMessage" role="status" aria-live="polite"></span>
+            </div>
+          </form>
+        </details>
         <div id="sessionBar" class="session-bar" hidden>
           <label for="sessions">录制记录</label
           ><select id="sessions">

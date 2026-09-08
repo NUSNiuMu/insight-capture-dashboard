@@ -1,4 +1,5 @@
 import { Trajectory, poseFromState } from "./trajectory.js";
+import { DevicePanel } from "./devices.js";
 const $ = (id) => document.getElementById(id),
   sides = ["left", "right"];
 const names = {
@@ -39,6 +40,7 @@ let mode = "capture",
   editorDirty = false,
   lastRenderedFrame = "";
 const scene = new Trajectory($("scene"), $("sceneEmpty"));
+const devicePanel = new DevicePanel(api);
 const el = (tag, text, cls) => {
   const x = document.createElement(tag);
   if (text !== undefined) x.textContent = text;
@@ -104,7 +106,8 @@ function updateControls() {
   const active = !!status?.recording;
   $("start").hidden = active;
   $("stop").hidden = !active;
-  $("start").disabled = actionBusy || exportBusy || !status;
+  $("start").disabled =
+    actionBusy || exportBusy || !status || status?.reconfiguring;
   $("stop").disabled = actionBusy;
   $("play").disabled = !review;
   for (const id of ["prevFrame", "nextFrame", "qc", "save", "add"])
@@ -306,6 +309,7 @@ async function pollStatus() {
     $("recordingState").className = "badge" + (s.recording ? " recording" : "");
     $("sampleRate").textContent = `${s.fps} Hz 采样`;
     readiness(s);
+    devicePanel.update(s);
     $("footerState").textContent = s.recording
       ? `正在保存 ${s.recording}`
       : s.calibrated
@@ -327,6 +331,7 @@ async function pollStatus() {
     updateControls();
   } catch (e) {
     status = null;
+    devicePanel.update(null);
     $("connection").textContent = "服务连接中断";
     $("connectionDot").className = "";
     $("footerState").textContent = "连接中断，请检查服务是否运行";
@@ -414,6 +419,9 @@ function changeMode() {
     quality: "定位无效时段，确认可用数据，再导出训练集。",
   }[mode];
   $("readiness").hidden = mode !== "capture";
+  $("devicePanel").hidden = mode !== "capture";
+  $("sourceAlerts").hidden =
+    mode !== "capture" || !$("sourceAlerts").textContent;
   $("sessionBar").hidden = mode === "capture";
   $("stage").hidden = mode === "quality";
   $("armCards").hidden = mode === "quality";

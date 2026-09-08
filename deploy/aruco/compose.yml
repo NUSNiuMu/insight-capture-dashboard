@@ -9,8 +9,12 @@ services:
     stop_grace_period: 15s
     environment:
       RMW_IMPLEMENTATION: rmw_cyclonedds_cpp
+      ARUCO_DEVICE_ROOT: /host-dev
+    device_cgroup_rules:
+      - "c 81:* rw"
+      - "c 188:* rw"
+      - "c 166:* rw"
     volumes:
+      - /dev:/host-dev:ro
       - ../../config/devices/x86-aruco/capture.json:/app/config/devices/x86-aruco/capture.json:ro
       - ../../outputs/aruco-capture:/app/outputs/aruco-capture
-    # Add only the devices in capture.json, e.g. /dev/video0 and /dev/ttyUSB0.
-    # devices: ["/dev/video0:/dev/video0", "/dev/ttyUSB0:/dev/ttyUSB0"]

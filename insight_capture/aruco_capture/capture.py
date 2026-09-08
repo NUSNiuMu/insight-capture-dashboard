@@ -26,7 +26,19 @@ def write_json(path, value):
 
 class Capture:
     def __init__(self, config_path, output):
+        self.root = Path(output).resolve()
+        self.root.mkdir(parents=True, exist_ok=True)
         self.config = json.loads(Path(config_path).read_text())
+        self.default_rgb = self.config.get("rgb", [])
+        override = self.root / "_devices.json"
+        if override.is_file():
+            self.config.update(
+                {
+                    key: value
+                    for key, value in json.loads(override.read_text()).items()
+                    if key in ("rgb", "serial")
+                }
+            )
         names = ["head"] + [x["name"] for x in self.config.get("rgb", [])]
         if len(names) != len(set(names)) or any(
             not re.fullmatch(r"[A-Za-z0-9_]+", name) for name in names
@@ -42,8 +54,6 @@ class Capture:
             or not 0 < self.config.get("sync_tolerance_ms", 40) <= 100
         ):
             raise ValueError("fps 或同步容差超出范围")
-        self.root = Path(output).resolve()
-        self.root.mkdir(parents=True, exist_ok=True)
         self.pose = DirectPose(config_path, self.config)
         self.lock = threading.RLock()
         self.queue = queue.Queue(maxsize=128)
@@ -53,6 +63,9 @@ class Capture:
         self.active = None
         self.db = None
         self.error = None
+        self.reconfiguring = False
+        self.sources = None
+        self.source_states = {}
         self.drops = {}
         self.latest = {}
         self.arrivals = defaultdict(lambda: deque(maxlen=500))
@@ -76,11 +89,17 @@ class Capture:
 
     def submit(self, kind, name, stamp_ns, value, received=None):
         now = time.monotonic() if received is None else received
-        if self.draining or self.stop_event.is_set():
+        if self.draining or self.reconfiguring or self.stop_event.is_set():
             return
         key = ("image" if kind == "raw_image" else kind) + "/" + name
         self.latest[key] = now
         self.arrivals[key].append(now)
+        if kind in ("image", "raw_image", "vio"):
+            self.source_states[key] = {
+                "state": "ready",
+                "message": "",
+                "device": self.source_states.get(key, {}).get("device"),
+            }
         try:
             session = self.active if now >= self.started else None
             self.queue.put_nowait((session, kind, name, now, int(stamp_ns), value))
@@ -88,9 +107,43 @@ class Capture:
             key = kind + "/" + name
             self.drops[key] = self.drops.get(key, 0) + 1
 
+    def source_state(self, key, state, message="", device=None):
+        old = self.source_states.get(key, {})
+        if old == {
+            "state": state,
+            "message": message,
+            "device": device or old.get("device"),
+        }:
+            return
+        with self.lock:
+            old = self.source_states.get(key, {})
+            if state != "ready":
+                self.latest.pop(key, None)
+                if key.startswith("image/"):
+                    self.preview.pop(key.split("/", 1)[1], None)
+                elif key.startswith("serial/"):
+                    index = int(key.split("/")[1])
+                    items = self.config.get("serial", [])
+                    hands = (
+                        items[index].get("hands", "both")
+                        if index < len(items)
+                        else "both"
+                    )
+                    for side in ("left", "right"):
+                        if hands in (side, "both"):
+                            self.grippers.pop(side, None)
+                            self.latest.pop("gripper/" + side, None)
+                elif key == "calibration":
+                    self.intrinsic = None
+            self.source_states[key] = {
+                "state": state,
+                "message": message,
+                "device": device or old.get("device"),
+            }
+
     def start(self):
         with self.lock:
-            if self.active or self.draining:
+            if self.active or self.draining or self.reconfiguring:
                 raise ValueError("已经在录制或正在停止")
             if (
                 time.monotonic() - self.latest.get("image/head", 0) > 2
@@ -305,6 +358,17 @@ class Capture:
         with self.lock:
             now = time.monotonic()
             return {
+                "reconfiguring": self.reconfiguring,
+                "source_states": {
+                    key: (
+                        {**value, "state": "waiting", "message": "等待数据恢复"}
+                        if value["state"] == "ready"
+                        and key in self.latest
+                        and now - self.latest[key] > 2
+                        else value
+                    )
+                    for key, value in list(self.source_states.items())
+                },
                 "source_rates_hz": {
                     key: round((len(recent) - 1) / (recent[-1] - recent[0]), 1)
                     if len(recent := [t for t in list(values) if now - t < 2]) > 1
@@ -344,4 +408,6 @@ class Capture:
     def close(self):
         self.stop()
         self.stop_event.set()
+        if self.sources is not None:
+            self.sources.close()
         self.worker.join(2)

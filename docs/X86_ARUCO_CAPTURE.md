@@ -25,6 +25,11 @@ mkdir -p outputs/aruco-capture
 docker run -d --name insight-aruco-capture --network host --init \
   --restart unless-stopped --stop-signal SIGINT \
   -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+  -e ARUCO_DEVICE_ROOT=/host-dev \
+  --device-cgroup-rule='c 81:* rw' \
+  --device-cgroup-rule='c 188:* rw' \
+  --device-cgroup-rule='c 166:* rw' \
+  -v /dev:/host-dev:ro \
   -v "$PWD/config/devices/x86-aruco/capture.json:/app/config/devices/x86-aruco/capture.json:ro" \
   -v "$PWD/outputs/aruco-capture:/app/outputs/aruco-capture" \
   insight-aruco-capture:local
@@ -73,7 +78,19 @@ USB RGB 示例，替换 `rgb` 中对应项：
  "right":{"scale_m":0.00001,"offset_m":0,"max_width_m":0.083}}
 ```
 
-上面比例仅为协议示例，必须替换为实际标定。也可用两个串口分别发送左右值。如果设备直接发送米，比例可设为 1。USB/串口设备还需在 Compose 的 `devices` 中显式映射。硬件协议确定后只修改 `sources.py` 的读取函数。
+上面比例仅为协议示例，必须替换为实际标定。也可用两个串口分别发送左右值。如果设备直接发送米，比例可设为 1。Compose 已挂载动态设备目录并允许 V4L2、USB 串口和 ACM 串口节点；无需事先写死设备编号。硬件协议确定后只修改 `sources.py` 的读取函数。
+
+## 热插拔与扫描端口
+
+实时采集页展开“设备连接与端口”，点击“扫描设备”，为各路 RGB 选择 USB 视频端口，或保留原 ROS 话题；编码器可选一个双手串口，或两个分别对应左右手的串口，并填写波特率。点击“应用设备选择”后立即重连，无需重启服务。录制期间允许扫描，停止录制后才能换绑。
+
+- USB 相机和串口在启动时可以缺席；断线、读取失败或持续 4 秒无数据后关闭旧连接，每秒重试一次。USB 读取使用可终止的 FFmpeg 子进程，避免驱动阻塞拖住工作台。
+- 成功收到图像或有效编码器数据后，自动清除对应设备的故障；其他设备故障和 VIO 重置等录制错误保留。原始采集缺失时间仍进入 QC，重连不会补造数据。
+- 扫描只枚举视频采集节点，过滤元数据节点。优先绑定 `/dev/v4l/by-id/`、`/dev/serial/by-id/` 的设备标识；没有设备标识时使用 `by-path` 的 USB 插口标识。编号改变后会重新解析链接；既没有稳定标识又更换了编号时，请重新扫描选择，不能自动猜测左右设备。
+- 页面选择保存到 `outputs/aruco-capture/_devices.json`，下次启动自动加载，仅覆盖 RGB/串口输入，不修改 Git 中的配置模板。要调整串口数值到米的标定，可修改该文件对应 `left`/`right` 标定字段后重启，或清除覆盖文件后使用模板配置。
+- Insight9 图像、CameraInfo、TF 和 VIO 继续使用原 ROS 配置；扫描 USB 相机不会替代 Insight9 的 ROS/VIO 驱动。VIO 接收中断超过 2 秒后恢复，会更换轨迹参考系代次；正在录制的后续位姿无效，需要停止后新建录制，避免拼接未知坐标系。
+
+Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、USB 串口（188）、ACM 串口（166）访问，以支持启动后新增设备；不需要静态 `--device` 节点。参见 [Docker 动态设备说明](https://docs.docker.com/engine/containers/run/#using-dynamically-created-devices)。
 
 ## 采集与标注
 
@@ -123,7 +140,7 @@ RGB/串口跨设备同步首版使用**主机接收时间**最近邻，默认容
 
 ## 代码位置
 
-`insight_capture/aruco_capture/` 中：`pose.py` 定位，`sources.py` 输入，`capture.py` 录制，`dataset.py` 对齐/QC/导出，`app.py` 提供接口，`index.html` / `workbench.css` / `workbench.js` 提供工作台，`trajectory.js` 封装三维绘制。复用现有 cube 几何、VIO 插值、视频写入及 LeRobot 元数据工具，不复制原 Dashboard。
+`insight_capture/aruco_capture/` 中：`pose.py` 定位，`sources.py` 输入，`capture.py` 录制，`dataset.py` 对齐/QC/导出，`devices.py` 扫描稳定设备路径，`app.py` 提供接口，`index.html` / `workbench.css` / `workbench.js` 提供工作台，`trajectory.js` 封装三维绘制，`devices.js` 提供端口扫描和选择。复用现有 cube 几何、VIO 插值、视频写入及 LeRobot 元数据工具，不复制原 Dashboard。
 
 ## 界面设计参考
 

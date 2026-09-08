@@ -45,7 +45,7 @@ def create_app(capture):
                 Path(__file__).resolve().parents[2]
                 / "web_dashboard/dist/static/babylon.js"
             )
-        elif name in {"workbench.css", "workbench.js", "trajectory.js"}:
+        elif name in {"workbench.css", "workbench.js", "trajectory.js", "devices.js"}:
             path = Path(__file__).with_name(name)
         else:
             raise web.HTTPNotFound()
@@ -63,6 +63,25 @@ def create_app(capture):
 
     async def status(request):
         return web.json_response(capture.status())
+
+    async def devices(request):
+        from .devices import scan_devices
+
+        if request.method == "POST":
+            if busy or capture.sources is None:
+                raise ValueError("当前无法应用设备配置，请等待导出完成")
+            settings = await request.json()
+            await asyncio.to_thread(capture.sources.apply, settings)
+        found = await asyncio.to_thread(scan_devices)
+        return web.json_response(
+            {
+                "available": found,
+                "default_rgb": capture.default_rgb,
+                "bindings": {
+                    key: capture.config.get(key, []) for key in ("rgb", "serial")
+                },
+            }
+        )
 
     async def start(request):
         if busy:
@@ -195,7 +214,7 @@ def create_app(capture):
 
     async def dataset(request):
         path = session(request)
-        if path.name in busy or capture.active:
+        if path.name in busy or capture.active or capture.reconfiguring:
             raise ValueError("请先停止录制，且勿重复导出")
         busy.add(path.name)
         try:
@@ -213,6 +232,8 @@ def create_app(capture):
             web.get("/assets/{asset}", asset),
             web.get("/api/live/trajectory", trajectory),
             web.get("/api/status", status),
+            web.get("/api/devices", devices),
+            web.post("/api/devices", devices),
             web.post("/api/start", start),
             web.post("/api/stop", stop),
             web.get("/api/sessions", sessions),
