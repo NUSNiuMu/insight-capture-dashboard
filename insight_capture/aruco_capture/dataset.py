@@ -56,7 +56,7 @@ def align(path):
         np.zeros((len(grid), 20), np.float32),
         np.zeros((len(grid), 20), bool),
     )
-    video, ratios = {}, {}
+    video, ratios, masks = {}, {}, {}
     with connect(path) as db:
         rows = db.execute(
             "SELECT t,payload FROM samples WHERE kind='pose' ORDER BY t"
@@ -90,6 +90,7 @@ def align(path):
                 ("rotation", valid[:, offset + 3 : offset + 9].all(1)),
                 ("gripper", valid[:, offset + 9]),
             ]:
+                masks[side + "." + key] = mask
                 ratios[side + "." + key] = float(mask.mean()) if len(grid) else 0
         for name in ["head"] + [x["name"] for x in config.get("rgb", [])]:
             rows_v = db.execute(
@@ -105,12 +106,17 @@ def align(path):
                 else np.zeros(len(grid), int),
                 vf,
             )
+            masks["video." + name] = vf
             ratios["video." + name] = float(vf.mean()) if len(grid) else 0
     all_valid = valid.all(1)
     for _, mask in video.values():
         all_valid &= mask
     ratios["all_required"] = float(all_valid.mean()) if len(grid) else 0
+    masks["all_required"] = all_valid
     report = {
+        "missing_intervals": {
+            name: intervals(~mask, fps) for name, mask in masks.items()
+        },
         "expected_frames": len(grid),
         "fps": fps,
         "duration_s": meta["duration_s"],
@@ -129,6 +135,28 @@ def align(path):
     return meta, grid, state, video, all_valid, report
 
 
+def intervals(mask, fps):
+    edges = np.diff(np.r_[False, mask, False].astype(int))
+    return [
+        [float(a / fps), float(b / fps)]
+        for a, b in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))
+    ]
+
+
+def export_runs(grid, good, segments):
+    runs = []
+    for segment in segments:
+        selected = np.flatnonzero(
+            good & (grid >= segment["start_s"]) & (grid < segment["end_s"])
+        )
+        for run in np.split(selected, np.flatnonzero(np.diff(selected) != 1) + 1):
+            if len(run) >= 3:
+                runs.append(
+                    (run, segment["task"].strip(), segment.get("hands", "both"))
+                )
+    return runs
+
+
 def validate_segments(segments, duration):
     if not isinstance(segments, list):
         raise ValueError("片段必须为列表")
@@ -142,6 +170,8 @@ def validate_segments(segments, duration):
             raise ValueError("片段须按时间排序、不重叠，且位于录制范围内")
         if not isinstance(task, str) or not task.strip():
             raise ValueError("任务文本不能为空")
+        if item.get("hands", "both") not in ("left", "right", "both"):
+            raise ValueError("参与手臂须为 left、right 或 both")
         previous = end
 
 
@@ -150,14 +180,7 @@ def export(path):
     segments = json.loads((path / "segments.json").read_text())
     validate_segments(segments, meta["duration_s"])
     fps = report["fps"]
-    runs = []
-    for segment in segments:
-        selected = np.flatnonzero(
-            good & (grid >= segment["start_s"]) & (grid < segment["end_s"])
-        )
-        for run in np.split(selected, np.flatnonzero(np.diff(selected) != 1) + 1):
-            if len(run) >= 3:
-                runs.append((run, segment["task"].strip()))
+    runs = export_runs(grid, good, segments)
     if not runs:
         raise ValueError(
             "没有可导出片段：先标注任务，且每段至少连续 3 帧的视频、双臂位姿与开合度均有效"
@@ -165,7 +188,7 @@ def export(path):
     destination = path / "lerobot"
     if destination.exists():
         raise ValueError("lerobot 已存在；请先移走旧导出目录后重试")
-    tasks = list(dict.fromkeys(task for _, task in runs))
+    tasks = list(dict.fromkeys(task for _, task, _ in runs))
     features = {
         key: {
             "dtype": "float32",
@@ -185,7 +208,7 @@ def export(path):
         root = Path(temporary) / "lerobot"
         writers, columns, episodes, offset = {}, {key: [] for key in features}, [], 0
         try:
-            for episode, (run, task) in enumerate(runs):
+            for episode, (run, task, hands) in enumerate(runs):
                 indices, following = run[:-1], run[1:]
                 length = len(indices)
                 values = {
@@ -204,6 +227,7 @@ def export(path):
                     "episode_index": episode,
                     "length": length,
                     "tasks": [task],
+                    "participating_hands": hands,
                     "dataset_from_index": offset,
                     "dataset_to_index": offset + length,
                     "data/chunk_index": 0,

@@ -7,6 +7,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections import defaultdict, deque
 from pathlib import Path
 
 import cv2
@@ -54,6 +55,13 @@ class Capture:
         self.error = None
         self.drops = {}
         self.latest = {}
+        self.arrivals = defaultdict(lambda: deque(maxlen=500))
+        self.grippers = {}
+        self.history = deque(maxlen=2400)
+        self.history_sequence = 0
+        self.history_epoch = 0
+        self.history_generation = self.pose.generation
+        self.history_time = 0.0
         self.preview = {}
         self.observation = {}
         self.intrinsic = None
@@ -70,7 +78,9 @@ class Capture:
         now = time.monotonic() if received is None else received
         if self.draining or self.stop_event.is_set():
             return
-        self.latest[("image" if kind == "raw_image" else kind) + "/" + name] = now
+        key = ("image" if kind == "raw_image" else kind) + "/" + name
+        self.latest[key] = now
+        self.arrivals[key].append(now)
         try:
             session = self.active if now >= self.started else None
             self.queue.put_nowait((session, kind, name, now, int(stamp_ns), value))
@@ -99,6 +109,8 @@ class Capture:
             self.started = time.monotonic()
             self.session_generation = self.pose.generation
             self.reference_pending = True
+            self.history.clear()
+            self.history_epoch += 1
             self.error = None
             self.drops = {}
             try:
@@ -198,9 +210,17 @@ class Capture:
                         else json.dumps(value, allow_nan=False).encode()
                     )
                     self._save(session, kind, name, seconds, stamp, payload)
+                    if kind == "gripper":
+                        self.grippers[name] = {**value, "received": seconds}
                     if kind == "image":
                         self.preview[name] = value
                     if kind == "image" and name == "head":
+                        if self.history_generation != self.pose.generation:
+                            self.history_generation = self.pose.generation
+                            self.history.clear()
+                            self.history_epoch += 1
+                            if not self.active:
+                                self.pose.reset_reference()
                         if self.reference_pending and session == self.active:
                             self.pose.reset_reference()
                         if (
@@ -257,6 +277,22 @@ class Capture:
                             stamp,
                             json.dumps(self.observation).encode(),
                         )
+                    if (
+                        kind == "image"
+                        and name == "head"
+                        and not self.reference_pending
+                        and (not self.active or session == self.active)
+                        and seconds - self.history_time >= 0.1
+                    ):
+                        self.history_time = seconds
+                        self.history_sequence += 1
+                        self.history.append(
+                            {
+                                "seq": self.history_sequence,
+                                "t": seconds,
+                                "arms": self.observation,
+                            }
+                        )
                     if self.db and time.monotonic() - self.last_commit > 1:
                         self.db.commit()
                         self.last_commit = time.monotonic()
@@ -269,11 +305,34 @@ class Capture:
         with self.lock:
             now = time.monotonic()
             return {
+                "source_rates_hz": {
+                    key: round((len(recent) - 1) / (recent[-1] - recent[0]), 1)
+                    if len(recent := [t for t in list(values) if now - t < 2]) > 1
+                    and recent[-1] > recent[0]
+                    else 0
+                    for key, values in list(self.arrivals.items())
+                },
+                "arm_bindings": self.config["arms"],
+                "grippers": {
+                    side: {
+                        **value,
+                        "valid": value["valid"] and now - value["received"] < 1,
+                    }
+                    for side, value in self.grippers.items()
+                },
+                "history_epoch": self.history_epoch,
+                "fps": self.config.get("fps", 20),
+                "calibration": {
+                    "intrinsic": self.intrinsic is not None,
+                    "extrinsic": self.imu_from_rgb is not None,
+                },
                 "recording": self.active,
                 "elapsed_s": now - self.started if self.active else 0,
                 "error": self.error,
                 "queue_drops": dict(self.drops),
-                "sources_age_s": {k: round(now - v, 2) for k, v in self.latest.items()},
+                "sources_age_s": {
+                    k: round(now - v, 2) for k, v in list(self.latest.items())
+                },
                 "calibrated": self.intrinsic is not None
                 and self.imu_from_rgb is not None,
                 "arms": self.observation

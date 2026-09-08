@@ -11,7 +11,7 @@ from pathlib import Path
 from aiohttp import web
 
 from .capture import Capture, write_json
-from .dataset import align, connect, export, validate_segments
+from .dataset import align, connect, export, export_runs, validate_segments
 
 
 def create_app(capture):
@@ -38,10 +38,35 @@ def create_app(capture):
     async def index(request):
         return web.FileResponse(Path(__file__).with_name("index.html"))
 
+    async def asset(request):
+        name = request.match_info["asset"]
+        if name == "babylon.js":
+            path = (
+                Path(__file__).resolve().parents[2]
+                / "web_dashboard/dist/static/babylon.js"
+            )
+        elif name in {"workbench.css", "workbench.js", "trajectory.js"}:
+            path = Path(__file__).with_name(name)
+        else:
+            raise web.HTTPNotFound()
+        return web.FileResponse(path)
+
+    async def trajectory(request):
+        after = int(request.query.get("after", 0))
+        with capture.lock:
+            return web.json_response(
+                {
+                    "epoch": capture.history_epoch,
+                    "rows": [x for x in capture.history if x["seq"] > after],
+                }
+            )
+
     async def status(request):
         return web.json_response(capture.status())
 
     async def start(request):
+        if busy:
+            raise ValueError("请等待当前导出完成，再开始录制")
         return web.json_response({"recording": await asyncio.to_thread(capture.start)})
 
     async def stop(request):
@@ -56,6 +81,10 @@ def create_app(capture):
                     "name": path.parent.name,
                     "duration_s": value.get("duration_s", 0),
                     "status": value["status"],
+                    "started_unix_ns": value.get("started_unix_ns"),
+                    "streams": ["head"]
+                    + [x["name"] for x in value["config"].get("rgb", [])],
+                    "exported": (path.parent / "lerobot/meta/info.json").is_file(),
                 }
             )
         return web.json_response(rows)
@@ -75,11 +104,24 @@ def create_app(capture):
         path = session(request)
         seconds = float(request.query.get("t", 0))
         stream = request.match_info["stream"]
-        with connect(path) as db:
-            row = db.execute(
-                "SELECT payload,t FROM samples WHERE kind='image' AND name=? ORDER BY ABS(t-?) LIMIT 1",
-                (stream, seconds),
-            ).fetchone()
+
+        def lookup():
+            with connect(path) as db:
+                before = db.execute(
+                    "SELECT payload,t FROM samples WHERE kind='image' AND name=? AND t<=? ORDER BY t DESC LIMIT 1",
+                    (stream, seconds),
+                ).fetchone()
+                after = db.execute(
+                    "SELECT payload,t FROM samples WHERE kind='image' AND name=? AND t>? ORDER BY t LIMIT 1",
+                    (stream, seconds),
+                ).fetchone()
+                return min(
+                    (r for r in (before, after) if r is not None),
+                    key=lambda r: abs(r[1] - seconds),
+                    default=None,
+                )
+
+        row = await asyncio.to_thread(lookup)
         if row is None or abs(row[1] - seconds) > 0.1:
             raise web.HTTPNotFound(text="此时刻图像缺失")
         return web.Response(body=row[0], content_type="image/jpeg")
@@ -96,22 +138,60 @@ def create_app(capture):
             write_json(path / "segments.json", values)
         return web.json_response(json.loads((path / "segments.json").read_text()))
 
-    async def qc(request):
-        path = session(request)
-        result = await asyncio.to_thread(align, path)
-        report = result[-1]
-        write_json(path / "quality.json", report)
-        # One XY trace per arm, sampled for a lightweight review plot.
-        stride = max(1, len(result[1]) // 500)
-        report["trace"] = {
-            side: [
-                [float(result[1][i]), *result[2][i, offset : offset + 3].tolist()]
-                for i in range(0, len(result[1]), stride)
-                if any(result[2][i, offset : offset + 9])
-            ]
-            for side, offset in [("left", 0), ("right", 10)]
+    def review_data(path, include_samples):
+        meta, grid, state, video, good, report = align(path)
+        parts = json.loads((path / "segments.json").read_text())
+        validate_segments(parts, meta["duration_s"])
+        runs = export_runs(grid, good, parts)
+        report["export_plan"] = {
+            "episodes": len(runs),
+            "frames": sum(len(r[0]) - 1 for r in runs),
+            "annotated_segments": len(parts),
         }
-        return web.json_response(report)
+        write_json(path / "quality.json", report)
+        result = {
+            "quality": report,
+            "segments": parts,
+            "streams": list(video),
+            "duration_s": meta["duration_s"],
+            "fps": report["fps"],
+        }
+        if include_samples:
+            flags = []
+            for key in (
+                "left.position",
+                "right.position",
+                "left.gripper",
+                "right.gripper",
+            ):
+                mask = [True] * len(grid)
+                for start, end in report["missing_intervals"][key]:
+                    for i in range(
+                        round(start * report["fps"]),
+                        min(len(grid), round(end * report["fps"])),
+                    ):
+                        mask[i] = False
+                flags.append(mask)
+            result["samples"] = [
+                [float(t), *[int(f[i]) for f in flags], *state[i].tolist()]
+                for i, t in enumerate(grid)
+            ]
+        else:
+            # Keep the original QC response usable by command-line callers.
+            return report
+        info = path / "lerobot/meta/info.json"
+        result["exported"] = json.loads(info.read_text()) if info.is_file() else None
+        return result
+
+    async def qc(request):
+        return web.json_response(
+            await asyncio.to_thread(review_data, session(request), False)
+        )
+
+    async def review(request):
+        return web.json_response(
+            await asyncio.to_thread(review_data, session(request), True)
+        )
 
     async def dataset(request):
         path = session(request)
@@ -130,6 +210,8 @@ def create_app(capture):
     app.add_routes(
         [
             web.get("/", index),
+            web.get("/assets/{asset}", asset),
+            web.get("/api/live/trajectory", trajectory),
             web.get("/api/status", status),
             web.post("/api/start", start),
             web.post("/api/stop", stop),
@@ -139,6 +221,7 @@ def create_app(capture):
             web.get("/api/sessions/{name}/segments", segments),
             web.post("/api/sessions/{name}/segments", segments),
             web.get("/api/sessions/{name}/qc", qc),
+            web.get("/api/sessions/{name}/review", review),
             web.post("/api/sessions/{name}/export", dataset),
         ]
     )

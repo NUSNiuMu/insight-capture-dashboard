@@ -1,32 +1,331 @@
 <!doctype html>
-<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ArUco 数采</title><link rel="icon" href="data:,">
-<style>
-body{font:16px system-ui;background:#f4f6f8;color:#17212c;max-width:1100px;margin:24px auto;padding:0 16px}section{background:white;padding:18px;margin:16px 0;border-radius:10px}button,input,select{font:inherit;padding:7px;margin:4px}button{cursor:pointer}img{width:100%;background:#e5e7eb;aspect-ratio:4/3;object-fit:contain}.videos{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px}#message{color:#b42318;min-height:24px}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px;border-bottom:1px solid #ddd}input[type=range]{width:95%}canvas{width:100%;max-width:600px;border:1px solid #ddd}small{color:#596775}
-</style>
-<h1>ArUco 数采</h1><p>Insight9 VIO · 双臂 cube 定位 · RGB 与夹爪开合度</p>
-<div id="message" role="status"></div>
-<section><h2>采集</h2><button id="start">开始录制</button><button id="stop">停止录制</button><span id="recording"></span><p id="health"></p><div id="live" class="videos"></div><pre id="arms"></pre></section>
-<section><h2>回看与标注</h2><button id="refresh">刷新录制列表</button><select id="sessions"><option value="">选择录制</option></select><p><input id="time" type="range" min="0" max="1" step="0.05" value="0"><span id="seconds">0.00 s</span></p><div id="replay" class="videos"></div>
-<p><button id="markStart">设为片段起点</button><input id="from" type="number" min="0" step="0.05" value="0" aria-label="起点秒"><button id="markEnd">设为片段终点</button><input id="to" type="number" min="0" step="0.05" value="1" aria-label="终点秒"></p><input id="task" placeholder="任务文本，例如：拿起杯子" size="35"><button id="add">添加片段</button><button id="save">保存标注</button><table><thead><tr><th>起点 / 秒</th><th>终点 / 秒</th><th>任务</th><th></th></tr></thead><tbody id="segments"></tbody></table></section>
-<section><h2>质量与导出</h2><p>有效率以整次录制的预期帧数为分母。导出仅保留标注范围内连续有效的数据；每段末尾观测仅用于生成前一帧动作。</p><button id="qc">计算质量报告</button><button id="export">导出 LeRobot v3</button><table id="quality"></table><p>双臂 TCP 轨迹：XY 平面，单位米。左手蓝色，右手橙色。</p><canvas id="trace" width="600" height="300"></canvas><pre id="result"></pre></section>
-<script>
-const $=id=>document.getElementById(id);let streams=[],parts=[],records=[];
-async function api(url,method='GET',body){const r=await fetch(url,{method,headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});const v=await r.json();if(!r.ok)throw Error(v.error||r.statusText);return v}
-function action(id,fn){$(id).onclick=async()=>{try{$('message').textContent='';$(id).disabled=true;await fn()}catch(e){$('message').textContent=e.message}finally{$(id).disabled=false}}}
-function selected(){const n=$('sessions').value;if(!n)throw Error('请先选择录制');return '/api/sessions/'+encodeURIComponent(n)}
-function videos(id,names){$(id).replaceChildren();for(const n of names){const d=document.createElement('div'),label=document.createElement('p'),im=document.createElement('img');label.textContent=n;im.alt=n;im.dataset.stream=n;d.append(label,im);$(id).append(d)}}
-async function refresh(){records=await api('/api/sessions');const previous=$('sessions').value;$('sessions').replaceChildren(new Option('选择录制',''));for(const r of records)$('sessions').add(new Option(r.name+' · '+r.status,r.name));$('sessions').value=previous}
-function renderParts(){$('segments').replaceChildren();parts.forEach((p,i)=>{const tr=document.createElement('tr');for(const v of [p.start_s,p.end_s,p.task]){const td=document.createElement('td');td.textContent=v;tr.append(td)}const td=document.createElement('td'),b=document.createElement('button');b.textContent='移除';b.onclick=()=>{parts.splice(i,1);renderParts()};td.append(b);tr.append(td);$('segments').append(tr)})}
-function replay(){if(!$('sessions').value)return;const t=Number($('time').value);$('seconds').textContent=t.toFixed(2)+' s';for(const im of $('replay').querySelectorAll('img'))im.src=selected()+'/frame/'+encodeURIComponent(im.dataset.stream)+'?t='+t}
-function trace(values){const c=$('trace'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);const all=Object.values(values).flat();if(!all.length)return;const xs=all.map(p=>p[1]),ys=all.map(p=>p[2]),xmin=Math.min(...xs),ymin=Math.min(...ys),xmax=Math.max(...xs),ymax=Math.max(...ys),scale=Math.min(540/Math.max(xmax-xmin,.1),240/Math.max(ymax-ymin,.1));for(const [side,points]of Object.entries(values)){ctx.strokeStyle=side==='left'?'#1769c2':'#dc710b';ctx.beginPath();points.forEach((p,i)=>{const x=30+(p[1]-xmin)*scale,y=270-(p[2]-ymin)*scale;if(i===0||p[0]-points[i-1][0]>.3)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.stroke()}ctx.fillStyle='#333';ctx.fillText(`X: ${xmin.toFixed(2)}–${xmax.toFixed(2)} m · Y: ${ymin.toFixed(2)}–${ymax.toFixed(2)} m`,12,16)}
-action('start',async()=>{await api('/api/start','POST');await refresh()});action('stop',async()=>{await api('/api/stop','POST');await refresh()});action('refresh',refresh);
-$('sessions').onchange=async()=>{try{if(!$('sessions').value)return;parts=await api(selected()+'/segments');renderParts();const r=records.find(r=>r.name===$('sessions').value);$('time').max=r.duration_s;$('to').value=r.duration_s;videos('replay',streams);replay();$('quality').replaceChildren();$('result').textContent=''}catch(e){$('message').textContent=e.message}};
-$('time').oninput=replay;$('markStart').onclick=()=>{$('from').value=$('time').value};$('markEnd').onclick=()=>{$('to').value=$('time').value};
-action('add',async()=>{const p={start_s:Number($('from').value),end_s:Number($('to').value),task:$('task').value.trim()};if(!p.task||p.start_s>=p.end_s)throw Error('请填写正确的起止时间和任务文本');parts.push(p);parts.sort((a,b)=>a.start_s-b.start_s);renderParts()});
-action('save',async()=>{await api(selected()+'/segments','POST',parts);$('message').textContent='标注已保存'});
-action('qc',async()=>{const q=await api(selected()+'/qc');$('quality').replaceChildren();for(const [k,v]of Object.entries(q.valid_ratios)){const tr=document.createElement('tr');for(const text of [k,(v*100).toFixed(1)+'%']){const td=document.createElement('td');td.textContent=text;tr.append(td)}$('quality').append(tr)}trace(q.trace);delete q.trace;$('result').textContent=JSON.stringify(q,null,2)});
-action('export',async()=>{$('result').textContent='正在导出，请稍候…';const r=await api(selected()+'/export','POST');$('result').textContent=JSON.stringify(r,null,2)});
-async function poll(){try{const s=await api('/api/status');if(JSON.stringify(streams)!==JSON.stringify(s.streams)){streams=s.streams;videos('live',streams)}$('recording').textContent=s.recording?`录制中 ${s.elapsed_s.toFixed(1)} s`:'未录制';$('start').disabled=!!s.recording;$('stop').disabled=!s.recording;$('health').textContent=(s.calibrated?'标定就绪':'等待相机标定')+' · '+Object.entries(s.sources_age_s).map(([k,v])=>`${k}: ${v}s 前`).join(' · ');$('arms').textContent=Object.entries(s.arms).map(([name,p])=>name+': '+(p.valid?'有效 · TCP '+p.matrix.slice(0,3).map(r=>r[3].toFixed(3)).join(', ')+' m':p.reason)).join('\n');if(s.error)$('message').textContent=s.error;for(const im of $('live').querySelectorAll('img'))if(s.sources_age_s['image/'+im.dataset.stream]<2)im.src='/api/preview/'+encodeURIComponent(im.dataset.stream)+'?v='+Date.now()}catch(e){$('health').textContent='连接失败：'+e.message}setTimeout(poll,1000)}
-refresh().catch(e=>{$('message').textContent=e.message});poll();
-</script></html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101c2c" />
+    <title>Insight · 数采工作台</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/assets/workbench.css" />
+    <script defer src="/assets/babylon.js"></script>
+    <script type="module" src="/assets/workbench.js"></script>
+  </head>
+  <body>
+    <a class="skip" href="#workspace">跳到工作区</a>
+    <aside class="rail">
+      <a class="brand" href="#capture" aria-label="Insight 数采首页"
+        ><svg viewBox="0 0 32 32" aria-hidden="true">
+          <path
+            d="M16 2 29 9.5v13L16 30 3 22.5v-13Z M3 9.5l13 8 13-8 M16 17.5V30 M9 6l13 8"
+          /></svg
+        ><span>Insight<small>双臂数采工作台</small></span></a
+      >
+      <nav aria-label="工作区">
+        <a href="#capture" data-mode="capture"
+          ><span aria-hidden="true">◉</span>实时采集</a
+        ><a href="#review" data-mode="review"
+          ><span aria-hidden="true">▷</span>回放与标注</a
+        ><a href="#quality" data-mode="quality"
+          ><span aria-hidden="true">▥</span>质量与导出</a
+        >
+      </nav>
+      <div class="rail-bottom">
+        <div class="connection">
+          <i id="connectionDot"></i><span id="connection">连接中…</span>
+        </div>
+        <p>ArUco cube 定位<br />Insight9 VIO 参考系</p>
+        <span class="version">x86 工作台</span>
+      </div>
+    </aside>
+    <div class="shell">
+      <header class="topbar">
+        <div>
+          <p class="breadcrumb">Insight / 数采</p>
+          <h1 id="pageTitle">实时采集</h1>
+        </div>
+        <div class="top-actions">
+          <span id="recordingState" class="badge">未录制</span
+          ><time id="elapsed">00:00.0</time
+          ><button id="start" class="primary">
+            <span aria-hidden="true">●</span> 开始录制</button
+          ><button id="stop" class="danger" hidden>停止录制</button>
+        </div>
+      </header>
+      <main id="workspace">
+        <div id="message" role="status" aria-live="polite" hidden></div>
+        <div class="context-bar">
+          <p id="contextHint">检查视频、定位和开合度，准备一次完整采集。</p>
+          <div class="legend">
+            <span><i class="left-color"></i>左手</span
+            ><span><i class="right-color"></i>右手</span
+            ><span id="sampleRate">20 Hz 采样</span>
+          </div>
+        </div>
+        <div id="readiness" class="readiness"></div>
+        <div id="sessionBar" class="session-bar" hidden>
+          <label for="sessions">录制记录</label
+          ><select id="sessions">
+            <option value="">选择一条录制…</option></select
+          ><button id="refresh" class="quiet">刷新列表</button
+          ><span id="sessionMeta" class="muted"></span>
+        </div>
+        <div id="stage" class="stage">
+          <section class="panel cameras-panel">
+            <div class="panel-heading">
+              <h2 id="cameraTitle">相机画面</h2>
+              <span id="cameraCount" class="muted">等待数据</span>
+            </div>
+            <div id="videos" class="videos"></div>
+          </section>
+          <section class="panel scene-panel">
+            <div class="panel-heading">
+              <h2>双臂 3D 轨迹</h2>
+              <div class="view-tools">
+                <button
+                  id="sceneFullscreen"
+                  class="quiet"
+                  aria-label="全屏查看三维轨迹"
+                >
+                  全屏
+                </button>
+                <button
+                  data-view="free"
+                  class="quiet"
+                  aria-label="适配全部轨迹"
+                >
+                  适配</button
+                ><button
+                  data-view="top"
+                  class="quiet"
+                  aria-label="从上方查看 XY 平面"
+                >
+                  俯视</button
+                ><button
+                  data-view="front"
+                  class="quiet"
+                  aria-label="从前方查看 XZ 平面"
+                >
+                  正视</button
+                ><button
+                  data-view="side"
+                  class="quiet"
+                  aria-label="从侧方查看 YZ 平面"
+                >
+                  侧视
+                </button>
+              </div>
+            </div>
+            <div class="scene-wrap">
+              <canvas
+                id="scene"
+                tabindex="0"
+                aria-label="双臂三维轨迹，拖动旋转，滚轮缩放，可使用上方视角按钮和下方缩放按钮"
+              ></canvas>
+              <div id="sceneEmpty" class="scene-empty">
+                <strong>等待双臂定位</strong
+                ><span>Insight9 识别夹爪上的 cube 后显示轨迹</span>
+              </div>
+              <div class="scene-overlay">
+                <span id="frameLabel">录制参考坐标系 · 米</span>
+                <div>
+                  <button id="zoomIn" class="quiet" aria-label="放大轨迹">
+                    ＋</button
+                  ><button id="zoomOut" class="quiet" aria-label="缩小轨迹">
+                    −
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div class="scene-footer">
+              <span
+                ><i class="axis-x">X</i><i class="axis-y">Y</i
+                ><i class="axis-z">Z</i> TCP 朝向轴 · 网格 0.1 m</span
+              ><span>拖动旋转 · 右键平移 · 滚轮缩放</span>
+            </div>
+          </section>
+        </div>
+        <div id="armCards" class="arm-cards"></div>
+        <section id="reviewPanel" class="panel review-panel" hidden>
+          <div class="panel-heading">
+            <h2>同步回放</h2>
+            <span id="playbackNote" class="muted"
+              >选择录制后查看视频与轨迹</span
+            >
+          </div>
+          <div class="transport">
+            <button id="play" class="primary" aria-label="播放或暂停">
+              ▶ 播放</button
+            ><button id="prevFrame" class="quiet" aria-label="上一帧">
+              上一帧</button
+            ><button id="nextFrame" class="quiet" aria-label="下一帧">
+              下一帧</button
+            ><time id="playTime">00:00.00 / 00:00.00</time
+            ><label class="speed"
+              >速度
+              <select id="speed">
+                <option value="0.5">0.5×</option>
+                <option value="1" selected>1×</option>
+                <option value="2">2×</option>
+              </select></label
+            ><span class="key-hint">空格播放 · ← → 逐帧 · I / O 设起止</span>
+          </div>
+          <div class="timeline-wrap">
+            <div id="timelineMarks" class="timeline-marks"></div>
+            <input
+              id="time"
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value="0"
+              aria-label="回放时间"
+            />
+            <div
+              id="segmentTrack"
+              class="segment-track"
+              aria-label="已标注片段"
+            ></div>
+            <div class="track-label">
+              <span>动作片段</span><span>点击片段定位并编辑</span>
+            </div>
+            <div
+              id="validityTrack"
+              class="validity-track"
+              aria-label="全部维度有效区间"
+            ></div>
+            <div class="track-label">
+              <span
+                ><i class="valid-dot"></i>完整有效
+                <i class="invalid-dot"></i>缺失 / 无效</span
+              ><span>点击缺失区间检查</span>
+            </div>
+          </div>
+          <div class="annotation-grid">
+            <form id="segmentForm" class="segment-form">
+              <div class="section-title">
+                <h3 id="editorTitle">添加动作片段</h3>
+                <span id="dirty" class="badge" hidden>未保存</span>
+              </div>
+              <div class="boundaries">
+                <label for="from"
+                  >起点 / 秒
+                  <div>
+                    <input
+                      id="from"
+                      name="start"
+                      type="number"
+                      min="0"
+                      step="0.05"
+                      value="0"
+                      required
+                    /><button type="button" id="markStart" class="quiet">
+                      设为当前
+                    </button>
+                  </div></label
+                ><label for="to"
+                  >终点 / 秒
+                  <div>
+                    <input
+                      id="to"
+                      name="end"
+                      type="number"
+                      min="0"
+                      step="0.05"
+                      value="1"
+                      required
+                    /><button type="button" id="markEnd" class="quiet">
+                      设为当前
+                    </button>
+                  </div></label
+                >
+              </div>
+              <label for="task">任务文本</label
+              ><input
+                id="task"
+                name="task"
+                autocomplete="off"
+                placeholder="例如：左手拿起杯子，交给右手…"
+                required
+              /><label for="hands">参与手臂</label
+              ><select id="hands" name="hands">
+                <option value="both">双手</option>
+                <option value="left">左手</option>
+                <option value="right">右手</option>
+              </select>
+              <p id="formError" class="error-text" role="alert"></p>
+              <div class="form-actions">
+                <button id="add" type="submit" class="primary">添加片段</button
+                ><button id="cancelEdit" type="button" class="quiet" hidden>
+                  取消编辑</button
+                ><button id="save" type="button">保存全部标注</button>
+              </div>
+            </form>
+            <div class="segments-list">
+              <div class="section-title">
+                <h3>动作片段</h3>
+                <span id="segmentCount" class="muted">0 个片段</span>
+              </div>
+              <div id="segments"></div>
+            </div>
+          </div>
+        </section>
+        <section id="qualityPanel" hidden>
+          <div class="quality-header">
+            <div>
+              <h2>采集质量</h2>
+              <p class="muted">
+                按整次录制的预期帧数评估；无效数据不会补齐成有效帧。
+              </p>
+            </div>
+            <button id="qc">重新评估</button>
+          </div>
+          <div id="qualitySummary" class="quality-summary"></div>
+          <div class="quality-grid">
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>各维度有效率</h3>
+                <span class="muted">点击缺失时段进入回放</span>
+              </div>
+              <div id="quality"></div>
+              <details>
+                <summary>查看全部 20 个状态维度</summary>
+                <div id="dimensions"></div>
+              </details>
+            </section>
+            <section class="panel export-panel">
+              <div class="panel-heading">
+                <h3>LeRobot v3 导出</h3>
+                <span class="badge">本地数据集</span>
+              </div>
+              <div class="export-mark" aria-hidden="true">▤</div>
+              <h3>准备训练数据</h3>
+              <p>
+                只保留标注范围内，视频、双臂位姿和开合度同时有效的连续片段。
+              </p>
+              <div id="exportPlan" class="export-plan">
+                选择录制并添加动作片段后，查看可导出数据。
+              </div>
+              <button id="export" class="primary wide">导出 LeRobot v3</button>
+              <div id="result" role="status" aria-live="polite"></div>
+              <small
+                >参与手臂是语义标注，不改变双臂完整性要求。缺失时段和动作片段边界不会被跨越。</small
+              >
+            </section>
+          </div>
+        </section>
+        <footer class="page-footer">
+          <span id="footerState">正在连接采集服务…</span
+          ><span>视频 · 双臂位姿 · 夹爪开合度</span>
+        </footer>
+      </main>
+    </div>
+    <dialog id="discardDialog">
+      <h2>标注尚未保存</h2>
+      <p>切换录制会丢弃当前修改。</p>
+      <div class="form-actions">
+        <button id="keepEditing" class="primary">继续编辑</button
+        ><button id="discardChanges">丢弃修改并切换</button>
+      </div>
+    </dialog>
+  </body>
+</html>

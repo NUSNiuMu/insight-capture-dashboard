@@ -4,5 +4,6 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 RUN pip3 install --no-cache-dir 'numpy>=1.26,<2' 'opencv-contrib-python-headless==4.11.0.86' 'scipy>=1.10,<1.16' 'pyarrow>=17,<18' 'aiohttp>=3.13,<4' 'pyserial==3.5' 'PyYAML>=6,<7'
 WORKDIR /app
 COPY insight_capture /app/insight_capture
+COPY web_dashboard/dist/static/babylon.js /app/web_dashboard/dist/static/babylon.js
 COPY config/devices/x86-aruco /app/config/devices/x86-aruco
 CMD ["python3", "-m", "insight_capture.aruco_capture.app"]

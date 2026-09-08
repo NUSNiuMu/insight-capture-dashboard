@@ -1,4 +1,4 @@
-# x86 ArUco 最小数采
+# x86 ArUco 数采工作台
 
 独立入口：`python3 -m insight_capture.aruco_capture.app`。不启动原 Dashboard、SuperPoint/SuperGlue、建图器或夹爪 VIO。算法不要求 CUDA/GPU，4090 无需参与首版定位。
 
@@ -78,15 +78,21 @@ USB RGB 示例，替换 `rgb` 中对应项：
 ## 采集与标注
 
 1. 确认头部标定、图像和 VIO 就绪，检查左右 cube 位姿，开始录制。
-2. 结束后停止录制，选择录制记录，用时间滑条回看各路图像。
-3. 设置片段起止秒数、填写任务文本，添加片段，保存标注。
-4. 计算质量报告，再导出 LeRobot v3。
+2. 停录后进入“回放与标注”。播放、暂停、逐帧、倍速和拖动时间轴都会同步各路视频、3D TCP 与开合度。按空格播放/暂停，左右方向键逐帧，I/O 设置片段起止点。
+3. 设置片段起止时间、任务文本和参与手臂（左手、右手、双手），添加或编辑片段后保存全部标注。片段不允许重叠；切换录制或关闭页面前提示未保存修改。
+4. “质量与导出”显示各维度有效率、缺失时段、20 维详细统计以及可导出片段/帧数。点击缺失区间回到相应时刻检查；预估和最终导出共用有效区间计算。
+
+工作台使用深色布局，左手蓝色、右手橙色。实时页显示输入接收频率、相机/VIO/内外参状态、cube 标记与重投影误差、TCP 坐标和串口开合度。无数据时明确显示等待或无效，不填充演示数值。
+
+3D 轨迹使用仓库已有 Babylon.js，在本地提供资源，网页无需访问 CDN。支持旋转、平移、缩放、适配、俯视/正视/侧视和全屏；坐标单位米，网格间距 0.1 m，TCP 附带 XYZ 朝向轴。无效帧和超过 0.3 秒的间隔会断开轨迹。实时轨迹保留约 4 分钟、最多 2400 次观测，开始新录制或 VIO 重置时清空旧参考系轨迹；离线回放显示整次录制轨迹，长录制只抽稀绘制点，不改变原始数据和 QC。
+
+视频预览为按需 JPEG，实时界面最高约 5 次更新/秒；回放按浏览器请求与解码速度显示，同一批视频解码完成后更新对应的 3D 位姿，不能把网页显示速率当作输入帧率。采集和导出使用原始输入与配置采样率。
 
 原始数据位于 `outputs/aruco-capture/<录制编号>/`：
 
 - `capture.sqlite3`：图像载荷、头部 VIO、左右 TCP 检测及串口原始数值。ROS 回调只排队，写盘和检测在一个独立线程。
 - `session.json`：配置、标定、参考变换、时长及错误记录。
-- `segments.json`：人工确认的时间范围及任务文本。
+- `segments.json`：人工确认的时间范围、任务文本及 `hands` 参与手臂；旧标注默认 `both`。
 - `quality.json`：全录制预期时间轴上的有效帧占比。
 - `lerobot/`：导出的 Parquet、MP4 和 v3 元数据，包含原始录制与标注溯源。重复导出不会覆盖旧目录。
 
@@ -113,8 +119,12 @@ RGB/串口跨设备同步首版使用**主机接收时间**最近邻，默认容
 
 状态为 `[left_10d, right_10d]`，每臂 `xyz + rotation_6d（旋转矩阵前两行）+ width_m`。导出仅保留人工标注范围内、所有配置视频与双臂状态同时有效的连续区间，不连接缺失帧前后的轨迹。`action` 是下一采样时刻的绝对状态；区间最后一帧只作为动作目标，不单独输出训练行。每段至少连续三帧观测，产生至少两行训练数据。
 
-首版按单次录制导出，不包含自动语义标注、自动任务切分、训练任务、多用户权限、云服务、发布升级和复杂 3D 场景。质量报告与 XY 轨迹回看使用同一套对齐数据。
+按单次录制导出，不包含自动语义标注、自动任务切分、训练任务、多用户权限、云服务和发布升级。参与手臂仅作为语义元数据写入 episode 的 `participating_hands`，仍要求全部配置视频和双臂状态有效。质量报告、3D 轨迹和回放使用同一套对齐数据。
 
 ## 代码位置
 
-`insight_capture/aruco_capture/` 中：`pose.py` 定位，`sources.py` 输入，`capture.py` 录制，`dataset.py` 对齐/QC/导出，`app.py` 与 `index.html` 提供单页操作。复用现有 cube 几何、VIO 插值、视频写入及 LeRobot 元数据工具，不复制原 Dashboard。
+`insight_capture/aruco_capture/` 中：`pose.py` 定位，`sources.py` 输入，`capture.py` 录制，`dataset.py` 对齐/QC/导出，`app.py` 提供接口，`index.html` / `workbench.css` / `workbench.js` 提供工作台，`trajectory.js` 封装三维绘制。复用现有 cube 几何、VIO 插值、视频写入及 LeRobot 元数据工具，不复制原 Dashboard。
+
+## 界面设计参考
+
+本次界面设计采用 [Anthropic frontend-design](https://github.com/anthropics/skills/tree/main/skills/frontend-design) 的设计流程，并按 [Vercel Web Interface Guidelines](https://vercel.com/design/guidelines) 检查键盘操作、标签、焦点、空状态、未保存修改保护和响应式布局。技能用于开发参考，不作为运行时依赖。
