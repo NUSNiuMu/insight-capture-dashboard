@@ -50,7 +50,9 @@ Jetson NX profile 当前设置：
 "apply_corrections": true
 ```
 
-二维码候选先通过 5 帧窗口内 3 帧一致性检查，再作为 `T_map_odom` 的低频绝对观测
+开启实际修正时，候选必须包含至少两个非共面标记面，每面至少三个 RANSAC 内点；
+仅单面或内点退化到同一平面的观测不会参与修正，即使 `min_markers=1`。
+通过几何检查的候选再通过 5 帧窗口内 3 帧一致性检查，作为 `T_map_odom` 的低频绝对观测
 写入 Insight3 的六自由度误差状态 EKF。小于 150 mm 且小于 10 度的修正由 EKF
 平滑吸收；超过任一阈值的已确认修正会执行 hard relocalization。Insight3 VIO 仍负责
 高频相对运动，最终输出为 `T_map_odom * T_odom_imu * T_imu_camera_center`。
@@ -58,9 +60,12 @@ Jetson NX profile 当前设置：
 ## 验证与已知限制
 
 Take 54 使用当前独立外参回放时，B 的局部相对误差中位数为 30.1 mm / 2.59 度；
-A 为 60.0 mm / 5.31 度，并出现过平面 PnP 错误分支。当前配置允许单 marker
-连续三帧确认，因此生产观测仍需关注 `hard_relocalizations`、marker ID 组合和换面时的
-位姿连续性。
+A 为 60.0 mm / 5.31 度，并出现过平面 PnP 错误分支。这些是修复前的回放数据。
+当前实际修正拒绝单 marker；只看到一个面时继续沿用 VIO，等待多面标记或自然特征定位。
+离线 shadow 模式仍可设置 `min_markers=1` 分析单面观测。
+
+头部位姿时间戳回退和 New Map 会重置标记处理时间戳、候选窗口与待处理队列，
+并递增会话编号；旧会话中尚未完成的检测不能写回候选、状态或定位修正。
 
 离线验证使用 `tools/diagnostics/replay_cube_marker_shadow.py`。该工具始终只读，即使加载
 的生产配置是 `apply_corrections=true`，也只输出 shadow 统计，不修改任何在线 pose。

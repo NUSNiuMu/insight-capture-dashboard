@@ -430,10 +430,11 @@ class Insight3GlobalLocalizer(Node):
             else None
         )
         self._head_pose_buffer = PoseBuffer(max_bracket_gap_ns=50_000_000)
-        self._head_marker_lock = threading.Lock()
+        self._head_marker_lock = threading.RLock()
         self._head_marker_camera_matrix: Optional[np.ndarray] = None
         self._head_center_to_rgb: Optional[np.ndarray] = None
-        self._marker_work: queue.Queue[object] = queue.Queue(maxsize=1)
+        self._marker_work: queue.Queue[tuple[int, object]] = queue.Queue(maxsize=1)
+        self._marker_generation = 0
         self._marker_last_processed_stamp_ns = -1
         self._path_publishers = (
             {
@@ -612,6 +613,10 @@ class Insight3GlobalLocalizer(Node):
     def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
         """清除两路全局修正与历史轨迹，但不修改共享 Insight9 地图。"""
 
+        with self._head_marker_lock:
+            return self._reset_mapping_state(response)
+
+    def _reset_mapping_state(self, response: Empty.Response) -> Empty.Response:
         with self._map_lock:
             self._map_points = np.empty((0, 3), dtype=np.float32)
             self._normalized_map_descriptors = np.empty(
@@ -657,12 +662,7 @@ class Insight3GlobalLocalizer(Node):
                     "tracking_mode": "unlocalized",
                 }
         self._head_pose_buffer.clear()
-        self._marker_last_processed_stamp_ns = -1
-        while True:
-            try:
-                self._marker_work.get_nowait()
-            except queue.Empty:
-                break
+        self._reset_marker_tracking("waiting_for_inputs")
         self.get_logger().info("Cleared Insight3 global corrections for a new map")
         return response
 
@@ -794,8 +794,21 @@ class Insight3GlobalLocalizer(Node):
             matrix_from_pose(sample)
         except ValueError:
             return
-        reset = self._head_pose_buffer.append(sample)
-        if reset:
+        with self._head_marker_lock:
+            reset = self._head_pose_buffer.append(sample)
+            if reset:
+                self._reset_marker_tracking("head_pose_reset")
+
+    def _reset_marker_tracking(self, reason: str) -> None:
+        """Invalidate queued and in-flight detections together with timestamp gates."""
+        with self._head_marker_lock:
+            self._marker_generation += 1
+            self._marker_last_processed_stamp_ns = -1
+            while True:
+                try:
+                    self._marker_work.get_nowait()
+                except queue.Empty:
+                    break
             for state in self._cameras.values():
                 with state.lock:
                     if state.marker_consensus is not None:
@@ -803,7 +816,7 @@ class Insight3GlobalLocalizer(Node):
                             state.marker_consensus.config
                         )
                         state.last_marker_measurement = None
-                        state.marker_status = {"state": "head_pose_reset"}
+                        state.marker_status = {"state": reason}
 
     def _head_marker_camera_info_callback(self, message: CameraInfo) -> None:
         projection = np.asarray(message.p, dtype=np.float64).reshape(3, 4)
@@ -818,23 +831,30 @@ class Insight3GlobalLocalizer(Node):
             self._head_marker_camera_matrix = matrix
 
     def _head_marker_image_callback(self, message: object) -> None:
+        with self._head_marker_lock:
+            self._queue_marker_image(message)
+
+    def _queue_marker_image(self, message: object) -> None:
+        item = (self._marker_generation, message)
         try:
-            self._marker_work.put_nowait(message)
+            self._marker_work.put_nowait(item)
         except queue.Full:
             try:
                 self._marker_work.get_nowait()
             except queue.Empty:
                 pass
             try:
-                self._marker_work.put_nowait(message)
+                self._marker_work.put_nowait(item)
             except queue.Full:
                 pass
 
     def _set_marker_rejection(
-        self, name: str, rejection: str, stamp_ns: int
+        self, name: str, rejection: str, stamp_ns: int, generation: int
     ) -> None:
         state = self._cameras[name]
-        with state.lock:
+        with self._head_marker_lock, state.lock:
+            if generation != self._marker_generation:
+                return
             progress = {}
             if state.marker_consensus is not None:
                 progress = state.marker_consensus.observe(None)
@@ -853,7 +873,7 @@ class Insight3GlobalLocalizer(Node):
         next_process_monotonic = 0.0
         while not self._stop.is_set():
             try:
-                message = self._marker_work.get(timeout=0.2)
+                generation, message = self._marker_work.get(timeout=0.2)
             except queue.Empty:
                 continue
             delay_sec = next_process_monotonic - time.monotonic()
@@ -861,15 +881,18 @@ class Insight3GlobalLocalizer(Node):
                 break
             while True:
                 try:
-                    message = self._marker_work.get_nowait()
+                    generation, message = self._marker_work.get_nowait()
                 except queue.Empty:
                     break
             next_process_monotonic = time.monotonic() + period_sec
             stamp_ns = stamp_to_ns(message.header.stamp)
-            if stamp_ns <= self._marker_last_processed_stamp_ns:
-                continue
-            self._marker_last_processed_stamp_ns = stamp_ns
             with self._head_marker_lock:
+                if (
+                    generation != self._marker_generation
+                    or stamp_ns <= self._marker_last_processed_stamp_ns
+                ):
+                    continue
+                self._marker_last_processed_stamp_ns = stamp_ns
                 camera_matrix = (
                     None
                     if self._head_marker_camera_matrix is None
@@ -882,11 +905,11 @@ class Insight3GlobalLocalizer(Node):
                 )
             if camera_matrix is None:
                 for name in self._cube_marker_config.targets:
-                    self._set_marker_rejection(name, "missing_camera_info", stamp_ns)
+                    self._set_marker_rejection(name, "missing_camera_info", stamp_ns, generation)
                 continue
             if head_center_to_rgb is None:
                 for name in self._cube_marker_config.targets:
-                    self._set_marker_rejection(name, "missing_head_rgb_extrinsic", stamp_ns)
+                    self._set_marker_rejection(name, "missing_head_rgb_extrinsic", stamp_ns, generation)
                 continue
             deadline = (
                 time.monotonic() + self._cube_marker_config.pose_wait_ms / 1000.0
@@ -898,7 +921,7 @@ class Insight3GlobalLocalizer(Node):
                 head_pose = self._head_pose_buffer.lookup(stamp_ns)
             if head_pose is None:
                 for name in self._cube_marker_config.targets:
-                    self._set_marker_rejection(name, "missing_head_pose_bracket", stamp_ns)
+                    self._set_marker_rejection(name, "missing_head_pose_bracket", stamp_ns, generation)
                 continue
             try:
                 gray = grayscale_marker_image(message)
@@ -906,17 +929,19 @@ class Insight3GlobalLocalizer(Node):
             except Exception as exc:
                 for name in self._cube_marker_config.targets:
                     self._set_marker_rejection(
-                        name, f"detection_error:{exc}", stamp_ns
+                        name, f"detection_error:{exc}", stamp_ns, generation
                     )
                 continue
             map_from_head_center = matrix_from_pose(head_pose)
             for name, target in self._cube_marker_config.targets.items():
                 estimate = estimates.get(name)
                 if estimate is None:
-                    self._set_marker_rejection(name, "marker_not_detected", stamp_ns)
+                    self._set_marker_rejection(name, "marker_not_detected", stamp_ns, generation)
                     continue
                 state = self._cameras[name]
-                with state.lock:
+                with self._head_marker_lock, state.lock:
+                    if generation != self._marker_generation:
+                        break
                     vio_sample = state.pose_buffer.lookup(stamp_ns)
                     imu_to_center = (
                         None

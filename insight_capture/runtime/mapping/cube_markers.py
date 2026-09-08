@@ -310,7 +310,8 @@ class MultiCubeMarkerEstimator:
             raise ValueError("invalid marker camera matrix")
         for camera, target in self.config.targets.items():
             visible = sorted(set(detections) & set(target.marker_corners_cube_m))
-            if len(visible) < self.config.min_markers:
+            minimum = max(self.config.min_markers, 2 if self.config.apply_corrections else 1)
+            if len(visible) < minimum:
                 continue
             object_points = np.concatenate(
                 [target.marker_corners_cube_m[marker_id] for marker_id in visible]
@@ -361,6 +362,22 @@ class MultiCubeMarkerEstimator:
         inlier_ratio = len(inliers) / float(len(object_points))
         if inlier_ratio < self.config.min_inlier_ratio:
             return None
+        if self.config.apply_corrections:
+            # Temporal agreement cannot resolve a stable planar PnP ambiguity.
+            # Require substantial inlier support on two non-coplanar faces.
+            supported = [
+                index for index in range(len(marker_ids))
+                if np.count_nonzero(inliers // 4 == index) >= 3
+            ]
+            supported_inliers = inliers[np.isin(inliers // 4, supported)]
+            if len(supported) < 2:
+                return None
+            geometry = object_points[supported_inliers]
+            singular_values = np.linalg.svd(
+                geometry - geometry.mean(axis=0), compute_uv=False
+            )
+            if singular_values[-1] < 1e-4:
+                return None
         rvec, tvec = cv2.solvePnPRefineLM(
             object_points[inliers],
             image_points[inliers],
