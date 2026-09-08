@@ -17,6 +17,23 @@ docker compose -f deploy/aruco/compose.yml logs --tail=100
 docker compose -f deploy/aruco/compose.yml down
 ```
 
+没有 Compose/Buildx 插件时，也可直接运行：
+
+```bash
+DOCKER_BUILDKIT=0 docker build --network host -f deploy/aruco/Dockerfile -t insight-aruco-capture:local .
+mkdir -p outputs/aruco-capture
+docker run -d --name insight-aruco-capture --network host --init \
+  --restart unless-stopped --stop-signal SIGINT \
+  -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+  -v "$PWD/config/devices/x86-aruco/capture.json:/app/config/devices/x86-aruco/capture.json:ro" \
+  -v "$PWD/outputs/aruco-capture:/app/outputs/aruco-capture" \
+  insight-aruco-capture:local
+```
+
+下载较慢时可在构建命令中添加 `--build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`，仅影响镜像构建，不修改主机全局 pip 配置。
+
+停止用 `docker stop insight-aruco-capture`，再次启动用 `docker start insight-aruco-capture`，日志用 `docker logs --tail=100 insight-aruco-capture`。代码修改后重新构建镜像并重建容器，录制数据保留在宿主机目录；配置修改只需停录后重启容器。
+
 这是独立服务和端口，不需要切换原 Dashboard 的 live profile。已有 Python/ROS 环境也可以直接运行：
 
 ```bash
