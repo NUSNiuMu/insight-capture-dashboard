@@ -16,6 +16,7 @@ const TRAIL_RADIUS_BY_ROLE = {
   right_hand: 0.008
 };
 const TRAIL_TESSELLATION = 6;
+const useGreasedTrails = new URLSearchParams(window.location.search).get("trail") === "greased";
 const HAND_RIG_EDGES = [
   [0, 1, "thumb"], [1, 2, "thumb"], [2, 3, "thumb"], [3, 4, "thumb"],
   [0, 5, "palm"], [5, 6, "index"], [6, 7, "index"], [7, 8, "index"],
@@ -900,6 +901,7 @@ function isTrailEnabled(role) {
 
 function clearTrail(trail) {
   trail.points = [];
+  trail.greasedBuffers = null;
   trail.meshCapacity = 0;
   trail.vertexPositions = null;
   trail.vertexNormals = null;
@@ -984,6 +986,35 @@ function refreshTrailMesh(trail) {
     trail.vertexPositions = null;
     trail.vertexNormals = null;
   }
+  if (useGreasedTrails) {
+    if (!trail.mesh) {
+      trail.mesh = BABYLON.CreateGreasedLine(`trail-${trail.role}`, {
+        points,
+        updatable: true,
+      }, {
+        materialType: BABYLON.GreasedLineMeshMaterialType.MATERIAL_TYPE_SIMPLE,
+        color: roleColor,
+        width: trail.role === "head" ? 6 : 5,
+        sizeAttenuation: true,
+      }, scene);
+      trail.meshCapacity = capacity;
+      trail.mesh.isPickable = false;
+      trail.mesh.alwaysSelectAsActiveMesh = true;
+      trail.mesh.renderingGroupId = 1;
+      trail.greasedBuffers = [
+        [BABYLON.VertexBuffer.PositionKind, 3],
+        ["grl_previousAndSide", 4],
+        ["grl_nextAndCounters", 4],
+      ].map(([kind, stride]) => {
+        const data = new Float32Array(trail.mesh.getVerticesData(kind));
+        trail.mesh.setVerticesData(kind, data, true, stride);
+        return { kind, data };
+      });
+    } else {
+      updateGreasedTrail(trail, points);
+    }
+    return;
+  }
   if (!trail.mesh) {
     // Keep topology fixed so 50 Hz updates only replace GPU vertex buffers.
     trail.mesh = new BABYLON.Mesh(`trail-${trail.role}`, scene);
@@ -1015,6 +1046,34 @@ function refreshTrailMesh(trail) {
     trail.mesh.material = material;
   } else {
     updateTrailTubeGeometry(trail, points, radius, true);
+  }
+}
+
+function updateGreasedTrail(trail, points) {
+  // GreasedLine 9.14 packs adjacency in these attributes. Updating only offsets
+  // leaves joins stale; setPoints instead rebuilds static topology every time.
+  const [positions, previous, next] = trail.greasedBuffers.map((buffer) => buffer.data);
+  const last = points.length - 1;
+  const closed = points[0].equals(points[last]);
+  for (let index = 0; index <= last; index += 1) {
+    const point = points[index];
+    const before = points[index > 0 ? index - 1 : closed ? last - 1 : 0];
+    const after = points[index < last ? index + 1 : closed ? 1 : last];
+    for (let side = 0; side < 2; side += 1) {
+      const vertex = index * 2 + side;
+      positions[vertex * 3] = point.x;
+      positions[vertex * 3 + 1] = point.y;
+      positions[vertex * 3 + 2] = point.z;
+      previous[vertex * 4] = before.x;
+      previous[vertex * 4 + 1] = before.y;
+      previous[vertex * 4 + 2] = before.z;
+      next[vertex * 4] = after.x;
+      next[vertex * 4 + 1] = after.y;
+      next[vertex * 4 + 2] = after.z;
+    }
+  }
+  for (const { kind, data } of trail.greasedBuffers) {
+    trail.mesh.getVertexBuffer(kind).updateDirectly(data, 0);
   }
 }
 
