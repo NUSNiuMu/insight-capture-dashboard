@@ -1,4 +1,5 @@
 import { escapeHtml } from "../shared/format.js";
+import { PresentedFrameRate } from "./frame-rate.js";
 
 const cameraDock = document.getElementById("camera-dock");
 const cameraWallStatus = document.querySelector("[data-camera-wall-status]");
@@ -11,9 +12,7 @@ const WEBRTC_RETRY_DELAY_MS = 5000;
 const WEBRTC_MAX_ATTEMPTS = 5;
 const WEBRTC_FIRST_FRAME_TIMEOUT_MS = 8000;
 const WEBRTC_STATS_INTERVAL_MS = 1000;
-// Firefox presents slightly fewer frames than it receives while compositing
-// the full-resolution camera wall with Babylon. Five frames of transport
-// headroom keep the visible cadence at 20 fps without changing resolution.
+// Leave browser scheduling headroom for the full-resolution wall and Babylon.
 const NORMAL_PREVIEW_FPS = 25;
 const cameraPanels = new Map();
 const cameraPollState = new Map();
@@ -498,7 +497,9 @@ function startCameraWebRtc(cameraName, panel, webrtcPort) {
     retryTimer: null,
     statsTimer: null,
     unavailable: Boolean(previous && previous.unavailable),
-    webrtcPort: port
+    webrtcPort: port,
+    presentedRate: new PresentedFrameRate(CAMERA_FPS_WINDOW_MS),
+    presentedSource: video.requestVideoFrameCallback ? "compositor" : "media quality"
   };
   cameraWebRtc.set(cameraName, state);
   const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
@@ -568,7 +569,7 @@ function startCameraWebRtc(cameraName, panel, webrtcPort) {
   };
   ws.onerror = fail;
   ws.onclose = fail;
-  const onVideoFrame = () => {
+  const onVideoFrame = (now, metadata) => {
     if (cameraWebRtc.get(cameraName) !== state || state.pc !== pc) {
       return;
     }
@@ -581,13 +582,15 @@ function startCameraWebRtc(cameraName, panel, webrtcPort) {
       img.removeAttribute("src");
     }
     recordDisplayedFrame(cameraName);
-    video.requestVideoFrameCallback(onVideoFrame);
+    if (metadata) {
+      state.presentedRate.record(metadata.presentedFrames, metadata.presentationTime);
+    }
+    video.requestVideoFrameCallback?.(onVideoFrame);
   };
   if (video.requestVideoFrameCallback) {
     video.requestVideoFrameCallback(onVideoFrame);
   } else {
-    // No rVFC (old Firefox): activate on playback start; the fps badge
-    // then reflects backend fps only.
+    // Without rVFC, sample media-quality counters in the stats timer.
     video.addEventListener("playing", onVideoFrame, { once: true });
   }
 }
@@ -728,6 +731,15 @@ async function collectWebRtcStats(cameraName, state, pc) {
       }
     }
     state.rtcTotals = { timestamp, ...totals };
+    if (state.presentedSource === "media quality") {
+      const video = cameraPanels.get(cameraName)?.querySelector(".camera-video");
+      const quality = video?.getVideoPlaybackQuality?.();
+      if (quality) {
+        state.presentedRate.record(
+          quality.totalVideoFrames - quality.droppedVideoFrames, performance.now()
+        );
+      }
+    }
     state.rtcStats = {
       ...totals,
       receivedFps,
@@ -736,9 +748,7 @@ async function collectWebRtcStats(cameraName, state, pc) {
       sceneFps: Number(window.__insightSceneFps || 0),
       sceneMaxGapMs: Number(window.__insightSceneMaxGapMs || 0),
       sceneWorkMaxMs: Number(window.__insightSceneWorkMaxMs || 0),
-      presentedFps: computeDisplayedFps(
-        (cameraPollState.get(cameraName) || {}).displayFrameTimes
-      )
+      presentedFps: state.presentedRate.fps(performance.now())
     };
     const pollState = cameraPollState.get(cameraName);
     if (pollState) {
@@ -829,9 +839,10 @@ function renderCameraFps(cameraName) {
     return;
   }
   const callbackFps = computeDisplayedFps(pollState.displayFrameTimes);
+  const live = cameraWebRtc.get(cameraName);
   const displayFps = preparedPlaybackSession && pollState.preparedPresentedFps > 0
     ? Number(pollState.preparedPresentedFps)
-    : callbackFps;
+    : live?.active ? live.presentedRate.fps(performance.now()) : callbackFps;
   const backendFps = Number(pollState.backendFps || 0);
   setTextIfChanged(label, displayFps > 0 ? `${displayFps.toFixed(1)} fps` : "-- fps");
   const pipeline = pollState.backendPipeline || {};
@@ -842,6 +853,9 @@ function renderCameraFps(cameraName) {
   const lines = [
     `source ${sourceFps.toFixed(1)} · processed ${backendFps.toFixed(1)} · presented ${displayFps.toFixed(1)} fps`
   ];
+  if (live?.active) {
+    lines.push(`${live.presentedSource} frames · callback ${callbackFps.toFixed(1)} fps`);
+  }
   if (preparedPlaybackSession && pollState.preparedQualityTotals) {
     lines.push(
       `browser media frames ${Number(pollState.preparedQualityTotals.totalFrames || 0)} · dropped ${Number(pollState.preparedQualityTotals.droppedFrames || 0)} · callback ${callbackFps.toFixed(1)} fps`

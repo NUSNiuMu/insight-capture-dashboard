@@ -137,6 +137,36 @@
 
 ## WebRTC 与预览
 
+### 2026-09-09 显示帧率与浏览器调度复核
+
+实时视频 FPS 使用 `requestVideoFrameCallback` 的累计 `presentedFrames` 与
+`presentationTime`，不再用 JS 回调次数代替提交合成的帧数。回调 FPS 保留在悬停详情，
+两者不等时不能直接判定视频丢帧；提交合成也不是物理屏幕扫描的测量。
+不支持 rVFC 时使用 `getVideoPlaybackQuality()` 的总帧数减丢帧数按墙钟采样。
+重连重置统计，累计数/时间回退重新建立基线，停帧 1.5 秒后不保留旧 FPS。
+相关语义见 [MDN rVFC 文档](https://developer.mozilla.org/en-US/docs/Web/API/HTMLVideoElement/requestVideoFrameCallback)。
+
+现场 Firefox、2560×1440 可见窗口、三路原分辨率视频，每组约 24 秒：
+
+| 预览目标/场景 | 累计呈现 FPS（A/B/9） | 回调 FPS（A/B/9） | rAF 间隔 P95 | 50 ms 定时器延迟 P95 |
+| --- | --- | --- | --- | --- |
+| 25 FPS，正常 3D | 23.76 / 23.18 / 23.26 | 19.53 / 18.95 / 19.44 | 66.26 ms | 13 ms |
+| 30 FPS，正常 3D | 27.10 / 27.88 / 27.01 | 19.31 / 20.05 / 18.85 | 67.46 ms | 22 ms |
+| 30 FPS，暂跳过 scene.render | 28.30 / 28.63 / 28.17 | 26.31 / 26.26 / 26.22 | 17.54 ms | 18 ms |
+
+正常 3D 的 `scene.render()` 同步耗时平均约 2 ms、P95 5–6 ms；跳过绘制后调度明显恢复，
+支持 3D 绘制与视频并行产生 GPU/合成/同步压力的判断，但未用原生 profiler 区分三者。
+Insight9 解码平均约 20–21 ms，高于两路红外的约 7–8 ms。各组网络丢包增量均为零，
+25 FPS 组 Insight9 解码丢帧增量为 1，其余增量为零。
+30 FPS 能增加实际呈现帧数，但正常 3D 下 rAF 最大间隔从约 101 ms 增至 150 ms，
+因此保留默认 25 FPS；这些短时单机结果不是满负载录制或长时稳定性保证。
+
+测试覆盖累计数跳跃、停帧、重连、计数/时间回退、无 rVFC 的 media-quality fallback；
+真实页面 API/WS 与视频流通过，源码和 dist 同步构建。原始采样保存在设备
+`~/workspaces/insight_capture_tests/frontend_fps/{baseline25,trial30,trial30_without_scene}.json`。
+本次只刷新/重开浏览器，未重启后端、建图或定位服务；短时跳过绘制已恢复。
+
+
 - WebRTC 信令和 H.264 编码运行在独立的 `webrtc_worker.py` 进程，主进程只负责投递经过选择的帧和轮询 health。
 - WebRTC 保留相机发布分辨率（只为 NV12 偶数尺寸向下取整），不再根据面板尺寸
   动态降采样。浏览器正常预览请求 25 FPS；主进程在图像转换和 IPC copy 前按
@@ -194,7 +224,7 @@
 2026-08-05 的 jetson-nx 实机验收（未改变模型/hardware scaling）：
 
 - 30 秒三路视频累计解码 24.0–25.1 FPS，新增 WebRTC 丢包和解码丢帧均为零；
-  `requestVideoFrameCallback` 可见帧率中位数为 21.38、21.49、20.00 FPS。
+  旧 `requestVideoFrameCallback` 回调计数中位数为 21.38、21.49、20.00 FPS。
 - 3D 帧率中位数 30.02–30.04 FPS，区间 29.75–30.38 FPS，最大帧间隔 53 ms。
 - 整机 CPU busy 从约 85–88% 降至 73.3%；OpenBLAS 单线程使 localizer 从
   83–102% 降至约 46%，提前限流使 WebRTC worker 从 43–50% 降至约 32%。

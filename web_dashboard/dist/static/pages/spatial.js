@@ -2,7 +2,7 @@ import {
   startPreparedCameraPlayback,
   startCameraDashboard,
   stopPreparedCameraPlayback,
-} from "../camera/dashboard.js?v=20260821-smooth-playback";
+} from "../camera/dashboard.js?v=20260909-presented-frames-final";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js?v=20260818-bag-library";
 import {
