@@ -1,0 +1,15 @@
+ARG BASE_IMAGE=ubuntu:22.04
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake g++ pkg-config python3 qt6-base-dev qt6-declarative-dev \
+    qt6-quick3d-dev qt6-quick3d-dev-tools libqt6shadertools6-dev \
+    libqt6opengl6-dev libqt6websockets6-dev qt6-image-formats-plugins \
+    qt6-quick3d-assetimporters-plugin qml6-module-qtquick \
+    qml6-module-qtquick-controls qml6-module-qtquick-templates \
+    qml6-module-qtquick-layouts qml6-module-qtquick-window \
+    qml6-module-qtqml-workerscript qml6-module-qtqml-models \
+    qml6-module-quick3d qml6-module-quick3d-assetutils \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+    libgstreamer-plugins-bad1.0-dev && rm -rf /var/lib/apt/lists/*
+WORKDIR /src

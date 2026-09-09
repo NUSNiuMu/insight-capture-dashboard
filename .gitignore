@@ -29,3 +29,5 @@ config/cameras.json
 config/post_processing.json
 config/runtime.json
 config/.device
+
+.native-build/
