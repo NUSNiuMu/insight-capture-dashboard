@@ -299,3 +299,11 @@ Insight9 解码平均约 20–21 ms，高于两路红外的约 7–8 ms。各组
 - `/3d`、`/recording`、`/bags`、`/umi-dataset`、`/scoring`、`/handpose`、
   `/optimization`、`/settings` 均能加载，WebSocket 首帧包含三路 pose 和轨迹快照。
 - 可重复运行的基线工具位于本机 `~/workspaces/insight_capture_tests/run_refactor_checks_20260723.sh`，不属于主仓库。
+
+## 2026-09-09：默认采用 Babylon 粗线
+
+轨迹默认改为 camera-facing GreasedLine，删除旧六边形圆管实现与实验 URL 开关。300 点单条轨迹为 600 顶点、598 三角形；位置和邻接缓冲区固定复用，避免 `setPoints()` 的重复重建。颜色、深度遮挡、轨迹数据协议及 25 FPS 视频目标保持原设计。该更新依赖 vendored Babylon 9.14 的邻接属性布局，升级 Babylon 时需重新验证。
+
+页面功能回归覆盖缓冲区复用、容量 600/2/300 切换、可见性、清空/恢复、总开关和 Keep trail；6 组端点/开放/闭合轨迹的邻接数据与库原生结果一致。前一轮性能试验未证明稳定的端到端 FPS 增益，本次采用粗线不等于解除浏览器调度瓶颈。
+
+原生视频/3D 客户端的依赖检查与选型见 [NATIVE_PREVIEW_OPTIONS.md](NATIVE_PREVIEW_OPTIONS.md)。

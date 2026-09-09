@@ -15,7 +15,7 @@ import {
   setKeepTrajectory,
   setTrajectoriesEnabled,
   stopSpatialRenderer,
-} from "../spatial/renderer.js?v=20260821-smooth-playback";
+} from "../spatial/renderer.js?v=20260909-greased-trails";
 import { createPreparedPosePayloadBuilder } from "../spatial/prepared-playback.js?v=20260821-progressive-trails";
 
 const modelStatus = document.getElementById("model-status");
