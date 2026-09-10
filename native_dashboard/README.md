@@ -9,9 +9,10 @@ Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬
 本机验证环境：Jetson Orin NX、JetPack R36.4.3、Ubuntu 22.04、GStreamer 1.20、Qt 6.2.4、X11。
 
 ```bash
-native_dashboard/build.sh
-native_dashboard/run.sh --server http://127.0.0.1:8765 --fps 25 --fullscreen
+./native_dashboard/run.sh
 ```
+
+不带参数时默认连接本机 `http://127.0.0.1:8765`，以 30 FPS 目标全屏启动；缺少可执行文件或 Qt 运行库时自动构建。Dashboard 后端需保持运行。传入参数时按指定参数启动。
 
 构建需要 Docker 和本机 Jetson Multimedia API 头文件。Qt 在独立 Ubuntu 22.04 构建容器内安装，运行库导出到 `.native-build/runtime`；运行时使用宿主机已有的 NVIDIA/GStreamer 驱动，避免替换 JetPack 多媒体栈。非标准 SDK 目录可通过 `JETSON_MM_HEADERS` 指定。
 

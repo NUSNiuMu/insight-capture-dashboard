@@ -4,8 +4,10 @@ native_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 build_dir="${INSIGHT_NATIVE_BUILD_DIR:-$(dirname -- "$native_dir")/.native-build}"
 qt_lib="$build_dir/runtime/usr/lib/aarch64-linux-gnu"
 if [[ ! -x "$build_dir/insight-native" || ! -d "$qt_lib" ]]; then
-    echo 'Run native_dashboard/build.sh first.' >&2
-    exit 1
+    "$native_dir/build.sh"
+fi
+if [[ $# -eq 0 ]]; then
+    set -- --fps 30 --fullscreen
 fi
 export LD_LIBRARY_PATH="$qt_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export QT_PLUGIN_PATH="$qt_lib/qt6/plugins"
