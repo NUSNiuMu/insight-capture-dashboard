@@ -1,1 +1,1 @@
-<RCC><qresource prefix="/"><file>Main.qml</file></qresource></RCC>
+<RCC><qresource prefix="/"><file>Main.qml</file><file>trail.vert</file><file>trail.frag</file></qresource></RCC>

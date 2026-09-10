@@ -4,6 +4,8 @@ Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬
 
 当前为 `experiment/qt-native-dashboard` 分支上的采集主界面原型。主仓库网页仍可远程访问，不修改后端启动方式，也未替换 kiosk 开机入口。
 
+完整功能与 UI 的逐页对齐范围见 [迁移清单](PARITY.md)。
+
 ## 构建与启动
 
 本机验证环境：Jetson Orin NX、JetPack R36.4.3、Ubuntu 22.04、GStreamer 1.20、Qt 6.2.4、X11。
@@ -41,7 +43,9 @@ native_dashboard/run.sh --fps 30 --quit-after 60 --diagnostics /tmp/insight-nati
 
 视频采用嵌入 Qt 窗口的原生子窗口。这使当前 JetPack 可以直接使用 NVIDIA sink，但不是共享 QML 纹理：不支持任意 QML 遮罩/旋转和覆盖层。弹出菜单与确认框打开时暂时隐藏视频子窗口，避免遮挡。
 
-轨迹使用 Quick 3D 动态线段几何，位置在三维空间，能够随视角旋转；当前是细线。姿态坐标使用 ROS → Qt 右手坐标转换，米换算为厘米。
+轨迹使用 Quick 3D 三角形带状几何，顶点着色器按屏幕宽度展开，头部 6 像素、双手 5 像素，与网页版宽度设置一致；旋转和缩放保持可见宽度。近裁剪面交叉在透视除法前处理，重复点不生成退化线段。姿态坐标使用 ROS → Qt 右手坐标转换，米换算为厘米。
+
+实时 H.264 解码启用 `disable-dpb=true`，避免 Insight3 的解码缓冲积累。仅适用于当前无 B 帧的实时编码流，MP4 回放保留正常 DPB。诊断文件中的 `decode_median_ms` / `decode_p95_ms` 匹配解码器输入和输出的 PTS，统计最近最多 120 帧，不包含相机曝光、网络和屏幕扫描延迟；无有效样本为 -1。排查时可用 `INSIGHT_NATIVE_DECODER_DPB=1` 临时恢复默认 DPB 做对照。[NVIDIA 低延迟模式说明](https://docs.nvidia.com/jetson/archives/r36.4.3/DeveloperGuide/SD/Multimedia/AcceleratedGstreamer.html#supported-decoder-features-with-gstreamer-1-0)。
 
 这是采集/回放主界面的试验，不覆盖网页的数据集导出、标注、设备设置等全部页面，尚未作为客户发布入口。长时间运行、断电恢复和现场录制质量仍需后续验收。
 
@@ -50,6 +54,21 @@ native_dashboard/run.sh --fps 30 --quit-after 60 --diagnostics /tmp/insight-nati
 真实视频与只读姿态连接现有设备；录制、任务和地图的自动化操作使用独立模拟后端，不对现场执行录制或地图重置。比较性能时关闭旧浏览器，保留后端和相机，分别采样服务端编码计数与原生输出计数，并排除启动、退出与会话重置区间。
 
 参考：[NVIDIA Accelerated GStreamer](https://docs.nvidia.com/jetson/archives/r36.4.3/DeveloperGuide/SD/Multimedia/AcceleratedGstreamer.html)、[GstVideoOverlay](https://gstreamer.freedesktop.org/documentation/video/gstvideooverlay.html)、[Qt RuntimeLoader](https://doc.qt.io/qt-6/qml-qtquick3d-assetutils-runtimeloader.html)。
+
+## 2026-09-10 轨迹与延迟验证
+
+在同一 Qt 客户端中用默认 DPB / 低延迟两种配置各运行 25 秒。以下为稳定阶段诊断窗口内最近 120 个匹配帧的解码器输入→输出耗时中位数；不是相机到屏幕的总延迟。
+
+| 视频 | 默认 DPB | 实时低延迟 | 低延迟输出端丢弃 |
+| --- | --- | --- | --- |
+| Insight3 A | 420.5 ms | 5.4 ms | 0 |
+| Insight3 B | 423.6 ms | 6.0 ms | 0 |
+| Insight9 | 36.7 ms | 16.7 ms | 0 |
+
+- 三路原生视频、模型和轨迹实际显示通过。模拟轨迹实际鼠标旋转/缩放通过，截图验证角色颜色保持不变。
+- 几何回归覆盖空轨迹、单点、重复点、三角形端点、有限值、包围盒及清除；切换回放不再产生空顶点缓冲警告。
+- 隔离模拟后端的任务、录制按钮状态和标准含 B 帧 MP4 回放通过：暂停、跳到约 5 秒、继续、返回实时，客户端正常退出。未操作现场录制或地图。
+- 原始诊断、截图及脚本：`~/workspaces/insight_capture_tests/qt_native_20260910/`。其中早期独立 Python WebRTC 探针崩溃，未用于结论；延迟数据取自随后 Qt 自身的 PTS 配对诊断。短时验证不代替长时现场验收。
 
 ## 2026-09-09 验证记录
 

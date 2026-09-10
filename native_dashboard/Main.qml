@@ -124,7 +124,21 @@ ApplicationWindow {
                                 delegate: Node {
                                     id: poseRoot; required property var modelData
                                     function diagnostics() { return {name:modelData.name, status:avatar.status, error:avatar.errorString, boundsMin:[avatar.bounds.minimum.x,avatar.bounds.minimum.y,avatar.bounds.minimum.z], boundsMax:[avatar.bounds.maximum.x,avatar.bounds.maximum.y,avatar.bounds.maximum.z], position:[modelData.position.x,modelData.position.y,modelData.position.z], scale:modelData.modelScale} }
-                                    Model { geometry: poseRoot.modelData.trail; visible: poseRoot.modelData.trailEnabled && poseRoot.modelData.pointCount > 1; materials: DefaultMaterial { diffuseColor: poseRoot.modelData.color; lighting: DefaultMaterial.NoLighting } }
+                                    Model {
+                                        geometry: poseRoot.modelData.trail
+                                        visible: poseRoot.modelData.trailEnabled && poseRoot.modelData.pointCount > 1
+                                        materials: CustomMaterial {
+                                            shadingMode: CustomMaterial.Unshaded
+                                            cullMode: Material.NoCulling
+                                            vertexShader: "qrc:/trail.vert"
+                                            fragmentShader: "qrc:/trail.frag"
+                                            // Unshaded output uses display RGB, without QColor's linear conversion.
+                                            property vector4d trailColor: Qt.vector4d(poseRoot.modelData.color.r,
+                                                poseRoot.modelData.color.g, poseRoot.modelData.color.b, 1)
+                                            property real lineWidth: poseRoot.modelData.role === "head" ? 6 : 5
+                                            property vector2d viewportSize: Qt.vector2d(view.width, view.height)
+                                        }
+                                    }
                                     Node {
                                         visible: poseRoot.modelData.visible; position: poseRoot.modelData.position; rotation: poseRoot.modelData.rotation
                                         Node {

@@ -5,6 +5,7 @@
 #include <QPointer>
 #include <QQuickWindow>
 #include <QUrlQuery>
+#include <algorithm>
 #include <gst/sdp/sdp.h>
 #include <gst/video/video-info.h>
 #include <gst/video/videooverlay.h>
@@ -127,6 +128,12 @@ void NativeVideo::stop() {
     m_bus = nullptr;
     m_renderedFps = 0;
     m_rendered = m_dropped = m_lastRendered = 0;
+    {
+        QMutexLocker lock(&m_timingMutex);
+        m_decodeStarts.clear();
+        m_decodeTimes.clear();
+        m_timingIndex = 0;
+    }
     m_stopping = false;
 }
 void NativeVideo::start() {
@@ -138,8 +145,9 @@ void NativeVideo::start() {
     const auto sinkName = qEnvironmentVariable("INSIGHT_NATIVE_VIDEO_SINK") == "nveglglessink"
                               ? QByteArray("nveglglessink")
                               : QByteArray("nv3dsink");
+    // Live H.264 has no B frames; DPB buffering otherwise adds hundreds of milliseconds.
     const char *decode = "queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! rtph264depay ! "
-                         "h264parse ! nvv4l2decoder name=hardwareDecoder enable-max-performance=true ! "
+                         "h264parse ! nvv4l2decoder name=hardwareDecoder disable-dpb=true enable-max-performance=true ! "
                          "nv3dsink name=display sync=false qos=false enable-last-sample=false";
     if (m_media.isEmpty()) {
         m_pipeline = gst_pipeline_new(nullptr);
@@ -181,6 +189,19 @@ void NativeVideo::start() {
         auto *input = gst_bin_get_by_name(GST_BIN(m_pipeline), "input");
         g_object_set(input, "uri", m_media.toEncoded().constData(), nullptr);
         gst_object_unref(input);
+    }
+    auto *decoder = gst_bin_get_by_name(GST_BIN(m_pipeline), "hardwareDecoder");
+    if (decoder) {
+        if (m_media.isEmpty() && qEnvironmentVariable("INSIGHT_NATIVE_DECODER_DPB") == "1")
+            g_object_set(decoder, "disable-dpb", FALSE, nullptr);
+        if (m_media.isEmpty()) {
+            for (const char *name : {"sink", "src"}) {
+                auto *pad = gst_element_get_static_pad(decoder, name);
+                gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, decodeTiming, this, nullptr);
+                gst_object_unref(pad);
+            }
+        }
+        gst_object_unref(decoder);
     }
     m_sink = gst_bin_get_by_name(GST_BIN(m_pipeline), "display");
     if (!m_sink || !GST_IS_VIDEO_OVERLAY(m_sink)) {
@@ -381,8 +402,43 @@ void NativeVideo::seek(double seconds) {
                                 GstSeekFlags(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
                                 qint64(qMax(0.0, seconds) * GST_SECOND));
 }
+GstPadProbeReturn NativeVideo::decodeTiming(GstPad *pad, GstPadProbeInfo *info, gpointer user) {
+    const auto *buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+    if (!buffer || !GST_BUFFER_PTS_IS_VALID(buffer))
+        return GST_PAD_PROBE_OK;
+    auto *self = static_cast<NativeVideo *>(user);
+    const quint64 pts = GST_BUFFER_PTS(buffer), now = gst_util_get_timestamp();
+    QMutexLocker lock(&self->m_timingMutex);
+    if (GST_PAD_DIRECTION(pad) == GST_PAD_SINK) {
+        self->m_decodeStarts[pts] = now;
+        while (self->m_decodeStarts.size() > 120)
+            self->m_decodeStarts.erase(self->m_decodeStarts.begin());
+    } else {
+        auto it = self->m_decodeStarts.find(pts);
+        if (it != self->m_decodeStarts.end()) {
+            const double ms = double(now - it.value()) / GST_MSECOND;
+            self->m_decodeStarts.erase(it);
+            if (self->m_decodeTimes.size() < 120)
+                self->m_decodeTimes.append(ms);
+            else {
+                self->m_decodeTimes[self->m_timingIndex] = ms;
+                self->m_timingIndex = (self->m_timingIndex + 1) % 120;
+            }
+        }
+    }
+    return GST_PAD_PROBE_OK;
+}
 QVariantMap NativeVideo::diagnostics() const {
+    QVector<double> timings;
+    {
+        QMutexLocker lock(&m_timingMutex);
+        timings = m_decodeTimes;
+    }
+    std::sort(timings.begin(), timings.end());
     return {{"camera", m_name},
+            {"decode_samples", timings.size()},
+            {"decode_median_ms", timings.isEmpty() ? -1.0 : timings[timings.size() / 2]},
+            {"decode_p95_ms", timings.isEmpty() ? -1.0 : timings[qMin(timings.size() - 1, timings.size() * 95 / 100)]},
             {"rendered", qulonglong(m_rendered)},
             {"dropped", qulonglong(m_dropped)},
             {"sink_fps", m_renderedFps},

@@ -1,5 +1,7 @@
 #pragma once
 #include <QElapsedTimer>
+#include <QMap>
+#include <QMutex>
 #include <QPointer>
 #include <QQuickItem>
 #include <QTimer>
@@ -57,6 +59,7 @@ class NativeVideo : public QQuickItem {
     static void incomingPad(GstElement *, GstPad *, gpointer);
     static void iceCandidate(GstElement *, guint, gchar *, gpointer);
     static void answerCreated(GstPromise *, gpointer);
+    static GstPadProbeReturn decodeTiming(GstPad *, GstPadProbeInfo *, gpointer);
     QString m_name, m_status = "未连接";
     QUrl m_endpoint, m_media;
     QPointer<QWindow> m_surface;
@@ -71,4 +74,8 @@ class NativeVideo : public QQuickItem {
     quint64 m_lastRendered = 0, m_rendered = 0, m_dropped = 0;
     qint64 m_lastPoll = 0, m_lastProgress = 0;
     double m_renderedFps = 0, m_position = 0;
+    mutable QMutex m_timingMutex;
+    QMap<quint64, quint64> m_decodeStarts;
+    QVector<double> m_decodeTimes;
+    int m_timingIndex = 0;
 };
