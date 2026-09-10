@@ -14,9 +14,10 @@ ApplicationWindow {
     color: "#eee7d5"
     property int previewFps: dashboard.targetFps
     property real sceneFps: view.renderStats.fps
-    property real yaw: -25
-    property real pitch: -22
-    property real distance: 300
+    // Match the web ArcRotateCamera after reflecting its Z axis.
+    property real yaw: 90 - 1.2 * 180 / Math.PI
+    property real pitch: 1.1 * 180 / Math.PI - 90
+    property real distance: 580
     property real playTime: 0
     property bool playPaused: false
     property string confirmAction: ""
@@ -27,8 +28,8 @@ ApplicationWindow {
     }
     function spatialDiagnostics() { var result=[]; for(var i=0;i<poseRepeater.count;++i)result.push(poseRepeater.objectAt(i).diagnostics()); return result }
     function controlPositions() {
-        var result={}; var items={record:recordButton,activate:activateButton,load:loadButton,live:liveButton,pause:pauseButton,check:checkButton,timeline:timeline}
-        for(var key in items) { var item=items[key];var p=item.mapToItem(null,item.width/2,item.height/2);result[key]={x:p.x,y:p.y,enabled:item.enabled} }
+        var result={}; var items={scene:scenePanel,cameraDock:cameraDock,record:recordButton,activate:activateButton,load:loadButton,live:liveButton,pause:pauseButton,check:checkButton,timeline:timeline}
+        for(var key in items) { var item=items[key];var p=item.mapToItem(null,item.width/2,item.height/2);result[key]={x:p.x,y:p.y,width:item.width,height:item.height,enabled:item.enabled} }
         return result
     }
     function videoDiagnostics() { var result=[]; allVideos(function(v){result.push(v.diagnostics())}); return result }
@@ -60,18 +61,27 @@ ApplicationWindow {
                 Button { text: "全屏"; onClicked: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
             }
         }
-        RowLayout {
-            Layout.fillWidth: true; Layout.fillHeight: true; spacing: 12
-            ColumnLayout {
-                Layout.preferredWidth: dashboard.playback ? root.width * 0.38 : Math.max(280, root.width * 0.20)
-                Layout.maximumWidth: Layout.preferredWidth; Layout.minimumWidth: 280
-                Layout.fillHeight: true; spacing: 10
+        GridLayout {
+            id: workspace
+            Layout.fillWidth: true; Layout.fillHeight: true
+            columns: dashboard.playback ? 1 : 2
+            rowSpacing: 12; columnSpacing: 12
+            GridLayout {
+                id: cameraDock
+                Layout.row: dashboard.playback ? 1 : 0; Layout.column: 0
+                Layout.preferredWidth: dashboard.playback ? -1 : Math.max(280, Math.min(360, root.width * 0.24))
+                Layout.maximumWidth: dashboard.playback ? Infinity : Layout.preferredWidth
+                Layout.minimumWidth: 0
+                Layout.preferredHeight: dashboard.playback ? (workspace.height-workspace.rowSpacing)*0.44 : -1
+                Layout.fillWidth: dashboard.playback; Layout.fillHeight: true
+                columns: dashboard.playback ? Math.max(1, cameraRepeater.count) : 1
+                rowSpacing: 10; columnSpacing: 12
                 Repeater {
                     id: cameraRepeater; model: dashboard.cameras
                     delegate: Rectangle {
                         id: cameraCard; required property var modelData
                         property alias player: video
-                        Layout.fillWidth: true; Layout.fillHeight: true; color: "#fffaf0"; radius: 9
+                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 1; color: "#fffaf0"; radius: 9
                         Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: cameraCard.modelData.label; font.bold: true; color: "#514b3e" }
                         Label { id: cameraStatus; anchors.top: cameraTitle.bottom; anchors.left: parent.left; anchors.margins: 10; text: video.status; elide: Text.ElideRight; width: parent.width-90; font.pixelSize: 11; color: "#84775f" }
                         Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " fps"; color: "#a27723"; font.bold: true }
@@ -85,7 +95,10 @@ ApplicationWindow {
                 Label { visible: cameraRepeater.count===0; text: "等待相机列表…"; color: "#776d5a" }
             }
             Rectangle {
-                Layout.minimumWidth: 500; Layout.fillHeight: true; Layout.fillWidth: true; color: "#f6efdf"; radius: 10
+                id: scenePanel
+                Layout.row: 0; Layout.column: dashboard.playback ? 0 : 1
+                Layout.preferredHeight: dashboard.playback ? (workspace.height-workspace.rowSpacing)*0.56 : -1
+                Layout.minimumWidth: 0; Layout.fillHeight: true; Layout.fillWidth: true; color: "#f6efdf"; radius: 10
                 ColumnLayout {
                     anchors.fill: parent; spacing: 0
                     RowLayout {
@@ -95,7 +108,7 @@ ApplicationWindow {
                         Item { Layout.fillWidth: true }
                         CheckBox { text: "保留轨迹"; checked: dashboard.keepTrail; onToggled: dashboard.keepTrail = checked }
                         Button { text: "清轨迹"; onClicked: dashboard.command("clear") }
-                        Button { text: "复位视角"; onClicked: { root.yaw=-25;root.pitch=-22;root.distance=300;orbit.position=Qt.vector3d(0,60,0) } }
+                        Button { text: "复位视角"; onClicked: { root.yaw=90-1.2*180/Math.PI;root.pitch=1.1*180/Math.PI-90;root.distance=580;orbit.position=Qt.vector3d(0,90,0) } }
                     }
                     Item {
                         Layout.fillWidth: true; Layout.fillHeight: true
@@ -103,8 +116,8 @@ ApplicationWindow {
                             id: view; anchors.fill: parent
                             environment: SceneEnvironment { clearColor: "#eee7d5"; backgroundMode: SceneEnvironment.Color; antialiasingMode: SceneEnvironment.NoAA }
                             Node {
-                                id: orbit; position: Qt.vector3d(0,60,0); eulerRotation: Qt.vector3d(root.pitch,root.yaw,0)
-                                PerspectiveCamera { id: camera; z: root.distance; clipNear: 1; clipFar: 8000 }
+                                id: orbit; position: Qt.vector3d(0,90,0); eulerRotation: Qt.vector3d(root.pitch,root.yaw,0)
+                                PerspectiveCamera { id: camera; z: root.distance; fieldOfView: 0.8 * 180 / Math.PI; clipNear: 1; clipFar: 8000 }
                             }
                             camera: camera
                             DirectionalLight { eulerRotation.x: -45; eulerRotation.y: -25; brightness: 1.2; ambientColor: "#8d8d8d" }
@@ -123,7 +136,7 @@ ApplicationWindow {
                                 id: poseRepeater; model: dashboard.poses
                                 delegate: Node {
                                     id: poseRoot; required property var modelData
-                                    function diagnostics() { return {name:modelData.name, status:avatar.status, error:avatar.errorString, boundsMin:[avatar.bounds.minimum.x,avatar.bounds.minimum.y,avatar.bounds.minimum.z], boundsMax:[avatar.bounds.maximum.x,avatar.bounds.maximum.y,avatar.bounds.maximum.z], position:[modelData.position.x,modelData.position.y,modelData.position.z], scale:modelData.modelScale} }
+                                    function diagnostics() { return {name:modelData.name, status:avatar.status, error:avatar.errorString, boundsMin:[avatar.bounds.minimum.x,avatar.bounds.minimum.y,avatar.bounds.minimum.z], boundsMax:[avatar.bounds.maximum.x,avatar.bounds.maximum.y,avatar.bounds.maximum.z], position:[modelData.position.x,modelData.position.y,modelData.position.z], scale:modelData.modelScale, rotation:[modelData.rotation.x,modelData.rotation.y,modelData.rotation.z,modelData.rotation.scalar], modelRotation:[modelData.modelRotation.x,modelData.modelRotation.y,modelData.modelRotation.z,modelData.modelRotation.scalar]} }
                                     Model {
                                         geometry: poseRoot.modelData.trail
                                         visible: poseRoot.modelData.trailEnabled && poseRoot.modelData.pointCount > 1

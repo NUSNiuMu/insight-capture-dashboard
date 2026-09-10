@@ -55,6 +55,14 @@ native_dashboard/run.sh --fps 30 --quit-after 60 --diagnostics /tmp/insight-nati
 
 参考：[NVIDIA Accelerated GStreamer](https://docs.nvidia.com/jetson/archives/r36.4.3/DeveloperGuide/SD/Multimedia/AcceleratedGstreamer.html)、[GstVideoOverlay](https://gstreamer.freedesktop.org/documentation/video/gstvideooverlay.html)、[Qt RuntimeLoader](https://doc.qt.io/qt-6/qml-qtquick3d-assetutils-runtimeloader.html)。
 
+## 2026-09-10 模型朝向与空间布局对齐
+
+- 修复模型局部朝向：Babylon 在左手场景加载 GLB 时反射 X 轴，Qt 场景相对网页反射 Z 轴，两者差异需要在配置旋转之后补一个局部 Y 轴 180° 旋转。后端姿态与轨迹坐标转换保持一致。
+- 实时采用左侧三路视频竖排、右侧 3D，视频栏宽度按网页的 24% 并限制在 280–360 像素；回放采用上方 3D（56%）、下方三路视频横排（44%）。默认观察方向、目标高度、距离和视场角与网页一致。
+- 对照仓库实际 Babylon 运行库，验证三轴姿态、复合模型配置旋转和三个局部方向向量，最大误差 `2.14e-7`。隔离后端验证三模型加载、三路 MP4 实际解码、布局比例、暂停/跳转/继续/返回实时，客户端正常退出。
+- 现场只读验证三路真实视频持续输出、三模型加载和各 300 点轨迹，输出端丢弃均为 0；截图检查布局通过。更新后的 Qt 客户端已启动，未操作现场录制或地图。
+- 可复核脚本、诊断与截图：`~/workspaces/insight_capture_tests/qt_layout_20260910/`。
+
 ## 2026-09-10 轨迹与延迟验证
 
 在同一 Qt 客户端中用默认 DPB / 低延迟两种配置各运行 25 秒。以下为稳定阶段诊断窗口内最近 120 个匹配帧的解码器输入→输出耗时中位数；不是相机到屏幕的总延迟。

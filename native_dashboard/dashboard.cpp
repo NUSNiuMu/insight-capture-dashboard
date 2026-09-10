@@ -246,7 +246,10 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         p->modelScale = d["avatar_scale"].toDouble(1) * 20;
         p->modelOffset = basis(vector(d["avatar_offset_xyz"].toArray())) * 100;
         auto r = vector(d["avatar_rotation_deg_xyz"].toArray());
-        p->modelRotation = QQuaternion::fromEulerAngles(-r.x(), -r.y(), r.z());
+        // Babylon's left-handed glTF loader reflects X; our scene reflects Z.
+        // Their difference is a local Y half-turn, after the configured rotation.
+        p->modelRotation = QQuaternion::fromEulerAngles(-r.x(), -r.y(), r.z()) *
+                           QQuaternion::fromAxisAndAngle(0, 1, 0, 180);
         if (d["gripper_opening"].isDouble())
             p->opening = qBound(0.0, d["gripper_opening"].toDouble(), 1.0);
         cacheModel(p, d);
