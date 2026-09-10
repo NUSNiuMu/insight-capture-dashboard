@@ -16,10 +16,10 @@ if [[ -n "${INSIGHT_NATIVE_BUILD_CONTAINER:-}" ]]; then
     docker exec "$INSIGHT_NATIVE_BUILD_CONTAINER" python3 /src/native_dashboard/export_runtime.py /src/.native-build/qt-runtime.tar
     docker exec "$INSIGHT_NATIVE_BUILD_CONTAINER" chown -R "$(id -u):$(id -g)" /src/.native-build
 else
-    docker build -t insight-qt-builder:jammy -f "$native_dir/Dockerfile.build" "$native_dir"
-    docker run --rm -v "$checkout_dir:/src" -v "$build_dir:/src/.native-build" insight-qt-builder:jammy \
+    docker build --network host -t insight-qt-builder:jammy -f "$native_dir/Dockerfile.build" "$native_dir"
+    docker run --rm --network host -v "$checkout_dir:/src" -v "$build_dir:/src/.native-build" insight-qt-builder:jammy \
         bash -c 'cmake -S /src/native_dashboard -B /src/.native-build -DCMAKE_BUILD_TYPE=Release && cmake --build /src/.native-build -j2 && python3 /src/native_dashboard/export_runtime.py /src/.native-build/qt-runtime.tar'
-    docker run --rm -v "$build_dir:/out" insight-qt-builder:jammy chown -R "$(id -u):$(id -g)" /out
+    docker run --rm --network host -v "$build_dir:/out" insight-qt-builder:jammy chown -R "$(id -u):$(id -g)" /out
 fi
 mkdir -p "$build_dir/runtime"
 tar -xf "$build_dir/qt-runtime.tar" -C "$build_dir/runtime"

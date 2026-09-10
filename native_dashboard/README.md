@@ -16,6 +16,8 @@ Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬
 
 构建需要 Docker 和本机 Jetson Multimedia API 头文件。Qt 在独立 Ubuntu 22.04 构建容器内安装，运行库导出到 `.native-build/runtime`；运行时使用宿主机已有的 NVIDIA/GStreamer 驱动，避免替换 JetPack 多媒体栈。非标准 SDK 目录可通过 `JETSON_MM_HEADERS` 指定。
 
+构建和临时容器使用 host 网络，避免 Jetson 内核缺少 `iptables raw` 表时默认 Docker bridge 无法创建；无需修改系统防火墙。
+
 `--server` 可以指定后端地址；WebRTC 端口使用相机 API 返回值，媒体连接仍需要 ICE 可达。当前客户端使用 Jetson 专用解码器，尚未适配普通 PC。
 
 `--fps 25` / `--fps 30` 设置预览目标，也可在界面顶部切换。它控制服务端请求目标，不保证最终显示率。
