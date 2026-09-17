@@ -57,9 +57,12 @@ class NativeVideo : public QQuickItem {
     void fail(const QString &message);
     void send(const QJsonObject &message);
     static void incomingPad(GstElement *, GstPad *, gpointer);
+    static void boundJitterBuffer(GstBin *, GstBin *, GstElement *, gpointer);
+    static void latestFrameOverrun(GstElement *, gpointer);
     static void iceCandidate(GstElement *, guint, gchar *, gpointer);
     static void answerCreated(GstPromise *, gpointer);
     static GstPadProbeReturn decodeTiming(GstPad *, GstPadProbeInfo *, gpointer);
+    static GstPadProbeReturn sinkTiming(GstPad *, GstPadProbeInfo *, gpointer);
     QString m_name, m_status = "未连接";
     QUrl m_endpoint, m_media;
     QPointer<QWindow> m_surface;
@@ -71,6 +74,10 @@ class NativeVideo : public QQuickItem {
     bool m_complete = false, m_stopping = false, m_paused = false;
     int m_fps = 25;
     std::atomic<int> m_generation{0};
+    std::atomic<quint64> m_latestFrameDrops{0};
+    std::atomic<int> m_boundedJitterBuffers{0};
+    std::atomic<double> m_sinkPtsAgeMs{-1};
+    std::atomic<quint64> m_expiredFrameDrops{0};
     quint64 m_lastRendered = 0, m_rendered = 0, m_dropped = 0;
     qint64 m_lastPoll = 0, m_lastProgress = 0;
     double m_renderedFps = 0, m_position = 0;
