@@ -19,6 +19,8 @@ p { margin: 2mm 0; }
 .intro { color: #54666e; font-size: 11pt; }
 .note { border-left: 3px solid #278c81; background: #edf6f4; padding: 2.5mm 3.5mm; margin: 3mm 0; }
 .warning { border-color: #b37524; background: #faf3e7; }
+.hardware-warning { color: #b42318; border-color: #b42318; background: #fff0ee; font-weight: 700; }
+.hardware-warning-text { color: #b42318; font-weight: 700; }
 table { width: 100%; border-collapse: collapse; margin: 3mm 0; font-size: 9.5pt; line-height: 1.55; }
 th { text-align: left; background: #edf2f4; font-weight: 700; }
 td, th { padding: 2.2mm 2.6mm; border-bottom: 1px solid #dce3e5; vertical-align: top; }
@@ -47,13 +49,16 @@ a { color: #286d68; text-decoration: none; }
 <h1>网页版前端<br>使用手册</h1>
 <p class="intro">在 Jetson 的显示器、键盘和鼠标上完成预览、采集、回放与数据导出。</p>
 <div class="note"><strong>适用范围：</strong>任务管理、三路视频和统一空间轨迹、录制回放、质量检查、数据导出与系统设置。全部操作在 Jetson 本机完成，不使用 SSH 转发或远程预览。</div>
+<div class="note hardware-warning">
+<p>重要：Insight 相机上电顺序与 USB 断连恢复</p>
+<p>设备启动时：先连接三路相机的 USB 线，等待 Jetson 开机完成，再插上电池上的 12V 相机供电线。</p>
+<p>由于 Insight 产品限制，USB 线松动或掉落后，仅重新插上 USB 线不会恢复相机发现。必须先接好 USB 线，再将电池上的 12V 相机供电插头拔下并重新插入，相机才会重新被发现。</p>
+</div>
 <h3>启动网页版：在 Jetson 桌面的终端执行</h3>
 <pre>cd /home/nvidia/insight-capture-dashboard
 ./scripts/run_dashboard.sh --jetson</pre>
-<p>此命令启动后端并打开 Jetson 显示器上的 <strong>Firefox 全屏窗口</strong>，不是无头浏览器；默认进入任务页。点击 <strong>Spatial review</strong> 查看视频和空间视图。已有后端时，可直接在本机浏览器打开：</p>
-<pre>http://127.0.0.1:8765/3d</pre>
-<h3>开机准备</h3>
-<ol><li>接好 Jetson 的电源、显示器、键盘鼠标，连接 Insight3 A、Insight3 B 和 Insight9。</li><li>连接录制盘并确认可用空间；在 Recorder 中核对实际保存位置。</li><li>启动网页，确认三路画面持续更新；按第 10 页完成统一坐标系和采集检查，再开始正式采集。</li></ol>
+<h3>采集准备</h3>
+<ol><li>按上方红色提示完成设备连接和上电，确认三路相机被发现。</li><li>连接录制盘并确认可用空间；在 Recorder 中核对实际保存位置。</li><li>启动网页，确认三路画面持续更新；按第 10 页完成统一坐标系和采集检查，再开始正式采集。</li></ol>
 <table><tr><th>当前设备角色</th><th>用途</th></tr><tr><td>Insight3 A / Right hand</td><td>右手夹爪相机</td></tr><tr><td>Insight3 B / Left hand</td><td>左手夹爪相机</td></tr><tr><td>Insight9 / Head</td><td>头部相机与公共地图参考</td></tr></table>
 <h3>开始前与退出时</h3>
 <p>连接相机和录制盘，确认实际保存位置与剩余空间。已有服务时不要反复运行启动脚本，它可能重启后端。录制结束后先等待停止与保存完成，再关闭前端。</p>
@@ -216,7 +221,7 @@ a { color: #286d68; text-decoration: none; }
 <table class="compact">
 <tr><th>遇到的现象</th><th>先做什么</th></tr>
 <tr><td>网页打不开 / 连接中断</td><td>在 Jetson 本机确认后端已启动，使用 127.0.0.1:8765；不要使用 SSH 隧道。</td></tr>
-<tr><td>stale、黑屏或一直协商</td><td>检查相机供电/连接和新鲜图像。视频和姿态是不同数据流，单凭“在线”无法判断。</td></tr>
+<tr><td>stale、黑屏或一直协商</td><td><span class="hardware-warning-text">USB 松脱后：先接好 USB，再拔下并重插电池上的 12V 相机供电插头；仅重插 USB 无效。</span>随后确认三路画面持续更新。</td></tr>
 <tr><td>有视频，没有模型或轨迹</td><td>检查建图、手部定位和 Trail 勾选状态；先等待输入与定位就绪，不盲目反复 New map。</td></tr>
 <tr><td>预览卡顿 / FPS 低</td><td>使用启动脚本配套的 Firefox，关闭重复视频页面及重型处理任务。预览流畅度与录制丢帧分开检查。</td></tr>
 <tr><td>找不到录制 / 导出失败</td><td>刷新并切到 All directories，检查实际盘和路径；查看失败原因、fail_ 文件名与结果路径。</td></tr>
