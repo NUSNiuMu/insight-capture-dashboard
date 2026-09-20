@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Insight · Jetson 网页版前端使用手册</title>
+<style>
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #213039; background: #e5e9eb; font: 10pt/1.55 "Noto Sans CJK SC", sans-serif; letter-spacing: 0; }
+.page { width: 210mm; height: 297mm; padding: 15mm 17mm 17mm; margin: 8mm auto; background: white; position: relative; break-after: page; overflow: hidden; }
+.page:last-child { break-after: auto; }
+.brand { color: #286d68; font-size: 9pt; font-weight: 700; border-bottom: 1px solid #cedbdd; padding-bottom: 3mm; margin-bottom: 4mm; }
+.eyebrow { color: #286d68; font-size: 10pt; font-weight: 700; margin: 0; }
+h1 { font-size: 29pt; line-height: 1.3; margin: 3mm 0 5mm; }
+h2 { font-size: 21pt; line-height: 1.3; margin: 0 0 4mm; }
+h3 { font-size: 12.5pt; margin: 4mm 0 1.5mm; }
+p { margin: 2mm 0; }
+.intro { color: #54666e; font-size: 11pt; }
+.note { border-left: 3px solid #278c81; background: #edf6f4; padding: 2.5mm 3.5mm; margin: 3mm 0; }
+.warning { border-color: #b37524; background: #faf3e7; }
+table { width: 100%; border-collapse: collapse; margin: 3mm 0; font-size: 9.5pt; line-height: 1.55; }
+th { text-align: left; background: #edf2f4; font-weight: 700; }
+td, th { padding: 2.2mm 2.6mm; border-bottom: 1px solid #dce3e5; vertical-align: top; }
+td:first-child { width: 31%; font-weight: 600; }
+ol, ul { margin: 2mm 0; padding-left: 6mm; }
+li { margin: 1.5mm 0; }
+pre { margin: 2mm 0 3mm; background: #eef2f4; padding: 3mm; border-radius: 3px; font: 9pt/1.7 "DejaVu Sans Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+code { font: 9pt "DejaVu Sans Mono", monospace; overflow-wrap: anywhere; }
+figure { margin: 3mm 0; }
+figure img { display: block; width: auto; max-width: 100%; max-height: 80mm; margin: auto; border: 1px solid #dce3e5; }
+.page:nth-of-type(3) figure img, .page:nth-of-type(5) figure img, .page:nth-of-type(8) figure img { max-height: 105mm; }
+.page:nth-of-type(4) figure img { max-height: 95mm; }
+figcaption, .small { color: #607078; font-size: 8.5pt; line-height: 1.55; }
+figcaption { padding-top: 1.5mm; }
+.compact { font-size: 9.5pt; line-height: 1.45; }
+.compact td, .compact th { padding: 1.7mm 2.5mm; }
+.footer { position: absolute; bottom: 9mm; left: 17mm; right: 17mm; border-top: 1px solid #dce3e5; padding-top: 2mm; display: flex; justify-content: space-between; color: #708087; font-size: 8pt; }
+a { color: #286d68; text-decoration: none; }
+@media print { body { background: white; } .page { margin: 0; } }
+</style>
+</head>
+<body>
+<section class="page">
+<div class="brand">INSIGHT / 操作手册 / JETSON LOCAL</div>
+<p class="eyebrow">网页版 · Jetson 本地使用</p>
+<h1>网页版前端<br>使用手册</h1>
+<p class="intro">在 Jetson 的显示器、键盘和鼠标上完成预览、采集、回放与数据导出。</p>
+<div class="note"><strong>适用范围：</strong>任务管理、三路视频和统一空间轨迹、录制回放、质量检查、数据导出与系统设置。全部操作在 Jetson 本机完成，不使用 SSH 转发或远程预览。</div>
+<h3>启动网页版：在 Jetson 桌面的终端执行</h3>
+<pre>cd /home/nvidia/insight-capture-dashboard
+./scripts/run_dashboard.sh --jetson</pre>
+<p>此命令启动后端并打开 Jetson 显示器上的 <strong>Firefox 全屏窗口</strong>，不是无头浏览器；默认进入任务页。点击 <strong>Spatial review</strong> 查看视频和空间视图。已有后端时，可直接在本机浏览器打开：</p>
+<pre>http://127.0.0.1:8765/3d</pre>
+<h3>开机准备</h3>
+<ol><li>接好 Jetson 的电源、显示器、键盘鼠标，连接 Insight3 A、Insight3 B 和 Insight9。</li><li>连接录制盘并确认可用空间；在 Recorder 中核对实际保存位置。</li><li>启动网页，确认三路画面持续更新；按第 10 页完成统一坐标系和采集检查，再开始正式采集。</li></ol>
+<table><tr><th>当前设备角色</th><th>用途</th></tr><tr><td>Insight3 A / Right hand</td><td>右手夹爪相机</td></tr><tr><td>Insight3 B / Left hand</td><td>左手夹爪相机</td></tr><tr><td>Insight9 / Head</td><td>头部相机与公共地图参考</td></tr></table>
+<h3>开始前与退出时</h3>
+<p>连接相机和录制盘，确认实际保存位置与剩余空间。已有服务时不要反复运行启动脚本，它可能重启后端。录制结束后先等待停止与保存完成，再关闭前端。</p>
+<p>只关闭网页窗口不会停止后端录制。收工时先点击 <strong>Stop</strong> 并确认保存，再结束任务、关闭浏览器；确认没有写入后才卸载录制盘或关机。</p>
+<div class="footer"><span>2026-09-20 · 当前工作区核对版</span><span>01 / 10</span></div>
+</section>
+
+<section class="page">
+<div class="brand">INSIGHT / WEB / NAVIGATION</div>
+<h2>页面入口与完整流程</h2>
+<p class="intro">通过左侧导航切换功能。在空间页，侧栏缩写对应同一组入口，鼠标悬停可查看名称。</p>
+<table>
+<tr><th>页面 / 空间页缩写</th><th>用途与路径</th></tr>
+<tr><td>Sessions / SE</td><td>创建、编辑和进入任务，查看 take 与快速质检。<br><code>/</code> · 第 4 页</td></tr>
+<tr><td>Spatial review / 3D</td><td>三路视频、空间轨迹、建图、采集检查及回放。<br><code>/3d</code> · 第 3、6、10 页</td></tr>
+<tr><td>Rosbags / BG</td><td>查看录制完整性、大小、缓存状态与删除。<br><code>/bags</code> · 第 6 页</td></tr>
+<tr><td>Datasets / DS</td><td>LeRobot / UMI 数据集导出。<br><code>/umi-dataset</code> · 第 7 页</td></tr>
+<tr><td>Scoring / SC</td><td>VIO 轨迹质量评分。<br><code>/scoring</code> · 第 8 页</td></tr>
+<tr><td>Hand pose / HP</td><td>离线人手关键点重建与结果回放。<br><code>/handpose</code> · 第 8 页</td></tr>
+<tr><td>Optimization / OP</td><td>VIO 与 COLMAP 轨迹对齐。<br><code>/optimization</code> · 第 8 页</td></tr>
+<tr><td>Recorder / RC</td><td>存储目录、话题选择、录制启停和日志。<br><code>/recording</code> · 第 5 页</td></tr>
+<tr><td>Settings / ST</td><td>音量、夹爪跟踪和定位遮罩。<br><code>/settings</code> · 第 9 页</td></tr>
+</table>
+<h3>一批数据的操作顺序</h3>
+<p><strong>进入任务 → 确认三路在线 → 统一坐标 → 录制 → 停止保存 → 质检/回放 → 导出。</strong></p>
+<p>每条动作采集后检查是否完整，结束当天采集后再执行批量回放准备、导出或优化，避免重型任务影响实时采集。</p>
+<div class="note">文件“存在”、视频“能播放”、轨迹“有显示”分别证明不同事情；以完整性、定位质量和动作内容共同决定数据是否可用。</div>
+<p class="small">核对日期：2026-09-20。内容来自当前工作区前端与启动脚本，7 张插图均为本次在 Jetson 上新截取的实际页面，没有复用旧截图。已有任务和录制名称是当时页面内容；本次未新建录制、删除数据或运行导出。</p>
+<div class="footer"><span>所有地址均使用本机 127.0.0.1:8765</span><span>02 / 10</span></div>
+</section>
+
+<section class="page">
+<div class="brand">INSIGHT / WEB / SPATIAL REVIEW</div>
+<h2>网页版：视频、轨迹与建图</h2>
+<p class="intro"><code>http://127.0.0.1:8765/3d</code> · 左栏三路视频，右侧空间视图，上方回放和建图控制。</p>
+<figure><img src="frontend-manual/web-live.png" alt="三路视频实时在线的网页版空间视图"><figcaption>2026-09-20 本机 Firefox 新截图：3/3 streams online，三路视频均为 live。当前两只手仍在 waiting、地图确认点不足，说明“视频在线”尚不等于“空间对齐成功”；请按第 10 页继续定位。</figcaption></figure>
+<ol>
+<li><strong>看视频：</strong>确认每路画面更新且标记为 live；stale 表示没有新鲜图像。相机标题栏的方框可放大，减号可收起。</li>
+<li><strong>看定位：</strong>读取 Global sparse mapping 和每路定位状态，等待头部建图、手部定位可用；再检查模型位置、方向和轨迹是否连续。</li>
+<li><strong>调整视图：</strong>在空间区拖动旋转，右键拖动平移，滚轮缩放。图例中的 Trail 控制对应轨迹。</li>
+<li><strong>采集检查：</strong>将两只手部相机放回规定工位，头部相机观察已建图区域，点击 <strong>Check episode</strong>，按显示原因处理未通过项。</li>
+</ol>
+<table class="compact">
+<tr><th>按钮</th><th>含义与使用时机</th></tr>
+<tr><td>Keep trail</td><td>保留并持续累积当前显示轨迹，适合观察较长动作。</td></tr>
+<tr><td>Clear trail</td><td>清空轨迹历史，不重新建立地图；会影响共享后端的轨迹显示。</td></tr>
+<tr><td>New map</td><td>换场地或明确需要重新建图时使用。停止录制和回放，确认重置，再缓慢观察场景、等待重新定位。</td></tr>
+</table>
+<div class="note warning">有视频不等于有定位；侧栏 “System online”、底部连接提示也不证明全部相机和建图正常。三相机统一坐标系的完整操作见第 10 页，正式录制前必须确认对齐。</div>
+<div class="footer"><span>视频预览帧率与录制完整性分开检查</span><span>03 / 10</span></div>
+</section>
+
+<section class="page">
+<div class="brand">INSIGHT / WEB / SESSIONS</div>
+<h2>任务管理与采集顺序</h2>
+<p class="intro">左侧 <strong>Sessions</strong> · <code>http://127.0.0.1:8765/</code></p>
+<figure><img src="frontend-manual/sessions.png" alt="本次任务管理页"><figcaption>任务页显示任务定义、当前任务统计与 take 列表。截图中的已有录制仅用于展示当前列表，不作为本次新录制或性能测试。</figcaption></figure>
+<ol>
+<li><strong>创建：</strong>点 <strong>New task</strong>，填写 Task ID、Display name 和 Task instruction；需要时补充 Chinese voice name、Capture profile，点 <strong>Create task</strong>。</li>
+<li><strong>进入：</strong>选择任务，点 <strong>Enter task set</strong>，核对标题、Folder 和 Next take。仅切换下拉选项不等于进入该任务。</li>
+<li><strong>录制：</strong>在 Recorder 中开始、停止，每次启停形成一条 take；同一任务可多次采集。</li>
+<li><strong>复核：</strong>回到 Sessions 点 <strong>Refresh</strong>，检查最新 take 的 Quick QC、异常数量和 Decision；点 <strong>Open rosbag</strong> 进入空间回放。</li>
+<li><strong>结束：</strong>停止录制后点 <strong>End current</strong> 并确认；已录制数据保留。下次可重新进入该任务。</li>
+</ol>
+<table class="compact">
+<tr><th>项目</th><th>注意事项</th></tr>
+<tr><td>Task ID / Edit</td><td>ID 使用小写字母、数字、下划线或连字符，创建后固定；显示名与任务描述通过 Edit 修改。</td></tr>
+<tr><td>pass / suspect / pending</td><td>快速检查通过 / 需要复核 / 尚无结论。通过不等于动作符合任务要求，仍需人工看回放。</td></tr>
+<tr><td>rejected</td><td>已作废。当前任务页展示结果，没有逐条批量审核或作废按钮；不要用录制库 Delete 代替标记作废。</td></tr>
+</table>
+<div class="note"><strong>日常最短流程：</strong>进入任务 → 检查视频、定位、存储 → 录一条 → 停止并等待保存 → 看 Quick QC 与回放 → Check episode → 下一条；结束当天采集后再做批量后处理。</div>
+<div class="footer"><span>任务描述应写清机器人需要完成的动作</span><span>04 / 10</span></div>
+</section>
+
+<section class="page">
+<div class="brand">INSIGHT / WEB / RECORDER</div>
+<h2>录制与保存</h2>
+<p class="intro">左侧 <strong>Recorder / Recording</strong> · <code>http://127.0.0.1:8765/recording</code></p>
+<figure><img src="frontend-manual/recording.png" alt="本次 Recorder 页面"><figcaption>录制页包含存储位置、名称、话题选择、启停按钮和实时日志。本次只查看页面，没有新建录制。</figcaption></figure>
+<ol>
+<li><strong>确认任务与磁盘：</strong>检查当前任务、disk 剩余空间和 Recording directory。出现备用存储提示时，数据可能写入 Jetson 内置盘，而不是 USB 盘。</li>
+<li><strong>选择目录：</strong>点 <strong>Browse...</strong>，打开可用目录；用 <strong>Up</strong> 返回上级，点 <strong>Use this folder</strong> 确认。界面路径是后端看到的位置。</li>
+<li><strong>核对话题：</strong>点 <strong>Refresh topics</strong>；展开 ROS topics 分组，保留采集需要的图像、位姿和 IMU。按组或逐条勾选；日常使用默认选择，勿随意取消必要话题。</li>
+<li><strong>开始：</strong>Session name 可留空自动命名；点 <strong>Start capture</strong>。确认状态变为录制中、出现输出路径，再执行动作。</li>
+<li><strong>停止：</strong>点 <strong>Stop</strong>，等待状态回到 idle，查看 Recorder log 与最新录制结果；确认保存完成后再拔盘或关机。</li>
+</ol>
+<div class="note warning">按钮报错或采集检查不通过时，按提示修复缺失输入、定位、任务或存储问题，不要把“已点击开始”当成录制成功。采集中不切换任务、不重建地图、不重启后端。</div>
+<h3>保持采集稳定</h3>
+<p>使用一个页面负责录制启停，关闭重复的视频预览标签页。切换网页不等于停止录制；判断是否录制以 Recorder 状态为准。离线导出、优化和批量回放准备安排在停止采集后。</p>
+<div class="footer"><span>停止录制后，确认落盘再退出</span><span>05 / 10</span></div>
+</section>
+
+<section class="page">
+<div class="brand">INSIGHT / WEB / PLAYBACK</div>
+<h2>录制库与回放</h2>
+<p class="intro">左侧 <strong>Rosbags</strong> · <code>http://127.0.0.1:8765/bags</code></p>
+<figure><img src="frontend-manual/bags.png" alt="本次 Rosbags 录制库"><figcaption>录制库用于查看文件规模、完整性和回放缓存状态；回放从 Spatial review 的录制选择框进入。</figcaption></figure>
+<table class="compact">
+<tr><th>录制库控件 / 标签</th><th>含义</th></tr>
+<tr><td>Refresh index</td><td>重新读取列表；All directories 查看所有已登记目录，Current recording directory 只看当前录制目录。</td></tr>
+<tr><td>complete / incomplete / unverified</td><td>完整性检查通过 / 未通过 / 尚未验证；与回放是否已准备是两项不同检查。</td></tr>
+<tr><td>scored / unscored</td><td>是否已有轨迹评分；评分入口是 Scoring。</td></tr>
+<tr><td>ready / pending</td><td>回放媒体已准备 / 尚待准备。首次回放可能需要转换并显示进度。</td></tr>
+<tr><td>Delete</td><td>确认后永久删除该录制目录。备份并核对路径后再执行，不能用来代替“作废”。</td></tr>
+</table>
+<h3>网页版回放</h3>
+<p>进入 <strong>Spatial review</strong> → 上方选录制 → <strong>Play</strong> → 等待准备完成。准备时查看百分比与阶段；<strong>Prepare all</strong> 可在录制空闲时排队补齐回放缓存。回放过程中查看视频与随时间展开的轨迹；<strong>Stop</strong> 停止，<strong>Go live</strong> 返回实时。</p>
+<div class="note warning">当前网页没有统一的暂停/拖动时间轴控件。录制中不切换回放，回放中不开始新录制；先停止当前操作并返回实时。</div>
+<div class="note">检查三件事：三路视频内容和时间是否对应；模型/轨迹是否连续、方向合理；动作是否完整且符合任务。回放能播放不代表录制质量合格。</div>
+<div class="footer"><span>准备失败先看页面错误，不连续重复提交</span><span>06 / 10</span></div>
+</section>
+
+<section class="page">
+<div class="brand">INSIGHT / WEB / DATASETS</div>
+<h2>导出训练数据</h2>
+<p class="intro">左侧 <strong>Datasets</strong> · <code>http://127.0.0.1:8765/umi-dataset</code></p>
+<figure><img src="frontend-manual/datasets.png" alt="本次数据集导出页"><figcaption>先选择已复核的录制，再配置格式和任务指令。导出结果保存在设备上，页面显示实际输出目录。</figcaption></figure>
+<table class="compact">
+<tr><th>字段</th><th>怎么选</th></tr>
+<tr><td>Select rosbags</td><td>勾选录制；Select all 全选当前候选列表。先排除动作错误、缺流或需要复核的数据。</td></tr>
+<tr><td>Dataset format</td><td>通常选 LeRobot v3；需要旧版夹爪 Zarr 数据时选 Legacy UMI。</td></tr>
+<tr><td>Task instruction</td><td>LeRobot 必填，填写本批数据的动作指令，例如 “Fold the towel in half”。不同任务分开导出。</td></tr>
+<tr><td>Gripper capture layout</td><td>Single arm A = 右手；Single arm B = 左手；Bimanual = 双手 + 头部。按实际采集配置选择。</td></tr>
+<tr><td>Episode segmentation</td><td>通常一包一条 episode；长录制可选 Auto-split，按稳定停顿自动拆分夹爪片段。</td></tr>
+<tr><td>Image resolution</td><td>Original 保留原尺寸；224 或 384 使用固定下部区域裁剪。此设置用于夹爪路线，按训练要求选择。</td></tr>
+</table>
+<p>点 <strong>Inspect and build LeRobot dataset</strong>（旧格式为 <strong>Build UMI outputs</strong>），等待检测、推理、编码及打包。LeRobot 自动检查夹爪标记：有标记走夹爪路线，无标记走头部相机的人手姿态推理路线，后者保留三视角原图。</p>
+<p>完成后逐项核对成功数、episode 数、帧数和输出路径。常见目录为 <code>outputs/lerobot_datasets/</code> 或 <code>outputs/umi_datasets/</code>，以页面结果为准；显示 100% 仍可能有部分失败。</p>
+<div class="note warning">失败项可能保留原数据并加上 <code>fail_</code> 前缀，随后不再出现在正常候选列表。先读取失败原因和实际路径，再决定处理或重试。</div>
+<div class="footer"><span>导出完成不等于数据已适合训练，仍须检查结果</span><span>07 / 10</span></div>
+</section>
+
+<section class="page">
+<div class="brand">INSIGHT / WEB / ANALYSIS</div>
+<h2>评分、手部重建与轨迹优化</h2>
+<p class="intro">这些是录制后的可选工具。先完成现场采集，再安排较重的处理任务。</p>
+<h3>Scoring：轨迹评分 · <code>/scoring</code></h3>
+<ol><li>选择 Rosbag；Pose topic 留空自动检测，或填写实际带协方差的位姿话题。</li><li>点 <strong>Run analysis</strong>，查看结果。缺少相应话题时按错误提示更换录制或话题。</li></ol>
+<p>评分衡量 VIO 协方差相关质量，不能代替回放中的动作正确性、全局定位或图像完整性检查。</p>
+<h3>Hand pose：离线手部重建 · <code>/handpose</code></h3>
+<figure><img src="frontend-manual/handpose.png" alt="本次 Hand pose 页面"><figcaption>当前手部重建页。运行能力以页面检测结果为准；未配置模型或运行环境时不能执行提取。</figcaption></figure>
+<ol><li>选择 Rosbag，确认能力检测可用，点 <strong>Extract hand pose</strong>。观察帧数、进度和日志；需要终止时点 <strong>Stop</strong>。</li><li>完成后在 3D viewer 中 <strong>Play</strong>，拖动时间轴；拖动旋转、滚轮缩放，选择关键点查看坐标。</li><li>已有结果从 <strong>Saved result → Load result</strong> 打开；有 <strong>Open preview</strong> 时可打开预览。结果位于 <code>outputs/handpose</code>。</li></ol>
+<h3>Optimization：轨迹优化 · <code>/optimization</code></h3>
+<p>选择 Rosbag → Camera → 实际存在的 Image stream（color compressed / color raw / infra 1 / infra 2）→ 可填写 Run name → <strong>Run optimization</strong>。查看进度与日志，必要时 <strong>Stop</strong>；完成后比较 VIO 与 COLMAP 对齐轨迹。已有任务从 <strong>Saved run → Load trajectory</strong> 载入，<strong>View log</strong> 查看日志。</p>
+<div class="footer"><span>所有入口均在网页版左侧导航中</span><span>08 / 10</span></div>
+</section>
+
+<section class="page">
+<div class="brand">INSIGHT / WEB / SETTINGS</div>
+<h2>设置与常见问题</h2>
+<p class="intro">左侧 <strong>Settings</strong> · <code>http://127.0.0.1:8765/settings</code></p>
+<figure><img src="frontend-manual/settings.png" alt="本次 Settings 页面"><figcaption>本次设置页。当前语音服务不可用，音量控件禁用；可用选项随相机配置变化。</figcaption></figure>
+<table class="compact">
+<tr><th>设置</th><th>操作</th></tr>
+<tr><td>Speaker volume</td><td>拖动 0–100 音量条，Play sample 试听。不可用时先检查语音服务与扬声器。</td></tr>
+<tr><td>Gripper tracking</td><td>按相机启停夹爪跟踪；若有 Hand landmark overlay，可控制手部关键点叠加。</td></tr>
+<tr><td>Gripper mask height ratio</td><td>屏蔽 Insight3 图像底部区域参与定位的比例；0.2 表示底部 20%，0 表示不屏蔽。修改后点 Save。</td></tr>
+<tr><td>Restart backend</td><td>仅在页面提示需要重启时使用；先停止录制和回放，保存工作，再重启并等待重新连接。</td></tr>
+</table>
+<table class="compact">
+<tr><th>遇到的现象</th><th>先做什么</th></tr>
+<tr><td>网页打不开 / 连接中断</td><td>在 Jetson 本机确认后端已启动，使用 127.0.0.1:8765；不要使用 SSH 隧道。</td></tr>
+<tr><td>stale、黑屏或一直协商</td><td>检查相机供电/连接和新鲜图像。视频和姿态是不同数据流，单凭“在线”无法判断。</td></tr>
+<tr><td>有视频，没有模型或轨迹</td><td>检查建图、手部定位和 Trail 勾选状态；先等待输入与定位就绪，不盲目反复 New map。</td></tr>
+<tr><td>预览卡顿 / FPS 低</td><td>使用启动脚本配套的 Firefox，关闭重复视频页面及重型处理任务。预览流畅度与录制丢帧分开检查。</td></tr>
+<tr><td>找不到录制 / 导出失败</td><td>刷新并切到 All directories，检查实际盘和路径；查看失败原因、fail_ 文件名与结果路径。</td></tr>
+</table>
+<div class="footer"><span>先读具体错误，再决定是否重启</span><span>09 / 10</span></div>
+</section>
+
+<section class="page">
+<div class="brand">INSIGHT / THREE-CAMERA ALIGNMENT</div>
+<h2>让三个相机处于同一空间坐标系</h2>
+<div class="note"><strong>头部 Insight9 建立公共地图，左右 Insight3 定位到这张地图。</strong>三路各自的原始 VIO 起点并不相同，即使原始消息都写着 world，也不代表已经对齐。网页展示的是后端统一后的全局位姿。</div>
+<h3>1. 准备共同可见的静态工作区</h3>
+<p>确认 A、B、Insight9 三路视频持续更新，镜头无遮挡。选光照稳定、纹理丰富的桌面和周围背景，避免纯白墙、反光面和大面积运动物体。相机、夹爪及标记块的固定安装和外参应已完成配置；拆装后先重新标定，不能靠拖动 3D 视图修正。</p>
+<h3>2. 用 Insight9 建立参考地图</h3>
+<p>打开网页 <strong>Spatial review</strong>。新场地需要新会话时，先停录制和回放，再点 <strong>New map</strong> 并确认；已有可用地图无需重置。缓慢移动、转动头部相机，从不同角度观察同一片工作区，适当平移产生视差，等待关键帧与地图点增长。</p>
+<h3>3. 让左右手部相机完成全局定位</h3>
+<p>分别让 A、B 的视野覆盖 Insight9 已看过的静态区域，缓慢调整位置和角度，避免模糊与遮挡；保持几帧稳定，等待系统匹配自然特征并确认定位。不要只把三个相机摆在一起却让它们朝向不同区域。</p>
+<p><strong>带标记块的夹爪：</strong>当前 Jetson 配置也支持头部相机观察夹爪立方体辅助定位。右手 A 的标记为 8/9/10/11，左手 B 为 2/3/4/5；让头部彩色画面清楚看到每个立方体的<strong>至少两个不同平面</strong>（如顶面和侧面）。只看到一个正面标记不会用于实际坐标修正，头部全局位姿也必须先有效。</p>
+<h3>4. 确认“对齐成功”，再开始采集</h3>
+<table class="compact">
+<tr><th>必须核对</th><th>通过标准</th></tr>
+<tr><td>数据在线</td><td>三路视频都实时更新，VIO 持续输入；没有 stale。</td></tr>
+<tr><td>全局定位</td><td>Insight9 建图在线，A/B 不再是 waiting / unlocalized；三角色在同一空间视图显示且随实体移动。</td></tr>
+<tr><td>物理一致性</td><td>左右不互换，模型的相对位置与朝向符合现场；缓慢移动一只手，另一只不随之漂移，回到原位置时轨迹合理。</td></tr>
+<tr><td>采集检查</td><td>双手相机回到固定工位、头部重看已建图区域，点 Check episode；处理未通过原因后再采集。</td></tr>
+</table>
+<h3>坐标是怎样统一的</h3>
+<p class="compact">公共世界系为 <code>insight9_map</code>。系统为每只手估计“局部 VIO → 公共地图”的变换，再结合相机安装外参输出全局位姿：<strong>公共地图 → 手部局部 VIO → 手部相机中心</strong>。标记辅助路径为：<strong>公共地图 → 头部相机 → 夹爪标记块 → 手部相机中心</strong>。TCP/指尖还需独立的相机中心到 TCP 外参，不能与相机中心混用。</p>
+<p class="small">短暂离开地图区域时可能进入 vio_only，表示用上次校正继续跟踪，需重新观察已建图区域校正漂移。New map 会清除当前对齐并开始新会话，各次重建不保证同一原点。旋转/复位观察视角只改变显示，不改变三相机的标定关系。</p>
+<div class="footer"><span>Insight · Jetson 网页版前端使用手册</span><span>10 / 10</span></div>
+</section>
+</body>
+</html>
