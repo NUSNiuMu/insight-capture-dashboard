@@ -774,6 +774,11 @@ input[type="range"] {
   max-height: 380px;
   overflow: auto;
 }
+.segment-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 .segment-row {
   display: flex;
   gap: 10px;

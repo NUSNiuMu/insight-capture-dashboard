@@ -110,7 +110,7 @@ function updateControls() {
     actionBusy || exportBusy || !status || status?.reconfiguring;
   $("stop").disabled = actionBusy;
   $("play").disabled = !review;
-  for (const id of ["prevFrame", "nextFrame", "qc", "save", "add"])
+  for (const id of ["prevFrame", "nextFrame", "qc", "save", "add", "autoSegment"])
     $(id).disabled = !review || reviewBusy;
   $("sessions").disabled = reviewBusy || exportBusy;
   for (const id of ["from", "to", "task", "hands"]) $(id).disabled = reviewBusy;
@@ -937,6 +937,35 @@ bind("save", async () => {
     installReview(data);
     seek(t);
     notice("标注已保存");
+  } finally {
+    reviewBusy = false;
+    updateControls();
+  }
+});
+bind("autoSegment", async () => {
+  if (!review) throw Error("请先选择一条已停止的录制");
+  if (editorDirty) throw Error("请先添加或更新正在编辑的片段，再自动分段");
+  reviewBusy = true;
+  updateControls();
+  try {
+    const suggestions = await api(base() + "/segments/auto");
+    const previous = parts;
+    parts = suggestions;
+    setDirty(true);
+    resetEditor();
+    renderParts();
+    notice(
+      `已按双臂静止检测生成 ${suggestions.length} 个片段草稿，请逐段填写任务文本后保存；保存前可撤销。`,
+    );
+    const undo = el("button", "撤销自动分段", "quiet");
+    undo.type = "button";
+    undo.onclick = () => {
+      parts = previous;
+      setDirty(true);
+      renderParts();
+      notice("已撤销自动分段");
+    };
+    $("message").append(undo);
   } finally {
     reviewBusy = false;
     updateControls();

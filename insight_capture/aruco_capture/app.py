@@ -11,7 +11,14 @@ from pathlib import Path
 from aiohttp import web
 
 from .capture import Capture, write_json
-from .dataset import align, connect, export, export_runs, validate_segments
+from .dataset import (
+    align,
+    connect,
+    export,
+    export_runs,
+    suggest_pause_segments,
+    validate_segments,
+)
 
 
 def create_app(capture):
@@ -157,6 +164,15 @@ def create_app(capture):
             write_json(path / "segments.json", values)
         return web.json_response(json.loads((path / "segments.json").read_text()))
 
+    async def auto_segments(request):
+        path = session(request)
+
+        def compute():
+            meta, grid, state, video, good, report = align(path)
+            return suggest_pause_segments(grid, state, good, report["fps"])
+
+        return web.json_response(await asyncio.to_thread(compute))
+
     def review_data(path, include_samples):
         meta, grid, state, video, good, report = align(path)
         parts = json.loads((path / "segments.json").read_text())
@@ -241,6 +257,7 @@ def create_app(capture):
             web.get("/api/sessions/{name}/frame/{stream}", frame),
             web.get("/api/sessions/{name}/segments", segments),
             web.post("/api/sessions/{name}/segments", segments),
+            web.get("/api/sessions/{name}/segments/auto", auto_segments),
             web.get("/api/sessions/{name}/qc", qc),
             web.get("/api/sessions/{name}/review", review),
             web.post("/api/sessions/{name}/export", dataset),

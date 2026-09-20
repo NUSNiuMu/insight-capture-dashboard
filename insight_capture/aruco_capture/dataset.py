@@ -1,6 +1,7 @@
 """Uniform-grid QC and strict contiguous LeRobot v3 export."""
 
 import json
+import math
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -17,7 +18,18 @@ from insight_capture.postprocess.datasets.lerobot import (
     _video_feature,
     _write_tasks,
 )
+from insight_capture.runtime.mapping.geometry import rotation_distance_deg
 from .capture import write_json
+
+# Ported from the auto_pause episode splitter in
+# insight_capture/legacy/umi_zarr.py: a hand is "idle" once its linear,
+# angular and gripper speed all sit below these thresholds.
+DEFAULT_IDLE_DURATION_S = 0.8
+DEFAULT_IDLE_LINEAR_SPEED_M_S = 0.02
+DEFAULT_IDLE_ANGULAR_SPEED_DEG_S = 10.0
+DEFAULT_IDLE_GRIPPER_SPEED_M_S = 0.005
+DEFAULT_IDLE_GAP_TOLERANCE_S = 0.15
+DEFAULT_MINIMUM_SEGMENT_DURATION_S = 1.0
 
 
 def connect(path):
@@ -173,6 +185,102 @@ def validate_segments(segments, duration):
         if item.get("hands", "both") not in ("left", "right", "both"):
             raise ValueError("参与手臂须为 left、right 或 both")
         previous = end
+
+
+def _rotation_matrix_from_6d(row01):
+    row0, row1 = row01[:3], row01[3:6]
+    return np.array([row0, row1, np.cross(row0, row1)])
+
+
+def suggest_pause_segments(
+    grid,
+    state,
+    good,
+    fps,
+    *,
+    idle_duration_s=DEFAULT_IDLE_DURATION_S,
+    idle_linear_speed_m_s=DEFAULT_IDLE_LINEAR_SPEED_M_S,
+    idle_angular_speed_deg_s=DEFAULT_IDLE_ANGULAR_SPEED_DEG_S,
+    idle_gripper_speed_m_s=DEFAULT_IDLE_GRIPPER_SPEED_M_S,
+    idle_gap_tolerance_s=DEFAULT_IDLE_GAP_TOLERANCE_S,
+    minimum_duration_s=DEFAULT_MINIMUM_SEGMENT_DURATION_S,
+):
+    """建议以双臂静止时刻为界的片段草稿，供人工标注前预填任务文本。
+
+    静止检测移植自 main 分支 `insight_capture/legacy/umi_zarr.py` 的
+    `auto_pause` episode 切分：双臂线速度、角速度、开合速度同时低于阈值
+    并持续 `idle_duration_s` 以上时视为一次停顿，在停顿区间中点切一刀。
+    只在 `good`（双臂位姿、开合度与全部视频同时有效）的相邻帧之间判断
+    静止，缺失或跳变数据不会被误判为停顿。返回的片段 `task` 留空，
+    必须由人工填写后才能通过 `validate_segments` 保存。
+    """
+    frame_count = len(grid)
+    if frame_count < 2:
+        return []
+    stationary = np.ones(frame_count - 1, dtype=bool)
+    stationary &= good[:-1] & good[1:]
+    for offset in (0, 10):
+        position = state[:, offset : offset + 3].astype(np.float64)
+        rotation = np.stack(
+            [_rotation_matrix_from_6d(row) for row in state[:, offset + 3 : offset + 9]]
+        )
+        opening = state[:, offset + 9].astype(np.float64)
+        linear_speed = np.linalg.norm(np.diff(position, axis=0), axis=1) * fps
+        angular_speed = (
+            np.array(
+                [
+                    rotation_distance_deg(rotation[i], rotation[i + 1])
+                    for i in range(frame_count - 1)
+                ]
+            )
+            * fps
+        )
+        gripper_speed = np.abs(np.diff(opening)) * fps
+        stationary &= linear_speed <= idle_linear_speed_m_s
+        stationary &= angular_speed <= idle_angular_speed_deg_s
+        stationary &= gripper_speed <= idle_gripper_speed_m_s
+
+    maximum_gap_intervals = int(math.floor(idle_gap_tolerance_s * fps))
+    moving_padded = np.concatenate(([False], ~stationary, [False])).astype(np.int8)
+    moving_changes = np.flatnonzero(np.diff(moving_padded)).reshape(-1, 2)
+    for start, end in moving_changes:
+        if end - start <= maximum_gap_intervals and start > 0 and end < len(stationary):
+            stationary[start:end] = True
+
+    minimum_idle_intervals = max(1, int(math.ceil(idle_duration_s * fps)))
+    minimum_frames = max(1, int(math.ceil(minimum_duration_s * fps)))
+    padded = np.concatenate(([False], stationary, [False])).astype(np.int8)
+    changes = np.flatnonzero(np.diff(padded)).reshape(-1, 2)
+    cuts, previous_cut = [], 0
+    for start, end in changes:
+        interval_count = int(end - start)
+        if interval_count < minimum_idle_intervals or start == 0 or end == len(stationary):
+            continue
+        cut = int((start + end + 1) // 2)
+        if cut - previous_cut < minimum_frames or frame_count - cut < minimum_frames:
+            continue
+        cuts.append(cut)
+        previous_cut = cut
+
+    boundaries = [0, *cuts, frame_count]
+    segments = []
+    for start_index, end_index in zip(boundaries[:-1], boundaries[1:]):
+        if end_index <= start_index:
+            continue
+        end_s = (
+            float(grid[end_index])
+            if end_index < frame_count
+            else float(grid[-1]) + 1.0 / fps
+        )
+        segments.append(
+            {
+                "start_s": float(grid[start_index]),
+                "end_s": end_s,
+                "task": "",
+                "hands": "both",
+            }
+        )
+    return segments
 
 
 def export(path):
