@@ -13,6 +13,8 @@ from typing import Optional
 class ParticipantWatchdog:
     def __init__(self, owner) -> None:
         self.owner = owner
+        self._last_wait_reason = ""
+        self._last_wait_warning_at = 0.0
 
     def _any_ros_data_received(self) -> bool:
         # Capture Mode intentionally leaves latest_camera_frames empty. Probe
@@ -63,14 +65,17 @@ class ParticipantWatchdog:
             sock.close()
         return False
 
-    def _restart_for_stale_participant(self, reason: str) -> None:
-        # Fast DDS needs a process restart to discover links added after startup.
-        if os.path.exists("/.dockerenv"):
-            self.owner.get_logger().error(
-                f"{reason} -- exiting so the container restart policy recreates the DDS participant."
-            )
-            os._exit(1)
-        self.owner.get_logger().warning(f"{reason} -- restart this process to recover.")
+    def _warn_waiting_for_camera_data(self, reason: str) -> None:
+        # A missing camera is not a process failure. Exiting also kills the kiosk
+        # and interrupts other cameras; keep DDS readers alive for rediscovery.
+        now = time.monotonic()
+        if reason == self._last_wait_reason and now - self._last_wait_warning_at < 60.0:
+            return
+        self._last_wait_reason = reason
+        self._last_wait_warning_at = now
+        self.owner.get_logger().warning(
+            f"{reason} -- keeping the backend running and waiting for camera data."
+        )
 
     def _recording_active(self) -> bool:
         manager = self.owner.recording_manager
@@ -82,10 +87,11 @@ class ParticipantWatchdog:
             return False
 
     def _stale_participant_watchdog_loop(self) -> None:
-        # Recover both boot-time link races and runtime camera-link drops.
+        # Observe boot-time link races and runtime camera-link drops without
+        # turning an upstream outage into a backend/container restart.
         link_grace_sec = 60.0
         poll_sec = 5.0
-        # Keep restart grace well above the UI stale threshold.
+        # Keep warning grace well above the UI stale threshold.
         camera_stall_grace_sec = 15.0
         link_up_since: Optional[float] = None
         while True:
@@ -107,9 +113,8 @@ class ParticipantWatchdog:
                     continue
                 if now - link_up_since < link_grace_sec:
                     continue
-                self.owner._restart_for_stale_participant(
-                    "Camera link up for 60s but no ROS data ever received -- DDS participant "
-                    "likely predates the camera links"
+                self._warn_waiting_for_camera_data(
+                    "Camera link up for 60s but no ROS data received"
                 )
                 link_up_since = now
                 continue
@@ -121,16 +126,20 @@ class ParticipantWatchdog:
                 continue
 
             if not self.owner._camera_link_up():
-                # Avoid restart loops on camera-less playback machines.
+                # The page already reports stale cameras while links are absent.
                 continue
 
             for camera in self.owner.cameras:
                 last_seen = self._camera_last_seen(camera.name)
                 if last_seen <= 0.0 or now - last_seen <= camera_stall_grace_sec:
                     continue
-                self.owner._restart_for_stale_participant(
+                self._warn_waiting_for_camera_data(
                     f"Camera '{camera.name}' produced no image, pose, or native VIO for over "
                     f"{camera_stall_grace_sec:.0f}s after previously streaming "
                     "(likely a USB/link drop)"
                 )
                 break
+            else:
+                if self._last_wait_reason:
+                    self.owner.get_logger().info("Camera data resumed; backend remained running.")
+                    self._last_wait_reason = ""

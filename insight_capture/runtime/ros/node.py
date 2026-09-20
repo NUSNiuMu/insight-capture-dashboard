@@ -458,10 +458,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         return ParticipantWatchdog._camera_link_up()
 
 
-    def _restart_for_stale_participant(self, reason: str) -> None:
-        self._participant_watchdog._restart_for_stale_participant(reason)
-
-
     def _recording_active(self) -> bool:
         return self._participant_watchdog._recording_active()
 
