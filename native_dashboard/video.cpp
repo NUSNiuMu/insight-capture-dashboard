@@ -128,6 +128,8 @@ void NativeVideo::stop() {
     m_bus = nullptr;
     m_renderedFps = 0;
     m_rendered = m_dropped = m_lastRendered = 0;
+    m_latestFrameDrops = 0;
+    m_boundedJitterBuffers = 0;
     {
         QMutexLocker lock(&m_timingMutex);
         m_decodeStarts.clear();
@@ -146,8 +148,12 @@ void NativeVideo::start() {
                               ? QByteArray("nveglglessink")
                               : QByteArray("nv3dsink");
     // Live H.264 has no B frames; DPB buffering otherwise adds hundreds of milliseconds.
-    const char *decode = "queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! rtph264depay ! "
+    // Drop only decoded frames here: dropping arbitrary H.264 packets breaks reference frames.
+    const char *decode = "queue max-size-buffers=3 max-size-bytes=0 max-size-time=0 ! "
+                         "rtph264depay request-keyframe=true wait-for-keyframe=true ! "
+                         "video/x-h264,alignment=au ! "
                          "h264parse ! nvv4l2decoder name=hardwareDecoder disable-dpb=true enable-max-performance=true ! "
+                         "queue name=latestFrame max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream ! "
                          "nv3dsink name=display sync=false qos=false enable-last-sample=false";
     if (m_media.isEmpty()) {
         m_pipeline = gst_pipeline_new(nullptr);
@@ -166,10 +172,14 @@ void NativeVideo::start() {
             return;
         }
         g_object_set(peer, "bundle-policy", GST_WEBRTC_BUNDLE_POLICY_MAX_BUNDLE, "latency", 50, nullptr);
+        g_signal_connect(peer, "deep-element-added", G_CALLBACK(boundJitterBuffer), this);
         gst_bin_add_many(GST_BIN(m_pipeline), peer, m_decode, nullptr);
         m_peer = GST_ELEMENT(gst_object_ref(peer));
         g_signal_connect(peer, "pad-added", G_CALLBACK(incomingPad), this);
         g_signal_connect(peer, "on-ice-candidate", G_CALLBACK(iceCandidate), this);
+        auto *latest = gst_bin_get_by_name(GST_BIN(m_decode), "latestFrame");
+        g_signal_connect(latest, "overrun", G_CALLBACK(latestFrameOverrun), this);
+        gst_object_unref(latest);
     } else {
         m_pipeline = gst_parse_launch(
             QByteArray("uridecodebin name=input caps=video/x-h264 ! queue ! h264parse config-interval=-1 ! "
@@ -322,6 +332,17 @@ void NativeVideo::incomingPad(GstElement *, GstPad *pad, gpointer user) {
         gst_pad_link(pad, sink);
     gst_object_unref(sink);
 }
+void NativeVideo::boundJitterBuffer(GstBin *, GstBin *, GstElement *element, gpointer user) {
+    auto *factory = gst_element_get_factory(element);
+    if (!factory || g_strcmp0(gst_plugin_feature_get_name(GST_PLUGIN_FEATURE(factory)), "rtpjitterbuffer"))
+        return;
+    // A latency target alone does not bound backlog when downstream is stalled.
+    g_object_set(element, "latency", 50u, "drop-on-latency", TRUE, nullptr);
+    ++static_cast<NativeVideo *>(user)->m_boundedJitterBuffers;
+}
+void NativeVideo::latestFrameOverrun(GstElement *, gpointer user) {
+    ++static_cast<NativeVideo *>(user)->m_latestFrameDrops;
+}
 void NativeVideo::iceCandidate(GstElement *, guint index, gchar *candidate, gpointer user) {
     auto *self = static_cast<NativeVideo *>(user);
     QString text = QString::fromUtf8(candidate);
@@ -441,6 +462,8 @@ QVariantMap NativeVideo::diagnostics() const {
             {"decode_p95_ms", timings.isEmpty() ? -1.0 : timings[qMin(timings.size() - 1, timings.size() * 95 / 100)]},
             {"rendered", qulonglong(m_rendered)},
             {"dropped", qulonglong(m_dropped)},
+            {"latest_frame_drops", qulonglong(m_latestFrameDrops.load())},
+            {"bounded_jitter_buffers", m_boundedJitterBuffers.load()},
             {"sink_fps", m_renderedFps},
             {"status", m_status},
             {"media", m_media.toString()},
