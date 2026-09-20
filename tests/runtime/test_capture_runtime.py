@@ -53,6 +53,7 @@ class CaptureRuntimeTest(unittest.TestCase):
     def test_node_close_releases_owned_media_resources(self):
         calls = []
         node = SimpleNamespace(
+            _participant_watchdog=SimpleNamespace(close=lambda: calls.append("watchdog")),
             _preview_manager=SimpleNamespace(close=lambda: calls.append("preview")),
             stop_webrtc_worker=lambda: calls.append("webrtc"),
             stop_hand_overlay_worker=lambda: calls.append("hand_overlay"),
@@ -60,7 +61,7 @@ class CaptureRuntimeTest(unittest.TestCase):
 
         PoseBridgeNode.close(node)
 
-        self.assertEqual(calls, ["preview", "webrtc", "hand_overlay"])
+        self.assertEqual(calls, ["watchdog", "preview", "webrtc", "hand_overlay"])
 
     def test_pose_payload_keeps_configured_3d_model(self):
         with tempfile.TemporaryDirectory() as temporary:

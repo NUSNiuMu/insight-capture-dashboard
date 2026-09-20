@@ -125,14 +125,6 @@ wait_for_backend_health() {
     done
 }
 
-# At least one up interface carrying a 169.254.x.x address -- the per-camera
-# point-to-point USB-ethernet links (see scripts/reboot_cameras.sh). Present
-# means a camera is physically connected, whether or not data is flowing yet.
-camera_links_present() {
-    ip -4 -o addr show up 2>/dev/null \
-        | awk '$2 != "lo" && $2 !~ /^docker/ && $4 ~ /^169\.254\./ {found=1} END {exit !found}'
-}
-
 all_cameras_live() {
     curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
         | python3 -c '
@@ -164,54 +156,28 @@ log "Waiting for backend to become healthy on :${PORT}..."
 wait_for_backend_health
 log "Backend is up."
 
-# Wait for ROS data; restarting recreates DDS after late USB links appear.
+# The backend repairs discovery on recreated USB links without a restart.
 ALL_LIVE_WAIT_SEC="${INSIGHT_ALL_LIVE_WAIT_SEC:-30}"
-ALL_LIVE_MAX_RESTARTS="${INSIGHT_ALL_LIVE_MAX_RESTARTS:-3}"
 log "Waiting for all cameras to report live data..."
-data_restarts=0
-while true; do
-    data_deadline=$(( $(date +%s) + ALL_LIVE_WAIT_SEC ))
-    all_live=false
-    next_progress=$(( $(date +%s) + 5 ))
-    while (( $(date +%s) <= data_deadline )); do
-        if all_cameras_live; then
-            all_live=true
-            break
-        fi
-        if (( $(date +%s) >= next_progress )); then
-            log "  still waiting, stale: $(stale_camera_names)"
-            next_progress=$(( $(date +%s) + 5 ))
-        fi
-        sleep 1
-    done
-    if [[ "${all_live}" == "true" ]]; then
-        log "All cameras are live."
+data_deadline=$(( $(date +%s) + ALL_LIVE_WAIT_SEC ))
+all_live=false
+next_progress=$(( $(date +%s) + 5 ))
+while (( $(date +%s) <= data_deadline )); do
+    if all_cameras_live; then
+        all_live=true
         break
     fi
-    if ! camera_links_present; then
-        # No camera USB-ethernet link exists at all (e.g. a dev machine
-        # with no cameras attached) -- restarting can't conjure data.
-        log "WARNING: no camera links present and not all cameras live (stale: $(stale_camera_names)) -- continuing anyway."
-        break
+    if (( $(date +%s) >= next_progress )); then
+        log "  still waiting, stale: $(stale_camera_names)"
+        next_progress=$(( $(date +%s) + 5 ))
     fi
-    if [[ "${in_container}" == "true" ]]; then
-        log "WARNING: not all cameras live (stale: $(stale_camera_names)) and no docker CLI in-container to restart the backend -- continuing anyway."
-        break
-    fi
-    if (( data_restarts >= ALL_LIVE_MAX_RESTARTS )); then
-        log "WARNING: not all cameras live after ${ALL_LIVE_MAX_RESTARTS} backend restart(s) (stale: $(stale_camera_names)) -- continuing anyway."
-        log "         If a stale camera answers HTTP but its interface shows no traffic, its stream is wedged -- reboot it: curl -X POST http://<camera-ip>/api/reboot"
-        break
-    fi
-    if recording_is_active; then
-        log "A recording started while waiting for camera data -- not restarting the backend."
-        break
-    fi
-    data_restarts=$(( data_restarts + 1 ))
-    log "Not all cameras live within ${ALL_LIVE_WAIT_SEC}s (stale: $(stale_camera_names)) -- restarting backend to recreate the DDS participant (attempt ${data_restarts}/${ALL_LIVE_MAX_RESTARTS})..."
-    docker compose restart insight-dashboard
-    wait_for_backend_health
+    sleep 1
 done
+if [[ "${all_live}" == "true" ]]; then
+    log "All cameras are live."
+else
+    log "WARNING: cameras still waiting (stale: $(stale_camera_names)); keeping backend running and opening the frontend. Recovery continues in the background."
+fi
 
 if [[ "${jetson_mode}" == "true" ]]; then
     log "Launching on-device kiosk window..."

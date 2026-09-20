@@ -6,8 +6,11 @@ import fcntl
 import os
 import socket
 import struct
+import threading
 import time
 from typing import Optional
+
+from insight_capture.runtime.discovery import DiscoveryMemberships
 
 
 class ParticipantWatchdog:
@@ -15,6 +18,18 @@ class ParticipantWatchdog:
         self.owner = owner
         self._last_wait_reason = ""
         self._last_wait_warning_at = 0.0
+        self._closed = threading.Event()
+        self._discovery: Optional[DiscoveryMemberships] = None
+
+    def enable_discovery_recovery(self, rmw_identifier: str) -> None:
+        # This workaround relies on Linux's default Fast DDS UDPv4 transport.
+        if rmw_identifier in {"rmw_fastrtps_cpp", "rmw_fastrtps_dynamic_cpp"}:
+            self._discovery = DiscoveryMemberships(self.owner.get_logger())
+
+    def close(self) -> None:
+        self._closed.set()
+        if self._discovery is not None:
+            self._discovery.close()
 
     def _any_ros_data_received(self) -> bool:
         # Capture Mode intentionally leaves latest_camera_frames empty. Probe
@@ -94,8 +109,14 @@ class ParticipantWatchdog:
         # Keep warning grace well above the UI stale threshold.
         camera_stall_grace_sec = 15.0
         link_up_since: Optional[float] = None
-        while True:
+        while not self._closed.is_set():
             time.sleep(poll_sec)
+            if self._closed.is_set():
+                return
+            if self._discovery is not None:
+                # Membership repair does not touch readers or recording state,
+                # and must also run while recording or replaying a bag.
+                self._discovery.refresh()
             now = time.monotonic()
 
             if getattr(self.owner, "_playback_mode", False):

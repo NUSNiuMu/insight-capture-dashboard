@@ -21,9 +21,9 @@
   均有实际 payload，探针沿用 Dashboard 默认 RMW，正式 MCAP recorder 仍使用 CycloneDDS；
   相机 raw-only 模式会主动停止 Dashboard 的 rectified preview 和依赖它的全局定位，
   因此校准预检、录制中 QC 都不得使用这两条路径判离线；participant watchdog 以每台相机
-  的原生 `vio_100hz` 作为轻量链路存活信号，只有图像、展示 Pose 与原生 VIO 全部停止才重启；
-  `run_dashboard.sh` 的 DDS 恢复循环也必须复用该 raw-only 判定，并在每次重启前重新查询
-  录制状态，不能只在脚本刚启动时检查一次，否则稍后开始的校准录制仍会被 SIGTERM 中断；
+  的原生 `vio_100hz` 作为轻量链路存活信号；图像、展示 Pose 与原生 VIO 全部停止只警告等待，
+  不退出后端。`run_dashboard.sh` 复用 raw-only 判定，相机等待超时后照常打开前端，
+  不因缺少相机反复重启；手动启动时加载代码的重启仍需先检查录制状态；
   “宸境”只打开 OpenClaw 模式，随后一句固定发送给 OpenClaw。自动停止接口只允许结束
   `looper_record_*` 或当前标记为 `vio_calibration` 的录制，避免误停网页、
   手势或其他控制器创建的录制。
@@ -134,6 +134,27 @@
   跳变前后各自稳定、切段后满足最短 episode 且双臂公共坐标关系可重新确认时，才能丢弃
   边界保护帧并按段重锚；短时振荡、多次米级跳变或仅单臂全局 Pose 失配应保留原 bag，
   改用本地 VIO 加稳健的 map-to-VIO 对齐离线重建，无法验证时必须重录。
+
+## USB 重连与 DDS 发现
+
+- Linux 删除 USB CDC-NCM 网卡时会丢失该接口上的多播成员关系；同名、同 IP 的新网卡
+  具有新的 ifindex。仅保留旧 Fast DDS participant 等待，不能保证重新发现相机。
+- `runtime/discovery.py` 在 watchdog 每 5 秒轮询时识别已启用多播的 CDC-NCM 链路本地
+  IPv4 接口，按名称、ifindex、地址维护默认 DDS 发现组 `239.255.0.1`。辅助 socket
+  不绑定端口、不收发图像；利用 Linux 默认 `IP_MULTICAST_ALL=1` 使旧 Fast DDS
+  通配接收 socket 重新收到发现流量。接口消失、地址变化和关闭时释放旧成员关系，失败限频
+  记录并重试；录制和回放期间也可执行，不重建 ROS reader 或容器。
+- 此路径仅为 `rmw_fastrtps_cpp` / `rmw_fastrtps_dynamic_cpp` 启用，针对默认 UDPv4
+  多播发现。自定义发现组、关闭多播、严格按 socket 过滤成员关系或修改 IP 的 DDS locator
+  不在此次恢复保证内；`camera_dds_type` 不代表后端实际使用的 RMW。
+- 2026-09-20 隔离网络验证：连续三次网卡重建后旧 UDP socket 均恢复；两个隔离容器内，
+  真实 Fast DDS 接收进程在 ifindex 从 2 变 3 后停止接收，新发布进程启动 12 秒仍无数据，
+  加入发现组后约 3.5 秒内接收 37 条消息且接收进程未重启。该数字不是相机上电到网页
+  出图的时延承诺，物理设备的 USB/12V 上电条件仍需满足。
+- 同日 Jetson 现场由用户重启全部三路相机：ifindex 从 A/B/Head 的 33/32/34 变为
+  44/45/46，16:49:27 自动重入发现组，16:50:00 采样确认三路真实图像与 VIO 恢复，
+  随后物理显示器 Firefox 三路恢复呈现。期间后端 PID 81790、Firefox PID 82001、
+  容器启动时间均未改变，没有创建额外 ROS 探针；不能用此次上电时长承诺固定恢复秒数。
 
 ## WebRTC 与预览
 

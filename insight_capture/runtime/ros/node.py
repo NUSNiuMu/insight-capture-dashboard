@@ -270,6 +270,9 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             self._create_pose_subscriptions()
             self._create_dashboard_image_subscriptions()
             self._create_hand_overlay_subscriptions()
+            self._participant_watchdog.enable_discovery_recovery(
+                rclpy.get_rmw_implementation_identifier()
+            )
             threading.Thread(
                 target=self._stale_participant_watchdog_loop,
                 daemon=True,
@@ -547,8 +550,9 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         return {"configured_mode": self.runtime_mode, **self._preview_manager.status()}
 
     def close(self) -> None:
-        """Stop node-owned media resources before ROS node destruction."""
+        """Stop node-owned network and media resources before ROS destruction."""
 
+        self._participant_watchdog.close()
         self._preview_manager.close()
         self.stop_webrtc_worker()
         self.stop_hand_overlay_worker()
