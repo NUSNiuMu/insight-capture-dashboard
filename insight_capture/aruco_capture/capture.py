@@ -280,9 +280,22 @@ class Capture:
                     while head is None and time.monotonic() < deadline:
                         time.sleep(0.002)
                         head = self.pose.buffer.lookup(stamp)
+                # Insight9 is mounted rotated; rotate only the copy that gets
+                # recorded/previewed/exported. ArUco pose detection below keeps
+                # decoding the original `value` bytes, so the intrinsics/extrinsic
+                # calibration (tied to the camera's physical, un-rotated frame)
+                # stays valid.
+                display_value = value
+                if kind == "image" and name == "head":
+                    bgr = cv2.imdecode(np.frombuffer(value, np.uint8), cv2.IMREAD_COLOR)
+                    if bgr is not None:
+                        rotated = cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE)
+                        ok, jpeg = cv2.imencode(".jpg", rotated)
+                        if ok:
+                            display_value = jpeg.tobytes()
                 with self.lock:
                     payload = (
-                        value
+                        display_value
                         if kind == "image"
                         else json.dumps(value, allow_nan=False).encode()
                     )
@@ -290,7 +303,7 @@ class Capture:
                     if kind == "gripper":
                         self.grippers[name] = {**value, "received": seconds}
                     if kind == "image":
-                        self.preview[name] = value
+                        self.preview[name] = display_value
                     if kind == "image" and name == "head":
                         if self.history_generation != self.pose.generation:
                             self.history_generation = self.pose.generation
