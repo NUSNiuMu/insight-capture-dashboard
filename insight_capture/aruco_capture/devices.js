@@ -5,6 +5,19 @@ const make = (tag, text, cls) => {
   if (cls) e.className = cls;
   return e;
 };
+function describeCalEntry(e) {
+  if (e.error === "duplicate angle")
+    return `错误：标定角度重复（${e.angle_degree?.toFixed(2)}°）`;
+  if (e.error) return `错误：${e.error}`;
+  if (e.info === "point added")
+    return `第 ${e.index + 1} 点：角度 ${e.angle_degree?.toFixed(2)}° → 开合度 ${e.opening_mm?.toFixed(1)}mm`;
+  if (e.info === "calibration saved") return `标定已保存，共 ${e.points} 点`;
+  if (e.info === "calibration loaded from flash")
+    return `已加载 flash 标定（${e.points} 点）`;
+  if (e.info === "using default calibration")
+    return `使用默认标定（${e.points} 点）`;
+  return e.info || JSON.stringify(e);
+}
 export class DevicePanel {
   constructor(api) {
     this.api = api;
@@ -12,6 +25,10 @@ export class DevicePanel {
     this.status = null;
     this.busy = false;
     this.dirty = false;
+    this.calibrating = {};
+    this.calAfter = {};
+    this.calEntries = {};
+    this.calAngle = {};
     $("scanDevices").onclick = () => this.scan();
     $("devicePanel").addEventListener("toggle", () => {
       if ($("devicePanel").open && !this.data) this.scan();
@@ -142,8 +159,135 @@ export class DevicePanel {
       hl.htmlFor = hands.id;
       extra.append(label, baud, hl, hands);
       d.append(extra);
+      d.append(this.calibrationPanel(i));
       $("deviceFields").append(d);
     }
+  }
+  calibrationPanel(i) {
+    const panel = make("div", undefined, "cal-panel"),
+      title = make("strong", "夹爪标定"),
+      start = make("button", "开始标定"),
+      openingLabel = make("label", "开合度 (mm)"),
+      opening = make("input"),
+      record = make("button", "记录点"),
+      restart = make("button", "重新标定"),
+      angle = make("span", "—", "cal-angle"),
+      log = make("div", undefined, "cal-log");
+    opening.type = "number";
+    opening.step = "10";
+    start.type = "button";
+    record.type = "button";
+    restart.type = "button";
+    start.onclick = () =>
+      this.calibrating[i] ? this.endCalibration(i) : this.startCalibration(i);
+    record.onclick = () => this.recordPoint(i, Number(opening.value));
+    restart.onclick = () => this.restartCalibration(i);
+    const row = make("div", undefined, "cal-row");
+    row.append(openingLabel, opening, record, restart, angle);
+    panel.append(title, start, row, log);
+    panel.dataset.cal = i;
+    this.renderCalibrationState(i, panel);
+    return panel;
+  }
+  renderCalibrationState(i, panel) {
+    panel ??= document.querySelector(`.cal-panel[data-cal="${i}"]`);
+    if (!panel) return;
+    const active = !!this.calibrating[i];
+    const [start, row, log] = [
+      panel.children[1],
+      panel.children[2],
+      panel.children[3],
+    ];
+    const locked = this.busy || !!this.status?.recording;
+    start.disabled = locked;
+    start.textContent = active ? "退出标定并保存" : "开始标定";
+    for (const el of row.querySelectorAll("input,button"))
+      el.disabled = !active || locked;
+    row.querySelector(".cal-angle").textContent = this.calAngle[i]
+      ? `当前角度 ${this.calAngle[i].toFixed(2)}°`
+      : active
+        ? "等待角度读数"
+        : "";
+    const entries = this.calEntries[i] || [];
+    log.replaceChildren(
+      ...entries
+        .slice(-8)
+        .map((e) =>
+          make("div", describeCalEntry(e), e.error ? "cal-log-error" : "cal-log-info"),
+        ),
+    );
+    log.scrollTop = log.scrollHeight;
+  }
+  async startCalibration(i) {
+    this.calibrating[i] = true;
+    this.calAfter[i] = 0;
+    this.calEntries[i] = [];
+    this.calAngle[i] = null;
+    this.renderCalibrationState(i);
+    try {
+      await this.api(`/api/serial/${i}/command`, "POST", {
+        command: "start_cal",
+      });
+      this.pollCalibration(i);
+    } catch (e) {
+      this.calibrating[i] = false;
+      $("deviceMessage").textContent = e.message;
+    }
+    this.renderCalibrationState(i);
+  }
+  async restartCalibration(i) {
+    this.calEntries[i] = [];
+    this.calAngle[i] = null;
+    try {
+      await this.api(`/api/serial/${i}/command`, "POST", {
+        command: "start_cal",
+      });
+    } catch (e) {
+      $("deviceMessage").textContent = e.message;
+    }
+    this.renderCalibrationState(i);
+  }
+  async recordPoint(i, value) {
+    try {
+      await this.api(`/api/serial/${i}/command`, "POST", {
+        command: "opening_mm",
+        value,
+      });
+    } catch (e) {
+      $("deviceMessage").textContent = e.message;
+    }
+  }
+  async endCalibration(i) {
+    try {
+      await this.api(`/api/serial/${i}/command`, "POST", {
+        command: "end_cal",
+      });
+    } catch (e) {
+      $("deviceMessage").textContent = e.message;
+    }
+    // Stays in calibrating state until the log confirms a save (or a
+    // rejection, e.g. too few points) — the firmware keeps calMode on
+    // failure and silently continues using the previous calibration.
+    this.renderCalibrationState(i);
+  }
+  async pollCalibration(i) {
+    if (!this.calibrating[i]) return;
+    try {
+      const r = await this.api(
+        `/api/serial/${i}/log?after=${this.calAfter[i] || 0}`,
+      );
+      if (r.entries.length) {
+        this.calEntries[i] = [...(this.calEntries[i] || []), ...r.entries];
+        this.calAfter[i] = r.entries[r.entries.length - 1].seq;
+        if (r.entries.some((e) => e.info === "calibration saved"))
+          this.calibrating[i] = false;
+      }
+      if (r.angle) this.calAngle[i] = r.angle.angle_degree;
+      this.renderCalibrationState(i);
+    } catch {
+      // Transient poll failures are retried on the next tick.
+    }
+    if (this.calibrating[i]) setTimeout(() => this.pollCalibration(i), 150);
   }
   bindings() {
     const result = { rgb: [], serial: [] };
@@ -187,6 +331,8 @@ export class DevicePanel {
       !this.data;
     for (const e of $("deviceFields").querySelectorAll("input,select"))
       e.disabled = this.busy || !!status?.recording || !status;
+    this.renderCalibrationState(0);
+    this.renderCalibrationState(1);
     $("deviceHint").textContent = status?.recording
       ? "录制中仍会自动重连；更换绑定请先停止录制。"
       : "自动重连已启用。更换设备绑定请先停止录制。";

@@ -4,14 +4,23 @@ const $ = (id) => document.getElementById(id),
   sides = ["left", "right"];
 const names = {
   head: "Insight9 观察相机",
-  rgb_left: "左侧 RGB",
-  rgb_right: "右侧 RGB",
+  rgb_left_up: "左手上侧 RGB",
+  rgb_left_down: "左手下侧 RGB",
+  rgb_right_up: "右手上侧 RGB",
+  rgb_right_down: "右手下侧 RGB",
   left: "左手",
   right: "右手",
   both: "双手",
 };
 const reasonText = {
   marker_not_detected: "未检测到 cube",
+  not_enough_markers_visible: "可见标记数量不足",
+  pnp_solve_failed: "位姿求解失败",
+  low_inlier_ratio: "内点比例过低",
+  insufficient_face_support: "有效标记面不足，几何不稳定",
+  degenerate_geometry: "标记共面/退化，无法求解",
+  depth_out_of_range: "推算深度超出合理范围",
+  reprojection_too_high: "重投影误差过大",
   pose_jump: "位姿跳变，当前帧无效",
   head_vio_reset: "VIO 重置，请重新录制",
   missing_head_pose_or_calibration: "缺少同步 VIO 或标定",
@@ -116,6 +125,8 @@ function updateControls() {
   for (const id of ["from", "to", "task", "hands"]) $(id).disabled = reviewBusy;
   updateExport();
 }
+const FULLSCREEN_ICON =
+  '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
 function videoCards(streams) {
   const key = streams.join("|");
   if (renderedStreams === key) return;
@@ -139,7 +150,8 @@ function videoCards(streams) {
     wrap.append(image, empty);
     const label = el("div", undefined, "video-label");
     label.append(el("strong", title(name)), el("span", "未连接", "video-rate"));
-    const expand = el("button", "⛶", "quiet");
+    const expand = el("button", undefined, "quiet");
+    expand.innerHTML = FULLSCREEN_ICON;
     expand.setAttribute("aria-label", "全屏查看" + title(name));
     expand.dataset.fullscreen = "";
     expand.onclick = () => toggleFullscreen(card);
@@ -149,7 +161,7 @@ function videoCards(streams) {
   }
   $("cameraCount").textContent = `${streams.length} 路视频`;
 }
-async function loadImage(card, url, valid = true) {
+async function loadImage(card, url, valid = true, signal) {
   const img = card.querySelector("img"),
     empty = card.querySelector(".video-empty");
   if (!valid) {
@@ -160,7 +172,7 @@ async function loadImage(card, url, valid = true) {
     return;
   }
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal });
     if (!response.ok) throw Error();
     const object = URL.createObjectURL(await response.blob());
     const image = new Image();
@@ -194,21 +206,24 @@ function applyImages(results, version) {
     }
   }
 }
-function armCards(arms = {}, grippers = {}) {
+function armCards(arms = {}, grippers = {}, rates = {}) {
   $("armCards").replaceChildren();
   for (const side of sides) {
     const p = arms[side],
       g = grippers[side],
+      rate = rates["gripper/" + side],
       card = el("section", undefined, "arm-card " + side),
-      heading = el("div", undefined, "arm-title");
-    heading.append(
-      el("strong", title(side) + " TCP"),
+      heading = el("div", undefined, "arm-title"),
+      status = el("div", undefined, "arm-status-group");
+    status.append(
       el(
         "span",
         p?.valid ? "定位有效" : reasonText[p?.reason] || "等待有效定位",
         "status" + (p?.valid ? " valid" : ""),
       ),
+      el("span", rate ? `${rate} Hz` : "—", "rate"),
     );
+    heading.append(el("strong", title(side) + " TCP"), status);
     const values = el("div", undefined, "arm-values"),
       coords = el("div", undefined, "coordinates");
     ["X", "Y", "Z"].forEach((axis, i) => {
@@ -297,6 +312,9 @@ function readiness(s) {
     }),
   );
 }
+function livePeriodMs() {
+  return Math.max(8, Math.round(1000 / (status?.fps || 20)));
+}
 async function pollStatus() {
   try {
     const s = await api("/api/status");
@@ -307,7 +325,8 @@ async function pollStatus() {
     $("elapsed").textContent = seconds(s.elapsed_s, 1);
     $("recordingState").textContent = s.recording ? "正在录制" : "未录制";
     $("recordingState").className = "badge" + (s.recording ? " recording" : "");
-    $("sampleRate").textContent = `${s.fps} Hz 采样`;
+    if (document.activeElement !== $("sampleRate")) $("sampleRate").value = s.fps;
+    $("sampleRate").disabled = !!s.recording;
     readiness(s);
     devicePanel.update(s);
     $("footerState").textContent = s.recording
@@ -317,7 +336,7 @@ async function pollStatus() {
         : "采集服务运行中，等待设备数据";
     if (mode === "capture") {
       videoCards(s.streams);
-      armCards(liveArms(s), s.grippers);
+      armCards(liveArms(s), s.grippers, s.source_rates_hz);
       for (const card of $("videos").children) {
         const name = card.dataset.stream;
         card.querySelector(".video-rate").textContent =
@@ -342,7 +361,7 @@ async function pollStatus() {
     }
     updateControls();
   }
-  setTimeout(pollStatus, 500);
+  setTimeout(pollStatus, livePeriodMs());
 }
 async function pollLive() {
   if (mode === "capture" && status && !document.hidden) {
@@ -392,7 +411,7 @@ async function pollLive() {
       notice("实时视图更新失败：" + e.message, true);
     }
   }
-  setTimeout(pollLive, 200);
+  setTimeout(pollLive, livePeriodMs());
 }
 function changeMode() {
   const requested = location.hash.slice(1).split("?")[0];
@@ -534,8 +553,8 @@ function installReview(data) {
   review.rows = data.samples.map((row) => ({
     t: row[0],
     arms: {
-      left: poseFromState(row, 5, !!row[1]),
-      right: poseFromState(row, 15, !!row[2]),
+      left: { ...poseFromState(row, 5, !!row[1]), reason: row[25] },
+      right: { ...poseFromState(row, 15, !!row[2]), reason: row[26] },
     },
     grippers: {
       left: { valid: !!row[3], width_m: row[14] },
@@ -545,7 +564,7 @@ function installReview(data) {
   setDirty(false);
   $("time").max = data.duration_s;
   $("time").step = 1 / data.fps;
-  $("from").step = $("to").step = 1 / data.fps;
+  $("from").step = $("to").step = "any";
   $("to").value = data.duration_s.toFixed(3);
   if (mode !== "capture") videoCards(data.streams);
   renderParts();
@@ -553,7 +572,7 @@ function installReview(data) {
   if (mode !== "capture") scene.setData(data.rows, true);
   seek(Math.min(currentTime, data.duration_s));
   $("playbackNote").textContent =
-    "视频、TCP 与开合度共用回放时间；显示速率受浏览器解码限制";
+    "TCP 与开合度随拖动即时更新；视频画面速率受浏览器解码限制，可能略有滞后";
   $("timelineMarks").replaceChildren(
     ...Array.from({ length: 6 }, (_, i) =>
       el("span", seconds((data.duration_s * i) / 5, 1)),
@@ -566,7 +585,7 @@ function seek(t) {
   $("time").value = currentTime;
   $("playTime").textContent =
     `${seconds(currentTime)} / ${seconds(review.duration_s)}`;
-  if (mode !== "review") displayPose(currentTime);
+  displayPose(currentTime);
 }
 function displayPose(t) {
   if (!review) return;
@@ -576,42 +595,37 @@ function displayPose(t) {
   armCards(row?.arms, row?.grippers);
   $("frameLabel").textContent = `录制参考系 · ${seconds(t)} · 米`;
 }
-async function renderReplay() {
+let replayAbort = null;
+function renderReplay() {
   if (
     review &&
     mode === "review" &&
-    !frameBusy &&
     !document.hidden &&
     lastRenderedFrame !== selectedName + ":" + currentTime
   ) {
-    frameBusy = true;
+    // A newer scrub position always wins: cancel whatever frames are still
+    // in flight for the old one instead of waiting for them to finish, so
+    // fast dragging chases the latest slider position, not a stale queue.
+    replayAbort?.abort();
+    replayAbort = new AbortController();
     const version = frameVersion,
-      time = currentTime;
-    try {
-      const results = await Promise.all(
-        [...$("videos").children].map((card) =>
-          loadImage(
-            card,
-            base() +
-              "/frame/" +
-              encodeURIComponent(card.dataset.stream) +
-              "?t=" +
-              time,
-          ),
-        ),
-      );
-      applyImages(results, version);
-      if (version === frameVersion) {
-        displayPose(time);
-        lastRenderedFrame = selectedName + ":" + time;
-        for (const card of $("videos").children)
-          card.querySelector(".video-rate").textContent = seconds(time);
-      }
-    } finally {
-      frameBusy = false;
+      time = currentTime,
+      signal = replayAbort.signal;
+    lastRenderedFrame = selectedName + ":" + time;
+    for (const card of $("videos").children)
+      card.querySelector(".video-rate").textContent = seconds(time);
+    for (const card of $("videos").children) {
+      loadImage(
+        card,
+        base() + "/frame/" + encodeURIComponent(card.dataset.stream) + "?t=" + time,
+        true,
+        signal,
+      ).then((result) => {
+        if (version === frameVersion) applyImages([result], version);
+      });
     }
   }
-  setTimeout(renderReplay, 100);
+  setTimeout(renderReplay, 40);
 }
 let playbackClock = performance.now();
 function tick(now) {
@@ -798,6 +812,8 @@ function updateExport() {
     exportBusy ||
     !!status?.recording ||
     !plan?.frames;
+  $("mergeExport").disabled =
+    !q || dirty || editorDirty || reviewBusy || exportBusy || !!status?.recording || !plan?.frames;
   if (!q) {
     $("exportPlan").textContent = "选择录制并添加动作片段后，查看可导出数据。";
     return;
@@ -827,6 +843,17 @@ function updateExport() {
       : "尚无动作标注。前往回放与标注，划分任务片段。";
   }
 }
+$("sampleRate").addEventListener("change", async () => {
+  const input = $("sampleRate"),
+    fps = Number(input.value);
+  try {
+    await api("/api/settings", "POST", { fps });
+    notice(`采样率已改为 ${fps} Hz，下次开始录制起生效`);
+  } catch (e) {
+    notice(e.message, true);
+    if (status) input.value = status.fps;
+  }
+});
 bind("start", async () => {
   actionBusy = true;
   try {
@@ -1005,6 +1032,36 @@ bind("export", async () => {
     updateExport();
   }
 });
+bind("mergeExport", async () => {
+  const name = $("mergeDatasetName").value.trim();
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+    $("mergeResult").textContent =
+      "数据集文件夹名只能包含字母、数字、下划线和短横线";
+    return;
+  }
+  exportBusy = true;
+  updateExport();
+  $("mergeResult").textContent = "正在编码视频并累加导出，请稍候…";
+  try {
+    const r = await api(base() + "/export_dataset", "POST", {
+      dataset_name: name,
+    });
+    $("mergeResult").replaceChildren(
+      el("strong", "已累加导出"),
+      el(
+        "p",
+        `本次 +${r.episodes_added} 个片段 · +${r.frames_added} 帧，数据集累计 ${r.total_episodes} 个片段 · ${r.total_frames} 帧`,
+      ),
+      el("p", r.path),
+    );
+  } catch (e) {
+    $("mergeResult").textContent = e.message;
+    throw e;
+  } finally {
+    exportBusy = false;
+    updateExport();
+  }
+});
 document
   .querySelectorAll("[data-view]")
   .forEach((b) => (b.onclick = () => scene.view(b.dataset.view)));
@@ -1031,7 +1088,7 @@ document.addEventListener("fullscreenchange", () => {
   for (const card of $("videos").children) {
     const b = card.querySelector("[data-fullscreen]");
     const active = document.fullscreenElement === card;
-    b.textContent = active ? "退出全屏" : "⛶";
+    b.innerHTML = active ? "退出全屏" : FULLSCREEN_ICON;
     b.setAttribute(
       "aria-label",
       active ? "退出相机全屏" : "全屏查看" + title(card.dataset.stream),

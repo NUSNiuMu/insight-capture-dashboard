@@ -21,17 +21,17 @@ docker compose -f deploy/aruco/compose.yml down
 
 ```bash
 DOCKER_BUILDKIT=0 docker build --network host -f deploy/aruco/Dockerfile -t insight-aruco-capture:local .
-mkdir -p outputs/aruco-capture
+mkdir -p outputs/aruco-capture outputs/lerobot_datasets
 docker run -d --name insight-aruco-capture --network host --init \
   --restart unless-stopped --stop-signal SIGINT \
-  -e RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
+  -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
   -e ARUCO_DEVICE_ROOT=/host-dev \
   --device-cgroup-rule='c 81:* rw' \
   --device-cgroup-rule='c 188:* rw' \
   --device-cgroup-rule='c 166:* rw' \
   -v /dev:/host-dev:ro \
   -v "$PWD/config/devices/x86-aruco/capture.json:/app/config/devices/x86-aruco/capture.json:ro" \
-  -v "$PWD/outputs/aruco-capture:/app/outputs/aruco-capture" \
+  -v "$PWD/outputs:/app/outputs" \
   insight-aruco-capture:local
 ```
 
@@ -52,16 +52,21 @@ python3 -m insight_capture.aruco_capture.app --config config/devices/x86-aruco/c
 
 唯一入口为 `config/devices/x86-aruco/capture.json`：
 
-- `head`：Insight9 已校正 RGB、CameraInfo、原始 VIO 话题，以及 IMU/RGB TF frame。没有内参、外参或新鲜 VIO 时不能起录，不用单位变换占位。
-- `arms`、`tcp`、`cube_marker_relative_localization.targets`：左右手标记编号、几何及既有硬件外参。沿用当前硬件，无须夹爪相机上报 VIO。
-- `rgb`：附加相机列表。默认两个 ROS 话题只是待接线占位，应替换为真实话题；无对应设备时显示缺失并降低有效率。增加两项即可扩到四路。
-- `serial`：默认空，编码器未接入时开合度无效，不会导出伪造宽度。
-- `fps`：导出与 QC 的统一采样率，默认 20；原始输入按实际收到的数据保存。
+- `ros_domain_id`：须与 Insight9 实际广播使用的 ROS domain 一致，不能照抄模板默认值——不同设备/网络需要用 `ros2 topic list`（配合 `ROS_DOMAIN_ID=<N>` 逐个试）实测确认。
+- `head`：Insight9 已校正 RGB、CameraInfo、原始 VIO 话题（`image_topic`/`info_topic`/`vio_topic`），以及 IMU/RGB TF frame。三个话题各自独立订阅——只有确认对应话题真的存在发布者时才会绑定，不会对着空话题空等；没有内参、外参或新鲜 VIO 时不能起录。
+- `arms`、`tcp`、`cube_marker_relative_localization.targets`：左右手标记编号、几何及既有硬件外参，`camera` 字段用 `gripper_left`/`gripper_right` 命名（对应主 Dashboard 里的 `insight3_b`/`insight3_a`）。沿用当前硬件，无须夹爪相机上报 VIO；cube 标记具体布局和坐标系见 [Cube Marker 布局](#cube-marker-布局)。
+- `rgb`：附加相机列表，当前实际部署为 4 路 UVC（左右手各上/下两路）。除 `name`/`device`/`width`/`height`/`fps` 外，还支持：
+  - `auto_exposure: false`：关闭自动曝光（不写这个字段则维持相机驱动默认的自动曝光）
+  - `exposure_time_absolute`：配合 `auto_exposure: false` 固定曝光时间，取值范围因相机而异，用 `v4l2-ctl -d <device> --list-ctrls-menus` 查具体相机支持的区间；不填则冻结在切换到手动模式那一刻的自动曝光值上，不会再变
+  无对应设备时显示缺失并降低有效率。
+- `serial`：编码器输入列表，`hands` 字段取 `"left"`/`"right"`（一个串口只对应一只手的单通道编码器）或 `"both"`（同一个串口输出双手数据）。
+- `fps`：导出与 QC 的统一采样率，同时也是实时页视频预览与状态轮询的节奏（页面右上角可直接改，改完立即生效；仅影响下次开始录制起的导出网格，不影响已录数据）。原始输入按实际收到的数据保存。
 
 USB RGB 示例，替换 `rgb` 中对应项：
 
 ```json
-{"name":"rgb_left","device":"/dev/video0","width":1280,"height":720,"fps":30}
+{"name":"rgb_left_up","device":"/dev/v4l/by-path/pci-0000:00:14.0-usb-0:4:1.0-video-index0",
+ "width":1280,"height":720,"fps":30,"auto_exposure":false,"exposure_time_absolute":156}
 ```
 
 原始 ROS Image 示例：
@@ -70,15 +75,21 @@ USB RGB 示例，替换 `rgb` 中对应项：
 {"name":"rgb_left","topic":"/rgb_left/image_raw","compressed":false}
 ```
 
-串口规格尚未确定，首版只约定一个容易修改的文本协议：每行 JSON，例如 `{"left":1234,"right":5678}`，可只包含一侧。配置线性标定将编码值换算为米：
+编码器实际使用的是 MT6701 磁编码器固件的单通道协议，每行 JSON：
 
 ```json
-{"device":"/dev/ttyUSB0","baudrate":115200,
- "left":{"scale_m":0.00001,"offset_m":0,"max_width_m":0.083},
- "right":{"scale_m":0.00001,"offset_m":0,"max_width_m":0.083}}
+{"raw":1234,"angle_degree":12.34,"opening_mm":56.78}
 ```
 
-上面比例仅为协议示例，必须替换为实际标定。也可用两个串口分别发送左右值。如果设备直接发送米，比例可设为 1。Compose 已挂载动态设备目录并允许 V4L2、USB 串口和 ACM 串口节点；无需事先写死设备编号。硬件协议确定后只修改 `sources.py` 的读取函数。
+固件还会输出 `{"info":"..."}`/`{"error":"..."}` 状态行（工作台会解析并显示，不当作开合度数据）。对应配置：
+
+```json
+{"device":"/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_XXXX-if00",
+ "baudrate":115200,"hands":"left",
+ "left":{"scale_m":1,"offset_m":0,"max_width_m":0.10}}
+```
+
+`scale_m`/`offset_m` 是在固件已经算出的 `opening_mm`（毫米）基础上再做一次线性修正，默认 `scale_m:1,offset_m:0` 即直接信任固件读数（只做 mm→m 单位换算）。旧的"一行 JSON 同时输出双手"协议（`{"left":1234,"right":5678}`）仍兼容，`hands` 设为 `"both"` 即可。Compose 已挂载动态设备目录并允许 V4L2、USB 串口和 ACM 串口节点；无需事先写死设备编号。硬件协议如有变化只修改 `sources.py` 的 `serial_worker` 读取函数。
 
 ## 热插拔与扫描端口
 
@@ -87,10 +98,32 @@ USB RGB 示例，替换 `rgb` 中对应项：
 - USB 相机和串口在启动时可以缺席；断线、读取失败或持续 4 秒无数据后关闭旧连接，每秒重试一次。USB 读取使用可终止的 FFmpeg 子进程，避免驱动阻塞拖住工作台。
 - 成功收到图像或有效编码器数据后，自动清除对应设备的故障；其他设备故障和 VIO 重置等录制错误保留。原始采集缺失时间仍进入 QC，重连不会补造数据。
 - 扫描只枚举视频采集节点，过滤元数据节点。优先绑定 `/dev/v4l/by-id/`、`/dev/serial/by-id/` 的设备标识；没有设备标识时使用 `by-path` 的 USB 插口标识。编号改变后会重新解析链接；既没有稳定标识又更换了编号时，请重新扫描选择，不能自动猜测左右设备。
+  - **已知坑**：同型号 UVC 相机（本机用的 DECXIN）经常上报**完全相同**的 `by-id` 厂商字符串，多台同型号相机接上后 `/dev/v4l/by-id/` 只解析得出一组符号链接，没法用它区分具体是哪一台——这种情况必须改用 `by-path`（USB 物理插口）绑定，重插到别的口才需要重新扫描，不能指望 by-id 兜底。
 - 页面选择保存到 `outputs/aruco-capture/_devices.json`，下次启动自动加载，仅覆盖 RGB/串口输入，不修改 Git 中的配置模板。要调整串口数值到米的标定，可修改该文件对应 `left`/`right` 标定字段后重启，或清除覆盖文件后使用模板配置。
+- UVC 采集需要 ffmpeg 显式指定 `-input_format mjpeg`（`usb_worker` 已加），否则可能协商到相机的 YUYV 模式——同分辨率下 YUYV 常明显慢于 MJPG（比如 720p 下 YUYV 只有 10fps，MJPG 能到 60fps）。某路 RGB 实测帧率明显低于配置的 `fps` 时，先用 `v4l2-ctl -d <device> --list-formats-ext` 确认该分辨率下两种格式各自的帧率上限，不要只怀疑软件层。
 - Insight9 图像、CameraInfo、TF 和 VIO 继续使用原 ROS 配置；扫描 USB 相机不会替代 Insight9 的 ROS/VIO 驱动。VIO 接收中断超过 2 秒后恢复，会更换轨迹参考系代次；正在录制的后续位姿无效，需要停止后新建录制，避免拼接未知坐标系。
+- **Insight9 掉线自动重连**：ROS2 的中间件（`rmw_fastrtps_cpp`/`rmw_cyclonedds_cpp`，从 ROS2 Foxy 起）是"一个进程一个 DDS Participant"，不是"一个 Node 一个 Participant"——网络接口扫描只在进程启动那一刻做一次。如果 Insight9 的 USB 网卡（ROS Native 模式下表现为一张 `169.254.x.x` link-local 接口）是在容器**启动之后**才插上的，光等待或重新订阅是发现不了的，必须重建整个 rclpy 参与者才能重新扫描接口。工作台内置了一个后台看门狗（`sources.py` 的 `watch_head_interface`，每 1 秒检查一次）：一旦发现"Insight9 图像/VIO 数据不新鲜 且 出现了之前没见过的网络接口"，就自动重建一次 ROS 层——**只重建订阅 Insight9 的那部分**，UVC 相机和串口线程全程不受影响，不会跟着一起断线重连。日常仍建议先插好 Insight9 再启动容器；顺序反了也不需要手动重启，等 1-2 秒看门狗会自己处理。
 
 Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、USB 串口（188）、ACM 串口（166）访问，以支持启动后新增设备；不需要静态 `--device` 节点。参见 [Docker 动态设备说明](https://docs.docker.com/engine/containers/run/#using-dynamically-created-devices)。
+
+## 夹爪开合度标定
+
+编码器固件（MT6701 磁编码器 + ESP32）自己维护一张"角度→开合度(mm)"的分段线性表，开机从 flash 加载，没有存过标定则用出厂默认值；实际开合度换算（`angleToOpening`）在固件里完成，工作台只是转发固件已经算好的 `opening_mm`。
+
+**标定命令协议**（`sources.py` 的 `send_serial`，通过串口下行）：
+- `start_cal`：进入标定模式，固件端标定点计数清零；进入后固件的遥测行会变成只有 `{"raw":...,"angle_degree":...}`（不含 `opening_mm`），工作台据此判断"当前处于标定模式"
+- `{"opening_mm": <数值>}`：把"当前角度"和"这个手动测量的开合度"记为一个标定点；必须先 `start_cal`
+- `end_cal`：按角度排序、检查重复角度，写 flash 并**立即生效**；至少需要 2 个点。失败（点数不够/角度重复）时固件**不退出标定模式**，也不会用半成品覆盖旧的标定表——旧标定继续有效，可以直接补点后再次 `end_cal`
+
+对应的 HTTP 接口：`POST /api/serial/{index}/command`（body 为 `{"command":"start_cal"}` / `{"command":"opening_mm","value":91.5}` / `{"command":"end_cal"}`），`GET /api/serial/{index}/log?after=<seq>` 增量拉取固件的 `info`/`error` 反馈和实时角度。
+
+**页面操作**（实时采集页"设备连接与端口"→对应编码器行下方的"夹爪标定"子面板）：
+1. 点"开始标定"（同一个按钮，标定中会变成"退出标定并保存"）
+2. 把夹爪开到一个已知宽度，用卡尺量出毫米数，填进"开合度 (mm)"输入框（步长 10），点"记录点"；至少两个不同角度重复这一步
+3. 点"退出标定并保存"提交；面板下方日志区会实时显示固件的角度遥测、每次记录确认（"第 N 点：角度 X° → 开合度 Ymm"）和最终"标定已保存，共 N 点"或具体报错
+4. 发现某个点录错了：点"重新标定"（对应 `start_cal`，固件端标定点计数清零，工作台侧也清空当页已显示的记录列表），从头补录——固件没有单点覆盖/删除命令，录错了只能整段重录，不能只改一个点
+
+录制中或设备面板忙碌时整个标定面板会跟着其他设备控件一起禁用。
 
 ## 采集与标注
 
@@ -103,7 +136,7 @@ Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、
 
 3D 轨迹使用仓库已有 Babylon.js，在本地提供资源，网页无需访问 CDN。支持旋转、平移、缩放、适配、俯视/正视/侧视和全屏；坐标单位米，网格间距 0.1 m，TCP 附带 XYZ 朝向轴。无效帧和超过 0.3 秒的间隔会断开轨迹。实时轨迹保留约 4 分钟、最多 2400 次观测，开始新录制或 VIO 重置时清空旧参考系轨迹；离线回放显示整次录制轨迹，长录制只抽稀绘制点，不改变原始数据和 QC。
 
-视频预览为按需 JPEG，实时界面最高约 5 次更新/秒；回放按浏览器请求与解码速度显示，同一批视频解码完成后更新对应的 3D 位姿，不能把网页显示速率当作输入帧率。采集和导出使用原始输入与配置采样率。
+视频预览为按需 JPEG，实时界面最高约 5 次更新/秒；回放拖动时间轴时，3D 轨迹光标和左右手 TCP/开合度会**立即**按拖动位置更新（`review.rows` 已整个加载在浏览器内存里，纯本地数组查找，不受视频影响）；视频画面仍按浏览器实际请求与解码速度显示，快速拖动时可能滞后于当前光标位置几帧，不能把网页视频显示速率当作输入帧率。采集和导出使用原始输入与配置采样率。
 
 原始数据位于 `outputs/aruco-capture/<录制编号>/`：
 
@@ -132,11 +165,53 @@ T_reference_TCP = inverse(T_world_IMU_start)
 
 单面标记允许定位：IPPE 候选先通过深度及重投影检查，误差接近时参考近期全局 cube 位姿选择，再检查运动跳变。没有时间先验的首帧和遮挡后重现仍有平面多解风险；不把低重投影误差当作精度证明。标记不可见不保持上一帧作为有效位姿。
 
+左右手 TCP 卡片 `valid: false` 时附带的 `reason` 精确到具体在哪一步失败，不再笼统显示"未检测到"：
+
+| 阶段 | `reason` | 前端文案 |
+| --- | --- | --- |
+| 一个 marker 都没看到 | `marker_not_detected` | 未检测到 cube |
+| 看到了但不够数量要求 | `not_enough_markers_visible` | 可见标记数量不足 |
+| `solvePnP`/`solvePnPRansac` 本身失败 | `pnp_solve_failed` | 位姿求解失败 |
+| RANSAC 内点比例太低 | `low_inlier_ratio` | 内点比例过低 |
+| 多面校正模式下有效面不够 | `insufficient_face_support` | 有效标记面不足，几何不稳定 |
+| 点集几何退化（近似共面） | `degenerate_geometry` | 标记共面/退化，无法求解 |
+| 解出来的深度超出合理范围 | `depth_out_of_range` | 推算深度超出合理范围 |
+| 重投影误差超阈值 | `reprojection_too_high` | 重投影误差过大 |
+| 与上一帧相比位姿跳变过大 | `pose_jump` | 位姿跳变，当前帧无效 |
+| 头部 VIO 被重置（时间回退/大跳变） | `head_vio_reset` | VIO 重置，请重新录制 |
+| 缺少同步 VIO 或内外参未就绪 | `missing_head_pose_or_calibration` | 缺少同步 VIO 或标定 |
+
+前 8 个来自 `cube_markers.py`/`pose.py` 的 `_solve_target()`（`MultiCubeMarkerEstimator.last_reasons`，跟主 Dashboard 共用同一套检测代码，纯附加字段，不影响主 Dashboard 现有调用），后 3 个是 `pose.py` `observe()` 里已有的录制级判断。
+
 RGB/串口跨设备同步首版使用**主机接收时间**最近邻，默认容差 40 ms；保留 ROS 源时间戳供检查。它不是硬件同步，USB 缓冲、串口延迟及链路抖动要等具体设备到位后实测。队列溢出有计数，所有缺失时间段仍计入 QC 分母。同一张源图像最多对应一个有效输出帧，不把重复补帧计作新的有效采样。
 
 状态为 `[left_10d, right_10d]`，每臂 `xyz + rotation_6d（旋转矩阵前两行）+ width_m`。导出仅保留人工标注范围内、所有配置视频与双臂状态同时有效的连续区间，不连接缺失帧前后的轨迹。`action` 是下一采样时刻的绝对状态；区间最后一帧只作为动作目标，不单独输出训练行。每段至少连续三帧观测，产生至少两行训练数据。
 
 按单次录制导出，不包含自动语义标注、自动任务切分、训练任务、多用户权限、云服务和发布升级。参与手臂仅作为语义元数据写入 episode 的 `participating_hands`，仍要求全部配置视频和双臂状态有效。质量报告、3D 轨迹和回放使用同一套对齐数据。
+
+## 累加导出到统一数据集
+
+"质量与导出"面板里，单次录制的 `导出 LeRobot v3` 按钮下方另有一个**累加导出**入口：填一个数据集文件夹名（只能含字母、数字、下划线、短横线），点"导出到该文件夹"，会把这次录制的片段追加进 `outputs/lerobot_datasets/<文件夹名>/`——多次不同录制可以反复点这个按钮导出到**同一个**文件夹名，累积成一个越来越大的数据集，不会覆盖旧数据；同一次录制对同一个数据集文件夹只能累加一次，重复点会被拒绝（避免同一批数据被算两遍）。
+
+底层按 LeRobot v3 的 `chunk-XXX/file-YYY` 惯例组织：`data/`、`videos/<camera>/` 各自按累计文件大小是否超过 `data_files_size_in_mb`/`video_files_size_in_mb`（默认 100MB/500MB，取自 `meta/info.json`，首次导出时写入，之后跟着数据集走）决定要不要滚动到下一个 `chunk` 目录；`meta/episodes/` 保持一张持续增长的表，行数超过 `chunks_size`（默认 1000）才会分文件。`meta/tasks.parquet`、`meta/stats.json`（均值/方差用 Welford 并行合并算法精确累加，不需要重新读原始帧）、`meta/manifest.json` 的 `source_datasets` 列表都会在每次追加时更新。跨会话的 `episode_index`/`index`（全局帧号）按已有数据集的累计值做偏移，不会跟新录制的本地编号冲突。
+
+导出的每个录制对应 `data/`/`videos/<camera>/` 各一个新文件（不是按大小切分单次录制内部），这跟同一生态里另一个独立工具 `~/Workspace/Datasets/tools/merge_lerobot_v3_datasets.py`（把多个独立导出的单会话数据集合并到一起）的实际落盘方式一致——不同的是那个工具的 chunk 阈值字段从来没被真正用来触发过滚动（哪怕单个 chunk 目录实测撑到了 9GB+ 也没分过 chunk），这里是真的按阈值滚动的。
+
+**明确不做的部分**：不生成 `meta/segments.parquet`/`meta/semantic_review.parquet`（多级语义子任务标注）和 `review/*.jpg` 缩略图——这套机制在参考数据集里由一个仓库外部的标注/审核工具产出，这个仓库里找不到对应实现，跟这里"每段一句任务文本"的简单标注模型也不匹配，没有必要照搬。
+
+## Cube Marker 布局
+
+每只手臂的定位 cube 贴 **5 个** ArUco 标记（字典 `DICT_4X4_50`），左手 ID 用 `1-5`，右手 ID 用 `7-11`，配置在 `config/devices/x86-aruco/capture.json` 的 `cube_marker_relative_localization.targets[].markers` 里（`gripper_left`/`gripper_right` 各一份）。四个面的几何延续了主 Dashboard `insight3_a`/`insight3_b` 的既有标定（详见 `docs/UMI_CUBE_MARKER_LOCALIZATION.md`），顶面额外多贴了一枚 ID，两个 ID 对应同一物理面：
+
+| 面 | 左手 ID | 右手 ID | Cube 坐标 |
+| --- | --- | --- | --- |
+| 顶面（主） | 2 | 8 | `Y = -35 mm` |
+| 顶面（副，同一面另一枚标记） | 1 | 7 | `Y = -35 mm` |
+| 后面 | 3 | 9 | `Z = -35 mm` |
+| 左面 | 4 | 10 | `X = -35 mm` |
+| 右面 | 5 | 11 | `X = +35 mm` |
+
+顶面贴两枚不同 ID 的标记（1/2、7/8）是因为头部相机俯视时最常看到的就是这一面，多一枚标记提高遮挡/角度变化下的识别覆盖率；其余三面（后/左/右）各一枚。跟主 Dashboard 一样，每个 `corners_cube_m` 必须严格按 OpenCV ArUco 返回的 `top-left, top-right, bottom-right, bottom-left` 顺序填写，顺序错了 `solvePnP` 不会报错但位姿会解错。
 
 ## 代码位置
 

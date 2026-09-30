@@ -36,7 +36,7 @@ class Capture:
                 {
                     key: value
                     for key, value in json.loads(override.read_text()).items()
-                    if key in ("rgb", "serial")
+                    if key in ("rgb", "serial", "fps")
                 }
             )
         names = ["head"] + [x["name"] for x in self.config.get("rgb", [])]
@@ -70,6 +70,11 @@ class Capture:
         self.latest = {}
         self.arrivals = defaultdict(lambda: deque(maxlen=500))
         self.grippers = {}
+        self.serial_ports = {}
+        self.serial_lock = threading.Lock()
+        self.serial_log = defaultdict(lambda: deque(maxlen=200))
+        self.serial_log_seq = 0
+        self.serial_angle = {}
         self.history = deque(maxlen=2400)
         self.history_sequence = 0
         self.history_epoch = 0
@@ -140,6 +145,18 @@ class Capture:
                 "message": message,
                 "device": device or old.get("device"),
             }
+
+    def log_serial(self, index, payload):
+        with self.lock:
+            self.serial_log_seq += 1
+            self.serial_log[index].append({"seq": self.serial_log_seq, **payload})
+
+    def send_serial(self, index, line):
+        with self.serial_lock:
+            port = self.serial_ports.get(index)
+            if port is None:
+                raise ValueError("串口未连接，无法发送命令")
+            port.write((line + "\n").encode())
 
     def start(self):
         with self.lock:
@@ -349,6 +366,7 @@ class Capture:
                     if self.db and time.monotonic() - self.last_commit > 1:
                         self.db.commit()
                         self.last_commit = time.monotonic()
+                self.error = None
             except Exception as exc:
                 self.error = str(exc)
             finally:

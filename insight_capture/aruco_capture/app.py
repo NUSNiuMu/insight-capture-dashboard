@@ -16,6 +16,7 @@ from .dataset import (
     connect,
     export,
     export_runs,
+    export_to_dataset,
     suggest_pause_segments,
     validate_segments,
 )
@@ -89,6 +90,48 @@ def create_app(capture):
                 },
             }
         )
+
+    async def serial_command(request):
+        index = int(request.match_info["index"])
+        if not 0 <= index < len(capture.config.get("serial", [])):
+            raise web.HTTPNotFound()
+        body = await request.json()
+        command = body.get("command")
+        if command == "start_cal":
+            line = "start_cal"
+        elif command == "end_cal":
+            line = "end_cal"
+        elif command == "opening_mm":
+            line = json.dumps({"opening_mm": float(body["value"])})
+        else:
+            raise ValueError("未知标定命令")
+        await asyncio.to_thread(capture.send_serial, index, line)
+        return web.json_response({"sent": command})
+
+    async def serial_log(request):
+        index = int(request.match_info["index"])
+        after = int(request.query.get("after", 0))
+        with capture.lock:
+            entries = [e for e in capture.serial_log.get(index, []) if e["seq"] > after]
+            angle = capture.serial_angle.get(index)
+        return web.json_response({"entries": entries, "angle": angle})
+
+    async def settings(request):
+        if capture.active:
+            raise ValueError("录制中不能修改采样率")
+        body = await request.json()
+        fps = int(body["fps"])
+        if not 1 <= fps <= 120:
+            raise ValueError("fps 须在 1-120 之间")
+        capture.config["fps"] = fps
+        write_json(
+            capture.root / "_devices.json",
+            {
+                **{key: capture.config.get(key, []) for key in ("rgb", "serial")},
+                "fps": fps,
+            },
+        )
+        return web.json_response({"fps": fps})
 
     async def start(request):
         if busy:
@@ -168,13 +211,13 @@ def create_app(capture):
         path = session(request)
 
         def compute():
-            meta, grid, state, video, good, report = align(path)
+            meta, grid, state, video, good, report, _reasons = align(path)
             return suggest_pause_segments(grid, state, good, report["fps"])
 
         return web.json_response(await asyncio.to_thread(compute))
 
     def review_data(path, include_samples):
-        meta, grid, state, video, good, report = align(path)
+        meta, grid, state, video, good, report, reasons = align(path)
         parts = json.loads((path / "segments.json").read_text())
         validate_segments(parts, meta["duration_s"])
         runs = export_runs(grid, good, parts)
@@ -208,7 +251,13 @@ def create_app(capture):
                         mask[i] = False
                 flags.append(mask)
             result["samples"] = [
-                [float(t), *[int(f[i]) for f in flags], *state[i].tolist()]
+                [
+                    float(t),
+                    *[int(f[i]) for f in flags],
+                    *state[i].tolist(),
+                    reasons["left"][i],
+                    reasons["right"][i],
+                ]
                 for i, t in enumerate(grid)
             ]
         else:
@@ -238,6 +287,23 @@ def create_app(capture):
         finally:
             busy.remove(path.name)
 
+    async def dataset_merge(request):
+        path = session(request)
+        if path.name in busy or capture.active or capture.reconfiguring:
+            raise ValueError("请先停止录制，且勿重复导出")
+        body = await request.json()
+        name = str(body.get("dataset_name", "")).strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            raise ValueError("数据集文件夹名只能包含字母、数字、下划线和短横线")
+        output_root = capture.root.parent / "lerobot_datasets" / name
+        busy.add(path.name)
+        try:
+            return web.json_response(
+                await asyncio.to_thread(export_to_dataset, path, output_root)
+            )
+        finally:
+            busy.remove(path.name)
+
     async def cleanup(app):
         capture.close()
 
@@ -250,6 +316,9 @@ def create_app(capture):
             web.get("/api/status", status),
             web.get("/api/devices", devices),
             web.post("/api/devices", devices),
+            web.post("/api/settings", settings),
+            web.post("/api/serial/{index}/command", serial_command),
+            web.get("/api/serial/{index}/log", serial_log),
             web.post("/api/start", start),
             web.post("/api/stop", stop),
             web.get("/api/sessions", sessions),
@@ -261,6 +330,7 @@ def create_app(capture):
             web.get("/api/sessions/{name}/qc", qc),
             web.get("/api/sessions/{name}/review", review),
             web.post("/api/sessions/{name}/export", dataset),
+            web.post("/api/sessions/{name}/export_dataset", dataset_merge),
         ]
     )
     return app
@@ -278,19 +348,22 @@ def main():
     config = json.loads(args.config.read_text())
     os.environ["ROS_DOMAIN_ID"] = str(config["ros_domain_id"])
     capture = Capture(args.config, args.output)
-    from .sources import start_sources
+    from .sources import start_ros_layer
 
-    node, listener, workers = start_sources(capture)
+    ros_layer, watchdog_stop, watchdog = start_ros_layer(capture)
     try:
         web.run_app(create_app(capture), host=args.host, port=args.port)
     finally:
         import rclpy
 
+        watchdog_stop.set()
         capture.close()
+        capture.sources.close()
+        ros_layer.node.destroy_node()
         rclpy.try_shutdown()
-        for worker in workers:
+        for worker in ros_layer.workers:
             worker.join(2)
-        node.destroy_node()
+        watchdog.join(2)
 
 
 if __name__ == "__main__":

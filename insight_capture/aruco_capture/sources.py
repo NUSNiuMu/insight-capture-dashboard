@@ -15,7 +15,13 @@ from .devices import local_device, scan_devices, valid_device
 from .capture import write_json
 
 
-def start_sources(capture):
+def _create_ros_node(capture):
+    """Build the rclpy participant, head subscriptions and spin thread.
+
+    Kept separate from ``start_sources`` so a reconnect can rebuild just
+    this ROS-facing part without touching the independent UVC/serial
+    worker threads owned by ``SourceManager``.
+    """
     import rclpy
     from geometry_msgs.msg import PoseStamped
     from rclpy.node import Node
@@ -99,12 +105,6 @@ def start_sources(capture):
         except Exception:
             pass
 
-    node.create_subscription(
-        PoseStamped, head["vio_topic"], vio, qos_profile_sensor_data
-    )
-    node.create_subscription(
-        CameraInfo, head["info_topic"], info, qos_profile_sensor_data
-    )
     node.create_timer(1, extrinsic)
 
     def image_callback(name, compressed):
@@ -118,14 +118,30 @@ def start_sources(capture):
 
         return receive
 
-    node.create_subscription(
-        CompressedImage,
-        head["image_topic"],
-        image_callback("head", True),
-        qos_profile_sensor_data,
+    # Only bind each head subscription once a live publisher is actually
+    # visible on the ROS graph — creating it speculatively would sit there
+    # silently matching nothing if Insight9 isn't really reachable yet.
+    head_subscriptions = (
+        (head["vio_topic"], PoseStamped, vio),
+        (head["info_topic"], CameraInfo, info),
+        (head["image_topic"], CompressedImage, image_callback("head", True)),
     )
-    capture.sources = SourceManager(capture, node, image_callback)
-    capture.sources.start()
+    bound = set()
+
+    def bind_head_subscriptions():
+        for topic, msg_type, callback in head_subscriptions:
+            if topic in bound:
+                # Once bound, DDS re-matches a publisher that comes and
+                # goes on its own; only a missing network interface needs
+                # the outer restart, which rebuilds this from scratch.
+                continue
+            if node.get_publishers_info_by_topic(topic):
+                node.create_subscription(
+                    msg_type, topic, callback, qos_profile_sensor_data
+                )
+                bound.add(topic)
+
+    node.create_timer(1, bind_head_subscriptions)
 
     def spin():
         from rclpy.executors import ExternalShutdownException
@@ -137,7 +153,90 @@ def start_sources(capture):
 
     thread = threading.Thread(target=spin, daemon=True)
     thread.start()
-    return node, listener, [thread]
+    return node, listener, [thread], image_callback
+
+
+def start_sources(capture):
+    """First-time setup: build the ROS node and start every RGB/serial
+    source (UVC, serial, and ROS-topic RGB alike)."""
+    node, listener, workers, image_callback = _create_ros_node(capture)
+    capture.sources = SourceManager(capture, node, image_callback)
+    capture.sources.start()
+    return node, listener, workers
+
+
+class RosLayer:
+    """Owns the rclpy participant. rclpy/DDS only scan network interfaces
+    once per process (one DDS participant per Context since ROS2 Foxy, not
+    per Node), so Insight9's USB link showing up after this process is
+    already running is otherwise invisible until the whole rclpy context
+    is torn down and rebuilt. UVC/serial worker threads never touch rclpy,
+    so they keep running untouched through a restart — only the ROS-topic
+    RGB subscriptions (if any) and the head subscriptions get rebuilt."""
+
+    def __init__(self, capture):
+        self.capture = capture
+        self.node, self.listener, self.workers = start_sources(capture)
+
+    def restart(self):
+        import rclpy
+
+        try:
+            self.node.destroy_node()
+        except Exception:
+            pass
+        rclpy.try_shutdown()
+        for worker in self.workers:
+            worker.join(2)
+        node, listener, workers, image_callback = _create_ros_node(self.capture)
+        self.capture.sources.rebind_node(node, image_callback)
+        self.node, self.listener, self.workers = node, listener, workers
+
+
+def _known_interfaces():
+    import socket
+
+    return {name for _, name in socket.if_nameindex()}
+
+
+def watch_head_interface(capture, layer, stop, interval=1):
+    """While Insight9's head topics are stale, poll for newly appeared
+    network interfaces (its USB link in ROS-native mode) and rebuild the
+    rclpy participant once one shows up."""
+    known = _known_interfaces()
+    while not stop.wait(interval):
+        now = time.monotonic()
+        # Image and VIO come from the same Insight9 unit/driver — treat
+        # either one going stale as "not fully connected", not just both.
+        stale = (
+            now - capture.latest.get("image/head", 0) > 5
+            or now - capture.latest.get("vio/head", 0) > 5
+        )
+        try:
+            current = _known_interfaces()
+        except OSError:
+            continue
+        if stale and current - known:
+            capture.source_state(
+                "image/head", "connecting", "检测到新网卡，正在重新连接 Insight9"
+            )
+            try:
+                layer.restart()
+            except Exception as exc:
+                capture.source_state(
+                    "image/head", "disconnected", f"重新连接失败: {exc}"
+                )
+        known = current
+
+
+def start_ros_layer(capture):
+    layer = RosLayer(capture)
+    stop = threading.Event()
+    watchdog = threading.Thread(
+        target=watch_head_interface, args=(capture, layer, stop), daemon=True
+    )
+    watchdog.start()
+    return layer, stop, watchdog
 
 
 class SourceManager:
@@ -145,30 +244,32 @@ class SourceManager:
         self.capture, self.node, self.image_callback = capture, node, image_callback
         self.handles = []
 
-    def start(self):
+    def _bind_topic(self, item):
         from rclpy.qos import qos_profile_sensor_data
         from sensor_msgs.msg import CompressedImage, Image
 
+        stop = threading.Event()
+        compressed = item.get("compressed", item["topic"].endswith("/compressed"))
+        callback = self.image_callback(item["name"], compressed)
+
+        def receive(message, callback=callback, stop=stop):
+            if not stop.is_set():
+                callback(message)
+
+        subscription = self.node.create_subscription(
+            CompressedImage if compressed else Image,
+            item["topic"],
+            receive,
+            qos_profile_sensor_data,
+        )
+        self.handles.append((stop, None, subscription))
+
+    def start(self):
         for item in self.capture.config.get("rgb", []):
-            stop = threading.Event()
             if "topic" in item:
-                compressed = item.get(
-                    "compressed", item["topic"].endswith("/compressed")
-                )
-                callback = self.image_callback(item["name"], compressed)
-
-                def receive(message, callback=callback, stop=stop):
-                    if not stop.is_set():
-                        callback(message)
-
-                subscription = self.node.create_subscription(
-                    CompressedImage if compressed else Image,
-                    item["topic"],
-                    receive,
-                    qos_profile_sensor_data,
-                )
-                self.handles.append((stop, None, subscription))
+                self._bind_topic(item)
             elif "device" in item:
+                stop = threading.Event()
                 thread = threading.Thread(
                     target=usb_worker, args=(self.capture, item, stop), daemon=True
                 )
@@ -183,6 +284,26 @@ class SourceManager:
             )
             self.handles.append((stop, thread, None))
             thread.start()
+
+    def rebind_node(self, node, image_callback):
+        """Reattach ROS-topic RGB subscriptions to a freshly rebuilt node
+        after a head reconnect. UVC/serial worker handles are left as-is —
+        they never held a reference to the old node."""
+        old_node = self.node
+        kept = []
+        for stop, thread, subscription in self.handles:
+            if subscription is not None:
+                try:
+                    old_node.destroy_subscription(subscription)
+                except Exception:
+                    pass
+            else:
+                kept.append((stop, thread, subscription))
+        self.handles = kept
+        self.node, self.image_callback = node, image_callback
+        for item in self.capture.config.get("rgb", []):
+            if "topic" in item:
+                self._bind_topic(item)
 
     def close(self):
         for stop, _, _ in self.handles:
@@ -224,7 +345,10 @@ class SourceManager:
                         capture.preview.pop(key, None)
             try:
                 self.start()
-                write_json(capture.root / "_devices.json", settings)
+                write_json(
+                    capture.root / "_devices.json",
+                    {**settings, "fps": capture.config.get("fps", 20)},
+                )
             except Exception:
                 self.close()
                 capture.config.update(old)
@@ -325,16 +449,28 @@ def stable_path(item, kind):
 def usb_worker(capture, item, stop=None):
     stop = stop or capture.stop_event
     key = "image/" + item["name"]
-    device = stable_path(item, "video")
+    device = stable_path(item, "video") # 转换成稳定的设备路径，使用by-path（推荐）或by-id，避免/dev/videoX变化导致的设备切换
+
     while not stopped(capture, stop):
-        if "/by-" not in device:
-            device = stable_path({"device": device}, "video")
         process = None
         try:
             capture.source_state(key, "connecting", "等待相机，自动重连中", device)
-            path = local_device(device)
+            path = local_device(device) # 转换到docker容器内的设备路径
             if not os.path.exists(path):
                 raise OSError("相机未连接")
+            if item.get("auto_exposure") is False:
+                ctrl_args = ["v4l2-ctl", "-d", path, "-c", "auto_exposure=1"]
+                if "exposure_time_absolute" in item:
+                    ctrl_args += [
+                        "-c",
+                        f"exposure_time_absolute={item['exposure_time_absolute']}",
+                    ]
+                subprocess.run(
+                    ctrl_args,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                )
             # A child process bounds V4L2 driver stalls as well as unplug failures.
             args = [
                 "ffmpeg",
@@ -349,6 +485,7 @@ def usb_worker(capture, item, stop=None):
                 "-f",
                 "v4l2",
             ]
+            args += ["-input_format", "mjpeg"]
             if "fps" in item:
                 args += ["-framerate", str(item["fps"])]
             if "width" in item and "height" in item:
@@ -426,73 +563,114 @@ def serial_worker(capture, item, stop=None, index=0):
                 timeout=0.2,
                 exclusive=True,
             ) as port:
-                data = bytearray()
-                last_data = time.monotonic()
-                while not stopped(capture, stop):
-                    raw = port.read(max(1, min(port.in_waiting, 4096)))
-                    if not raw:
-                        if time.monotonic() - last_data > 4:
-                            raise OSError("串口 4 秒无数据，正在重新连接")
-                        continue
+                with capture.serial_lock:
+                    capture.serial_ports[index] = port
+                try:
+                    data = bytearray()
                     last_data = time.monotonic()
-                    data.extend(raw)
-                    if len(data) > 4096:
-                        data.clear()
-                        capture.source_state(
-                            key, "invalid", "串口单行超过 4096 字节", device
-                        )
-                    while b"\n" in data:
-                        line, _, rest = data.partition(b"\n")
-                        data = bytearray(rest)
-                        try:
-                            values = json.loads(line)
-                            if not isinstance(values, dict):
-                                raise ValueError("串口须输出 JSON 对象")
-                            count = 0
-                            valid_all = True
-                            for arm in ("left", "right"):
-                                if arm not in values or item.get(
-                                    "hands", "both"
-                                ) not in (arm, "both"):
+                    while not stopped(capture, stop):
+                        raw = port.read(max(1, min(port.in_waiting, 4096)))
+                        if not raw:
+                            if time.monotonic() - last_data > 4:
+                                raise OSError("串口 4 秒无数据，正在重新连接")
+                            continue
+                        last_data = time.monotonic()
+                        data.extend(raw)
+                        if len(data) > 4096:
+                            data.clear()
+                            capture.source_state(
+                                key, "invalid", "串口单行超过 4096 字节", device
+                            )
+                        while b"\n" in data:
+                            line, _, rest = data.partition(b"\n")
+                            data = bytearray(rest)
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                values = json.loads(line)
+                                if not isinstance(values, dict):
+                                    raise ValueError("串口须输出 JSON 对象")
+                                if "info" in values:
+                                    capture.log_serial(index, values)
                                     continue
-                                raw_value = float(values[arm])
-                                calibration = item.get(arm, {})
-                                width = raw_value * calibration.get(
-                                    "scale_m", 1
-                                ) + calibration.get("offset_m", 0)
-                                valid = bool(
-                                    np.isfinite(width)
-                                    and 0
-                                    <= width
-                                    <= calibration.get("max_width_m", 0.1)
-                                )
-                                valid_all &= valid
-                                count += 1
-                                if not stopped(capture, stop):
-                                    capture.submit(
-                                        "gripper",
-                                        arm,
-                                        0,
-                                        {
-                                            "raw": raw_value
-                                            if np.isfinite(raw_value)
-                                            else None,
-                                            "width_m": width if valid else None,
-                                            "valid": valid,
-                                        },
+                                if "error" in values:
+                                    if values["error"] != "read error":
+                                        capture.log_serial(index, values)
+                                    capture.source_state(
+                                        key, "invalid", "编码器上报: " + str(values["error"]), device
                                     )
-                            if not count:
-                                raise ValueError("未收到所选 left/right 编码器通道")
-                            capture.source_state(
-                                key,
-                                "ready" if valid_all else "invalid",
-                                "" if valid_all else "开合度超出标定范围",
-                                device,
-                            )
-                        except (ValueError, TypeError, AttributeError) as exc:
-                            capture.source_state(
-                                key, "invalid", "串口格式错误: " + str(exc), device
-                            )
+                                    continue
+                                if "angle_degree" in values and "opening_mm" not in values:
+                                    capture.serial_angle[index] = {
+                                        "angle_degree": values["angle_degree"],
+                                        "raw": values.get("raw"),
+                                        "t": time.monotonic(),
+                                    }
+                                    capture.source_state(
+                                        key, "invalid", "标定模式：等待记录标定点", device
+                                    )
+                                    continue
+                                hands_cfg = item.get("hands", "both")
+                                if "left" in values or "right" in values:
+                                    readings = {
+                                        arm: float(values[arm])
+                                        for arm in ("left", "right")
+                                        if arm in values and hands_cfg in (arm, "both")
+                                    }
+                                elif "opening_mm" in values:
+                                    if hands_cfg not in ("left", "right"):
+                                        raise ValueError(
+                                            "单通道编码器须在 hands 中指定 left 或 right"
+                                        )
+                                    readings = {
+                                        hands_cfg: float(values["opening_mm"]) / 1000.0
+                                    }
+                                else:
+                                    raise ValueError("缺少 left/right 或 opening_mm 字段")
+                                count = 0
+                                valid_all = True
+                                for arm, raw_value in readings.items():
+                                    calibration = item.get(arm, {})
+                                    width = raw_value * calibration.get(
+                                        "scale_m", 1
+                                    ) + calibration.get("offset_m", 0)
+                                    valid = bool(
+                                        np.isfinite(width)
+                                        and 0
+                                        <= width
+                                        <= calibration.get("max_width_m", 0.1)
+                                    )
+                                    valid_all &= valid
+                                    count += 1
+                                    if not stopped(capture, stop):
+                                        capture.submit(
+                                            "gripper",
+                                            arm,
+                                            0,
+                                            {
+                                                "raw": raw_value
+                                                if np.isfinite(raw_value)
+                                                else None,
+                                                "width_m": width if valid else None,
+                                                "valid": valid,
+                                            },
+                                        )
+                                if not count:
+                                    raise ValueError("未收到所选 left/right 编码器通道")
+                                capture.source_state(
+                                    key,
+                                    "ready" if valid_all else "invalid",
+                                    "" if valid_all else "开合度超出标定范围",
+                                    device,
+                                )
+                            except (ValueError, TypeError, AttributeError) as exc:
+                                capture.source_state(
+                                    key, "invalid", "串口格式错误: " + str(exc), device
+                                )
+                finally:
+                    with capture.serial_lock:
+                        capture.serial_ports.pop(index, None)
         except (OSError, ValueError, serial.SerialException) as exc:
             if not stopped(capture, stop):
                 capture.source_state(key, "disconnected", str(exc), device)

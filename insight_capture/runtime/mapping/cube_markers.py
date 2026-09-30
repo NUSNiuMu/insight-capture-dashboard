@@ -286,6 +286,11 @@ class MultiCubeMarkerEstimator:
         self._detector = cv2.aruco.ArucoDetector(
             dictionary, cv2.aruco.DetectorParameters()
         )
+        # Per-camera reason the most recent _solve_target call failed, for
+        # callers that want to show why a target is invalid rather than
+        # just "not detected". Purely additive: existing callers that only
+        # use the returned dict[str, CubePoseEstimate] are unaffected.
+        self.last_reasons: dict[str, str] = {}
 
     def detect(
         self, image_gray: np.ndarray, camera_matrix: np.ndarray
@@ -311,7 +316,11 @@ class MultiCubeMarkerEstimator:
         for camera, target in self.config.targets.items():
             visible = sorted(set(detections) & set(target.marker_corners_cube_m))
             minimum = max(self.config.min_markers, 2 if self.config.apply_corrections else 1)
+            if not visible:
+                self.last_reasons[camera] = "marker_not_detected"
+                continue
             if len(visible) < minimum:
+                self.last_reasons[camera] = "not_enough_markers_visible"
                 continue
             object_points = np.concatenate(
                 [target.marker_corners_cube_m[marker_id] for marker_id in visible]
@@ -324,6 +333,7 @@ class MultiCubeMarkerEstimator:
             )
             if estimate is not None:
                 results[camera] = estimate
+                self.last_reasons.pop(camera, None)
         return results
 
     def _solve_target(
@@ -355,12 +365,15 @@ class MultiCubeMarkerEstimator:
                 confidence=0.999,
             )
             if not ok or inlier_payload is None:
+                self.last_reasons[camera] = "pnp_solve_failed"
                 return None
             inliers = inlier_payload.reshape(-1)
         if not ok:
+            self.last_reasons[camera] = "pnp_solve_failed"
             return None
         inlier_ratio = len(inliers) / float(len(object_points))
         if inlier_ratio < self.config.min_inlier_ratio:
+            self.last_reasons[camera] = "low_inlier_ratio"
             return None
         if self.config.apply_corrections:
             # Temporal agreement cannot resolve a stable planar PnP ambiguity.
@@ -371,12 +384,14 @@ class MultiCubeMarkerEstimator:
             ]
             supported_inliers = inliers[np.isin(inliers // 4, supported)]
             if len(supported) < 2:
+                self.last_reasons[camera] = "insufficient_face_support"
                 return None
             geometry = object_points[supported_inliers]
             singular_values = np.linalg.svd(
                 geometry - geometry.mean(axis=0), compute_uv=False
             )
             if singular_values[-1] < 1e-4:
+                self.last_reasons[camera] = "degenerate_geometry"
                 return None
         rvec, tvec = cv2.solvePnPRefineLM(
             object_points[inliers],
@@ -393,6 +408,7 @@ class MultiCubeMarkerEstimator:
             float(np.min(depths)) < self.config.min_depth_m
             or float(np.max(depths)) > self.config.max_depth_m
         ):
+            self.last_reasons[camera] = "depth_out_of_range"
             return None
         projected, _ = cv2.projectPoints(
             object_points[inliers], rvec, tvec, camera_matrix, None
@@ -406,6 +422,7 @@ class MultiCubeMarkerEstimator:
             median_error > self.config.max_reprojection_error_px
             or max_error > self.config.max_reprojection_error_px * 2.0
         ):
+            self.last_reasons[camera] = "reprojection_too_high"
             return None
         rgb_from_cube = np.eye(4, dtype=np.float64)
         rgb_from_cube[:3, :3] = rotation

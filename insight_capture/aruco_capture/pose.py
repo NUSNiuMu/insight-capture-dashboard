@@ -74,8 +74,10 @@ class DirectPose(MultiCubeMarkerEstimator):
             flags=cv2.SOLVEPNP_IPPE,
         )
         if not ok:
+            self.last_reasons[camera] = "pnp_solve_failed"
             return None
         candidates = []
+        depth_rejected = reprojection_rejected = False
         for rvec, tvec in zip(rotations, translations):
             rotation = cv2.Rodrigues(rvec)[0]
             depth = (objects @ rotation.T + tvec.reshape(1, 3))[:, 2]
@@ -83,6 +85,7 @@ class DirectPose(MultiCubeMarkerEstimator):
                 depth.min() < self.config.min_depth_m
                 or depth.max() > self.config.max_depth_m
             ):
+                depth_rejected = True
                 continue
             projected = cv2.projectPoints(objects, rvec, tvec, intrinsic, None)[
                 0
@@ -92,11 +95,17 @@ class DirectPose(MultiCubeMarkerEstimator):
                 np.median(error) > self.config.max_reprojection_error_px
                 or error.max() > 2 * self.config.max_reprojection_error_px
             ):
+                reprojection_rejected = True
                 continue
             transform = np.eye(4)
             transform[:3, :3], transform[:3, 3] = rotation, tvec.reshape(3)
             candidates.append((float(np.median(error)), float(error.max()), transform))
         if not candidates:
+            self.last_reasons[camera] = (
+                "reprojection_too_high"
+                if reprojection_rejected
+                else "depth_out_of_range" if depth_rejected else "pnp_solve_failed"
+            )
             return None
         best_error = min(x[0] for x in candidates)
         candidates = [x for x in candidates if x[0] <= best_error + 0.3]
@@ -126,7 +135,8 @@ class DirectPose(MultiCubeMarkerEstimator):
         for name in self.config.targets:
             estimate = estimates.get(name)
             if estimate is None:
-                result[name] = {"valid": False, "reason": "marker_not_detected"}
+                reason = self.last_reasons.get(name, "marker_not_detected")
+                result[name] = {"valid": False, "reason": reason}
                 continue
             world_cube = self.world_from_rgb @ estimate.rgb_from_cube
             previous = self.previous.get(name)

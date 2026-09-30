@@ -304,6 +304,19 @@ main {
 .legend .right-color {
   background: var(--right);
 }
+.sample-rate input {
+  width: 42px;
+  background: #1c2b40;
+  border: 1px solid #384b64;
+  border-radius: 5px;
+  color: var(--text);
+  padding: 2px 4px;
+  font: inherit;
+  text-align: right;
+}
+.sample-rate input:disabled {
+  opacity: 0.5;
+}
 .readiness {
   display: flex;
   gap: 8px;
@@ -539,6 +552,15 @@ main {
 }
 .arm-title .status.valid {
   color: var(--green);
+}
+.arm-status-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.arm-status-group .rate {
+  font-size: 11px;
+  color: var(--muted);
 }
 .arm-values {
   display: flex;
@@ -961,6 +983,36 @@ summary {
   overflow-wrap: anywhere;
   color: var(--green);
 }
+.merge-export {
+  margin: 0 22px 22px;
+  padding-top: 16px;
+  border-top: 1px solid #2a3c54;
+}
+.merge-export label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.merge-export label small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 2px;
+}
+.merge-export > div {
+  display: flex;
+  gap: 8px;
+}
+.merge-export input {
+  flex: 1;
+  min-width: 0;
+}
+#mergeResult {
+  margin-top: 10px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  color: var(--green);
+}
 #message {
   border: 1px solid #577895;
   border-radius: 7px;
@@ -1283,6 +1335,16 @@ dialog p {
 .video-label .quiet {
   padding: 0 3px;
   font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+}
+.video-label .quiet svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
 }
 .video-label .video-rate {
   margin-left: auto;
@@ -1356,6 +1418,53 @@ dialog p {
 }
 .serial-options select {
   flex: 1;
+}
+.cal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 4px;
+  padding: 8px;
+  border: 1px solid #384b64;
+  border-radius: 6px;
+  background: #1c2b40;
+}
+.cal-panel > strong {
+  font-size: 11px;
+  color: var(--muted);
+}
+.cal-row {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.cal-row label {
+  font-size: 10px;
+  white-space: nowrap;
+}
+.cal-row input {
+  width: 80px;
+  font-size: 12px;
+}
+.cal-angle {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+.cal-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  max-height: 110px;
+  overflow-y: auto;
+}
+.cal-log-info {
+  color: var(--text);
+}
+.cal-log-error {
+  color: var(--red);
 }
 .device-actions {
   display: flex;

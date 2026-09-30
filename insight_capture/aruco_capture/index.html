@@ -58,7 +58,10 @@
           <div class="legend">
             <span><i class="left-color"></i>左手</span
             ><span><i class="right-color"></i>右手</span
-            ><span id="sampleRate">20 Hz 采样</span>
+            ><span class="sample-rate"
+              ><label for="sampleRate">采样</label
+              ><input id="sampleRate" type="number" min="1" max="120" step="1" />Hz</span
+            >
           </div>
         </div>
         <div id="readiness" class="readiness"></div>
@@ -233,7 +236,7 @@
                       name="start"
                       type="number"
                       min="0"
-                      step="0.05"
+                      step="any"
                       value="0"
                       required
                     /><button type="button" id="markStart" class="quiet">
@@ -248,7 +251,7 @@
                       name="end"
                       type="number"
                       min="0"
-                      step="0.05"
+                      step="any"
                       value="1"
                       required
                     /><button type="button" id="markEnd" class="quiet">
@@ -333,6 +336,23 @@
               <small
                 >参与手臂是语义标注，不改变双臂完整性要求。缺失时段和动作片段边界不会被跨越。</small
               >
+              <div class="merge-export">
+                <label for="mergeDatasetName"
+                  >累加导出到数据集文件夹
+                  <small
+                    >多次录制可导出到同一个文件夹，按 chunk 累加，不覆盖旧数据</small
+                  >
+                </label>
+                <div>
+                  <input
+                    id="mergeDatasetName"
+                    type="text"
+                    placeholder="数据集文件夹名，如 my_dataset"
+                    pattern="[A-Za-z0-9_-]+"
+                  /><button id="mergeExport" class="quiet">导出到该文件夹</button>
+                </div>
+                <div id="mergeResult" role="status" aria-live="polite"></div>
+              </div>
             </section>
           </div>
         </section>
