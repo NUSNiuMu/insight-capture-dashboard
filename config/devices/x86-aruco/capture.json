@@ -45,7 +45,7 @@
   "rgb": [
     {
       "name": "rgb_left_up",
-      "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:12.1:1.0-video-index0",
+      "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:9.2:1.0-video-index0",
       "width": 1280,
       "height": 720,
       "fps": 30,
@@ -54,7 +54,7 @@
     },
     {
       "name": "rgb_left_down",
-      "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:11:1.0-video-index0",
+      "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:9.1:1.0-video-index0",
       "width": 1280,
       "height": 720,
       "fps": 30,
@@ -63,7 +63,7 @@
     },
     {
       "name": "rgb_right_up",
-      "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:4:1.0-video-index0",
+      "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:9.4:1.0-video-index0",
       "width": 1280,
       "height": 720,
       "fps": 30,
@@ -72,7 +72,7 @@
     },
     {
       "name": "rgb_right_down",
-      "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:3:1.0-video-index0",
+      "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:9.3:1.0-video-index0",
       "width": 1280,
       "height": 720,
       "fps": 30,

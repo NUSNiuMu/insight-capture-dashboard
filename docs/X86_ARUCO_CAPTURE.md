@@ -27,6 +27,11 @@ docker compose version
 然后在本分支根目录执行：
 
 ```bash
+# 首次构建
+docker compose -f deploy/aruco/compose.yml build --build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
+docker compose -f deploy/aruco/compose.yml up -d
+
+# 重新构建
 docker compose -f deploy/aruco/compose.yml up --build -d
 ```
 
@@ -55,7 +60,7 @@ docker run -d --name insight-aruco-capture --network host --init \
   insight-aruco-capture:local
 ```
 
-下载较慢时可在构建命令中添加 `--build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`，仅影响镜像构建，不修改主机全局 pip 配置。
+下载较慢时可在构建命令中添加 `--build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/`，仅影响镜像构建，不修改主机全局 pip 配置。
 
 停止用 `docker stop insight-aruco-capture`，再次启动用 `docker start insight-aruco-capture`，日志用 `docker logs --tail=100 insight-aruco-capture`。代码修改后重新构建镜像并重建容器，录制数据保留在宿主机目录；配置修改只需停录后重启容器。
 
@@ -75,7 +80,7 @@ python3 -m insight_capture.aruco_capture.app --config config/devices/x86-aruco/c
 - `ros_domain_id`：须与 Insight9 实际广播使用的 ROS domain 一致，不能照抄模板默认值——不同设备/网络需要用 `ros2 topic list`（配合 `ROS_DOMAIN_ID=<N>` 逐个试）实测确认。
 - `head`：Insight9 已校正 RGB、CameraInfo、原始 VIO 话题（`image_topic`/`info_topic`/`vio_topic`），以及 IMU/RGB TF frame。三个话题各自独立订阅——只有确认对应话题真的存在发布者时才会绑定，不会对着空话题空等；没有内参、外参或新鲜 VIO 时不能起录。
 - `arms`、`tcp`、`cube_marker_relative_localization.targets`：左右手标记编号、几何及既有硬件外参，`camera` 字段用 `gripper_left`/`gripper_right` 命名（对应主 Dashboard 里的 `insight3_b`/`insight3_a`）。沿用当前硬件，无须夹爪相机上报 VIO；cube 标记具体布局和坐标系见 [Cube Marker 布局](#cube-marker-布局)。
-- `rgb`：附加相机列表，当前实际部署为 4 路 UVC（左右手各上/下两路）。除 `name`/`device`/`width`/`height`/`fps` 外，还支持：
+- `rgb`：附加相机列表，当前实际部署为 4 路 UVC（左右手各上/下两路），**每次更换主机都需要使用 `ls -l /dev/v4l/by-path` 命令确认相机输出的路径**。除 `name`/`device`/`width`/`height`/`fps` 外，还支持：
   - `auto_exposure: false`：关闭自动曝光（不写这个字段则维持相机驱动默认的自动曝光）
   - `exposure_time_absolute`：配合 `auto_exposure: false` 固定曝光时间，取值范围因相机而异，用 `v4l2-ctl -d <device> --list-ctrls-menus` 查具体相机支持的区间；不填则冻结在切换到手动模式那一刻的自动曝光值上，不会再变
   无对应设备时显示缺失并降低有效率。
