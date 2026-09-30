@@ -260,6 +260,26 @@ time {
   font-size: 22px;
   letter-spacing: -1px;
 }
+.record-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.record-name input {
+  width: 150px;
+  background: #1c2b40;
+  border: 1px solid #384b64;
+  border-radius: 5px;
+  color: var(--text);
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12px;
+}
+.record-name input:disabled {
+  opacity: 0.5;
+}
 .badge {
   display: inline-flex;
   border: 1px solid #45546a;
@@ -741,7 +761,6 @@ input[type="range"] {
 }
 .segment-form {
   padding: 20px;
-  border-right: 1px solid var(--line);
   display: grid;
   gap: 8px;
   align-content: start;
@@ -795,11 +814,7 @@ input[type="range"] {
   min-width: 0;
   max-height: 380px;
   overflow: auto;
-}
-.segment-list-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  border-right: 1px solid var(--line);
 }
 .segment-row {
   display: flex;
@@ -856,6 +871,12 @@ input[type="range"] {
   margin-bottom: 20px;
   padding: 18px 0;
 }
+#qualityPanel > .panel {
+  margin-bottom: 20px;
+}
+#qualityPanel > .panel:last-child {
+  margin-bottom: 0;
+}
 .quality-stat {
   padding: 0 22px;
   border-right: 1px solid var(--line);
@@ -876,11 +897,6 @@ input[type="range"] {
 }
 .quality-stat small {
   font-size: 10px;
-}
-.quality-grid {
-  display: grid;
-  grid-template-columns: minmax(350px, 1.6fr) minmax(280px, 1fr);
-  gap: 20px;
 }
 .quality-row {
   display: grid;
@@ -913,6 +929,20 @@ input[type="range"] {
 .quality-row.low .bar i {
   background: #dfb27d;
 }
+.quality-row.paired {
+  grid-template-columns: 92px 14px 1fr 44px 14px 1fr 44px 70px;
+}
+.side-tag {
+  font-size: 9px;
+  text-align: center;
+  color: var(--muted);
+}
+.side-tag.left {
+  color: var(--left);
+}
+.side-tag.right {
+  color: var(--right);
+}
 details {
   padding: 15px 18px;
   color: var(--muted);
@@ -933,85 +963,124 @@ summary {
   gap: 10px;
   font-size: 10px;
 }
-.export-panel > h3,
-.export-panel > p,
-.export-plan,
-.export-panel > small,
-#result {
-  margin: 12px 22px;
-}
-.export-panel > p {
+.quality-sessions-panel > p,
+.dataset-manager-panel > p {
+  margin: 0 22px 14px;
   color: var(--muted);
   font-size: 12px;
 }
-.export-panel > small {
-  display: block;
-  font-size: 10px;
-  margin-bottom: 22px;
+.quality-session-list {
+  max-height: 320px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
-.export-panel > button {
-  display: block;
-  width: calc(100% - 44px);
-  margin: 20px 22px;
-}
-.export-mark {
-  margin: 25px 22px 10px;
-  width: 44px;
-  height: 44px;
-  border-radius: 9px;
-  border: 1px solid #48718d;
-  background: #244359;
-  display: grid;
-  place-items: center;
-  color: var(--cyan);
-  font-size: 25px;
-}
-.export-plan {
-  background: #122337;
-  border-radius: 6px;
-  padding: 15px;
-  font-size: 12px;
-  color: #c9d9eb;
-}
-.export-plan strong {
-  color: var(--cyan);
-  font-size: 20px;
-  font-weight: 500;
-}
-#result {
-  font-size: 12px;
-  overflow-wrap: anywhere;
-  color: var(--green);
-}
-.merge-export {
-  margin: 0 22px 22px;
-  padding-top: 16px;
-  border-top: 1px solid #2a3c54;
-}
-.merge-export label {
-  display: block;
-  font-size: 12px;
-  margin-bottom: 8px;
-}
-.merge-export label small {
-  display: block;
-  color: var(--muted);
-  font-size: 10px;
-  margin-top: 2px;
-}
-.merge-export > div {
+.quality-session-row {
   display: flex;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 22px;
+  border-bottom: 1px solid #263a52;
+  cursor: pointer;
 }
-.merge-export input {
-  flex: 1;
+.quality-session-row:last-child {
+  border-bottom: 0;
+}
+.quality-session-row:hover {
+  background: #1c2f45;
+}
+.quality-session-row.active {
+  background: #203a54;
+  box-shadow: inset 3px 0 var(--cyan);
+}
+.quality-session-row input[type="checkbox"] {
+  margin-top: 3px;
+}
+.quality-session-info {
+  display: grid;
+  gap: 3px;
   min-width: 0;
 }
-#mergeResult {
-  margin-top: 10px;
+.quality-session-info strong {
+  font-size: 13px;
+  font-weight: 500;
+}
+.quality-session-info small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.export-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 16px 22px;
+}
+.export-controls label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.export-controls select,
+.export-controls input {
+  min-width: 160px;
+}
+#exportResult {
+  margin: 0 22px 18px;
   font-size: 12px;
   overflow-wrap: anywhere;
   color: var(--green);
+}
+.dataset-folder-list {
+  display: grid;
+  gap: 10px;
+  padding: 4px 22px 18px;
+}
+.dataset-folder-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #1a2c42;
+}
+.dataset-folder-info {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.dataset-folder-info small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.dataset-folder-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.dataset-detail {
+  margin: 0 22px 18px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #142236;
+}
+.dataset-detail h4 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.dataset-session-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #263a52;
+  font-size: 12px;
+}
+.dataset-session-row:last-child {
+  border-bottom: 0;
 }
 #message {
   border: 1px solid #577895;
@@ -1113,6 +1182,10 @@ dialog p {
     grid-template-columns: 100px 1fr 46px 75px;
     gap: 7px;
   }
+  .quality-row.paired {
+    grid-template-columns: 80px 12px 1fr 38px 12px 1fr 38px 60px;
+    gap: 5px;
+  }
   .view-tools button {
     padding: 3px 5px;
   }
@@ -1161,9 +1234,6 @@ dialog p {
   }
   .annotation-grid {
     grid-template-columns: 1fr 1fr;
-  }
-  .quality-grid {
-    grid-template-columns: 1fr;
   }
   .session-bar {
     flex-wrap: wrap;
@@ -1267,7 +1337,7 @@ dialog p {
   .annotation-grid {
     grid-template-columns: 1fr;
   }
-  .segment-form {
+  .segments-list {
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
@@ -1291,6 +1361,11 @@ dialog p {
     grid-template-columns: 85px 1fr 42px 65px;
     padding: 12px 10px;
   }
+  .quality-row.paired {
+    grid-template-columns: 68px 10px 1fr 34px 10px 1fr 34px 52px;
+    padding: 10px 8px;
+    gap: 4px;
+  }
   .quality-row button {
     font-size: 9px;
   }
@@ -1311,6 +1386,30 @@ dialog p {
   }
   .view-tools {
     gap: 0;
+  }
+  .export-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .export-controls select,
+  .export-controls input,
+  .export-controls button {
+    width: 100%;
+  }
+  .dataset-folder-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .top-actions {
+    flex-wrap: wrap;
+  }
+  .record-name {
+    order: 1;
+    width: 100%;
+  }
+  .record-name input {
+    flex: 1;
+    width: auto;
   }
 }
 @media (prefers-reduced-motion: reduce) {

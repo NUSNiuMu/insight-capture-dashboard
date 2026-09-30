@@ -11,6 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from insight_capture.postprocess.datasets.lerobot import (
@@ -613,6 +614,240 @@ def _merge_stats(base, addition):
             "count": n.astype(int).tolist(),
         }
     return merged
+
+
+def list_datasets(root):
+    """List accumulating LeRobot v3 dataset folders under ``root`` (each one
+    a directory that export_to_dataset() has written a meta/manifest.json
+    into)."""
+    root = Path(root)
+    if not root.is_dir():
+        return []
+    result = []
+    for folder in sorted(root.iterdir()):
+        manifest_path = folder / "meta/manifest.json"
+        if not manifest_path.is_file():
+            continue
+        manifest = json.loads(manifest_path.read_text())
+        result.append(
+            {
+                "name": folder.name,
+                "episode_count": manifest["episode_count"],
+                "total_frames": manifest["total_frames"],
+                "duration_s": manifest["duration_s"],
+                "session_count": len(manifest["source_datasets"]),
+                "size_bytes": manifest.get("size_bytes", 0),
+            }
+        )
+    return result
+
+
+def dataset_export_index(root):
+    """Map every session name that has been merged into any dataset folder
+    under ``root`` to the list of folder names it was merged into, in one
+    pass (used to annotate the recordings list without re-scanning every
+    dataset folder per recording)."""
+    root = Path(root)
+    index = {}
+    if not root.is_dir():
+        return index
+    for folder in sorted(root.iterdir()):
+        manifest_path = folder / "meta/manifest.json"
+        if not manifest_path.is_file():
+            continue
+        manifest = json.loads(manifest_path.read_text())
+        for entry in manifest["source_datasets"]:
+            index.setdefault(entry["source_session"], []).append(folder.name)
+    return index
+
+
+def dataset_detail(output_root):
+    output_root = Path(output_root)
+    manifest_path = output_root / "meta/manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError("数据集文件夹不存在")
+    manifest = json.loads(manifest_path.read_text())
+    return {
+        "name": output_root.name,
+        "episode_count": manifest["episode_count"],
+        "total_frames": manifest["total_frames"],
+        "duration_s": manifest["duration_s"],
+        "size_bytes": manifest.get("size_bytes", 0),
+        "sessions": manifest["source_datasets"],
+    }
+
+
+def delete_dataset(output_root):
+    output_root = Path(output_root)
+    if not (output_root / "meta/manifest.json").is_file():
+        raise ValueError("数据集文件夹不存在")
+    lock = _dataset_lock(output_root)
+    try:
+        shutil.rmtree(output_root)
+    finally:
+        try:
+            lock.close()
+        except OSError:
+            pass
+
+
+def _episode_files(output_root):
+    return sorted(
+        (output_root / "meta/episodes").glob("chunk-*/file-*.parquet"),
+        key=lambda p: (int(p.parent.name.split("-")[1]), int(p.stem.split("-")[1])),
+    )
+
+
+def delete_session_from_dataset(output_root, session_name):
+    """Remove one previously-merged session's episodes, frames and private
+    data/video files from an accumulating dataset folder, and renumber every
+    later session's episode_index/frame index down so the dataset stays
+    contiguous (required for LeRobot v3 readers that assume no gaps).
+
+    Each export_to_dataset() call writes its own private data.parquet and
+    per-camera mp4 files (never shared with another session), so those are
+    simply deleted outright. Only meta/episodes (a table shared across
+    sessions) and each later session's own data.parquet need their
+    episode_index/index columns shifted down by this session's counts."""
+    output_root = Path(output_root)
+    lock = _dataset_lock(output_root)
+    try:
+        manifest_path = output_root / "meta/manifest.json"
+        if not manifest_path.is_file():
+            raise ValueError("数据集文件夹不存在")
+        manifest = json.loads(manifest_path.read_text())
+        source_datasets = manifest["source_datasets"]
+        index = next(
+            (i for i, e in enumerate(source_datasets) if e["source_session"] == session_name),
+            None,
+        )
+        if index is None:
+            raise ValueError(f"{session_name} 不在这个数据集文件夹里")
+        entry = source_datasets[index]
+        frame_offset = sum(e["frames"] for e in source_datasets[:index])
+        deleted_frames, deleted_episodes = entry["frames"], entry["episodes"]
+        boundary = frame_offset + deleted_frames
+
+        info_path = output_root / "meta/info.json"
+        info = json.loads(info_path.read_text())
+        fps = info["fps"]
+
+        own_data_files, own_video_files, shifted_data_files = set(), set(), set()
+        for path in _episode_files(output_root):
+            table = pq.read_table(path)
+            rows = table.to_pylist()
+            kept = []
+            changed = False
+            for row in rows:
+                if row["source_session"] == session_name:
+                    own_data_files.add((row["data/chunk_index"], row["data/file_index"]))
+                    for field in row:
+                        if field.startswith("videos/") and field.endswith("/chunk_index"):
+                            key = field.split("/")[1]
+                            own_video_files.add(
+                                (key, row[field], row[f"videos/{key}/file_index"])
+                            )
+                    changed = True
+                    continue
+                if row["dataset_from_index"] >= boundary:
+                    row["episode_index"] -= deleted_episodes
+                    row["dataset_from_index"] -= deleted_frames
+                    row["dataset_to_index"] -= deleted_frames
+                    for field in row:
+                        if field.startswith("videos/") and (
+                            field.endswith("/from_timestamp")
+                            or field.endswith("/to_timestamp")
+                        ):
+                            row[field] -= deleted_frames / fps
+                    shifted_data_files.add(
+                        (row["data/chunk_index"], row["data/file_index"])
+                    )
+                    changed = True
+                kept.append(row)
+            if not changed:
+                continue
+            if kept:
+                pq.write_table(pa.Table.from_pylist(kept), path)
+            else:
+                path.unlink()
+
+        for chunk, file in shifted_data_files:
+            data_path = (
+                output_root / "data" / f"chunk-{chunk:03d}" / f"file-{file:03d}.parquet"
+            )
+            table = pq.read_table(data_path)
+            table = table.set_column(
+                table.schema.get_field_index("episode_index"),
+                "episode_index",
+                pc.subtract(table.column("episode_index"), deleted_episodes),
+            )
+            table = table.set_column(
+                table.schema.get_field_index("index"),
+                "index",
+                pc.subtract(table.column("index"), deleted_frames),
+            )
+            pq.write_table(table, data_path)
+
+        for chunk, file in own_data_files:
+            _remove_placed_file(
+                output_root / "data" / f"chunk-{chunk:03d}" / f"file-{file:03d}.parquet"
+            )
+        for key, chunk, file in own_video_files:
+            _remove_placed_file(
+                output_root
+                / "videos"
+                / key
+                / f"chunk-{chunk:03d}"
+                / f"file-{file:03d}.mp4"
+            )
+
+        info["total_episodes"] -= deleted_episodes
+        info["total_frames"] -= deleted_frames
+        info["splits"] = {"train": f"0:{info['total_episodes']}"}
+        write_json(info_path, info)
+
+        remaining = sorted((output_root / "data").glob("chunk-*/file-*.parquet"))
+        if remaining:
+            combined = pa.concat_tables(
+                [
+                    pq.read_table(
+                        p, columns=["observation.state", "action", "timestamp"]
+                    )
+                    for p in remaining
+                ]
+            )
+            write_json(
+                output_root / "meta/stats.json",
+                {
+                    key: _feature_stats(np.array(combined.column(key).to_pylist()))
+                    for key in ("observation.state", "action", "timestamp")
+                },
+            )
+        else:
+            write_json(output_root / "meta/stats.json", {})
+
+        del source_datasets[index]
+        manifest["source_datasets"] = source_datasets
+        manifest["episode_count"] = info["total_episodes"]
+        manifest["total_frames"] = info["total_frames"]
+        manifest["duration_s"] = round(info["total_frames"] / fps, 3)
+        manifest["size_bytes"] = _directory_size(output_root)
+        write_json(manifest_path, manifest)
+
+        (output_root / f"meta/sessions/{session_name}.json").unlink(missing_ok=True)
+    finally:
+        lock.close()
+    return {
+        "deleted_session": session_name,
+        "remaining_episodes": info["total_episodes"],
+        "remaining_frames": info["total_frames"],
+    }
+
+
+def _remove_placed_file(path):
+    path.unlink(missing_ok=True)
+    if path.parent.exists() and not any(path.parent.iterdir()):
+        path.parent.rmdir()
 
 
 def export_to_dataset(path, output_root):

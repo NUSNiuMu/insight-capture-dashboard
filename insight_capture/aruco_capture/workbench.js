@@ -47,7 +47,10 @@ let mode = "capture",
   exportBusy = false,
   reviewBusy = false,
   editorDirty = false,
-  lastRenderedFrame = "";
+  lastRenderedFrame = "",
+  exportSelection = new Set(),
+  datasets = [],
+  datasetDetailName = "";
 const scene = new Trajectory($("scene"), $("sceneEmpty"));
 const devicePanel = new DevicePanel(api);
 const el = (tag, text, cls) => {
@@ -95,7 +98,6 @@ function title(name) {
 function setDirty(value) {
   dirty = value;
   $("dirty").hidden = !value;
-  updateExport();
 }
 function bind(id, fn) {
   $(id).addEventListener("click", async () => {
@@ -123,7 +125,8 @@ function updateControls() {
     $(id).disabled = !review || reviewBusy;
   $("sessions").disabled = reviewBusy || exportBusy;
   for (const id of ["from", "to", "task", "hands"]) $(id).disabled = reviewBusy;
-  updateExport();
+  updateSessionNav();
+  updateBatchExport();
 }
 const FULLSCREEN_ICON =
   '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>';
@@ -327,6 +330,7 @@ async function pollStatus() {
     $("recordingState").className = "badge" + (s.recording ? " recording" : "");
     if (document.activeElement !== $("sampleRate")) $("sampleRate").value = s.fps;
     $("sampleRate").disabled = !!s.recording;
+    $("recordName").disabled = !!s.recording;
     readiness(s);
     devicePanel.update(s);
     $("footerState").textContent = s.recording
@@ -441,7 +445,7 @@ function changeMode() {
   $("devicePanel").hidden = mode !== "capture";
   $("sourceAlerts").hidden =
     mode !== "capture" || !$("sourceAlerts").textContent;
-  $("sessionBar").hidden = mode === "capture";
+  $("sessionBar").hidden = mode !== "review";
   $("stage").hidden = mode === "quality";
   $("armCards").hidden = mode === "quality";
   $("reviewPanel").hidden = mode !== "review";
@@ -461,7 +465,22 @@ function changeMode() {
     if (review) seek(currentTime);
     else armCards();
   }
+  if (mode === "quality") {
+    renderQualitySessions();
+    refreshDatasets().catch((e) => notice(e.message, true));
+  }
   updateControls();
+}
+function sessionStatusSuffix(r) {
+  return r.status !== "stopped" ? " · 未结束" : !r.annotated ? " · 未标注" : "";
+}
+function sessionTimestamp(r) {
+  return r.started_unix_ns
+    ? new Date(r.started_unix_ns / 1e6).toLocaleString("zh-CN", { hour12: false })
+    : "";
+}
+function sessionLabel(r) {
+  return `${r.name} · ${seconds(r.duration_s, 1)}` + sessionStatusSuffix(r);
 }
 async function refresh() {
   records = await api("/api/sessions");
@@ -469,20 +488,34 @@ async function refresh() {
     new Option(records.length ? "选择一条录制…" : "暂无录制，请先开始采集", ""),
   );
   for (const r of records) {
-    const date = r.started_unix_ns
-      ? new Date(r.started_unix_ns / 1e6).toLocaleString("zh-CN", {
-          hour12: false,
-        })
-      : r.name;
-    const option = new Option(
-      `${date} · ${seconds(r.duration_s, 1)}${r.status !== "stopped" ? " · 未结束" : ""}`,
-      r.name,
-    );
+    const option = new Option(sessionLabel(r), r.name);
     option.disabled = r.status !== "stopped";
     $("sessions").add(option);
   }
   $("sessions").value = selectedName;
+  updateSessionNav();
+  renderQualitySessions();
 }
+function stoppedRecords() {
+  return records.filter((r) => r.status === "stopped");
+}
+function updateSessionNav() {
+  const stopped = stoppedRecords();
+  const index = stopped.findIndex((r) => r.name === selectedName);
+  $("prevSession").disabled = index <= 0;
+  $("nextSession").disabled = index === -1 || index >= stopped.length - 1;
+}
+bind("prevSession", async () => {
+  const stopped = stoppedRecords();
+  const index = stopped.findIndex((r) => r.name === selectedName);
+  if (index > 0) await selectSession(stopped[index - 1].name);
+});
+bind("nextSession", async () => {
+  const stopped = stoppedRecords();
+  const index = stopped.findIndex((r) => r.name === selectedName);
+  if (index !== -1 && index < stopped.length - 1)
+    await selectSession(stopped[index + 1].name);
+});
 function discardApproval() {
   return new Promise((resolve) => {
     const d = $("discardDialog");
@@ -506,19 +539,20 @@ async function selectSession(name) {
   updatePlay();
   frameVersion++;
   selectedName = name;
+  $("sessions").value = name;
   editorDirty = false;
   review = null;
   parts = [];
   setDirty(false);
   editing = -1;
   currentTime = 0;
-  $("result").textContent = "";
   scene.setData([]);
   scene.cursor(null);
   armCards();
   resetEditor();
   renderParts();
   renderQuality();
+  renderQualitySessions();
   for (const card of $("videos").children) loadImage(card, "", false);
   if (!name) {
     renderParts();
@@ -714,7 +748,6 @@ function renderParts() {
       $("segmentTrack").append(block);
     }
   });
-  updateExport();
 }
 function metricLabel(key) {
   return (
@@ -733,6 +766,57 @@ function jumpMissing(t) {
   location.hash = "review";
   seek(t);
 }
+const PAIRED_QUALITY_METRICS = [
+  ["left.position", "right.position", "位置"],
+  ["left.rotation", "right.rotation", "姿态"],
+  ["left.gripper", "right.gripper", "开合度"],
+  ["video.rgb_left_up", "video.rgb_right_up", "上侧 RGB"],
+  ["video.rgb_left_down", "video.rgb_right_down", "下侧 RGB"],
+];
+function qualityBar(v) {
+  const bar = el("div", undefined, "bar"),
+    fill = el("i");
+  fill.style.width = v * 100 + "%";
+  if (v < 0.95) fill.style.background = "#dfb27d";
+  bar.append(fill);
+  return bar;
+}
+function gapButton(gaps) {
+  const jump = el("button", gaps.length ? "检查缺失" : "无缺失", "quiet");
+  jump.disabled = !gaps.length;
+  jump.onclick = () => jumpMissing(gaps[0][0]);
+  return jump;
+}
+function qualitySingleRow(key, v, q) {
+  const row = el("div", undefined, "quality-row" + (v < 0.95 ? " low" : ""));
+  row.append(
+    el("span", metricLabel(key)),
+    qualityBar(v),
+    el("strong", (v * 100).toFixed(1) + "%"),
+    gapButton(q.missing_intervals[key] || []),
+  );
+  return row;
+}
+function qualityPairRow(label, leftKey, leftV, rightKey, rightV, q) {
+  // Per-side "low" coloring is applied directly on each bar by qualityBar();
+  // the row itself skips .low so the shared `.quality-row.low .bar i` rule
+  // doesn't force the OTHER (fine) side's bar amber too.
+  const row = el("div", undefined, "quality-row paired");
+  const gaps = [...(q.missing_intervals[leftKey] || []), ...(q.missing_intervals[rightKey] || [])].sort(
+    (a, b) => a[0] - b[0],
+  );
+  row.append(
+    el("span", label),
+    el("span", "左", "side-tag left"),
+    qualityBar(leftV),
+    el("strong", (leftV * 100).toFixed(1) + "%"),
+    el("span", "右", "side-tag right"),
+    qualityBar(rightV),
+    el("strong", (rightV * 100).toFixed(1) + "%"),
+    gapButton(gaps),
+  );
+  return row;
+}
 function renderQuality() {
   const q = review?.quality;
   $("quality").replaceChildren();
@@ -743,7 +827,6 @@ function renderQuality() {
     $("quality").append(
       el("div", "选择一条录制，查看质量报告。", "empty-state"),
     );
-    updateExport();
     return;
   }
   const metrics = [
@@ -765,23 +848,19 @@ function renderQuality() {
     d.append(el("span", label), el("strong", value), el("small", sub));
     $("qualitySummary").append(d);
   }
-  for (const [key, v] of Object.entries(q.valid_ratios)) {
-    const row = el("div", undefined, "quality-row" + (v < 0.95 ? " low" : "")),
-      bar = el("div", undefined, "bar"),
-      fill = el("i");
-    fill.style.width = v * 100 + "%";
-    bar.append(fill);
-    const gaps = q.missing_intervals[key] || [],
-      jump = el("button", gaps.length ? "检查缺失" : "无缺失", "quiet");
-    jump.disabled = !gaps.length;
-    jump.onclick = () => jumpMissing(gaps[0][0]);
-    row.append(
-      el("span", metricLabel(key)),
-      bar,
-      el("strong", (v * 100).toFixed(1) + "%"),
-      jump,
+  const ratios = q.valid_ratios,
+    handled = new Set();
+  for (const [leftKey, rightKey, label] of PAIRED_QUALITY_METRICS) {
+    if (!(leftKey in ratios) || !(rightKey in ratios)) continue;
+    handled.add(leftKey);
+    handled.add(rightKey);
+    $("quality").append(
+      qualityPairRow(label, leftKey, ratios[leftKey], rightKey, ratios[rightKey], q),
     );
-    $("quality").append(row);
+  }
+  for (const [key, v] of Object.entries(ratios)) {
+    if (handled.has(key)) continue;
+    $("quality").append(qualitySingleRow(key, v, q));
   }
   for (const [key, v] of Object.entries(q.state_dimension_valid_ratios)) {
     const d = el("div");
@@ -798,49 +877,192 @@ function renderQuality() {
     b.onclick = () => seek(start);
     $("validityTrack").append(b);
   }
-  updateExport();
 }
-function updateExport() {
-  const q = review?.quality,
-    plan = q?.export_plan;
-  $("export").disabled =
-    !q ||
-    dirty ||
-    editorDirty ||
-    reviewBusy ||
-    !!review?.exported ||
-    exportBusy ||
-    !!status?.recording ||
-    !plan?.frames;
-  $("mergeExport").disabled =
-    !q || dirty || editorDirty || reviewBusy || exportBusy || !!status?.recording || !plan?.frames;
-  if (!q) {
-    $("exportPlan").textContent = "选择录制并添加动作片段后，查看可导出数据。";
+function renderQualitySessions() {
+  const list = $("qualitySessions");
+  list.replaceChildren();
+  const stopped = stoppedRecords();
+  if (!stopped.length) {
+    list.append(el("div", "暂无已完成的录制。", "empty-state"));
+    updateBatchExport();
     return;
   }
-  if (review.exported) {
-    $("exportPlan").textContent =
-      `已导出 ${review.exported.total_frames} 帧，${review.exported.total_episodes} 个片段。原数据集会保留。`;
-    return;
-  }
-  if (dirty || editorDirty) {
-    $("exportPlan").textContent =
-      "标注有未保存的修改。保存后重新计算可导出范围。";
-    return;
-  }
-  $("exportPlan").replaceChildren();
-  if (plan.frames) {
-    $("exportPlan").append(
-      el("strong", `${plan.frames} 帧`),
+  for (const r of stopped) {
+    const row = el(
+      "div",
+      undefined,
+      "quality-session-row" + (r.name === selectedName ? " active" : ""),
+    );
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = exportSelection.has(r.name);
+    check.setAttribute("aria-label", "选中导出 " + r.name);
+    check.onclick = (e) => e.stopPropagation();
+    check.onchange = () => {
+      if (check.checked) exportSelection.add(r.name);
+      else exportSelection.delete(r.name);
+      updateBatchExport();
+    };
+    const info = el("div", undefined, "quality-session-info");
+    info.append(
+      el("strong", r.name),
       el(
-        "p",
-        `${plan.episodes} 个连续片段 · ${plan.annotated_segments} 段动作标注`,
+        "small",
+        `${sessionTimestamp(r)} · ${seconds(r.duration_s, 1)}` +
+          sessionStatusSuffix(r) +
+          (r.exported_to.length
+            ? ` · 已导出到：${r.exported_to.join(", ")}`
+            : " · 尚未导出"),
       ),
     );
-  } else {
-    $("exportPlan").textContent = parts.length
-      ? "没有可导出片段。检查缺失维度；每段需要至少连续 3 帧完整观测。"
-      : "尚无动作标注。前往回放与标注，划分任务片段。";
+    row.append(check, info);
+    row.onclick = () =>
+      selectSession(r.name).catch((e) => notice(e.message, true));
+    list.append(row);
+  }
+  updateBatchExport();
+}
+function updateBatchExport() {
+  $("batchExport").disabled =
+    exportSelection.size === 0 || exportBusy || !!status?.recording;
+}
+$("datasetTarget").onchange = () => {
+  $("newDatasetName").hidden = $("datasetTarget").value !== "__new__";
+};
+async function refreshDatasets() {
+  datasets = await api("/api/datasets");
+  const select = $("datasetTarget"),
+    previous = select.value;
+  select.replaceChildren(new Option("+ 新建文件夹…", "__new__"));
+  for (const d of datasets)
+    select.add(new Option(`${d.name}（${d.episode_count} 段）`, d.name));
+  select.value = datasets.some((d) => d.name === previous) ? previous : "__new__";
+  $("newDatasetName").hidden = select.value !== "__new__";
+  renderDatasetFolders();
+}
+function renderDatasetFolders() {
+  const wrap = $("datasetFolders");
+  wrap.replaceChildren();
+  if (!datasets.length) {
+    wrap.append(el("div", "还没有导出过的数据集文件夹。", "empty-state"));
+    return;
+  }
+  for (const d of datasets) {
+    const row = el("div", undefined, "dataset-folder-row");
+    const info = el("div", undefined, "dataset-folder-info");
+    info.append(
+      el("strong", d.name),
+      el(
+        "small",
+        `${d.episode_count} 个片段 · ${d.total_frames} 帧 · ${d.session_count} 条录制 · ${(d.size_bytes / 1e6).toFixed(1)} MB`,
+      ),
+    );
+    const actions = el("div", undefined, "dataset-folder-actions");
+    const view = el("button", datasetDetailName === d.name ? "收起" : "查看", "quiet");
+    view.type = "button";
+    view.onclick = () => toggleDatasetDetail(d.name);
+    const remove = el("button", "删除文件夹", "quiet");
+    remove.type = "button";
+    remove.onclick = () => deleteDatasetFolder(d.name);
+    actions.append(view, remove);
+    row.append(info, actions);
+    wrap.append(row);
+  }
+}
+async function loadDatasetDetail(name) {
+  $("datasetDetail").replaceChildren(el("p", "加载中…", "muted"));
+  try {
+    renderDatasetDetail(await api("/api/datasets/" + encodeURIComponent(name)));
+  } catch (e) {
+    $("datasetDetail").replaceChildren(el("p", e.message, "error-text"));
+  }
+}
+function renderDatasetDetail(detail) {
+  $("datasetDetail").replaceChildren();
+  $("datasetDetail").append(el("h4", `${detail.name} 内的录制`));
+  if (!detail.sessions.length) {
+    $("datasetDetail").append(el("div", "空文件夹。", "empty-state"));
+    return;
+  }
+  for (const s of detail.sessions) {
+    const row = el("div", undefined, "dataset-session-row");
+    row.append(
+      el("span", s.source_session),
+      el("span", `${s.episodes} 段 · ${s.frames} 帧`, "muted"),
+    );
+    const remove = el("button", "删除此录制", "quiet");
+    remove.type = "button";
+    remove.onclick = () => deleteDatasetSession(detail.name, s.source_session);
+    row.append(remove);
+    $("datasetDetail").append(row);
+  }
+}
+async function toggleDatasetDetail(name) {
+  if (datasetDetailName === name) {
+    datasetDetailName = "";
+    $("datasetDetail").hidden = true;
+    renderDatasetFolders();
+    return;
+  }
+  datasetDetailName = name;
+  $("datasetDetail").hidden = false;
+  renderDatasetFolders();
+  await loadDatasetDetail(name);
+}
+function confirmDelete(title, body) {
+  return new Promise((resolve) => {
+    const d = $("deleteDialog");
+    $("deleteDialogTitle").textContent = title;
+    $("deleteDialogBody").textContent = body;
+    d.showModal();
+    const finish = (value) => {
+      d.close();
+      resolve(value);
+    };
+    $("confirmDelete").onclick = () => finish(true);
+    $("cancelDelete").onclick = () => finish(false);
+    d.oncancel = () => resolve(false);
+  });
+}
+async function deleteDatasetFolder(name) {
+  if (
+    !(await confirmDelete(
+      "删除数据集文件夹",
+      `将永久删除文件夹 ${name} 及其全部导出数据，且无法撤销，确定继续吗？`,
+    ))
+  )
+    return;
+  try {
+    await api("/api/datasets/" + encodeURIComponent(name), "DELETE");
+    if (datasetDetailName === name) {
+      datasetDetailName = "";
+      $("datasetDetail").hidden = true;
+    }
+    notice(`已删除数据集文件夹 ${name}`);
+    await refreshDatasets();
+  } catch (e) {
+    notice(e.message, true);
+  }
+}
+async function deleteDatasetSession(datasetName, sessionName) {
+  if (
+    !(await confirmDelete(
+      "删除这条录制的导出数据",
+      `将从 ${datasetName} 中移除 ${sessionName} 贡献的全部片段，且无法撤销，确定继续吗？`,
+    ))
+  )
+    return;
+  try {
+    await api(
+      `/api/datasets/${encodeURIComponent(datasetName)}/sessions/${encodeURIComponent(sessionName)}`,
+      "DELETE",
+    );
+    notice(`已从 ${datasetName} 移除 ${sessionName}`);
+    await refresh();
+    await refreshDatasets();
+    if (datasetDetailName === datasetName) await loadDatasetDetail(datasetName);
+  } catch (e) {
+    notice(e.message, true);
   }
 }
 $("sampleRate").addEventListener("change", async () => {
@@ -855,9 +1077,12 @@ $("sampleRate").addEventListener("change", async () => {
   }
 });
 bind("start", async () => {
+  const name = $("recordName").value.trim();
+  if (name && !/^[A-Za-z0-9_-]+$/.test(name))
+    throw Error("录制名称只能包含字母、数字、下划线和短横线");
   actionBusy = true;
   try {
-    await api("/api/start", "POST");
+    await api("/api/start", "POST", { name });
     notice("已开始录制");
     await refresh();
   } finally {
@@ -880,6 +1105,8 @@ bind("stop", async () => {
   }
 });
 bind("refresh", refresh);
+bind("refreshQualitySessions", refresh);
+bind("refreshDatasets", refreshDatasets);
 $("sessions").onchange = () =>
   selectSession($("sessions").value).catch((e) => notice(e.message, true));
 bind("play", () => {
@@ -907,17 +1134,14 @@ $("time").oninput = () => {
 $("markStart").onclick = () => {
   $("from").value = currentTime.toFixed(3);
   editorDirty = true;
-  updateExport();
 };
 $("markEnd").onclick = () => {
   $("to").value = currentTime.toFixed(3);
   editorDirty = true;
-  updateExport();
 };
 $("cancelEdit").onclick = resetEditor;
 $("segmentForm").addEventListener("input", () => {
   editorDirty = true;
-  updateExport();
 });
 $("segmentForm").onsubmit = (e) => {
   e.preventDefault();
@@ -1011,55 +1235,43 @@ bind("qc", async () => {
     updateControls();
   }
 });
-bind("export", async () => {
-  exportBusy = true;
-  updateExport();
-  $("result").textContent = "正在编码视频并导出，请稍候…";
-  try {
-    const r = await api(base() + "/export", "POST");
-    $("result").replaceChildren(
-      el("strong", "导出完成"),
-      el("p", `${r.frames} 帧 · ${r.episodes} 个片段`),
-      el("p", r.path),
-    );
-    review.exported = { total_frames: r.frames, total_episodes: r.episodes };
-    await refresh();
-  } catch (e) {
-    $("result").textContent = e.message;
-    throw e;
-  } finally {
-    exportBusy = false;
-    updateExport();
+bind("batchExport", async () => {
+  const target = $("datasetTarget").value;
+  let name = target;
+  if (target === "__new__") {
+    name = $("newDatasetName").value.trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+      $("exportResult").textContent =
+        "数据集文件夹名只能包含字母、数字、下划线和短横线";
+      return;
+    }
   }
-});
-bind("mergeExport", async () => {
-  const name = $("mergeDatasetName").value.trim();
-  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
-    $("mergeResult").textContent =
-      "数据集文件夹名只能包含字母、数字、下划线和短横线";
-    return;
-  }
+  const chosen = [...exportSelection];
+  if (!chosen.length) return;
   exportBusy = true;
-  updateExport();
-  $("mergeResult").textContent = "正在编码视频并累加导出，请稍候…";
+  updateBatchExport();
+  $("exportResult").textContent = `正在导出 ${chosen.length} 条记录，请稍候…`;
   try {
-    const r = await api(base() + "/export_dataset", "POST", {
-      dataset_name: name,
+    const r = await api(`/api/datasets/${encodeURIComponent(name)}/export`, "POST", {
+      sessions: chosen,
     });
-    $("mergeResult").replaceChildren(
-      el("strong", "已累加导出"),
+    $("exportResult").replaceChildren(
+      el("strong", "导出完成"),
       el(
         "p",
-        `本次 +${r.episodes_added} 个片段 · +${r.frames_added} 帧，数据集累计 ${r.total_episodes} 个片段 · ${r.total_frames} 帧`,
+        `累计 ${r.detail.episode_count} 个片段 · ${r.detail.total_frames} 帧，来自 ${r.detail.sessions.length} 条录制`,
       ),
-      el("p", r.path),
+      el("p", r.detail.name),
     );
+    exportSelection.clear();
+    await refresh();
+    await refreshDatasets();
   } catch (e) {
-    $("mergeResult").textContent = e.message;
+    $("exportResult").textContent = e.message;
     throw e;
   } finally {
     exportBusy = false;
-    updateExport();
+    updateBatchExport();
   }
 });
 document

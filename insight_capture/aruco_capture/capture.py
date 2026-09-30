@@ -6,7 +6,6 @@ import re
 import sqlite3
 import threading
 import time
-import uuid
 from collections import defaultdict, deque
 from pathlib import Path
 
@@ -158,7 +157,7 @@ class Capture:
                 raise ValueError("串口未连接，无法发送命令")
             port.write((line + "\n").encode())
 
-    def start(self):
+    def start(self, label=None):
         with self.lock:
             if self.active or self.draining or self.reconfiguring:
                 raise ValueError("已经在录制或正在停止")
@@ -173,7 +172,15 @@ class Capture:
                 or time.monotonic() - self.latest.get("vio/head", 0) > 2
             ):
                 raise ValueError("等待 Insight9 VIO")
-            name = time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
+            label = (label or "").strip() or "My_Capture"
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", label):
+                raise ValueError("录制名称只能包含字母、数字、下划线和短横线")
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            name = f"{label}_{stamp}"
+            suffix = 2
+            while (self.root / name).exists():
+                name = f"{label}_{stamp}_{suffix}"
+                suffix += 1
             directory = self.root / name
             directory.mkdir()
             self.started = time.monotonic()

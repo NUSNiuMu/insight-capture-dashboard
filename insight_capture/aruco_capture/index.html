@@ -46,6 +46,16 @@
         <div class="top-actions">
           <span id="recordingState" class="badge">未录制</span
           ><time id="elapsed">00:00.0</time
+          ><label class="record-name" for="recordName"
+            >录制名称
+            <input
+              id="recordName"
+              type="text"
+              value="My_Capture"
+              maxlength="60"
+              pattern="[A-Za-z0-9_-]+"
+              aria-label="录制名称，将与时间戳一起作为文件夹名"
+          /></label
           ><button id="start" class="primary">
             <span aria-hidden="true">●</span> 开始录制</button
           ><button id="stop" class="danger" hidden>停止录制</button>
@@ -88,6 +98,10 @@
           ><select id="sessions">
             <option value="">选择一条录制…</option></select
           ><button id="refresh" class="quiet">刷新列表</button
+          ><button id="prevSession" class="quiet" aria-label="上一条录制">
+            ‹ 上一项</button
+          ><button id="nextSession" class="quiet" aria-label="下一条录制">
+            下一项 ›</button
           ><span id="sessionMeta" class="muted"></span>
         </div>
         <div id="stage" class="stage">
@@ -222,6 +236,13 @@
             </div>
           </div>
           <div class="annotation-grid">
+            <div class="segments-list">
+              <div class="section-title">
+                <h3>动作片段</h3>
+                <span id="segmentCount" class="muted">0 个片段</span>
+              </div>
+              <div id="segments"></div>
+            </div>
             <form id="segmentForm" class="segment-form">
               <div class="section-title">
                 <h3 id="editorTitle">添加动作片段</h3>
@@ -275,24 +296,16 @@
               </select>
               <p id="formError" class="error-text" role="alert"></p>
               <div class="form-actions">
-                <button id="add" type="submit" class="primary">添加片段</button
+                <button id="autoSegment" type="button" class="primary">
+                  自动分段（静止检测）</button
+                ><button id="add" type="submit" class="primary">添加片段</button
                 ><button id="cancelEdit" type="button" class="quiet" hidden>
                   取消编辑</button
-                ><button id="save" type="button">保存全部标注</button>
+                ><button id="save" type="button" class="primary">
+                  保存全部标注
+                </button>
               </div>
             </form>
-            <div class="segments-list">
-              <div class="section-title">
-                <h3>动作片段</h3>
-                <div class="segment-list-actions">
-                  <span id="segmentCount" class="muted">0 个片段</span>
-                  <button id="autoSegment" type="button" class="quiet">
-                    自动分段（静止检测）
-                  </button>
-                </div>
-              </div>
-              <div id="segments"></div>
-            </div>
           </div>
         </section>
         <section id="qualityPanel" hidden>
@@ -306,55 +319,49 @@
             <button id="qc">重新评估</button>
           </div>
           <div id="qualitySummary" class="quality-summary"></div>
-          <div class="quality-grid">
-            <section class="panel">
-              <div class="panel-heading">
-                <h3>各维度有效率</h3>
-                <span class="muted">点击缺失时段进入回放</span>
-              </div>
-              <div id="quality"></div>
-              <details>
-                <summary>查看全部 20 个状态维度</summary>
-                <div id="dimensions"></div>
-              </details>
-            </section>
-            <section class="panel export-panel">
-              <div class="panel-heading">
-                <h3>LeRobot v3 导出</h3>
-                <span class="badge">本地数据集</span>
-              </div>
-              <div class="export-mark" aria-hidden="true">▤</div>
-              <h3>准备训练数据</h3>
-              <p>
-                只保留标注范围内，视频、双臂位姿和开合度同时有效的连续片段。
-              </p>
-              <div id="exportPlan" class="export-plan">
-                选择录制并添加动作片段后，查看可导出数据。
-              </div>
-              <button id="export" class="primary wide">导出 LeRobot v3</button>
-              <div id="result" role="status" aria-live="polite"></div>
-              <small
-                >参与手臂是语义标注，不改变双臂完整性要求。缺失时段和动作片段边界不会被跨越。</small
-              >
-              <div class="merge-export">
-                <label for="mergeDatasetName"
-                  >累加导出到数据集文件夹
-                  <small
-                    >多次录制可导出到同一个文件夹，按 chunk 累加，不覆盖旧数据</small
-                  >
-                </label>
-                <div>
-                  <input
-                    id="mergeDatasetName"
-                    type="text"
-                    placeholder="数据集文件夹名，如 my_dataset"
-                    pattern="[A-Za-z0-9_-]+"
-                  /><button id="mergeExport" class="quiet">导出到该文件夹</button>
-                </div>
-                <div id="mergeResult" role="status" aria-live="polite"></div>
-              </div>
-            </section>
-          </div>
+          <section class="panel">
+            <div class="panel-heading">
+              <h3>各维度有效率</h3>
+              <span class="muted">点击缺失时段进入回放；点击一条录制查看其质量</span>
+            </div>
+            <div id="quality"></div>
+            <details>
+              <summary>查看全部 20 个状态维度</summary>
+              <div id="dimensions"></div>
+            </details>
+          </section>
+          <section class="panel quality-sessions-panel">
+            <div class="panel-heading">
+              <h3>录制记录 · 导出到 LeRobot v3</h3>
+              <button id="refreshQualitySessions" class="quiet">刷新列表</button>
+            </div>
+            <p class="muted">
+              点击一条记录查看其采集质量；勾选复选框加入本次批量导出。只保留标注范围内，视频、双臂位姿和开合度同时有效的连续片段。
+            </p>
+            <div id="qualitySessions" class="quality-session-list"></div>
+            <div class="export-controls">
+              <label for="datasetTarget">导出到文件夹</label>
+              <select id="datasetTarget">
+                <option value="__new__">+ 新建文件夹…</option>
+              </select>
+              <input
+                id="newDatasetName"
+                type="text"
+                placeholder="新文件夹名，如 my_dataset"
+                pattern="[A-Za-z0-9_-]+"
+              />
+              <button id="batchExport" class="primary">导出选中记录</button>
+            </div>
+            <div id="exportResult" role="status" aria-live="polite"></div>
+          </section>
+          <section class="panel dataset-manager-panel">
+            <div class="panel-heading">
+              <h3>数据集文件夹管理</h3>
+              <button id="refreshDatasets" class="quiet">刷新</button>
+            </div>
+            <div id="datasetFolders" class="dataset-folder-list"></div>
+            <div id="datasetDetail" class="dataset-detail" hidden></div>
+          </section>
         </section>
         <footer class="page-footer">
           <span id="footerState">正在连接采集服务…</span
@@ -368,6 +375,14 @@
       <div class="form-actions">
         <button id="keepEditing" class="primary">继续编辑</button
         ><button id="discardChanges">丢弃修改并切换</button>
+      </div>
+    </dialog>
+    <dialog id="deleteDialog">
+      <h2 id="deleteDialogTitle">确认删除</h2>
+      <p id="deleteDialogBody">此操作不可撤销。</p>
+      <div class="form-actions">
+        <button id="cancelDelete" class="primary">取消</button
+        ><button id="confirmDelete" class="danger">确认删除</button>
       </div>
     </dialog>
   </body>

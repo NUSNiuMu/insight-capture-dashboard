@@ -14,9 +14,13 @@ from .capture import Capture, write_json
 from .dataset import (
     align,
     connect,
-    export,
+    dataset_detail,
+    dataset_export_index,
+    delete_dataset,
+    delete_session_from_dataset,
     export_runs,
     export_to_dataset,
+    list_datasets,
     suggest_pause_segments,
     validate_segments,
 )
@@ -34,14 +38,22 @@ def create_app(capture):
 
     app = web.Application(middlewares=[errors])
 
-    def session(request):
-        name = request.match_info["name"]
+    def session_path(name):
         if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
             raise web.HTTPNotFound()
         path = capture.root / name
         if not (path / "session.json").is_file():
             raise web.HTTPNotFound()
         return path
+
+    def session(request):
+        return session_path(request.match_info["name"])
+
+    def dataset_root(request):
+        name = request.match_info["name"]
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            raise web.HTTPNotFound()
+        return capture.root.parent / "lerobot_datasets" / name
 
     async def index(request):
         return web.FileResponse(Path(__file__).with_name("index.html"))
@@ -136,15 +148,23 @@ def create_app(capture):
     async def start(request):
         if busy:
             raise ValueError("请等待当前导出完成，再开始录制")
-        return web.json_response({"recording": await asyncio.to_thread(capture.start)})
+        text = await request.text()
+        label = json.loads(text).get("name") if text else None
+        return web.json_response(
+            {"recording": await asyncio.to_thread(capture.start, label)}
+        )
 
     async def stop(request):
         return web.json_response({"stopped": await asyncio.to_thread(capture.stop)})
 
     async def sessions(request):
+        exported_index = await asyncio.to_thread(
+            dataset_export_index, capture.root.parent / "lerobot_datasets"
+        )
         rows = []
         for path in sorted(capture.root.glob("*/session.json"), reverse=True):
             value = json.loads(path.read_text())
+            segments = json.loads((path.parent / "segments.json").read_text())
             rows.append(
                 {
                     "name": path.parent.name,
@@ -153,7 +173,8 @@ def create_app(capture):
                     "started_unix_ns": value.get("started_unix_ns"),
                     "streams": ["head"]
                     + [x["name"] for x in value["config"].get("rgb", [])],
-                    "exported": (path.parent / "lerobot/meta/info.json").is_file(),
+                    "annotated": bool(segments),
+                    "exported_to": exported_index.get(path.parent.name, []),
                 }
             )
         return web.json_response(rows)
@@ -263,8 +284,6 @@ def create_app(capture):
         else:
             # Keep the original QC response usable by command-line callers.
             return report
-        info = path / "lerobot/meta/info.json"
-        result["exported"] = json.loads(info.read_text()) if info.is_file() else None
         return result
 
     async def qc(request):
@@ -277,32 +296,67 @@ def create_app(capture):
             await asyncio.to_thread(review_data, session(request), True)
         )
 
-    async def dataset(request):
-        path = session(request)
-        if path.name in busy or capture.active or capture.reconfiguring:
-            raise ValueError("请先停止录制，且勿重复导出")
-        busy.add(path.name)
-        try:
-            return web.json_response(await asyncio.to_thread(export, path))
-        finally:
-            busy.remove(path.name)
-
-    async def dataset_merge(request):
-        path = session(request)
-        if path.name in busy or capture.active or capture.reconfiguring:
-            raise ValueError("请先停止录制，且勿重复导出")
-        body = await request.json()
-        name = str(body.get("dataset_name", "")).strip()
-        if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
-            raise ValueError("数据集文件夹名只能包含字母、数字、下划线和短横线")
-        output_root = capture.root.parent / "lerobot_datasets" / name
-        busy.add(path.name)
-        try:
-            return web.json_response(
-                await asyncio.to_thread(export_to_dataset, path, output_root)
+    async def datasets_list(request):
+        return web.json_response(
+            await asyncio.to_thread(
+                list_datasets, capture.root.parent / "lerobot_datasets"
             )
-        finally:
-            busy.remove(path.name)
+        )
+
+    async def datasets_detail(request):
+        return web.json_response(
+            await asyncio.to_thread(dataset_detail, dataset_root(request))
+        )
+
+    async def datasets_export(request):
+        if capture.active or capture.reconfiguring:
+            raise ValueError("请先停止录制，再导出")
+        output_root = dataset_root(request)
+        body = await request.json()
+        names = body.get("sessions")
+        if not isinstance(names, list) or not names:
+            raise ValueError("请至少选择一条录制记录")
+        done = []
+        try:
+            for name in names:
+                path = session_path(name)
+                if path.name in busy:
+                    raise ValueError(f"{name} 正在使用中，请稍后重试")
+                busy.add(path.name)
+                try:
+                    done.append(
+                        await asyncio.to_thread(export_to_dataset, path, output_root)
+                    )
+                finally:
+                    busy.remove(path.name)
+        except ValueError as exc:
+            if done:
+                raise ValueError(
+                    f"{exc}（已成功导出 {len(done)} 条：{', '.join(names[: len(done)])}）"
+                ) from exc
+            raise
+        return web.json_response(
+            {
+                "results": done,
+                "detail": await asyncio.to_thread(dataset_detail, output_root),
+            }
+        )
+
+    async def datasets_delete_session(request):
+        output_root = dataset_root(request)
+        session_name = request.match_info["session"]
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", session_name):
+            raise web.HTTPNotFound()
+        return web.json_response(
+            await asyncio.to_thread(
+                delete_session_from_dataset, output_root, session_name
+            )
+        )
+
+    async def datasets_delete(request):
+        output_root = dataset_root(request)
+        await asyncio.to_thread(delete_dataset, output_root)
+        return web.json_response({"deleted": output_root.name})
 
     async def cleanup(app):
         capture.close()
@@ -329,8 +383,11 @@ def create_app(capture):
             web.get("/api/sessions/{name}/segments/auto", auto_segments),
             web.get("/api/sessions/{name}/qc", qc),
             web.get("/api/sessions/{name}/review", review),
-            web.post("/api/sessions/{name}/export", dataset),
-            web.post("/api/sessions/{name}/export_dataset", dataset_merge),
+            web.get("/api/datasets", datasets_list),
+            web.get("/api/datasets/{name}", datasets_detail),
+            web.post("/api/datasets/{name}/export", datasets_export),
+            web.delete("/api/datasets/{name}/sessions/{session}", datasets_delete_session),
+            web.delete("/api/datasets/{name}", datasets_delete),
         ]
     )
     return app
