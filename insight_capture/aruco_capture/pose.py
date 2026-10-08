@@ -125,7 +125,11 @@ class DirectPose(MultiCubeMarkerEstimator):
         )
 
     def observe(self, gray, intrinsic, head_pose, imu_from_rgb, seconds):
-        world_from_imu = matrix_from_pose(head_pose)
+        # head_pose is None when VIO is disabled (camera rigidly mounted): the
+        # IMU frame is then treated as coinciding with world, so the cube's
+        # pose is tracked purely relative to the fixed camera, with no VIO
+        # drift/motion correction.
+        world_from_imu = np.eye(4) if head_pose is None else matrix_from_pose(head_pose)
         self.world_from_rgb = world_from_imu @ imu_from_rgb
         self.time = seconds
         if self.reference is None:

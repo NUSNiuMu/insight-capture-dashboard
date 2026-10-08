@@ -208,9 +208,12 @@ def watch_head_interface(capture, layer, stop, interval=1):
         now = time.monotonic()
         # Image and VIO come from the same Insight9 unit/driver — treat
         # either one going stale as "not fully connected", not just both.
-        stale = (
-            now - capture.latest.get("image/head", 0) > 5
-            or now - capture.latest.get("vio/head", 0) > 5
+        # Skip the VIO half when it's intentionally disabled (fixed-mount
+        # camera, no VIO ever expected): otherwise "always stale" would
+        # trigger a pointless reconnect the moment any new interface shows up.
+        stale = now - capture.latest.get("image/head", 0) > 5 or (
+            capture.config.get("vio_enabled", True)
+            and now - capture.latest.get("vio/head", 0) > 5
         )
         try:
             current = _known_interfaces()

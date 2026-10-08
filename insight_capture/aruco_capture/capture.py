@@ -35,7 +35,7 @@ class Capture:
                 {
                     key: value
                     for key, value in json.loads(override.read_text()).items()
-                    if key in ("rgb", "serial", "fps")
+                    if key in ("rgb", "serial", "fps", "vio_enabled")
                 }
             )
         names = ["head"] + [x["name"] for x in self.config.get("rgb", [])]
@@ -167,7 +167,7 @@ class Capture:
                 or self.imu_from_rgb is None
             ):
                 raise ValueError("等待 Insight9 RGB、CameraInfo 和 IMU→RGB 外参")
-            if (
+            if self.config.get("vio_enabled", True) and (
                 self.pose.last_vio is None
                 or time.monotonic() - self.latest.get("vio/head", 0) > 2
             ):
@@ -274,7 +274,8 @@ class Capture:
                     kind, value = "image", jpeg.tobytes()
                 # Future VIO samples arrive independently of this processing thread.
                 head = None
-                if kind == "image" and name == "head":
+                vio_enabled = self.config.get("vio_enabled", True)
+                if kind == "image" and name == "head" and vio_enabled:
                     deadline = time.monotonic() + 0.05
                     head = self.pose.buffer.lookup(stamp)
                     while head is None and time.monotonic() < deadline:
@@ -314,7 +315,7 @@ class Capture:
                         if self.reference_pending and session == self.active:
                             self.pose.reset_reference()
                         if (
-                            head is None
+                            (vio_enabled and head is None)
                             or self.intrinsic is None
                             or self.imu_from_rgb is None
                         ):
@@ -326,7 +327,8 @@ class Capture:
                                 for x in self.pose.config.targets
                             }
                         elif (
-                            self.active
+                            vio_enabled
+                            and self.active
                             and self.pose.generation != self.session_generation
                         ):
                             self.error = "Insight9 VIO 重置或跳变，请停止后重新录制"
@@ -344,7 +346,7 @@ class Capture:
                             self.observation = self.pose.observe(
                                 gray, self.intrinsic, head, self.imu_from_rgb, seconds
                             )
-                            if generation != self.pose.generation:
+                            if vio_enabled and generation != self.pose.generation:
                                 self.observation = {
                                     x: {"valid": False, "reason": "head_vio_reset"}
                                     for x in self.pose.config.targets
@@ -424,6 +426,7 @@ class Capture:
                 },
                 "history_epoch": self.history_epoch,
                 "fps": self.config.get("fps", 20),
+                "vio_enabled": self.config.get("vio_enabled", True),
                 "calibration": {
                     "intrinsic": self.intrinsic is not None,
                     "extrinsic": self.imu_from_rgb is not None,

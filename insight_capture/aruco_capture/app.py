@@ -130,20 +130,29 @@ def create_app(capture):
 
     async def settings(request):
         if capture.active:
-            raise ValueError("录制中不能修改采样率")
+            raise ValueError("录制中不能修改采样率或 VIO 开关")
         body = await request.json()
-        fps = int(body["fps"])
-        if not 1 <= fps <= 120:
-            raise ValueError("fps 须在 1-120 之间")
-        capture.config["fps"] = fps
+        if "fps" in body:
+            fps = int(body["fps"])
+            if not 1 <= fps <= 120:
+                raise ValueError("fps 须在 1-120 之间")
+            capture.config["fps"] = fps
+        if "vio_enabled" in body:
+            capture.config["vio_enabled"] = bool(body["vio_enabled"])
         write_json(
             capture.root / "_devices.json",
             {
                 **{key: capture.config.get(key, []) for key in ("rgb", "serial")},
-                "fps": fps,
+                "fps": capture.config.get("fps", 20),
+                "vio_enabled": capture.config.get("vio_enabled", True),
             },
         )
-        return web.json_response({"fps": fps})
+        return web.json_response(
+            {
+                "fps": capture.config.get("fps", 20),
+                "vio_enabled": capture.config.get("vio_enabled", True),
+            }
+        )
 
     async def start(request):
         if busy:

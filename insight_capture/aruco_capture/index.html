@@ -71,7 +71,12 @@
             ><span class="sample-rate"
               ><label for="sampleRate">采样</label
               ><input id="sampleRate" type="number" min="1" max="120" step="1" />Hz</span
-            >
+            ><span
+                class="vio-toggle"
+                title="关闭后相机位姿按固定安装计算，不再依赖 Insight9 VIO；适用于头部相机固定不动的场景"
+              ><label for="vioEnabled">使用 VIO</label
+              ><input id="vioEnabled" type="checkbox" checked
+            /></span>
           </div>
         </div>
         <div id="readiness" class="readiness"></div>

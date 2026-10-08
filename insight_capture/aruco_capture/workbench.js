@@ -285,13 +285,15 @@ function readiness(s) {
         ? `${s.source_rates_hz["image/head"] || 0} Hz`
         : "等待接入",
     ],
-    [
-      "VIO",
-      age("vio/head") < 2,
-      age("vio/head") < 2
-        ? `${s.source_rates_hz["vio/head"] || 0} Hz`
-        : "等待接入",
-    ],
+    s.vio_enabled
+      ? [
+          "VIO",
+          age("vio/head") < 2,
+          age("vio/head") < 2
+            ? `${s.source_rates_hz["vio/head"] || 0} Hz`
+            : "等待接入",
+        ]
+      : ["VIO", true, "已禁用（固定相机模式）"],
     [
       "内参 / 外参",
       s.calibrated,
@@ -331,6 +333,8 @@ async function pollStatus() {
     if (document.activeElement !== $("sampleRate")) $("sampleRate").value = s.fps;
     $("sampleRate").disabled = !!s.recording;
     $("recordName").disabled = !!s.recording;
+    if (document.activeElement !== $("vioEnabled")) $("vioEnabled").checked = s.vio_enabled;
+    $("vioEnabled").disabled = !!s.recording;
     readiness(s);
     devicePanel.update(s);
     $("footerState").textContent = s.recording
@@ -1074,6 +1078,21 @@ $("sampleRate").addEventListener("change", async () => {
   } catch (e) {
     notice(e.message, true);
     if (status) input.value = status.fps;
+  }
+});
+$("vioEnabled").addEventListener("change", async () => {
+  const input = $("vioEnabled"),
+    vioEnabled = input.checked;
+  try {
+    await api("/api/settings", "POST", { vio_enabled: vioEnabled });
+    notice(
+      vioEnabled
+        ? "已启用 VIO，下次开始录制起生效"
+        : "已关闭 VIO，位姿将按固定相机计算，下次开始录制起生效",
+    );
+  } catch (e) {
+    notice(e.message, true);
+    if (status) input.checked = status.vio_enabled;
   }
 });
 bind("start", async () => {

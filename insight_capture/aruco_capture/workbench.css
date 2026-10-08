@@ -337,6 +337,18 @@ main {
 .sample-rate input:disabled {
   opacity: 0.5;
 }
+.vio-toggle {
+  cursor: help;
+}
+.vio-toggle input {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+.vio-toggle input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .readiness {
   display: flex;
   gap: 8px;
