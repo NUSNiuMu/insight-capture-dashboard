@@ -171,6 +171,14 @@ class PayloadBuilder:
                 cameras.append(
                     {
                         "name": camera.name,
+                        "native_preview_available": (
+                            getattr(self.owner, "native_preview", None) is not None
+                            and camera.topic_type in ("image", "h264")
+                        ),
+                        "native_preview": (
+                            self.owner.native_preview.status(camera.name)
+                            if getattr(self.owner, "native_preview", None) is not None else {}
+                        ),
                         "label": camera.label,
                         "device_name": camera.device_name or camera.name,
                         "encoding": camera.topic_type,

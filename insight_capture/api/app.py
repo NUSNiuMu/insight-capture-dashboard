@@ -9,6 +9,7 @@ from .routes.quality import CaptureCheckRoutes
 from .routes.gripper import GripperExtractionRoutes
 from .routes.handpose import HandPoseRoutes
 from .routes.mapping import MappingRoutes
+from .routes.native import NativePreviewRoutes
 from .routes.optimization import OptimizationRoutes
 from .routes.playback import PlaybackRoutes
 from .routes.recording import RecordingRoutes
@@ -31,6 +32,7 @@ def create_app(context: DashboardContext) -> web.Application:
     )
     websocket = PoseWebSocketService(context)
     cameras = CameraRoutes(context)
+    native_preview = NativePreviewRoutes(context)
     capture_check = CaptureCheckRoutes(context)
     gripper = GripperExtractionRoutes(context)
     handpose = HandPoseRoutes(context)
@@ -50,6 +52,7 @@ def create_app(context: DashboardContext) -> web.Application:
         return web.json_response({"ok": True, "fake_pose": context.node.fake_pose})
 
     app.router.add_get("/ws", websocket._handle_ws)
+    app.router.add_get("/ws/native", native_preview._handle_stream)
     app.router.add_get("/healthz", handle_health)
     app.router.add_get("/api/cameras", cameras._handle_camera_snapshot)
     app.router.add_post(

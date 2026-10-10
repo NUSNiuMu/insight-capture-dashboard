@@ -5,6 +5,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QNetworkAccessManager>
+#include <QPointer>
 #include <QObject>
 #include <QQuaternion>
 #include <QSet>
@@ -18,23 +19,25 @@ class Pose : public QObject {
     Q_PROPERTY(QString name MEMBER name CONSTANT)
     Q_PROPERTY(QString role MEMBER role CONSTANT)
     Q_PROPERTY(QColor color MEMBER color CONSTANT)
-    Q_PROPERTY(bool visible MEMBER visible NOTIFY changed)
-    Q_PROPERTY(QVector3D position MEMBER position NOTIFY changed)
-    Q_PROPERTY(QQuaternion rotation MEMBER rotation NOTIFY changed)
-    Q_PROPERTY(QUrl modelSource MEMBER modelSource NOTIFY changed)
-    Q_PROPERTY(float modelScale MEMBER modelScale NOTIFY changed)
-    Q_PROPERTY(QVector3D modelOffset MEMBER modelOffset NOTIFY changed)
-    Q_PROPERTY(QQuaternion modelRotation MEMBER modelRotation NOTIFY changed)
+    Q_PROPERTY(bool visible MEMBER visible NOTIFY poseChanged)
+    Q_PROPERTY(QVector3D position MEMBER position NOTIFY poseChanged)
+    Q_PROPERTY(QQuaternion rotation MEMBER rotation NOTIFY poseChanged)
+    Q_PROPERTY(QUrl modelSource MEMBER modelSource NOTIFY modelChanged)
+    Q_PROPERTY(float modelScale MEMBER modelScale NOTIFY modelChanged)
+    Q_PROPERTY(QVector3D modelOffset MEMBER modelOffset NOTIFY modelChanged)
+    Q_PROPERTY(QQuaternion modelRotation MEMBER modelRotation NOTIFY modelChanged)
     Q_PROPERTY(TrailGeometry *trail READ trail CONSTANT)
-    Q_PROPERTY(bool trailEnabled MEMBER trailEnabled NOTIFY changed)
-    Q_PROPERTY(int pointCount READ pointCount NOTIFY changed)
-    Q_PROPERTY(double opening MEMBER opening NOTIFY changed)
+    Q_PROPERTY(bool trailEnabled MEMBER trailEnabled NOTIFY traceChanged)
+    Q_PROPERTY(int pointCount READ pointCount NOTIFY traceChanged)
+    Q_PROPERTY(double opening MEMBER opening NOTIFY openingChanged)
   public:
     explicit Pose(QObject *parent = nullptr) : QObject(parent), geometry(new TrailGeometry) {}
     ~Pose() override { delete geometry; }
     QString name, role, assetKey;
     QColor color;
     bool visible = false, trailEnabled = true;
+    bool geometryDirty = true;
+    bool keepMode = false;
     QVector3D position, modelOffset;
     QQuaternion rotation, modelRotation;
     QUrl modelSource;
@@ -44,14 +47,23 @@ class Pose : public QObject {
     qint64 generation = -1, firstSeq = 1, lastSeq = 0, lastGeometry = 0;
     TrailGeometry *geometry;
     TrailGeometry *trail() const { return geometry; }
-    int pointCount() const { return points.size(); }
-    void notify() { emit changed(); }
+    int pointCount() const { return keepMode ? kept.size() : points.size(); }
+    void notify() {
+        emit poseChanged();
+        emit modelChanged();
+        emit traceChanged();
+        emit openingChanged();
+    }
     Q_INVOKABLE void setTrail(bool enabled) {
         trailEnabled = enabled;
-        emit changed();
+        geometryDirty = true;
+        emit traceChanged();
     }
   signals:
-    void changed();
+    void poseChanged();
+    void modelChanged();
+    void traceChanged();
+    void openingChanged();
 };
 
 class Dashboard : public QObject {
@@ -67,6 +79,7 @@ class Dashboard : public QObject {
     Q_PROPERTY(bool playback READ playback NOTIFY camerasChanged)
     Q_PROPERTY(double duration READ duration NOTIFY camerasChanged)
     Q_PROPERTY(int targetFps READ targetFps CONSTANT)
+    Q_PROPERTY(QVariantMap cameraAvailability READ cameraAvailability NOTIFY availabilityChanged)
   public:
     Dashboard(QUrl server, int fps, QObject *parent = nullptr);
     QVariantList cameras() const { return m_cameras; }
@@ -80,11 +93,13 @@ class Dashboard : public QObject {
     bool playback() const { return !m_manifest.isEmpty(); }
     double duration() const { return m_manifest["duration_s"].toDouble(); }
     int targetFps() const { return m_fps; }
+    QVariantMap cameraAvailability() const { return m_cameraAvailability; }
     void start();
     void setKeepTrail(bool value);
     Q_INVOKABLE void command(const QString &action, const QString &value = QString());
     Q_INVOKABLE void setPlaybackTime(double seconds);
     Q_INVOKABLE void updateGripper(QObject *root, double opening);
+    Q_INVOKABLE void resetGripper(QObject *root);
     Q_INVOKABLE QVariantMap diagnostics() const;
     void shutdown();
   signals:
@@ -93,6 +108,7 @@ class Dashboard : public QObject {
     void camerasChanged();
     void posesChanged();
     void stateChanged();
+    void availabilityChanged();
 
   private:
     void fetch(const QString &path, std::function<void(QJsonObject)> done);
@@ -118,6 +134,9 @@ class Dashboard : public QObject {
     QVariantList m_cameras, m_liveCameras, m_tasks, m_bags;
     QVariantList m_poseTrace;
     QVariantMap m_state;
+    QVariantMap m_cameraAvailability;
+    QHash<QObject *, QList<QPointer<QObject>>> m_gripperNodes;
+    QHash<QObject *, double> m_gripperOpenings;
     QString m_message = "正在连接后端", m_requestedPlayback;
     QJsonObject m_manifest, m_latestLive;
     QSet<QString> m_pending;

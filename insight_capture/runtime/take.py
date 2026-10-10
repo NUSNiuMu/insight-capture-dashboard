@@ -29,6 +29,7 @@ class SessionTakeStore:
         task_catalog: Optional[CaptureTaskCatalog] = None,
     ) -> None:
         self._lock = threading.RLock()
+        self._stats_cache: Dict[Path, tuple[int, float, Dict[str, int]]] = {}
         self._current_take_id: Optional[int] = None
         self.results_root = Path(results_root).resolve()
         self.sessions_root = self.results_root / "sessions"
@@ -142,6 +143,7 @@ class SessionTakeStore:
             encoding="utf-8",
         )
         temporary.replace(path)
+        self._stats_cache.pop(path.parent, None)
 
     def _write_session(self, *, ended_at_epoch_s: Optional[float] = None) -> None:
         path = self.root / "session.json"
@@ -241,13 +243,12 @@ class SessionTakeStore:
         for item in self._task_catalog.list():
             task_set_id = self._task_set_id(str(item.get("task_id") or ""))
             takes_root = self.sessions_root / task_set_id / "takes"
-            takes = self._list_takes_from(takes_root)
             tasks.append({
                 **item,
                 "task_set_id": task_set_id,
                 "recording_subdirectory": task_set_id,
                 "active": self._active and self.task_id == item.get("task_id"),
-                "stats": self._take_stats(takes, takes_root=takes_root),
+                "stats": self._cached_take_stats(takes_root),
             })
         return tasks
 
@@ -498,6 +499,22 @@ class SessionTakeStore:
             "next_take_id": self._next_take_id_from(takes_root or self.takes_root),
         }
 
+    def _cached_take_stats(self, takes_root: Path) -> Dict[str, int]:
+        """Cache summaries with local-write invalidation and external-edit refresh."""
+        with self._lock:
+            try:
+                signature = takes_root.stat().st_mtime_ns
+            except FileNotFoundError:
+                signature = -1
+            now = time.monotonic()
+            cached = self._stats_cache.get(takes_root)
+            # TTL covers external edits and coalesced filesystem timestamps.
+            if cached is None or cached[0] != signature or now >= cached[1]:
+                stats = self._take_stats(self._list_takes_from(takes_root), takes_root=takes_root)
+                cached = (signature, now + 30.0, stats)
+                self._stats_cache[takes_root] = cached
+            return dict(cached[2])
+
     def task_status(self) -> Dict[str, object]:
         with self._lock:
             if not self._active:
@@ -505,9 +522,8 @@ class SessionTakeStore:
                     "active": False,
                     "task": None,
                     "session_id": None,
-                    "stats": self._take_stats(self.list_takes()),
+                    "stats": self._cached_take_stats(self.takes_root),
                 }
-            takes = self.list_takes()
             task = {
                 "task_id": self.task_id,
                 "name": self.task,
@@ -521,5 +537,5 @@ class SessionTakeStore:
                 "active": True,
                 "task": task,
                 "session_id": self.session_id,
-                "stats": self._take_stats(takes),
+                "stats": self._cached_take_stats(self.takes_root),
             }

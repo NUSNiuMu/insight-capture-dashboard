@@ -121,18 +121,32 @@ void Dashboard::request(const QString &path, const QJsonObject *body, std::funct
 void Dashboard::poll() {
     fetch("/api/cameras", [this](QJsonObject data) {
         QVariantList list;
+        QVariantMap availability;
         for (auto value : data["cameras"].toArray()) {
             auto c = value.toObject();
+            availability[c["name"].toString()] = !c["stale"].toBool();
             QUrl u = m_server;
             u.setScheme(u.scheme() == "https" ? "wss" : "ws");
             u.setPort(c["webrtc_port"].toInt(8766));
+            QUrl local;
+            if (c["native_preview_available"].toBool() &&
+                (m_server.host() == "127.0.0.1" || m_server.host() == "localhost" || m_server.host() == "::1") &&
+                qEnvironmentVariable("INSIGHT_NATIVE_TRANSPORT") != "webrtc") {
+                local = m_server.resolved(QUrl("/ws/native"));
+                local.setScheme(local.scheme() == "https" ? "wss" : "ws");
+            }
             list.append(QVariantMap{{"name", c["name"].toString()},
                                     {"device", c["device_name"].toString(c["name"].toString())},
                                     {"width", c["width"].toInt()},
                                     {"height", c["height"].toInt()},
                                     {"label", c["label"].toString()},
                                     {"endpoint", u},
+                                    {"nativeEndpoint", local},
                                     {"media", QUrl()}});
+        }
+        if (availability != m_cameraAvailability) {
+            m_cameraAvailability = availability;
+            emit availabilityChanged();
         }
         if (list != m_liveCameras) {
             m_liveCameras = list;
@@ -204,13 +218,18 @@ void Dashboard::clearTraces() {
         p->lastSeq = 0;
         p->firstSeq = 1;
         p->geometry->setPoints({});
+        p->geometryDirty = false;
         p->notify();
     }
 }
 void Dashboard::setKeepTrail(bool value) {
     m_keep = value;
-    for (auto *p : m_poseOrder)
+    for (auto *p : m_poseOrder) {
         p->kept.clear();
+        p->keepMode = value;
+        p->geometryDirty = true;
+        emit p->traceChanged();
+    }
     emit stateChanged();
 }
 void Dashboard::acceptPose(const QJsonObject &payload) {
@@ -235,11 +254,22 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
             p = new Pose(this);
             p->name = name;
             p->role = d["role"].toString();
+            p->keepMode = m_keep;
             p->color = QColor(p->role == "head" ? "#79c47b" : p->role == "left_hand" ? "#79adc2" : "#cf7f6f");
             m_poseByName.insert(name, p);
             m_poseOrder.append(p);
             emit posesChanged();
         }
+        const auto previousPosition = p->position;
+        const auto previousRotation = p->rotation;
+        const auto previousOffset = p->modelOffset;
+        const auto previousModelRotation = p->modelRotation;
+        const auto previousScale = p->modelScale;
+        const auto previousOpening = p->opening;
+        const auto previousVisible = p->visible;
+        const auto previousSeq = p->lastSeq;
+        const auto previousGeneration = p->generation;
+        const auto previousFirstSeq = p->firstSeq;
         p->visible = d["visible"].toBool();
         p->position = mapPoint(d["position"].toArray());
         auto q = d["quaternion_xyzw"].toArray();
@@ -259,6 +289,8 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         cacheModel(p, d);
         auto trace = d["trace_update"].toObject();
         auto points = trace.isEmpty() ? d["trace"].toArray() : trace["points"].toArray();
+        const bool snapshot = trace.isEmpty() || trace["mode"] == "snapshot";
+        const auto previousPoints = snapshot ? p->points : QVector<QVector3D>();
         if (trace.isEmpty() || trace["mode"] == "snapshot") {
             p->points.clear();
             for (int i = qMax(0, int(points.size()) - capacity); i < points.size(); ++i)
@@ -284,13 +316,37 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
                 p->firstSeq += remove;
             }
         }
-        if (m_keep && p->visible && (p->kept.isEmpty() || (p->kept.last() - p->position).length() > .1f))
+        bool keptChanged = false;
+        if (m_keep && p->visible && (p->kept.isEmpty() || (p->kept.last() - p->position).length() > .1f)) {
             p->kept.append(p->position);
-        if (m_clock.elapsed() - p->lastGeometry >= 100) {
+            // Bound display history while retaining the full path's extent.
+            if (p->kept.size() > 4096) {
+                QVector<QVector3D> reduced;
+                reduced.reserve(p->kept.size() / 2 + 1);
+                for (int i = 0; i < p->kept.size() - 1; i += 2)
+                    reduced.append(p->kept[i]);
+                reduced.append(p->kept.last());
+                p->kept = std::move(reduced);
+            }
+            keptChanged = true;
+        }
+        const bool traceChanged = previousSeq != p->lastSeq || previousGeneration != p->generation ||
+                                  previousFirstSeq != p->firstSeq || keptChanged ||
+                                  (snapshot && previousPoints != p->points);
+        p->geometryDirty |= (m_keep ? keptChanged : traceChanged) || previousVisible != p->visible;
+        if (p->trailEnabled && p->geometryDirty && m_clock.elapsed() - p->lastGeometry >= 100) {
             p->geometry->setPoints(m_keep ? p->kept : (p->visible ? p->points : QVector<QVector3D>()));
             p->lastGeometry = m_clock.elapsed();
+            p->geometryDirty = false;
         }
-        p->notify();
+        if (previousVisible != p->visible || previousPosition != p->position || previousRotation != p->rotation)
+            emit p->poseChanged();
+        if (previousOffset != p->modelOffset || previousModelRotation != p->modelRotation || previousScale != p->modelScale)
+            emit p->modelChanged();
+        if (previousOpening != p->opening)
+            emit p->openingChanged();
+        if (traceChanged)
+            emit p->traceChanged();
         if (qEnvironmentVariable("INSIGHT_LATENCY_TRACE") == "1" && d.contains("latency_trace")) {
             auto timing = d["latency_trace"].toObject().toVariantMap();
             timing["name"] = p->name;
@@ -498,12 +554,27 @@ void Dashboard::setPlaybackTime(double seconds) {
     }
     acceptPose({{"poses", poses}, {"trace_capacity", qMax(300, int(frame) + 1)}});
 }
+void Dashboard::resetGripper(QObject *root) {
+    m_gripperNodes.remove(root);
+    m_gripperOpenings.remove(root);
+}
 void Dashboard::updateGripper(QObject *root, double opening) {
     if (!root)
         return;
-    for (auto *node : root->findChildren<QObject *>()) {
-        const auto name = node->objectName();
-        if (!name.contains("finger_holder"))
+    if (!m_gripperNodes.contains(root)) {
+        QList<QPointer<QObject>> nodes;
+        for (auto *node : root->findChildren<QObject *>())
+            if (node->objectName().contains("finger_holder"))
+                nodes.append(node);
+        m_gripperNodes.insert(root, nodes);
+        connect(root, &QObject::destroyed, this, [this, root] { resetGripper(root); });
+    }
+    if (m_gripperOpenings.contains(root) && m_gripperOpenings.value(root) == opening)
+        return;
+    m_gripperOpenings[root] = opening;
+    for (const auto &pointer : m_gripperNodes.value(root)) {
+        auto *node = pointer.data();
+        if (!node)
             continue;
         QVariant value = node->property("position");
         if (!value.canConvert<QVector3D>())
@@ -525,6 +596,8 @@ QVariantMap Dashboard::diagnostics() const {
         data.append(QVariantMap{{"name", p->name},
                                 {"visible", p->visible},
                                 {"points", p->points.size()},
+                                {"kept_points", p->kept.size()},
+                                {"geometry_updates", qulonglong(p->geometry->revision())},
                                 {"model", p->modelSource.toString()}});
     return {{"connected", m_connected}, {"poses", data}, {"pose_trace", m_poseTrace},
             {"playback", playback()}, {"message", m_message}};

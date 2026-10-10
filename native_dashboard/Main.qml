@@ -112,7 +112,8 @@ ApplicationWindow {
                                 NativeVideo {
                                     id: video; visible: !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.margins: 6
                                     sourceSize: Qt.size(cameraCard.modelData.width || 0, cameraCard.modelData.height || 0)
-                                    cameraName: cameraCard.modelData.name; endpoint: cameraCard.modelData.endpoint; media: cameraCard.modelData.media; targetFps: root.previewFps
+                                    sourceOnline: dashboard.playback || dashboard.cameraAvailability[cameraCard.modelData.name] !== false
+                                    cameraName: cameraCard.modelData.name; endpoint: cameraCard.modelData.endpoint; nativeEndpoint: cameraCard.modelData.nativeEndpoint || ""; media: cameraCard.modelData.media; targetFps: root.previewFps
                                     onStatsChanged: { if (dashboard.playback) { root.playTime = position; dashboard.setPlaybackTime(position) } }
                                 }
                             }
@@ -188,12 +189,12 @@ ApplicationWindow {
                                             RuntimeLoader {
                                                 id: avatar; source: poseRoot.modelData.modelSource
                                                 position: Qt.vector3d(-(bounds.minimum.x+bounds.maximum.x)/2, -(bounds.minimum.y+bounds.maximum.y)/2, -(bounds.minimum.z+bounds.maximum.z)/2)
-                                                onStatusChanged: { if (status===RuntimeLoader.Success) { dashboard.updateGripper(avatar,poseRoot.modelData.opening) } }
+                                                onStatusChanged: { if (status===RuntimeLoader.Success) { dashboard.resetGripper(avatar); dashboard.updateGripper(avatar,poseRoot.modelData.opening) } }
                                             }
                                         }
                                         Model { source: "#Sphere"; visible: avatar.status !== RuntimeLoader.Success; scale: Qt.vector3d(.07,.07,.07); materials: DefaultMaterial { diffuseColor: poseRoot.modelData.color } }
                                     }
-                                    Connections { target: poseRoot.modelData; function onChanged() { if(poseRoot.modelData.role!=="head" && avatar.status===RuntimeLoader.Success)dashboard.updateGripper(avatar,poseRoot.modelData.opening) } }
+                                    Connections { target: poseRoot.modelData; function onOpeningChanged() { if(poseRoot.modelData.role!=="head" && avatar.status===RuntimeLoader.Success)dashboard.updateGripper(avatar,poseRoot.modelData.opening) } }
                                 }
                             }
                         }

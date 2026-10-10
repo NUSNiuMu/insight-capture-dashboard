@@ -1,8 +1,8 @@
-# Jetson 原生采集台试验
+# Jetson 原生 Qt 采集台
 
-Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬件解码的独立客户端。复用现有 Dashboard HTTP/WebSocket 和 WebRTC 服务，不新增 ROS 图像订阅。
+Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬件解码的独立客户端。复用现有 Dashboard HTTP/WebSocket 服务与 ROS 图像订阅；本机优先使用直接预览通道，远程连接使用 WebRTC。
 
-当前为 `experiment/qt-native-dashboard` 分支上的采集主界面原型。主仓库网页仍可远程访问，不修改后端启动方式，也未替换 kiosk 开机入口。
+当前 EgoHalo 接入与优化位于 `feat/egohalo-native` 分支。优化前基线已标记为 `native-qt-stable-2026-10-10`（稳定版本地 Qt，提交 `723ed28`）；标签保持不变。网页仍可远程访问，客户发布和 kiosk 开机入口需另行部署。
 
 完整功能与 UI 的逐页对齐范围见 [迁移清单](PARITY.md)。
 
@@ -20,7 +20,7 @@ Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬
 
 构建和临时容器使用 host 网络，避免 Jetson 内核缺少 `iptables raw` 表时默认 Docker bridge 无法创建；无需修改系统防火墙。
 
-`--server` 可以指定后端地址；WebRTC 端口使用相机 API 返回值，媒体连接仍需要 ICE 可达。当前客户端使用 Jetson 专用解码器，尚未适配普通 PC。
+`--server` 可以指定后端地址。本机 loopback 地址且后端支持时，Insight3 原始图像通过 `/ws/native` 直接进入 VIC 显示；Ego 原始 H.264 通过同一通道进入 NVDEC。远程地址、旧后端和旧 Insight9 JPEG 输入使用 WebRTC，端口取相机 API，仍需 ICE 可达。可用 `INSIGHT_NATIVE_TRANSPORT=webrtc ./native_dashboard/run.sh` 作旧链路对照。当前客户端使用 Jetson 专用解码器，尚未适配普通 PC。
 
 `--fps 25` / `--fps 30` 设置预览目标，也可在界面顶部切换。它控制服务端请求目标，不保证最终显示率。
 
@@ -32,7 +32,7 @@ native_dashboard/run.sh --fps 30 --quit-after 60 --diagnostics /tmp/insight-nati
 
 ## 已接入的功能
 
-- 三路现有 WebRTC 视频：`webrtcbin → rtph264depay → h264parse → nvv4l2decoder → nv3dsink`，使用 NVMM 硬件解码结果。
+- 本机直接预览（Insight3 两路或加 Ego 四路），以及兼容的 WebRTC 视频：`webrtcbin → rtph264depay → h264parse → nvv4l2decoder → nv3dsink`，使用 NVMM 硬件解码结果。
 - 实时姿态、三模型、夹爪开合、轨迹显示/保留/清除；支持鼠标旋转、平移、缩放。遵循后端姿态可见性和轨迹 generation/sequence；断线隐藏过期姿态并重连获取快照。
 - GLB 模型缓存；为 Qt 6.2 转换 `KHR_mesh_quantization` 和 `EXT_texture_webp`，保持原模型内容。
 - 任务进入/结束、录制启停、作废最近一条、采集检查、新建地图。
@@ -55,10 +55,20 @@ native_dashboard/run.sh --fps 30 --quit-after 60 --diagnostics /tmp/insight-nati
 
 参考：[NVIDIA Accelerated GStreamer](https://docs.nvidia.com/jetson/archives/r36.4.3/DeveloperGuide/SD/Multimedia/AcceleratedGstreamer.html)、[GstVideoOverlay](https://gstreamer.freedesktop.org/documentation/video/gstvideooverlay.html)、[Qt RuntimeLoader](https://doc.qt.io/qt-6/qml-qtquick3d-assetutils-runtimeloader.html)。
 
+## 2026-10-10 本机预览与姿态性能优化
+
+- 本机 Insight3 省掉主机 H.264 编码、WebRTC 与再次解码；Ego 保持设备 H.264 原码流。复用录制订阅，录制先入队，再交给预览；不新增 DDS 图像 reader。
+- 任务/录制状态 GET 的目录与磁盘读取移到线程，统计缓存由录制/作废写入立即失效；外部修改最迟约 30 秒刷新。
+- 隐藏或未变化的轨迹不重建几何；姿态、模型、夹爪和轨迹分开通知。保留轨迹显示最多 4096 点，超限均匀抽稀并保留起止点；完整录制不受影响。
+- 离线设备停止媒体连接和轮询，恢复后自动连接；只更新在线状态，避免每次状态变化销毁全部视频卡片。
+- 现场两台 Insight3 90 秒实际输出约 30 FPS；后端本机预览收到帧至显示 sink 入口 P95 8.9/8.3 ms。该指标不含设备、USB/DDS 接收前或屏幕扫描时间。
+
+详细链路、诊断含义和验收边界见 [性能记录](../docs/NATIVE_PERFORMANCE.md)。Ego 重连后实际六路、运动统一定位及长时间录制仍待验收。
+
 ## 2026-09-10 模型朝向与空间布局对齐
 
 - 修复模型局部朝向：Babylon 在左手场景加载 GLB 时反射 X 轴，Qt 场景相对网页反射 Z 轴，两者差异需要在配置旋转之后补一个局部 Y 轴 180° 旋转。后端姿态与轨迹坐标转换保持一致。
-- 实时采用左侧三路视频竖排、右侧 3D，视频栏宽度按网页的 24% 并限制在 280–360 像素；回放采用上方 3D（56%）、下方三路视频横排（44%）。默认观察方向、目标高度、距离和视场角与网页一致。
+- 当时采用左侧三路视频、右侧 3D；当前布局已调整为视频约三分之二、轨迹约三分之一，实时与回放均以视频为主。默认观察方向、目标高度、距离和视场角与网页一致。
 - 对照仓库实际 Babylon 运行库，验证三轴姿态、复合模型配置旋转和三个局部方向向量，最大误差 `2.14e-7`。隔离后端验证三模型加载、三路 MP4 实际解码、布局比例、暂停/跳转/继续/返回实时，客户端正常退出。
 - 现场只读验证三路真实视频持续输出、三模型加载和各 300 点轨迹，输出端丢弃均为 0；截图检查布局通过。更新后的 Qt 客户端已启动，未操作现场录制或地图。
 - 可复核脚本、诊断与截图：`~/workspaces/insight_capture_tests/qt_layout_20260910/`。

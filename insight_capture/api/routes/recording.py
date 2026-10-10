@@ -33,6 +33,9 @@ class RecordingRoutes:
         return BagLibrary(manager.storage_browse_roots, lambda: manager.rosbag_root)
 
     async def _handle_recording_status(self, _request: web.Request) -> web.Response:
+        return web.json_response(await asyncio.to_thread(self._recording_status_snapshot))
+
+    def _recording_status_snapshot(self) -> dict[str, object]:
         payload = self.context.recording_manager.status()
         payload["system_load"] = read_system_load()
         payload["disk_space"] = read_disk_space(self.context.recording_manager.rosbag_root)
@@ -41,7 +44,7 @@ class RecordingRoutes:
         payload["task_status"] = (
             take_store.task_status() if take_store is not None else {"active": True}
         )
-        return web.json_response(payload)
+        return payload
 
     async def _handle_recording_topics(self, _request: web.Request) -> web.Response:
         loop = asyncio.get_running_loop()

@@ -53,6 +53,7 @@ from insight_capture.runtime.ros.topics import playback_topic
 
 from insight_capture.core.models import CameraFrame, CameraSpec, PoseSample, PoseSpec
 from insight_capture.media.image_pipeline import ImagePipeline
+from insight_capture.media.native_preview import NativePreviewHub
 from insight_capture.media.preview_manager import PreviewManager
 from insight_capture.media.worker_supervisor import WorkerSupervisor
 from insight_capture.quality.capture_check import CaptureCheckManager
@@ -210,6 +211,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             camera.name: threading.Event() for camera in self.cameras
         }
         self._localization_image_publishers: Dict[str, object] = {}
+        self.native_preview = NativePreviewHub(self.cameras)
         self._last_localization_image_relay_ns: Dict[str, int] = {}
         self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
         self._configure_hand_overlay()

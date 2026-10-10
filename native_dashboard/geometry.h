@@ -7,4 +7,7 @@ class TrailGeometry : public QQuick3DGeometry {
   public:
     explicit TrailGeometry(QQuick3DObject *parent = nullptr);
     void setPoints(const QVector<QVector3D> &points);
+    quint64 revision() const { return m_revision; }
+  private:
+    quint64 m_revision = 0;
 };

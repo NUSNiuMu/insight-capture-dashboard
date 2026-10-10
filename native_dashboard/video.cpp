@@ -6,6 +6,7 @@
 #include <QPointer>
 #include <QQuickWindow>
 #include <QUrlQuery>
+#include <QtEndian>
 #include <algorithm>
 #include <gst/sdp/sdp.h>
 #include <gst/video/video-info.h>
@@ -24,6 +25,13 @@ NativeVideo::NativeVideo(QQuickItem *parent) : QQuickItem(parent) {
     connect(&m_restart, &QTimer::timeout, this, &NativeVideo::start);
     connect(&m_timer, &QTimer::timeout, this, &NativeVideo::poll);
     connect(&m_socket, &QWebSocket::textMessageReceived, this, &NativeVideo::handleMessage);
+    connect(&m_socket, &QWebSocket::binaryMessageReceived, this, &NativeVideo::handleNativeFrame);
+    m_socket.setMaxAllowedIncomingMessageSize(16 * 1024 * 1024);
+    connect(&m_socket, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error), this,
+            [this](QAbstractSocket::SocketError) {
+                if (!m_stopping && m_media.isEmpty())
+                    fail(m_socket.errorString());
+            });
     connect(&m_socket, &QWebSocket::disconnected, this, [this] {
         if (!m_stopping && m_media.isEmpty())
             fail("信令断开，重连中");
@@ -49,6 +57,13 @@ void NativeVideo::setEndpoint(const QUrl &v) {
     emit sourceChanged();
     reconnect();
 }
+void NativeVideo::setNativeEndpoint(const QUrl &value) {
+    if (value == m_nativeEndpoint)
+        return;
+    m_nativeEndpoint = value;
+    emit sourceChanged();
+    reconnect();
+}
 void NativeVideo::setMedia(const QUrl &v) {
     if (v == m_media)
         return;
@@ -62,6 +77,19 @@ void NativeVideo::setSourceSize(const QSize &value) {
     m_sourceSize = value;
     emit sourceChanged();
     reconnect();
+}
+void NativeVideo::setSourceOnline(bool value) {
+    if (value == m_sourceOnline)
+        return;
+    m_sourceOnline = value;
+    emit sourceChanged();
+    if (!value && m_media.isEmpty()) {
+        stop();
+        m_status = "设备离线，等待连接";
+        syncWindow();
+        emit statsChanged();
+    } else
+        reconnect();
 }
 void NativeVideo::setTargetFps(int v) {
     v = qBound(1, v, 30);
@@ -111,10 +139,11 @@ void NativeVideo::syncWindow() {
     m_surface->setGeometry(qRound(pos.x() + (width() - size.width()) / 2),
                            qRound(pos.y() + (height() - size.height()) / 2), qMax(1, qRound(size.width())),
                            qMax(1, qRound(size.height())));
-    m_surface->setVisible(isVisible() && window()->isVisible() && width() > 1 && height() > 1);
+    m_surface->setVisible(isVisible() && (m_sourceOnline || !m_media.isEmpty()) &&
+                          window()->isVisible() && width() > 1 && height() > 1);
 }
 void NativeVideo::reconnect() {
-    if (m_complete)
+    if (m_complete && (m_sourceOnline || !m_media.isEmpty()))
         m_restart.start(150);
 }
 void NativeVideo::stop() {
@@ -133,9 +162,14 @@ void NativeVideo::stop() {
             gst_object_unref(m_sink);
         if (m_peer)
             gst_object_unref(m_peer);
+        if (m_appsrc)
+            gst_object_unref(m_appsrc);
         gst_object_unref(m_pipeline);
     }
     m_pipeline = m_peer = m_decode = m_sink = nullptr;
+    m_appsrc = nullptr;
+    m_nativeReceived = 0;
+    m_nativeFormat = 0;
     m_bus = nullptr;
     m_renderedFps = 0;
     m_rendered = m_dropped = m_lastRendered = 0;
@@ -153,8 +187,21 @@ void NativeVideo::stop() {
 void NativeVideo::start() {
     stop();
     syncWindow();
-    if (!m_surface || m_name.isEmpty() || m_endpoint.isEmpty())
+    if (!m_surface || m_name.isEmpty() || m_endpoint.isEmpty() || (!m_sourceOnline && m_media.isEmpty()))
         return;
+    m_useNative = m_media.isEmpty() && !m_nativeEndpoint.isEmpty();
+    if (m_useNative) {
+        m_status = "正在连接本机视频";
+        m_lastProgress = m_clock.elapsed();
+        QUrl url = m_nativeEndpoint;
+        QUrlQuery query;
+        query.addQueryItem("camera", m_name);
+        query.addQueryItem("fps", QString::number(m_fps));
+        url.setQuery(query);
+        m_socket.open(url);
+        emit statsChanged();
+        return;
+    }
     GError *error = nullptr;
     const auto sinkName = qEnvironmentVariable("INSIGHT_NATIVE_VIDEO_SINK") == "nveglglessink"
                               ? QByteArray("nveglglessink")
@@ -224,6 +271,10 @@ void NativeVideo::start() {
         g_object_set(input, "uri", m_media.toEncoded().constData(), nullptr);
         gst_object_unref(input);
     }
+    startPipeline();
+}
+
+void NativeVideo::startPipeline() {
     auto *decoder = gst_bin_get_by_name(GST_BIN(m_pipeline), "hardwareDecoder");
     if (decoder) {
         if (m_media.isEmpty() && qEnvironmentVariable("INSIGHT_NATIVE_DECODER_DPB") == "1")
@@ -260,7 +311,7 @@ void NativeVideo::start() {
             return GST_BUS_DROP;
         },
         reinterpret_cast<gpointer>(handle), nullptr);
-    m_status = m_media.isEmpty() ? "正在协商 H.264" : "正在加载回放";
+    m_status = m_useNative ? "本机直通 · 原生显示" : m_media.isEmpty() ? "正在协商 H.264" : "正在加载回放";
     m_lastPoll = m_lastProgress = m_clock.elapsed();
     if (gst_element_set_state(m_pipeline, m_paused ? GST_STATE_PAUSED : GST_STATE_PLAYING) ==
         GST_STATE_CHANGE_FAILURE) {
@@ -268,7 +319,7 @@ void NativeVideo::start() {
         return;
     }
     m_timer.start(33);
-    if (m_media.isEmpty()) {
+    if (m_media.isEmpty() && !m_useNative) {
         QUrl url = m_endpoint;
         url.setPath("/ws/webrtc");
         QUrlQuery query;
@@ -278,6 +329,102 @@ void NativeVideo::start() {
         m_socket.open(url);
     }
     emit statsChanged();
+}
+
+void NativeVideo::startNativePipeline(int format, int width, int height) {
+    const auto sink = qEnvironmentVariable("INSIGHT_NATIVE_VIDEO_SINK") == "nveglglessink"
+                          ? QByteArray("nveglglessink") : QByteArray("nv3dsink");
+    QByteArray source;
+    if (format == 4)
+        source = "appsrc name=src is-live=true format=time block=false max-buffers=8 max-bytes=0 "
+                 "caps=video/x-h264,stream-format=byte-stream,alignment=au ! h264parse ! "
+                 "nvv4l2decoder name=hardwareDecoder disable-dpb=true enable-max-performance=true ! ";
+    else if (format == 3)
+        source = "appsrc name=src is-live=true format=time block=false max-buffers=1 max-bytes=0 leaky-type=downstream "
+                 "caps=image/jpeg ! nvjpegdec ! ";
+    else
+        source = QString("appsrc name=src is-live=true format=time block=false max-buffers=1 max-bytes=0 leaky-type=downstream "
+                         "caps=video/x-raw,format=%1,width=%2,height=%3,framerate=%4/1 ! ")
+                     .arg(format == 1 ? "GRAY8" : "NV12").arg(width).arg(height).arg(m_fps).toUtf8();
+    const double factor = qMin(1.0, 720.0 / qMax(width, height));
+    const int outWidth = qMax(2, int(width * factor) / 2 * 2);
+    const int outHeight = qMax(2, int(height * factor) / 2 * 2);
+    // VIC conversion also releases decoder surfaces before the display retains them.
+    const auto display = QString("queue name=latestFrame max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream ! "
+                                 "nvvidconv ! video/x-raw(memory:NVMM),format=I420,width=%1,height=%2 ! "
+                                 "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream ! "
+                                 "%3 name=display sync=false qos=false enable-last-sample=false")
+                             .arg(outWidth).arg(outHeight).arg(QString::fromUtf8(sink)).toUtf8();
+    GError *error = nullptr;
+    m_pipeline = gst_parse_launch((source + display).constData(), &error);
+    if (!m_pipeline || error) {
+        fail(error ? QString::fromUtf8(error->message) : "本机视频管线创建失败");
+        if (error)
+            g_error_free(error);
+        return;
+    }
+    m_nativeFormat = format;
+    m_nativeSize = QSize(width, height);
+    m_appsrc = gst_bin_get_by_name(GST_BIN(m_pipeline), "src");
+    auto *latest = gst_bin_get_by_name(GST_BIN(m_pipeline), "latestFrame");
+    g_signal_connect(latest, "overrun", G_CALLBACK(latestFrameOverrun), this);
+    gst_object_unref(latest);
+    m_nativeEpoch = gst_util_get_timestamp();
+    startPipeline();
+}
+
+void NativeVideo::handleNativeFrame(const QByteArray &message) {
+    if (!m_useNative || !m_media.isEmpty() || message.size() <= 32)
+        return;
+    const auto *header = reinterpret_cast<const uchar *>(message.constData());
+    const int format = header[5];
+    const auto width = qFromBigEndian<quint32>(header + 8);
+    const auto height = qFromBigEndian<quint32>(header + 12);
+    if (message.left(4) != "INPV" || header[4] != 1 || format < 1 || format > 4 ||
+        !width || !height || width > 8192 || height > 8192 ||
+        (format == 1 && message.size() - 32 != qint64(width) * height) ||
+        (format == 2 && (height % 2 || message.size() - 32 != qint64(width) * height * 3 / 2))) {
+        fail("本机视频数据格式错误");
+        return;
+    }
+    if (!m_pipeline)
+        startNativePipeline(format, width, height);
+    if (!m_appsrc)
+        return;
+    if (format != m_nativeFormat || QSize(width, height) != m_nativeSize) {
+        m_restart.start(0);
+        return;
+    }
+    if (format == 4 && gst_app_src_get_current_level_buffers(GST_APP_SRC(m_appsrc)) >= 8) {
+        // Reconnect at a complete IDR instead of dropping dependent H.264 pictures.
+        m_restart.start(0);
+        return;
+    }
+    const auto now = gst_util_get_timestamp();
+    const auto received = qFromBigEndian<quint64>(header + 24);
+    if (now > received && now - received > 150 * GST_MSECOND) {
+        if (format == 4)
+            m_restart.start(0);
+        return;
+    }
+    auto *owned = new QByteArray(message);
+    auto *buffer = gst_buffer_new_wrapped_full(GST_MEMORY_FLAG_READONLY, const_cast<char *>(owned->constData() + 32),
+                                               owned->size() - 32, 0, owned->size() - 32, owned,
+                                               [](gpointer data) { delete static_cast<QByteArray *>(data); });
+    const quint64 pts = now - m_nativeEpoch;
+    GST_BUFFER_PTS(buffer) = pts;
+    GST_BUFFER_DTS(buffer) = pts;
+    GST_BUFFER_DURATION(buffer) = GST_SECOND / m_fps;
+    if (m_traceFrames) {
+        QMutexLocker lock(&m_timingMutex);
+        m_frameTrace[pts] = {{"source_stamp_ns", qulonglong(qFromBigEndian<quint64>(header + 16))},
+                             {"received_ns", qulonglong(received)}, {"native_input_ns", qulonglong(now)}};
+        while (m_frameTrace.size() > 120)
+            m_frameTrace.erase(m_frameTrace.begin());
+    }
+    ++m_nativeReceived;
+    if (gst_app_src_push_buffer(GST_APP_SRC(m_appsrc), buffer) != GST_FLOW_OK)
+        fail("本机视频投递失败");
 }
 void NativeVideo::fail(const QString &message) {
     if (m_stopping)
@@ -428,7 +575,7 @@ void NativeVideo::poll() {
                             : 0;
         if (rendered > m_lastRendered) {
             m_lastProgress = now;
-            m_status = "NVDEC · 原生显示";
+            m_status = m_useNative ? "本机直通 · 原生显示" : "NVDEC · 原生显示";
         }
         m_rendered = rendered;
         m_dropped = dropped;
@@ -504,8 +651,9 @@ GstPadProbeReturn NativeVideo::decodeTiming(GstPad *pad, GstPadProbeInfo *info, 
     QMutexLocker lock(&self->m_timingMutex);
     if (GST_PAD_DIRECTION(pad) == GST_PAD_SINK) {
         if (self->m_traceFrames) {
-            self->m_frameTrace[pts] = {{"key", frameFingerprint(const_cast<GstBuffer *>(buffer))},
-                                      {"decode_input_ns", qulonglong(now)}};
+            auto &trace = self->m_frameTrace[pts];
+            trace["key"] = frameFingerprint(const_cast<GstBuffer *>(buffer));
+            trace["decode_input_ns"] = qulonglong(now);
             while (self->m_frameTrace.size() > 120)
                 self->m_frameTrace.erase(self->m_frameTrace.begin());
         }
@@ -540,6 +688,8 @@ QVariantMap NativeVideo::diagnostics() const {
     }
     std::sort(timings.begin(), timings.end());
     return {{"camera", m_name},
+            {"transport", !m_media.isEmpty() ? "replay" : m_useNative ? "local" : "webrtc"},
+            {"native_received", qulonglong(m_nativeReceived)},
             {"frame_trace", frameTrace},
             {"display_width", m_displaySize.width()},
             {"display_height", m_displaySize.height()},

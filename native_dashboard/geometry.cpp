@@ -4,6 +4,7 @@
 
 TrailGeometry::TrailGeometry(QQuick3DObject *parent) : QQuick3DGeometry(parent) { setPoints({}); }
 void TrailGeometry::setPoints(const QVector<QVector3D> &points) {
+    ++m_revision;
     clear();
     setStride(8 * sizeof(float));
     setPrimitiveType(QQuick3DGeometry::PrimitiveType::Triangles);

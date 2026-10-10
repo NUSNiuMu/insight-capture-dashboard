@@ -156,9 +156,10 @@ class H264Gate:
 class H264Queue:
     """Keep short contiguous GOP segments; overflow waits for the next IDR."""
 
-    def __init__(self, max_frames=8, max_bytes=8 * 1024 * 1024, fps=30):
+    def __init__(self, max_frames=8, max_bytes=8 * 1024 * 1024, fps=30, max_age_sec=None):
         self._lock = threading.Lock()
         self._frames = deque()
+        self._metadata = deque()
         self._bytes = 0
         self._gate = H264Gate()
         self._stamp = None
@@ -166,6 +167,8 @@ class H264Queue:
         self.fps = fps
         self.max_frames = max_frames
         self.max_bytes = max_bytes
+        self.max_age_ns = None if max_age_sec is None else int(max_age_sec * 1e9)
+        self.expiries = 0
         self.max_gap_ns = int(1.5e9 / fps)
         self.dropped = 0
         self.received = 0
@@ -185,6 +188,7 @@ class H264Queue:
                 "timestamp_rollbacks": self.timestamp_rollbacks,
                 "overflows": self.overflows, "waiting_drops": self.waiting_drops,
                 "reference_gaps": self.reference_gaps,
+                "expiries": self.expiries,
                 "queued_frames": len(self._frames), "queued_bytes": self._bytes,
                 "waiting_for_idr": self._gate.waiting,
                 "frame_trace": list(self._trace),
@@ -193,6 +197,7 @@ class H264Queue:
     def reset(self):
         with self._lock:
             self._frames.clear()
+            self._metadata.clear()
             self._bytes = 0
             self._stamp = None
             self._gate = H264Gate()
@@ -220,10 +225,14 @@ class H264Queue:
             if stamp_ns is not None:
                 self._stamp = stamp_ns
             overflow = len(self._frames) >= self.max_frames or self._bytes + len(data) > self.max_bytes
+            expired = bool(self._metadata and self.max_age_ns is not None and
+                           received_ns - self._metadata[0][1] > self.max_age_ns)
+            self.expiries += int(expired)
             self.overflows += int(overflow)
-            if discontinuity or overflow:
+            if discontinuity or overflow or expired:
                 self.dropped += len(self._frames)
                 self._frames.clear()
+                self._metadata.clear()
                 self._bytes = 0
                 self._gate.reset()
             data = self._gate.accept(data)
@@ -234,12 +243,17 @@ class H264Queue:
                     self._gate.reset()
                 return False
             self._frames.append(data)
+            self._metadata.append((stamp_ns, received_ns))
             self._bytes += len(data)
             return True
 
     def drain(self):
+        return [data for data, _stamp, _received in self.drain_with_metadata()]
+
+    def drain_with_metadata(self):
         with self._lock:
-            result = list(self._frames)
+            result = [(data, stamp, received) for data, (stamp, received) in zip(self._frames, self._metadata)]
             self._frames.clear()
+            self._metadata.clear()
             self._bytes = 0
             return result

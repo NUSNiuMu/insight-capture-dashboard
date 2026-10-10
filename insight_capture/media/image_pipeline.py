@@ -55,6 +55,9 @@ class ImagePipeline:
             # relay alive, but does no display decode/encode until a viewer asks.
             if not self.owner.preview_requested():
                 return
+            native = getattr(self.owner, "native_preview", None)
+            if native is not None:
+                native.submit(camera_name, msg)
             if topic_type == "h264":
                 self.owner._worker_supervisor.queue_h264(camera_name, msg)
                 return
@@ -117,7 +120,9 @@ class ImagePipeline:
                 # Refresh the hidden HTTP fallback at low rate during WebRTC.
                 refresh_fallback = (
                     topic_type == "compressed"
-                    or not self.owner._webrtc_has_sessions.get(camera_name)
+                    or not (self.owner._webrtc_has_sessions.get(camera_name)
+                            or (getattr(self.owner, "native_preview", None) is not None
+                                and self.owner.native_preview.active(camera_name)))
                     or now - self.owner._last_webrtc_fallback_jpeg_at.get(camera_name, 0.0)
                     >= WEBRTC_JPEG_FALLBACK_INTERVAL_SEC
                 )

@@ -1,5 +1,7 @@
 """Capture-task selection and operator status routes."""
 
+import asyncio
+
 from aiohttp import web
 
 from insight_capture.api.context import DashboardContext
@@ -27,15 +29,17 @@ class TaskRoutes:
         self.context = context
 
     async def _handle_list(self, _request: web.Request) -> web.Response:
-        status = self.context.take_store.task_status()
-        task = status.get("task") or {}
-        return web.json_response({
-            "tasks": self.context.take_store.list_tasks(),
-            "active_task_id": task.get("task_id") if status.get("active") else None,
-        })
+        def snapshot():
+            status = self.context.take_store.task_status()
+            task = status.get("task") or {}
+            return {
+                "tasks": self.context.take_store.list_tasks(),
+                "active_task_id": task.get("task_id") if status.get("active") else None,
+            }
+        return web.json_response(await asyncio.to_thread(snapshot))
 
     async def _handle_current(self, _request: web.Request) -> web.Response:
-        status = self.context.take_store.task_status()
+        status = await asyncio.to_thread(self.context.take_store.task_status)
         return web.json_response({**status, "speech": task_status_speech(status)})
 
     def _recording_conflict(self, action: str) -> web.Response | None:

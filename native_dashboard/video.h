@@ -9,14 +9,17 @@
 #include <QWindow>
 #include <atomic>
 #include <gst/gst.h>
+#include <gst/app/gstappsrc.h>
 #include <gst/webrtc/webrtc.h>
 
 class NativeVideo : public QQuickItem {
     Q_OBJECT
     Q_PROPERTY(QString cameraName READ cameraName WRITE setCameraName NOTIFY sourceChanged)
     Q_PROPERTY(QUrl endpoint READ endpoint WRITE setEndpoint NOTIFY sourceChanged)
+    Q_PROPERTY(QUrl nativeEndpoint READ nativeEndpoint WRITE setNativeEndpoint NOTIFY sourceChanged)
     Q_PROPERTY(QUrl media READ media WRITE setMedia NOTIFY sourceChanged)
     Q_PROPERTY(QSize sourceSize READ sourceSize WRITE setSourceSize NOTIFY sourceChanged)
+    Q_PROPERTY(bool sourceOnline READ sourceOnline WRITE setSourceOnline NOTIFY sourceChanged)
     Q_PROPERTY(int targetFps READ targetFps WRITE setTargetFps NOTIFY sourceChanged)
     Q_PROPERTY(QString status READ status NOTIFY statsChanged)
     Q_PROPERTY(double renderedFps READ renderedFps NOTIFY statsChanged)
@@ -27,8 +30,10 @@ class NativeVideo : public QQuickItem {
     ~NativeVideo() override;
     QString cameraName() const { return m_name; }
     QUrl endpoint() const { return m_endpoint; }
+    QUrl nativeEndpoint() const { return m_nativeEndpoint; }
     QUrl media() const { return m_media; }
     QSize sourceSize() const { return m_sourceSize; }
+    bool sourceOnline() const { return m_sourceOnline; }
     int targetFps() const { return m_fps; }
     QString status() const { return m_status; }
     double renderedFps() const { return m_renderedFps; }
@@ -36,9 +41,11 @@ class NativeVideo : public QQuickItem {
     bool paused() const { return m_paused; }
     void setCameraName(const QString &value);
     void setEndpoint(const QUrl &value);
+    void setNativeEndpoint(const QUrl &value);
     void setMedia(const QUrl &value);
     void setTargetFps(int value);
     void setSourceSize(const QSize &value);
+    void setSourceOnline(bool value);
     void setPaused(bool value);
     Q_INVOKABLE void seek(double seconds);
     Q_INVOKABLE void reconnect();
@@ -57,6 +64,9 @@ class NativeVideo : public QQuickItem {
     void stop();
     void poll();
     void handleMessage(const QString &text);
+    void handleNativeFrame(const QByteArray &data);
+    void startNativePipeline(int format, int width, int height);
+    void startPipeline();
     void fail(const QString &message);
     void send(const QJsonObject &message);
     static void incomingPad(GstElement *, GstPad *, gpointer);
@@ -67,7 +77,7 @@ class NativeVideo : public QQuickItem {
     static GstPadProbeReturn decodeTiming(GstPad *, GstPadProbeInfo *, gpointer);
     static GstPadProbeReturn sinkTiming(GstPad *, GstPadProbeInfo *, gpointer);
     QString m_name, m_status = "未连接";
-    QUrl m_endpoint, m_media;
+    QUrl m_endpoint, m_media, m_nativeEndpoint;
     QSize m_sourceSize, m_displaySize;
     QPointer<QWindow> m_surface;
     QWebSocket m_socket;
@@ -75,7 +85,12 @@ class NativeVideo : public QQuickItem {
     QElapsedTimer m_clock;
     GstElement *m_pipeline = nullptr, *m_peer = nullptr, *m_decode = nullptr, *m_sink = nullptr;
     GstBus *m_bus = nullptr;
-    bool m_complete = false, m_stopping = false, m_paused = false;
+    GstElement *m_appsrc = nullptr;
+    bool m_useNative = false;
+    int m_nativeFormat = 0;
+    QSize m_nativeSize;
+    quint64 m_nativeEpoch = 0, m_nativeReceived = 0;
+    bool m_complete = false, m_stopping = false, m_paused = false, m_sourceOnline = true;
     int m_fps = 25;
     std::atomic<int> m_generation{0};
     std::atomic<quint64> m_latestFrameDrops{0};
