@@ -1,0 +1,213 @@
+{
+  "checked_at": "2026-10-10T11:33:53.133860+08:00",
+  "scope": "Read-only hardware and management interface inventory; no recording or ROS payload acceptance test.",
+  "device_tree": {
+    "model": "NVIDIA Jetson Orin NX Engineering Reference Developer Kit Super",
+    "compatible": "nvidia,p3768-0000+p3767-0001-super nvidia,p3767-0001 nvidia,tegra234"
+  },
+  "memory": "MemTotal:        7802680 kB",
+  "l4t": "# R36 (release), REVISION: 4.3, GCID: 38968081, BOARD: generic, EABI: aarch64, DATE: Wed Jan  8 01:49:37 UTC 2025\n# KERNEL_VARIANT: oot\nTARGET_USERSPACE_LIB_DIR=nvidia\nTARGET_USERSPACE_LIB_DIR_PATH=usr/lib/aarch64-linux-gnu/nvidia",
+  "commands": [
+    {
+      "command": [
+        "lsusb"
+      ],
+      "returncode": 0,
+      "stdout": "Bus 002 Device 006: ID 3652:0104 LooperRobotics Insight Series USB AI Camera\nBus 002 Device 007: ID 3652:0104 LooperRobotics Insight Series USB AI Camera\nBus 002 Device 008: ID 3652:0104 LooperRobotics Insight Series USB AI Camera\nBus 002 Device 002: ID 0bda:0489 Realtek Semiconductor Corp. 4-Port USB 3.0 Hub\nBus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub\nBus 001 Device 004: ID 0bda:c822 Realtek Semiconductor Corp. Bluetooth Radio \nBus 001 Device 003: ID 046d:c52b Logitech, Inc. Unifying Receiver\nBus 001 Device 002: ID 0bda:5489 Realtek Semiconductor Corp. 4-Port USB 2.0 Hub\nBus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "lsusb",
+        "-t"
+      ],
+      "returncode": 0,
+      "stdout": "/:  Bus 02.Port 1: Dev 1, Class=root_hub, Driver=tegra-xusb/4p, 10000M\n    |__ Port 1: Dev 2, If 0, Class=Hub, Driver=hub/4p, 10000M\n        |__ Port 2: Dev 8, If 0, Class=Communications, Driver=cdc_ncm, 5000M\n        |__ Port 2: Dev 8, If 1, Class=CDC Data, Driver=cdc_ncm, 5000M\n        |__ Port 3: Dev 7, If 0, Class=Communications, Driver=cdc_ncm, 5000M\n        |__ Port 3: Dev 7, If 1, Class=CDC Data, Driver=cdc_ncm, 5000M\n        |__ Port 4: Dev 6, If 1, Class=CDC Data, Driver=cdc_ncm, 5000M\n        |__ Port 4: Dev 6, If 0, Class=Communications, Driver=cdc_ncm, 5000M\n/:  Bus 01.Port 1: Dev 1, Class=root_hub, Driver=tegra-xusb/4p, 480M\n    |__ Port 2: Dev 2, If 0, Class=Hub, Driver=hub/4p, 480M\n        |__ Port 1: Dev 3, If 1, Class=Human Interface Device, Driver=usbhid, 12M\n        |__ Port 1: Dev 3, If 2, Class=Human Interface Device, Driver=usbhid, 12M\n        |__ Port 1: Dev 3, If 0, Class=Human Interface Device, Driver=usbhid, 12M\n    |__ Port 3: Dev 4, If 0, Class=Wireless, Driver=btusb, 12M\n    |__ Port 3: Dev 4, If 1, Class=Wireless, Driver=btusb, 12M\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "lspci",
+        "-nn"
+      ],
+      "returncode": 0,
+      "stdout": "0001:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229e] (rev a1)\n0001:01:00.0 Network controller [0280]: Realtek Semiconductor Co., Ltd. RTL8822CE 802.11ac PCIe Wireless Network Adapter [10ec:c822]\n0004:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229c] (rev a1)\n0004:01:00.0 Non-Volatile memory controller [0108]: MAXIO Technology (Hangzhou) Ltd. NVMe SSD Controller MAP1202 [1e4b:1202] (rev 01)\n0007:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229a] (rev a1)\n0007:01:00.0 Non-Volatile memory controller [0108]: Sandisk Corp Device [15b7:5007] (rev 01)\n0008:00:00.0 PCI bridge [0604]: NVIDIA Corporation Device [10de:229c] (rev a1)\n0008:01:00.0 Ethernet controller [0200]: Realtek Semiconductor Co., Ltd. RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller [10ec:8168] (rev 15)\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "ip",
+        "-br",
+        "address"
+      ],
+      "returncode": 0,
+      "stdout": "lo               UNKNOWN        127.0.0.1/8 ::1/128 \nenP8p1s0         DOWN           \ncan0             DOWN           \nwlP1p1s0         UP             192.168.19.222/24 fe80::1b3c:6011:b7c2:8615/64 \nl4tbr0           DOWN           \nusb0             DOWN           \nusb1             DOWN           \nbr-18e50775fb63  DOWN           172.18.0.1/16 \ndocker0          DOWN           172.17.0.1/16 \nenx020000000a01  UP             169.254.10.2/24 fe80::ad0e:4fd1:8851:b698/64 \nenx020000001401  UP             169.254.20.2/24 fe80::11c1:42c:47b8:545b/64 \nenx020000001e01  UP             169.254.30.2/24 fe80::36a8:f142:8bc3:44d7/64 \n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "ip",
+        "-details",
+        "link",
+        "show",
+        "can0"
+      ],
+      "returncode": 0,
+      "stdout": "3: can0: <NOARP,ECHO> mtu 16 qdisc noop state DOWN mode DEFAULT group default qlen 10\n    link/can  promiscuity 0 minmtu 0 maxmtu 0 \n    can state STOPPED (berr-counter tx 0 rx 0) restart-ms 0 \n\t  mttcan: tseg1 2..255 tseg2 0..127 sjw 1..127 brp 1..511 brp-inc 1\n\t  mttcan: dtseg1 1..31 dtseg2 0..15 dsjw 1..15 dbrp 1..15 dbrp-inc 1\n\t  clock 50000000 numtxqueues 1 numrxqueues 1 gso_max_size 65536 gso_max_segs 65535 parentbus platform parentdev c310000.mttcan \n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "lsblk",
+        "-b",
+        "-o",
+        "NAME,MODEL,SIZE,TYPE,FSTYPE,MOUNTPOINTS,TRAN",
+        "-e",
+        "7"
+      ],
+      "returncode": 0,
+      "stdout": "NAME         MODEL                           SIZE TYPE FSTYPE MOUNTPOINTS                                    TRAN\nzram0                                   665829376 disk        [SWAP]                                         \nzram1                                   665829376 disk        [SWAP]                                         \nzram2                                   665829376 disk        [SWAP]                                         \nzram3                                   665829376 disk        [SWAP]                                         \nzram4                                   665829376 disk        [SWAP]                                         \nzram5                                   665829376 disk        [SWAP]                                         \nnvme0n1      PUSKILL 1TB             128035676160 disk                                                       nvme\n├─nvme0n1p1                          126474031104 part ext4   /                                              nvme\n├─nvme0n1p2                             134217728 part                                                       nvme\n├─nvme0n1p3                                786432 part                                                       nvme\n├─nvme0n1p4                              33161216 part                                                       nvme\n├─nvme0n1p5                             134217728 part                                                       nvme\n├─nvme0n1p6                                786432 part                                                       nvme\n├─nvme0n1p7                              33161216 part                                                       nvme\n├─nvme0n1p8                              83886080 part                                                       nvme\n├─nvme0n1p9                                524288 part                                                       nvme\n├─nvme0n1p10                             67108864 part vfat   /boot/efi                                      nvme\n├─nvme0n1p11                             83886080 part                                                       nvme\n├─nvme0n1p12                               524288 part                                                       nvme\n├─nvme0n1p13                             67108864 part                                                       nvme\n├─nvme0n1p14                            419430400 part                                                       nvme\n└─nvme0n1p15                            502792192 part                                                       nvme\nnvme1n1      PC SN530 NVMe WDC 512GB 512110190592 disk                                                       nvme\n└─nvme1n1p1                          512108789760 part ext4   /home/nvidia/workspaces                        nvme\n                                                              /home/nvidia/insight-capture-dashboard/runs    \n                                                              /home/nvidia/jetson-inference                  \n                                                              /home/nvidia/insight-capture-dashboard/rosbags \n                                                              /home/nvidia/insight-capture-dashboard/release \n                                                              /home/nvidia/insight-capture-dashboard/gesture \n                                                              /home/nvidia/insight-capture-dashboard/data    \n                                                              /home/nvidia/JEP                               \n                                                              /home/nvidia/Downloads                         \n                                                              /mnt/data                                      \n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "cat",
+        "/proc/asound/cards"
+      ],
+      "returncode": 0,
+      "stdout": " 0 [HDA            ]: tegra-hda - NVIDIA Jetson Orin NX HDA\n                      NVIDIA Jetson Orin NX HDA at 0x3518000 irq 120\n 1 [APE            ]: tegra-ape - NVIDIA Jetson Orin NX APE\n                      NVIDIA-NVIDIAJetsonOrinNXEngineeringReferenceDeveloperKitSuper-NotSpecified-Jet\n",
+      "stderr": ""
+    }
+  ],
+  "power_supply": [],
+  "serial_nodes": [
+    "ttyTHS2",
+    "ttyTHS1",
+    "ttyS3",
+    "ttyS2",
+    "ttyS1",
+    "ttyS0"
+  ],
+  "cameras": [
+    {
+      "ip": "169.254.10.1",
+      "camera-config": {
+        "data": {
+          "nodeName": "insight3_a_full",
+          "cameraNamespace": "insight3_a",
+          "cameraName": "camera"
+        },
+        "success": true
+      },
+      "dds-type": {
+        "data": {
+          "ddsType": "cyclonedds"
+        },
+        "success": true
+      },
+      "ros-domain-id": {
+        "data": {
+          "rosDomainId": "20"
+        },
+        "success": true
+      },
+      "version": {
+        "version": "1.43"
+      }
+    },
+    {
+      "ip": "169.254.20.1",
+      "camera-config": {
+        "data": {
+          "nodeName": "insight3_b_full",
+          "cameraNamespace": "insight3_b",
+          "cameraName": "camera"
+        },
+        "success": true
+      },
+      "dds-type": {
+        "data": {
+          "ddsType": "cyclonedds"
+        },
+        "success": true
+      },
+      "ros-domain-id": {
+        "data": {
+          "rosDomainId": "20"
+        },
+        "success": true
+      },
+      "version": {
+        "version": "1.43"
+      }
+    },
+    {
+      "ip": "169.254.30.1",
+      "camera-config": {
+        "data": {
+          "nodeName": "insight9_a_full",
+          "cameraNamespace": "insight9_a",
+          "cameraName": "camera"
+        },
+        "success": true
+      },
+      "dds-type": {
+        "data": {
+          "ddsType": "cyclonedds"
+        },
+        "success": true
+      },
+      "ros-domain-id": {
+        "data": {
+          "rosDomainId": "20"
+        },
+        "success": true
+      },
+      "version": {
+        "version": "1.43"
+      }
+    }
+  ],
+  "power_sensors": [
+    {
+      "in3_input": "14520",
+      "in1_label": "VDD_IN",
+      "in7_input": "6520",
+      "curr2_input": "336",
+      "in4_input": "4400",
+      "in2_label": "VDD_CPU_GPU_CV",
+      "curr3_input": "200",
+      "in1_input": "14520",
+      "in5_input": "1680",
+      "in3_label": "VDD_SOC",
+      "curr4_input": "1152",
+      "in2_input": "14520",
+      "in7_label": "sum of shunt voltages",
+      "in6_input": "1000",
+      "curr1_input": "880"
+    }
+  ],
+  "recording": {
+    "recording": false,
+    "storage": {
+      "configured_path": "/mnt/insight-recordings",
+      "active_path": "/workspaces/insight_capture/rosbags",
+      "required_source": "/dev/sda1",
+      "mounted_source": "/dev/nvme1n1p1[/insight/rosbags]",
+      "using_fallback": true,
+      "fallback_reason": "required source /dev/sda1 does not match /dev/nvme1n1p1[/insight/rosbags]"
+    }
+  },
+  "installation_manual": {
+    "filename": "Insight_三相机系统_硬件安装手册.pdf",
+    "pages": 8,
+    "sha256": "de536e854c4695438f5f40dbfe1f51df0b505a46941762fc6647e29c4c26f902",
+    "photo_source_pages": [
+      2,
+      4,
+      5,
+      6,
+      7
+    ]
+  }
+}

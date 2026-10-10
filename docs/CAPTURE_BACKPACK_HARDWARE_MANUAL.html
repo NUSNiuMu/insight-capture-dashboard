@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Insight 数采背包硬件说明手册 · Orin NX 8GB</title>
+<style>
+@page { size: A4; margin: 0; }
+:root { --ink:#172c3e; --muted:#586c7b; --teal:#087f87; --line:#d7e1e7; --paper:#f1f5f7; --power:#ac6517; }
+* { box-sizing:border-box; }
+body { margin:0; color:var(--ink); background:#dce4e9; font:10.4pt/1.65 "Noto Sans CJK SC",sans-serif; }
+.page { width:210mm; height:297mm; padding:16mm 18mm 18mm; margin:8mm auto; background:white; position:relative; break-after:page; }
+.page:last-child { break-after:auto; }
+.running { display:flex; justify-content:space-between; border-bottom:1px solid var(--line); padding-bottom:3mm; margin-bottom:7mm; color:var(--muted); font-size:8pt; letter-spacing:.07em; }
+footer { position:absolute; bottom:9mm; left:18mm; right:18mm; display:flex; justify-content:space-between; border-top:1px solid var(--line); padding-top:2mm; font-size:8pt; color:var(--muted); }
+h1 { font-size:32pt; line-height:1.3; margin:5mm 0; letter-spacing:.03em; }
+h2 { font-size:21pt; line-height:1.4; margin:0 0 5mm; }
+h3 { font-size:12pt; color:var(--teal); margin:5mm 0 2mm; }
+p { margin:2mm 0 3mm; }
+.eyebrow { color:var(--teal); font-weight:700; font-size:9pt; letter-spacing:.12em; }
+.lead { font-size:12pt; color:var(--muted); }
+.note { background:#edf6f6; border-left:3px solid var(--teal); padding:3mm 4mm; margin:4mm 0; }
+.power-note { background:#fff6e9; border-left-color:var(--power); }
+.small, figcaption { font-size:8.5pt; color:var(--muted); line-height:1.55; }
+table { width:100%; border-collapse:collapse; margin:3mm 0; font-size:9pt; line-height:1.55; }
+th { background:var(--ink); color:white; text-align:left; font-weight:500; }
+th,td { padding:2.4mm 2.6mm; vertical-align:top; border-bottom:1px solid var(--line); }
+tr:nth-child(even) td { background:#f5f8fa; }
+td:first-child { font-weight:500; }
+code { font-family:"DejaVu Sans Mono",monospace; font-size:.88em; overflow-wrap:anywhere; }
+pre { padding:3mm 4mm; background:var(--paper); font:8.1pt/1.7 "DejaVu Sans Mono",monospace; white-space:pre-wrap; overflow-wrap:anywhere; margin:3mm 0; }
+ol,ul { padding-left:6mm; margin:2mm 0; }
+li { margin-bottom:2mm; }
+figure { margin:4mm 0; }
+figcaption { margin-top:2mm; }
+.photo { width:100%; object-fit:contain; display:block; border:1px solid var(--line); border-radius:2mm; background:#eef0f1; }
+.rotate { width:100%; position:relative; height:120mm; background:#eef0f1; border-radius:2mm; overflow:hidden; }
+.rotate img { position:absolute; top:50%; left:50%; width:120mm; height:160mm; object-fit:contain; transform:translate(-50%,-50%) rotate(-90deg); }
+.rotate.compact { height:82mm; }
+.rotate.compact img { width:82mm; height:109.33mm; }
+.columns { display:grid; grid-template-columns:1fr 1fr; gap:6mm; }
+.columns figure { margin:0; }
+.columns .photo { height:95mm; }
+.tag { display:inline-block; background:#e8f2f3; color:var(--teal); padding:.5mm 2mm; border-radius:1mm; font-size:8pt; margin-right:2mm; }
+.flow { padding:4mm; border:1px solid var(--line); border-radius:2mm; margin:4mm 0; background:#f8fafb; }
+.flow-row { display:flex; align-items:center; gap:2mm; margin:3mm 0; }
+.box { flex:1; text-align:center; border:1px solid #b3cbd0; background:white; border-radius:2mm; padding:3mm 2mm; font-size:9.5pt; }
+.arrow { color:var(--teal); font-size:17pt; }
+.power .box { border-color:#dfc393; }
+.power .arrow { color:var(--power); }
+.box small { display:block; font-size:8pt; color:var(--muted); }
+.toc { display:grid; grid-template-columns:1fr 1fr; gap:2mm 8mm; font-size:9pt; }
+.toc div { border-bottom:1px solid var(--line); padding:1mm 0; display:flex; justify-content:space-between; }
+.checklist { list-style:none; padding-left:0; }
+.checklist li::before { content:"□ "; color:var(--teal); font-size:12pt; }
+a { color:var(--teal); text-decoration:none; }
+@media print { body { background:white; } .page { margin:0; } }
+</style>
+</head>
+<body>
+<section class="page" id="cover">
+<div class="running"><span>INSIGHT / 硬件与连接</span><span>现场核验版 · V1.0</span></div>
+<p class="eyebrow">三相机 · 双手与头部 · 本地采集</p>
+<h1>数采背包<br>硬件说明手册</h1>
+<p class="lead">Jetson Orin NX 8GB + Insight3 × 2 + Insight9 × 1</p>
+<figure><div class="rotate"><img src="hardware-manual/overview.jpg" alt="安装手册中的 Jetson 主机与白色电池，主机面板可见 DC、DP、USB、ETH 和 TYPE-C 标识"></div><figcaption>原安装手册实物照片：Jetson 主机与白色电池。照片用于辨认接口，不代表本次盘点时的全部接线状态。</figcaption></figure>
+<div class="note"><strong>先理解两条链路：</strong>电池分别给 Jetson 和三台相机供电；三台相机通过 USB 虚拟网卡向 Jetson 发送数据。相机 USB 线不作为本方案的工作供电线路。</div>
+<p class="small">编制日期：2026-10-10（UTC+08:00）<br>适用范围：本项目 jetson-nx 现场设备的认识、安装、巡检与交接。<br>依据：用户提供的 8 页硬件安装手册、本机只读盘点、当前相机配置及项目文档。电池容量、线缆针脚与载板商品型号等未证实项见第 12 页。</p>
+<footer><span>INSIGHT · 数采背包硬件说明手册</span><span>01 / 12</span></footer>
+</section>
+
+<section class="page" id="overview">
+<div class="running"><span>系统概述</span><span>先看供电，再看数据</span></div>
+<h2>01 / 系统如何连接</h2>
+<p>两台 Insight3 分别对应右手、左手；Insight9 对应头部。Jetson 接收相机图像和传感器消息，运行建图、重定位、录制与预览。安装手册没有覆盖穿戴支架的机械装配尺寸。</p>
+<h3>供电连接</h3>
+<div class="flow power">
+<div class="flow-row"><div class="box">白色电池<small>D-Tap 输出</small></div><span class="arrow">→</span><div class="box">D-Tap 转 DC 线</div><span class="arrow">→</span><div class="box">Jetson 主机<small>面板 DC 输入口</small></div></div>
+<div class="flow-row"><div class="box">同一块电池<small>12V 输出</small></div><span class="arrow">→</span><div class="box">8-pin 一分三供电线</div><span class="arrow">→</span><div class="box">三台 Insight 相机<small>每台独立接入一条支路</small></div></div>
+</div>
+<h3>数据连接</h3>
+<div class="flow">
+<div class="flow-row"><div class="box">Insight3 A / B<br>Insight9 A<small>每台一根 USB 数据线</small></div><span class="arrow">→</span><div class="box">USB Hub<small>系统识别为 Realtek 四口</small></div><span class="arrow">→</span><div class="box">Jetson Orin NX<small>CDC-NCM → ROS 2 / DDS</small></div></div>
+<div class="flow-row"><div class="box">Jetson 数据处理</div><span class="arrow">→</span><div class="box">NVMe / USB 存储<small>录制文件</small></div><span class="arrow">＋</span><div class="box">本地屏幕 / 网络前端<small>预览与操作</small></div></div>
+</div>
+<p class="small">上图是逻辑拓扑，不是插针图。三根线接主机面板 USB 口，系统仍可能把这些口列在同一个 Hub 下。Hub 是否集成于载板或另行安装，需拆机照片或载板资料确认。</p>
+<h3>阅读导航</h3>
+<div class="toc"><div>硬件清单与计算主机 <b>03</b></div><div>主机面板接口 <b>04</b></div><div>电池与供电线路 <b>05</b></div><div>相机与采集信息 <b>06</b></div><div>USB、网络与协议 <b>07</b></div><div>存储、串口与外设 <b>08</b></div><div>安装与走线 <b>09</b></div><div>启动、关机与恢复 <b>10</b></div><div>故障排查与检查命令 <b>11</b></div><div>证据、边界与待补规格 <b>12</b></div></div>
+<footer><span>供电关系来自安装手册；数据关系结合本机实测</span><span>02 / 12</span></footer>
+</section>
+
+<section class="page" id="inventory">
+<div class="running"><span>硬件清单</span><span>型号与用途</span></div>
+<h2>02 / 计算主机与主要部件</h2>
+<table><thead><tr><th style="width:27%">部件</th><th style="width:14%">数量</th><th>规格／作用及证据</th></tr></thead><tbody>
+<tr><td>Jetson 主机</td><td>1 台</td><td>Orin NX 8GB；接收、处理、录制三路相机数据。本机设备树、CPU 与内存信息已核实。</td></tr>
+<tr><td>Insight3</td><td>2 台</td><td>A 为右手，B 为左手；角色来自当前配置，命名经相机管理接口核实。</td></tr>
+<tr><td>Insight9</td><td>1 台</td><td>A 为头部相机，承担头部视角采集与建图输入。</td></tr>
+<tr><td>白色电池</td><td>1 台</td><td>D-Tap 为 Jetson 供电；12V 输出为相机供电。型号、容量和各口电流上限未提供。</td></tr>
+<tr><td>D-Tap 转 DC 线</td><td>1 根</td><td>电池 → Jetson。是否内含稳压、DC 尺寸及极性待确认。</td></tr>
+<tr><td>12V 转 8-pin 一分三线</td><td>1 根</td><td>电池 → 三台相机；沿用原安装手册的接头名称，不据此推断针脚。</td></tr>
+<tr><td>相机 USB 数据线</td><td>3 根</td><td>相机 → 主机；三路本次均以 5 Gbit/s 连接。</td></tr>
+<tr><td>四口 USB Hub</td><td>1 个 USB 3.x Hub 节点</td><td>Realtek 0bda:0489；另有 USB 2.0 Hub 节点 0bda:5489，不能据此认定是两只实体 Hub。</td></tr>
+<tr><td>NVMe 固态硬盘</td><td>2 块</td><td>系统盘实际约 128GB；数据盘 WDC PC SN530 512GB。详细说明见第 8 页。</td></tr>
+</tbody></table>
+<h3>这台计算主机的已确认信息</h3>
+<table><tbody>
+<tr><td>CPU / 内存</td><td>6 核 ARM Cortex-A78AE；标称 8GB，系统可见约 7.4 GiB。</td></tr>
+<tr><td>设备树标识</td><td><code>p3768-0000+p3767-0001-super</code>；这是系统采用的载板／模块配置，不能替代实际载板厂家证明。</td></tr>
+<tr><td>系统软件基线</td><td>Ubuntu 22.04.5 LTS；L4T R36.4.3；内核 5.15.148-tegra。</td></tr>
+<tr><td>散热</td><td>安装照片可见机壳风扇开口，系统存在风扇监测节点。背包装配需保留进出风空间。</td></tr>
+</tbody></table>
+<p class="small">本页是已知硬件清单，不是采购替换料号表；接口外形相同不代表电气规格相同。</p>
+<footer><span>实际配置以本设备为准，不外推至其他 profile</span><span>03 / 12</span></footer>
+</section>
+
+<section class="page" id="host-ports">
+<div class="running"><span>主机面板</span><span>按丝印辨认接口</span></div>
+<h2>03 / Jetson 主机接口说明</h2>
+<figure><div class="rotate compact"><img src="hardware-manual/overview.jpg" alt="Jetson 面板从 DC、DP、两组双层 USB-A、ETH 到 TYPE-C 的实物排列"></div><figcaption>原安装手册第 2 页照片。转向仅为方便阅读；接口位置以实物丝印为准。</figcaption></figure>
+<table><thead><tr><th style="width:19%">标识／外形</th><th style="width:36%">用途</th><th>本设备说明</th></tr></thead><tbody>
+<tr><td>DC 圆口</td><td>主机电源输入</td><td>连接配套 D-Tap 转 DC 电源线。允许输入范围、插头极性和尺寸尚未确认。</td></tr>
+<tr><td>DP</td><td>DisplayPort 显示输出</td><td>用于本机显示器；照片示例带显示转接器。本次系统显示 DP 已连接。</td></tr>
+<tr><td>USB-A × 4</td><td>相机或其他 USB 外设</td><td>照片可见两组双层口；三台相机在系统里共享同一 USB Hub 上行链路。</td></tr>
+<tr><td>ETH / RJ45</td><td>有线网络</td><td>Realtek 千兆以太网控制器；本次无链路，不是当前三路相机的数据入口。</td></tr>
+<tr><td>TYPE-C</td><td>USB Type-C 外形接口</td><td>照片可辨认；具体主机／设备角色、供电能力和显示能力未核实，不作为本手册接线入口。</td></tr>
+<tr><td>ANT 天线端</td><td>无线天线连接</td><td>照片可见两根天线；系统识别 RTL8822CE Wi-Fi 与 Realtek 蓝牙。</td></tr>
+</tbody></table>
+<div class="note"><strong>接相机时：</strong>按当前三根 USB 数据线与 12V 一分三供电线配套连接。不要把 ETH 网络口、TYPE-C 外形或系统里的 <code>usb0/usb1</code> 名称误认为三路相机的固定入口。</div>
+<footer><span>实物接口照片 + 系统枚举信息</span><span>04 / 12</span></footer>
+</section>
+
+<section class="page" id="power">
+<div class="running"><span>电源系统</span><span>主机与相机分别供电</span></div>
+<h2>04 / 电池与供电线束</h2>
+<div class="columns"><figure><img class="photo" src="hardware-manual/battery-ports.jpg" alt="白色电池端口照片，可见 12V 插接位置及相邻 8.4V 输出标识"><figcaption>原手册第 5 页：相机线路使用 12V 口。下方另有 8.4V 口，不能混用。</figcaption></figure><div><h3>两条独立供电路径</h3><p><strong>主机：</strong>电池 D-Tap → 配套 D-Tap 转 DC 线 → Jetson DC。</p><p><strong>相机：</strong>电池 12V → 一分三供电线 → 三台相机各自的 8-pin 电源连接。</p><p>本方案不依靠 Jetson 的 USB 口承担相机工作电源。USB 插好但没有 12V 供电，相机仍不能按本方案正常工作。</p><p class="small">原照片中可见其他 USB-C、USB-A 电源口标识；这些口不是本手册指定的相机供电路径。</p></div></div>
+<h3>安装和更换时必须确认</h3>
+<ul><li>电池输出关闭后连接 D-Tap、DC 和各相机电源接头；接头方向正确、插接到位。</li><li>使用已配套验证的线束。安装手册未给出 8-pin 针脚、电源极性、线径及各输出电流上限，不可仅凭外形自行改线。</li><li>一分三的三条支路分别供给三台相机；整理线束并固定受力点，避免接口承受背包运动产生的拉力。</li><li>电池到 Jetson 的路径和相机 12V 路径不同，不能把“相机 12V”当成 Jetson 的额定输入规格。</li></ul>
+<div class="note power-note"><strong>电量与续航：</strong>本机有 INA3221 电压／电流监测，但未注册电池／UPS 电量设备。上一轮盘点的 <code>VDD_IN≈14.68V</code> 只是主机监测点的瞬时读数，不能据此推算电池容量、剩余电量、允许输入范围或续航。</div>
+<p class="small">待补：电池型号、Wh／Ah、D-Tap 电压范围、12V 电流上限、充电要求、线束额定值及稳压方式。照片中的单个功率标识不能替代上述规格。</p>
+<footer><span>依据：原安装手册第 3—5、8 页</span><span>05 / 12</span></footer>
+</section>
+
+<section class="page" id="camera-data">
+<div class="running"><span>相机与采集数据</span><span>同一根 USB 承载多类信息</span></div>
+<h2>05 / 各路信息从哪里来</h2>
+<table><thead><tr><th style="width:23%">信息</th><th style="width:32%">来源与用途</th><th>进入 Jetson 的路径</th></tr></thead><tbody>
+<tr><td>右手／左手图像</td><td>Insight3 A / B；当前预览选用 <code>infra1</code>。</td><td>相机 USB → CDC-NCM → ROS 2 图像话题。</td></tr>
+<tr><td>头部彩色图像</td><td>Insight9 A；当前预览选用 <code>color_compressed</code>。</td><td>同上；图像流是否发布取决于相机输出配置。</td></tr>
+<tr><td>IMU、原生 VIO</td><td>相机传感器／相机端估计结果；用于运动状态与轨迹。</td><td>随同相机网络链路进入 ROS 2，不额外铺设串口或 CAN 线。</td></tr>
+<tr><td>统一坐标系位姿</td><td>Jetson 上的 Insight9 建图、Insight3 重定位服务计算。</td><td>主机软件生成并传给前端／录制端，不是另一条外部硬件线路。</td></tr>
+<tr><td>夹爪开口宽度</td><td>项目 UMI 路线由图像中的 ArUco 标记和实测标定提取。</td><td>使用已采集图像；未发现本设备经 CAN／串口读取夹爪编码器的证据。</td></tr>
+<tr><td>麦克风与播报</td><td>配置支持 USB 音频输入／输出，本次未枚举到 USB 声卡。</td><td>USB 音频驱动 → 主机语音服务；不经相机 DDS 链路。</td></tr>
+</tbody></table>
+<figure><div class="rotate compact"><img src="hardware-manual/camera-ports.jpg" alt="原安装手册中的相机侧面，可见供电连接与 USB-C 数据接口"></div><figcaption>原手册第 6 页相机接口示例。照片可见 USB-C 外形、12V⎓0.9A 和 5V⎓2A 标识；仅是该照片机身标注，不能推广成三台相机各自的功耗或替代供电许可。</figcaption></figure>
+<p class="small">“VIO”指视觉惯性里程计。具体图像分辨率、帧率、IMU 频率和时间同步精度，本次未进行数据流验收，不在本硬件手册中给出性能承诺。</p>
+<footer><span>相机供电按第 5 页；采集内容按实际话题选择</span><span>06 / 12</span></footer>
+</section>
+
+<section class="page" id="usb-network">
+<div class="running"><span>传输方式</span><span>物理 USB · 逻辑网络</span></div>
+<h2>06 / USB、IP 与 ROS 2 的关系</h2>
+<div class="flow"><div class="flow-row"><div class="box">USB 线<small>物理连接</small></div><span class="arrow">→</span><div class="box">CDC-NCM 网卡<small>Linux 驱动 cdc_ncm</small></div><span class="arrow">→</span><div class="box">IP 网络<small>各路独立 /24 网段</small></div><span class="arrow">→</span><div class="box">ROS 2 / DDS<small>图像、IMU、VIO 消息</small></div></div></div>
+<p>本机三路相机枚举为 LooperRobotics <code>3652:0104</code>，数据接口驱动均为 <code>cdc_ncm</code>。因此“USB 传输”和“网络通信”同时成立。相机管理 HTTP 接口与 ROS 2 消息共享这条物理链路，但管理接口能响应不等于图像已经出帧。</p>
+<table><thead><tr><th>相机／用途</th><th>相机 IP → 主机 IP</th><th>主机网卡 / USB 路径</th></tr></thead><tbody>
+<tr><td>Insight3 A<br>右手</td><td><code>169.254.10.1</code><br>→ <code>169.254.10.2/24</code></td><td><code>enx020000000a01</code><br><code>2-1.4</code></td></tr>
+<tr><td>Insight3 B<br>左手</td><td><code>169.254.20.1</code><br>→ <code>169.254.20.2/24</code></td><td><code>enx020000001401</code><br><code>2-1.3</code></td></tr>
+<tr><td>Insight9 A<br>头部</td><td><code>169.254.30.1</code><br>→ <code>169.254.30.2/24</code></td><td><code>enx020000001e01</code><br><code>2-1.2</code></td></tr>
+</tbody></table>
+<p class="small">以上是 2026-10-10 本机映射，管理接口已逐路核对 namespace。USB 路径会随换口改变；不能把系统路径后缀直接当成外壳印刷端口号。</p>
+<h3>共享带宽与发现配置</h3>
+<ul><li>三台相机本次连接速率各为 <strong>5 Gbit/s</strong>；同一个 Realtek Hub 上行枚举为 <strong>10 Gbit/s</strong>。三路共享上行，不能把 3 × 5 Gbit/s 当成主机可用总吞吐量。</li><li>三台相机管理接口均返回 <strong>CycloneDDS</strong> 和 <strong>ROS_DOMAIN_ID=20</strong>，与当前配置一致。其他设备应读取各自配置，不能固定套用 20。</li><li>Wi-Fi 用于局域网访问；本次主机地址 <code>192.168.19.222</code> 可能随网络变化。远程看图依赖这段网络，但相机到主机的三条 USB 链路独立存在。</li></ul>
+<div class="note"><strong>判断采集就绪要看实际数据：</strong>USB 枚举、网卡 UP、管理 HTTP 响应和 ROS 发现分别只证明链路的一部分。还需在采集界面确认三路画面持续更新、所需位姿新鲜，并通过开始录制前检查。</div>
+<footer><span>本次核验未新增 ROS 图像订阅或进行录制测试</span><span>07 / 12</span></footer>
+</section>
+
+<section class="page" id="peripherals">
+<div class="running"><span>存储与其他接口</span><span>支持能力与当前接入状态分开记录</span></div>
+<h2>07 / NVMe、音频、串口与 CAN</h2>
+<h3>存储路径</h3>
+<table><thead><tr><th style="width:24%">设备</th><th>本机结果</th><th style="width:27%">用途</th></tr></thead><tbody>
+<tr><td><code>nvme0n1</code></td><td>实际 128,035,676,160 字节，约 119.24 GiB；型号字符串为 <code>PUSKILL 1TB</code>。</td><td>系统盘。型号文字与实际容量不符，本手册按实际容量记录。</td></tr>
+<tr><td><code>nvme1n1</code></td><td>WDC PC SN530 512GB；实际约 476.94 GiB，ext4 数据分区。</td><td>数据盘；本次录制目录回退到该盘。</td></tr>
+<tr><td>USB 存储</td><td>软件支持外置 USB 录制盘；本次未枚举到。</td><td>接入后需确认真实挂载位置和可写状态。</td></tr>
+</tbody></table>
+<p>本次录制状态接口报告 <code>using_fallback=true</code>，实际来源为 <code>/dev/nvme1n1p1[/insight/rosbags]</code>。这表示当前写入目标在 NVMe 上，不能因为配置中有 USB 目录就认为文件已写入外置盘。</p>
+<h3>其他接口</h3>
+<table><thead><tr><th style="width:22%">接口</th><th>已发现的硬件／驱动</th><th style="width:34%">本次状态与说明</th></tr></thead><tbody>
+<tr><td>CAN</td><td><code>can0</code>，<code>mttcan</code> 控制器。</td><td>DOWN / STOPPED。外部收发器、接线端子和节点未确认；当前没有已证实的 CAN 采集链路。</td></tr>
+<tr><td>板载串口</td><td><code>ttyTHS1/2</code> 及 <code>ttyS0–3</code> 节点。</td><td>节点存在不等于已连接传感器，也不能证明电平为 RS-232 或 RS-485。</td></tr>
+<tr><td>USB 串口</td><td>检查 <code>ttyUSB*</code> / <code>ttyACM*</code>。</td><td>本次未枚举到。</td></tr>
+<tr><td>音频</td><td>板载 HDA / APE；软件支持 USB 音频设备。</td><td>本次没有 USB 声卡；麦克风、音响型号不能从当前现场读取。</td></tr>
+<tr><td>输入设备</td><td>Logitech Unifying Receiver，USB HID。</td><td>已连接；仅凭接收器不能确定具体键鼠型号。</td></tr>
+<tr><td>Wi-Fi / 蓝牙</td><td>RTL8822CE PCIe 无线网卡；Realtek USB 蓝牙。</td><td>Wi-Fi 已连接，蓝牙已枚举；蓝牙不是当前相机数据通道。</td></tr>
+</tbody></table>
+<footer><span>“本次未枚举”不代表产品不支持或永远不配备</span><span>08 / 12</span></footer>
+</section>
+
+<section class="page" id="assembly">
+<div class="running"><span>装配操作</span><span>先断电接线，再检查固定</span></div>
+<h2>08 / 安装与线缆固定</h2>
+<ol><li><strong>关闭电池输出。</strong>确认 Jetson 和三台相机均未通电，检查插头无弯针、破损和松动。</li><li><strong>固定设备。</strong>按右手 A、左手 B、头部 A 对应相机角色；保留镜头视野和主机散热通道。</li><li><strong>连接主机电源。</strong>D-Tap 端接电池，DC 圆口接主机标有 DC 的输入口。</li><li><strong>连接相机电源。</strong>12V 一分三线接电池 12V 口，三路 8-pin 分别接三台相机；确认方向，勿倾斜硬插。</li><li><strong>连接数据。</strong>三根 USB 线分别连接相机数据口和主机 USB 口。不要把只供电的线当作数据线。</li><li><strong>整理与标记。</strong>建议在线缆两端标注 A-右手、B-左手、9-头部；固定线束，预留活动余量，避免拉扯、夹压及过度弯折。</li></ol>
+<div class="columns"><figure><img class="photo" src="hardware-manual/nx-front.jpg" alt="安装手册中的 Jetson 主机正面，接有显示转接器和 USB 线"><figcaption>原手册第 4 页：主机连接示例，风扇开口应保持通畅。</figcaption></figure><figure><img class="photo" src="hardware-manual/usb-connections.jpg" alt="安装手册中的三根相机 USB 线连接主机面板"><figcaption>原手册第 7 页：三路 USB 接线示例；实体口与系统路径不直接对应。</figcaption></figure></div>
+<div class="note power-note"><strong>接线完成再通电。</strong>所有电源接头均应在对应供电关闭后装拆，尤其不要带电反复插拔相机侧 8-pin。正常停机须先停止录制并完成系统关机。</div>
+<footer><span>安装手册实物照片复用；未宣称为本次新拍照片</span><span>09 / 12</span></footer>
+</section>
+
+<section class="page" id="startup">
+<div class="running"><span>现场运行</span><span>上电、关机与 USB 掉线恢复</span></div>
+<h2>09 / 启停顺序</h2>
+<h3>日常上电</h3>
+<ol><li>断电完成第 9 页接线检查，先确保三条相机 USB 数据线已经插好。</li><li><strong>若电池支持主机与相机分路控制：</strong>先给 Jetson 上电，待主机启动完成后再使能相机 12V 输出。相机侧 8-pin 保持插接。</li><li><strong>若只能总开关同时上电：</strong>全部接头在断电时接好，再按配套安装流程打开总输出；等待主机启动，并核实系统是否完成相机恢复和实际出图。不要假定任何机器都能自动恢复。</li><li>进入采集界面，确认右手、左手、头部三路画面持续更新，检查所需位姿、录制目录和可用空间，再进行采集。</li></ol>
+<p class="small">原安装手册采用整体通电流程；项目后续前端手册补充了“USB 先接、Jetson 就绪后给相机 12V”的现场经验。本页按实际分路控制能力区分；电池是否支持独立开关尚未确认，不能要求带电改接 8-pin 来实现顺序。</p>
+<h3>正常关机</h3>
+<ol><li>先停止当前录制，等待界面确认结束、文件写入和停止处理完成。</li><li>在 Jetson 系统中执行正常关机，等待系统完全停止。</li><li>关闭电池输出。确认设备断电后再拆卸 USB、电源线或外置录制盘。</li></ol>
+<h3>USB 松脱或重插后没有恢复</h3>
+<p>先接稳 USB，再检查画面是否持续更新。仅重插 USB 可能不足以恢复相机发现；需要重新给相机上电时，先结束录制并关闭相机供电支路，再恢复该支路。若无法独立控制相机电源，按完整关机流程断电后重启。</p>
+<div class="note power-note"><strong>共同影响：</strong>三台相机共用 12V 一分三线和 USB Hub 上行。关闭共同电源或断开共同上行，会影响多路相机；不要在录制中为排查一路相机而直接切断共同电源。</div>
+<h3>启动检查清单</h3>
+<ul class="checklist"><li>主机与三台相机均独立接好指定供电线路。</li><li>三路画面持续更新，角色与实际佩戴位置一致。</li><li>录制目标盘、空间及 fallback 提示已核对。</li><li>线缆没有拉扯接口，散热通道与镜头无遮挡。</li></ul>
+<footer><span>电源操作以配套电池和线束的真实控制能力为准</span><span>10 / 12</span></footer>
+</section>
+
+<section class="page" id="diagnostics">
+<div class="running"><span>维护与巡检</span><span>从物理连接逐层检查</span></div>
+<h2>10 / 常见问题与只读检查</h2>
+<table><thead><tr><th style="width:26%">现象</th><th>优先检查</th></tr></thead><tbody>
+<tr><td>Jetson 无法开机</td><td>电池输出、D-Tap、DC 输入口及接头固定。不要把相机的 12V 路径当成主机输入规格。</td></tr>
+<tr><td>某台相机无数据</td><td>同时检查该路 12V 支路和 USB；再看是否有对应 cdc_ncm 网卡、相机管理响应以及实际图像／VIO。</td></tr>
+<tr><td>三路同时消失</td><td>先查共用相机供电、一分三线、Hub 与上行路径。仅凭同时掉线不能认定电池电压异常。</td></tr>
+<tr><td>相机 IP 可访问但无画面</td><td>管理服务与 ROS 数据不是同一验收项；继续看实际消息和页面更新，不要先改 DDS 域号。</td></tr>
+<tr><td>录制没有落到 USB 盘</td><td>查实际挂载源与 <code>using_fallback</code>，确认外置盘是否存在并可写。不要在录制期间切换存储。</td></tr>
+<tr><td>语音无输入或无播报</td><td>先确认 USB 音频硬件已枚举，再查语音服务；只有板载 HDA／APE 不代表外置麦克风和音响在线。</td></tr>
+<tr><td>电源接头异常发热／有焦味</td><td>停止使用并按现场条件安全断电，检查线缆和接头；不要反复试插继续运行。</td></tr>
+</tbody></table>
+<h3>维护人员的只读命令</h3>
+<pre>lsusb
+lsusb -t
+ip -br address
+ip -details link show can0
+lsblk -o NAME,MODEL,SIZE,TYPE,FSTYPE,MOUNTPOINTS,TRAN
+cat /proc/asound/cards
+ls /sys/class/power_supply
+curl -fsS --max-time 5 http://127.0.0.1:8765/api/recording/status</pre>
+<p>依次核对：三台 <code>3652:0104</code> 相机、三条 <code>cdc_ncm</code> 接口、实际存储设备，以及录制状态中的 <code>storage.active_path</code>、<code>mounted_source</code> 和 <code>using_fallback</code>。</p>
+<div class="note"><strong>这组命令不证明录制质量。</strong>图像和位姿是否新鲜、录制是否完整，应由采集前检查、实际录制及完成后的质量检查确认。不要仅凭“网卡在线”交付采集验收。</div>
+<footer><span>不包含重启、改 IP、改 DDS 或格式化命令</span><span>11 / 12</span></footer>
+</section>
+
+<section class="page" id="sources">
+<div class="running"><span>资料依据</span><span>适用边界与待补规格</span></div>
+<h2>11 / 核验记录与规格边界</h2>
+<p>本手册覆盖硬件组成、接口用途、供电／数据关系、安装操作与基本巡检。当前资料尚不足以制作可据此自行配线的电气原理图或完整采购替换清单。</p>
+<h3>资料与实测来源</h3>
+<table><thead><tr><th style="width:29%">来源</th><th>支持内容</th></tr></thead><tbody>
+<tr><td>原硬件安装手册<br>共 8 页</td><td><code>Insight_三相机系统_硬件安装手册.pdf</code>：设备清单、D-Tap 与 12V 分路、8-pin 一分三、USB 接线及五张实物照片。照片来源页：2、4、5、6、7。</td></tr>
+<tr><td>2026-10-10<br>11:33 +08:00 盘点</td><td>设备树、USB / PCIe 枚举、IP、CAN 状态、存储、音频、电源传感器；相机管理接口逐路读取及后端实际存储路径。</td></tr>
+<tr><td>当前项目配置与文档</td><td><code>config/cameras.json</code> 的相机角色与预览流；<code>docs/USAGE.md</code>、<code>OPENCLAW_VOICE.md</code> 及前端手册中的使用和启动约束。</td></tr>
+</tbody></table>
+<p class="small">原始盘点摘要随手册保存：<a href="hardware-manual/inspection-2026-10-10.json"><code>hardware-manual/inspection-2026-10-10.json</code></a>。本次没有新建录制、订阅全速图像、重启服务或断电试验；管理接口返回不能代替实际采集验收。</p>
+<h3>仍需铭牌、采购资料或电气资料补齐</h3>
+<table><thead><tr><th style="width:29%">待补项目</th><th>需要确认的规格</th></tr></thead><tbody>
+<tr><td>电池与供电能力</td><td>品牌型号、额定电压与 Wh／Ah、D-Tap 范围、12V 电流上限、独立开关能力、充电方式与实测续航。</td></tr>
+<tr><td>电源线束</td><td>DC 尺寸／极性、8-pin 接头料号与针脚、线径、额定电流；有无稳压或保护模块。</td></tr>
+<tr><td>载板与 USB Hub</td><td>载板商品型号、实际允许输入、Hub 实体位置及料号。设备树配置不等于载板厂家认证。</td></tr>
+<tr><td>相机与配件</td><td>各相机完整型号／硬件版本、电源额定值；USB 线长度／规格、未接入音频设备型号、穿戴支架尺寸。</td></tr>
+<tr><td>性能与环境</td><td>整包重量、续航、环境适用范围，以及三路持续录制和同步精度验收。不得从链路速率推算这些指标。</td></tr>
+</tbody></table>
+<div class="note"><strong>更新原则：</strong>换载板、电池、相机、Hub 或线束后，重新核对接口与供电规格；更换 USB 端口或 IP 配置后，更新第 7 页映射。交接时保留这一页，避免把待确认项当成已认证规格。</div>
+<footer><span>V1.0 · 现场核验版 · 2026-10-10</span><span>12 / 12</span></footer>
+</section>
+</body>
+</html>
