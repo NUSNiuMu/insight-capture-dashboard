@@ -4,7 +4,7 @@ import os
 import subprocess
 from typing import Callable, Dict, List, Optional, Sequence, Set
 
-from insight_capture.core.config import camera_base, camera_info_topic, enabled_cameras, image_topic
+from insight_capture.core.config import camera_base, dashboard_streams, enabled_cameras
 
 
 VIO_CALIBRATION_CAMERA_NAMES = ("insight3_a", "insight3_b")
@@ -83,12 +83,13 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         # global pose. UMI single-arm export requires this local trajectory.
         topics.append(f"{camera_base(namespace)}/vio_100hz")
 
-        image_stream = str(camera.get("dashboard_image_stream", "color_compressed"))
         topics.append(f"{camera_base(namespace)}/imu")
-        topics.append(camera_info_topic(namespace, image_stream))
-        topics.append(image_topic(namespace, image_stream))
+        for stream in dashboard_streams(camera):
+            topics.extend([stream["camera_info_topic"], stream["topic"]])
         cov_stream = str(camera.get("dashboard_cov_stream", "vio_image_cov"))
-        topics.append(f"{camera_base(namespace)}/{cov_stream}")
+        if cov_stream:
+            topics.append(f"{camera_base(namespace)}/{cov_stream}")
+        topics.extend(camera.get("record_topics", []))
         # HandEngine streams remain available for explicit selection in the
         # Recording page, but are optional analysis data and not default.
     return _normalize_topics(topics)

@@ -34,7 +34,20 @@ ApplicationWindow {
     }
     function videoDiagnostics() { var result=[]; allVideos(function(v){result.push(v.diagnostics())}); return result }
     function allVideos(fn) {
-        for (var i=0; i<cameraRepeater.count; ++i) fn(cameraRepeater.itemAt(i).player)
+        for (var i=0; i<cameraRepeater.count; ++i) cameraRepeater.itemAt(i).eachVideo(fn)
+    }
+    function cameraGroups() {
+        var groups=[], positions={}
+        for (var i=0; i<dashboard.cameras.length; ++i) {
+            var camera=dashboard.cameras[i]
+            var key=dashboard.playback ? camera.name : (camera.device || camera.name)
+            if (positions[key] === undefined) {
+                positions[key]=groups.length
+                groups.push({name:key, streams:[]})
+            }
+            groups[positions[key]].streams.push(camera)
+        }
+        return groups
     }
     Shortcut { sequence: "Escape"; onActivated: root.visibility = Window.Windowed }
     Shortcut { sequence: "F11"; onActivated: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
@@ -77,18 +90,27 @@ ApplicationWindow {
                 columns: dashboard.playback ? Math.max(1, cameraRepeater.count) : 1
                 rowSpacing: 10; columnSpacing: 12
                 Repeater {
-                    id: cameraRepeater; model: dashboard.cameras
-                    delegate: Rectangle {
-                        id: cameraCard; required property var modelData
-                        property alias player: video
-                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 1; color: "#fffaf0"; radius: 9
-                        Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: cameraCard.modelData.label; font.bold: true; color: "#514b3e" }
-                        Label { id: cameraStatus; anchors.top: cameraTitle.bottom; anchors.left: parent.left; anchors.margins: 10; text: video.status; elide: Text.ElideRight; width: parent.width-90; font.pixelSize: 11; color: "#84775f" }
-                        Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " fps"; color: "#a27723"; font.bold: true }
-                        NativeVideo {
-                            id: video; visible: !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.margins: 6
-                            cameraName: cameraCard.modelData.name; endpoint: cameraCard.modelData.endpoint; media: cameraCard.modelData.media; targetFps: root.previewFps
-                            onStatsChanged: { if (dashboard.playback) { root.playTime = position; dashboard.setPlaybackTime(position) } }
+                    id: cameraRepeater; model: root.cameraGroups()
+                    delegate: GridLayout {
+                        id: cameraGroup; required property var modelData
+                        columns: modelData.streams.length > 1 ? 2 : 1
+                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: modelData.streams.length > 1 ? 2 : 1
+                        function eachVideo(fn) { for(var j=0;j<streamRepeater.count;++j)fn(streamRepeater.itemAt(j).player) }
+                        Repeater {
+                            id: streamRepeater; model: cameraGroup.modelData.streams
+                            delegate: Rectangle {
+                                id: cameraCard; required property var modelData
+                                property alias player: video
+                                Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 1; color: "#fffaf0"; radius: 9
+                                Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: cameraCard.modelData.label; width: cameraGroup.modelData.streams.length > 1 ? parent.width-20 : parent.width-110; elide: Text.ElideRight; font.bold: true; color: "#514b3e" }
+                                Label { id: cameraStatus; anchors.top: cameraTitle.bottom; anchors.left: parent.left; anchors.margins: 10; text: video.status; elide: Text.ElideRight; width: parent.width-20; font.pixelSize: 11; color: "#84775f" }
+                                Label { visible: cameraGroup.modelData.streams.length === 1; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " fps"; color: "#a27723"; font.bold: true }
+                                NativeVideo {
+                                    id: video; visible: !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.margins: 6
+                                    cameraName: cameraCard.modelData.name; endpoint: cameraCard.modelData.endpoint; media: cameraCard.modelData.media; targetFps: root.previewFps
+                                    onStatsChanged: { if (dashboard.playback) { root.playTime = position; dashboard.setPlaybackTime(position) } }
+                                }
+                            }
                         }
                     }
                 }

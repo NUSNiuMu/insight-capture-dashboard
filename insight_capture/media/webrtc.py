@@ -5,6 +5,7 @@ import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 from .rate import select_frame
+from .h264 import H264Gate
 
 try:
     import gi
@@ -152,6 +153,7 @@ class WebRtcSession:
         self._closed = False
         self._target_fps = max(5, min(30, int(target_fps)))
         self._next_frame_at = 0.0
+        self._h264_gate = H264Gate()
         self._stats_lock = threading.Lock()
         self._stats = {
             "session_received": 0,
@@ -175,7 +177,7 @@ class WebRtcSession:
     ) -> None:
         with self._stats_lock:
             self._stats["session_received"] += 1
-        if not rate_checked:
+        if not rate_checked and fmt != "H264":
             now = time.monotonic()
             selected, self._next_frame_at = select_frame(
                 now, self._next_frame_at, self._target_fps
@@ -204,6 +206,13 @@ class WebRtcSession:
                     self._stats["caps_mismatch"] += 1
                 return
             appsrc = self._appsrc
+            if fmt == "H264":
+                if appsrc.get_property("current-level-buffers") >= 8:
+                    self._h264_gate.reset()
+                    return
+                data = self._h264_gate.accept(data)
+                if data is None:
+                    return
         buf = Gst.Buffer.new_wrapped(data)
         if appsrc.emit("push-buffer", buf) == Gst.FlowReturn.OK:
             with self._stats_lock:
@@ -219,7 +228,13 @@ class WebRtcSession:
     def _build_pipeline(self, fmt: str, width: int, height: int) -> None:
         out_width, out_height = _encoder_dims(width, height)
         bitrate = _bitrate_for(out_width, out_height, self._target_fps)
-        if fmt == "JPEG":
+        if fmt == "H264":
+            source = (
+                "appsrc name=src is-live=true format=time do-timestamp=true "
+                "block=false max-buffers=8 "
+                "caps=video/x-h264,stream-format=byte-stream,alignment=au ! "
+            )
+        elif fmt == "JPEG":
             source = (
                 f"appsrc name=src is-live=true format=time do-timestamp=true "
                 f"block=false max-buffers=3 leaky-type=downstream "
@@ -235,12 +250,14 @@ class WebRtcSession:
         # insert-sps-pps + config-interval=-1: parameter sets ride along with
         # every IDR so a viewer joining mid-stream can start decoding at the
         # next keyframe. A one-second IDR interval bounds that wait.
-        description = (
-            f"{source}"
+        encoder = "" if fmt == "H264" else (
             f"nvvidconv ! video/x-raw(memory:NVMM),format=NV12,width={out_width},height={out_height} ! "
             f"nvv4l2h264enc bitrate={bitrate} insert-sps-pps=true "
             f"idrinterval={self._target_fps} iframeinterval={self._target_fps} "
             f"maxperf-enable=true ! "
+        )
+        description = (
+            f"{source}{encoder}"
             f"h264parse name=parser config-interval=-1 ! "
             f"rtph264pay pt=96 mtu=1200 aggregate-mode=zero-latency config-interval=-1 ! "
             f"application/x-rtp,media=video,encoding-name=H264,payload=96 ! "
@@ -260,10 +277,13 @@ class WebRtcSession:
         self._pipeline = pipeline
         self._appsrc = pipeline.get_by_name("src")
         self._webrtc = webrtc
-        self._log(
-            f"webrtc[{self.camera_name}]: streaming {fmt} {width}x{height} -> "
-            f"{out_width}x{out_height} at {self._target_fps} fps, {bitrate // 1000} kbps"
-        )
+        if fmt == "H264":
+            self._log(f"webrtc[{self.camera_name}]: H.264 passthrough {width}x{height}, source cadence/bitrate")
+        else:
+            self._log(
+                f"webrtc[{self.camera_name}]: streaming {fmt} {width}x{height} -> "
+                f"{out_width}x{out_height} at {self._target_fps} fps, {bitrate // 1000} kbps"
+            )
 
     # ── webrtcbin callbacks (GStreamer threads) ─────────────────────────────
 

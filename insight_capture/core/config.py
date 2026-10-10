@@ -99,25 +99,45 @@ def enabled_cameras(config: Dict) -> List[Dict]:
     return [camera for camera in config.get("cameras", []) if camera.get("enabled", True)]
 
 
+def dashboard_streams(camera: Dict) -> List[Dict]:
+    """Resolve image streams independently of the device's single pose."""
+    streams = camera.get("dashboard_streams")
+    if streams is None:
+        stream = camera.get("dashboard_image_stream", "color_compressed")
+        streams = [{
+            "name": camera["name"],
+            "topic": image_topic(camera["namespace"], stream),
+            "camera_info_topic": camera_info_topic(camera["namespace"], stream),
+            "type": IMAGE_STREAMS[stream]["type"],
+        }]
+    if not isinstance(streams, list) or not streams:
+        raise ValueError(f"{camera['name']}: dashboard_streams must be a nonempty list")
+    resolved = []
+    for stream in streams:
+        item = dict(stream)
+        if not item.get("name") or not str(item.get("topic", "")).startswith("/"):
+            raise ValueError("Every image stream needs a name and absolute ROS topic")
+        if item.get("type") not in {"image", "compressed", "h264"}:
+            raise ValueError(f"Unsupported image stream type: {item.get('type')}")
+        if not str(item.get("camera_info_topic", "")).startswith("/"):
+            raise ValueError("Every image stream needs an absolute camera_info_topic")
+        item.update(namespace=camera["namespace"], device_name=camera["name"])
+        item.setdefault("label", camera.get("dashboard_label", item["name"]))
+        item.setdefault("rotation_deg", int(camera.get("dashboard_rotation_deg", 0)))
+        item.setdefault("row", int(camera.get("dashboard_row", 0)))
+        item.setdefault("column", int(camera.get("dashboard_column", 0)))
+        item["hand_tracking"] = bool(camera.get("dashboard_hand_tracking", False))
+        resolved.append(item)
+    return resolved
+
+
 def build_dashboard_config(config: Dict) -> Dict:
     dashboard = config.get("dashboard", {})
     cameras = []
     poses = []
     for camera in enabled_cameras(config):
         namespace = camera["namespace"]
-        image_stream = camera["dashboard_image_stream"]
-        cameras.append(
-            {
-                "name": camera["name"],
-                "hand_tracking": bool(camera.get("dashboard_hand_tracking", False)),
-                "label": camera.get("dashboard_label", camera["name"]),
-                "topic": image_topic(namespace, image_stream),
-                "type": IMAGE_STREAMS[image_stream]["type"],
-                "rotation_deg": int(camera.get("dashboard_rotation_deg", 0)),
-                "row": int(camera.get("dashboard_row", 0)),
-                "column": int(camera.get("dashboard_column", 0)),
-            }
-        )
+        cameras.extend(dashboard_streams(camera))
 
         pose_stream = camera.get("dashboard_pose_stream", "vio_100hz")
         if pose_stream.startswith("vio_"):
@@ -143,6 +163,13 @@ def build_dashboard_config(config: Dict) -> Dict:
             }
         )
 
+    names = [camera["name"] for camera in cameras]
+    topics = [camera["topic"] for camera in cameras]
+    if len(set(names)) != len(names) or len(set(topics)) != len(topics):
+        raise ValueError("Dashboard image stream names and topics must be unique")
+    pose_names = [pose["name"] for pose in poses]
+    if len(set(pose_names)) != len(pose_names):
+        raise ValueError("Camera device names must be unique")
     return {
         "trajectory": dashboard.get("trajectory", {}),
         "cameras": cameras,

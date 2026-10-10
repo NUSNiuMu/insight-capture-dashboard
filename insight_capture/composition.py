@@ -61,12 +61,14 @@ class RuntimeServices:
         pose_by_name = {pose.name: pose for pose in self.node.poses}
         cameras = []
         for camera in self.node.cameras:
-            pose = pose_by_name[camera.name]
+            pose = pose_by_name[getattr(camera, "device_name", "") or camera.name]
             cameras.append(
                 {
                     "name": camera.name,
                     "label": camera.label,
                     "topic": camera.topic,
+                    "type": camera.topic_type,
+                    "device_name": getattr(camera, "device_name", "") or camera.name,
                     "role": pose.teleop_role,
                     "rotation_deg": camera.rotation_deg,
                     "row": camera.row,

@@ -19,6 +19,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
 
 from insight_capture.media.jpeg import HwJpegCodec
 from insight_capture.media.rate import select_frame
+from insight_capture.media.h264 import H264Queue
 
 from insight_capture.core.models import CameraFrame
 
@@ -29,6 +30,20 @@ class WorkerSupervisor:
 
     def __init__(self, owner) -> None:
         self.owner = owner
+        self._h264_queues = {}
+
+    def queue_h264(self, camera_name, message):
+        """Keep encoded dependencies intact; never put H.264 in latest-frame slots."""
+        if not self.owner._webrtc_has_sessions.get(camera_name):
+            return
+        if str(message.format).lower() != "h264":
+            return
+        queue = self._h264_queues.setdefault(camera_name, H264Queue())
+        stamp = self.owner._stamp_to_ns(message.header.stamp)
+        if queue.push(bytes(message.data), stamp):
+            with self.owner._webrtc_metrics_lock:
+                self.owner._webrtc_main_metrics[camera_name]["queued"] += 1
+            self.owner._webrtc_frame_event.set()
 
     def _queue_webrtc_frame(
         self,
@@ -276,6 +291,8 @@ class WorkerSupervisor:
                             self.owner._webrtc_session_fps[camera_name] = target_fps
                             self.owner._webrtc_has_sessions[camera_name] = target_fps > 0
                             self.owner._next_webrtc_frame_at[camera_name] = 0.0
+                            if target_fps == 0 and camera_name in self._h264_queues:
+                                self._h264_queues[camera_name].reset()
                     if self.owner._webrtc_frame_event.wait(timeout=0.05):
                         self.owner._webrtc_frame_event.clear()
                         for camera_name in list(self.owner._pending_webrtc_frames.keys()):
@@ -288,9 +305,17 @@ class WorkerSupervisor:
                             conn.send((camera_name,) + payload)
                             with self.owner._webrtc_metrics_lock:
                                 self.owner._webrtc_main_metrics[camera_name]["ipc_sent"] += 1
+                        for camera_name, queue in list(self._h264_queues.items()):
+                            spec = next(c for c in self.owner.cameras if c.name == camera_name)
+                            for data in queue.drain():
+                                conn.send((camera_name, "H264", spec.width, spec.height, data))
+                                with self.owner._webrtc_metrics_lock:
+                                    self.owner._webrtc_main_metrics[camera_name]["ipc_sent"] += 1
             except (EOFError, OSError) as exc:
                 self.owner.get_logger().warning(f"webrtc ipc: lost connection to worker ({exc}); reconnecting")
             finally:
+                for queue in list(self._h264_queues.values()):
+                    queue.reset()
                 with contextlib.suppress(Exception):
                     conn.close()
             time.sleep(1.0)

@@ -213,6 +213,8 @@ def load_camera_specs(
     single_arm = sum(role != "head" for role in selected_roles) == 1
     for role in selected_roles:
         camera = by_role[role]
+        if camera.get("dashboard_streams"):
+            raise ValueError("Multi-stream H.264 dataset export is not supported; use native recording/review")
         stream = str(camera["dashboard_image_stream"])
         if stream not in IMAGE_STREAMS:
             raise ValueError(f"unsupported image stream '{stream}' for {camera['name']}")

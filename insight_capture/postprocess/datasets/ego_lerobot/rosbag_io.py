@@ -49,6 +49,8 @@ def load_camera_streams(config_path: Path) -> dict[str, CameraStream]:
     for role in required:
         item = by_role[role]
         namespace = str(item["namespace"])
+        if item.get("dashboard_streams"):
+            raise ValueError("Multi-stream H.264 dataset export is not supported; use native recording/review")
         stream = str(item["dashboard_image_stream"])
         if stream not in IMAGE_STREAMS:
             raise ValueError(f"unsupported stream {stream!r} for {namespace}")

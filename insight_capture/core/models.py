@@ -32,6 +32,9 @@ class CameraSpec:
     rotation_deg: int
     row: int
     column: int
+    device_name: str = ""
+    width: int = 0
+    height: int = 0
 
 
 @dataclass

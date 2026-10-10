@@ -114,9 +114,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
 
         raw_config = load_setup(config_path)
         config = build_dashboard_config(raw_config)
-        enabled_camera_map = {
-            camera["name"]: camera for camera in raw_config.get("cameras", []) if camera.get("enabled", True)
-        }
         trajectory_config = config.get("trajectory", {})
         # Reliable image QoS prevents whole-frame loss from fragmented UDP samples.
         self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
@@ -130,7 +127,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self.cameras: List[CameraSpec] = [
             CameraSpec(
                 name=item["name"],
-                namespace=enabled_camera_map[item["name"]]["namespace"],
+                namespace=item["namespace"],
                 hand_tracking=bool(item.get("hand_tracking", False)),
                 label=item["label"],
                 topic=item["topic"],
@@ -138,6 +135,9 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 rotation_deg=int(item.get("rotation_deg", 0)),
                 row=int(item.get("row", 0)),
                 column=int(item.get("column", 0)),
+                device_name=item["device_name"],
+                width=int(item.get("width", 0)),
+                height=int(item.get("height", 0)),
             )
             for item in config.get("cameras", [])
         ]
@@ -358,7 +358,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         # Depth 20 absorbs executor stalls without overwriting recording frames.
         image_qos = make_image_qos(depth=20, reliability=self.image_qos_reliability)
         for camera in self.cameras:
-            msg_type = CompressedImage if camera.topic_type == "compressed" else RosImage
+            msg_type = CompressedImage if camera.topic_type in ("compressed", "h264") else RosImage
             sub = self.create_subscription(
                 msg_type,
                 camera.topic,
@@ -396,6 +396,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 self.get_logger().info(
                     f"Localization relay: {camera.name} -> {relay_topic} at 2 Hz"
                 )
+            if camera.topic_type == "h264":
+                continue
             threading.Thread(
                 target=self._frame_worker_loop,
                 args=(camera.name, camera.topic_type),

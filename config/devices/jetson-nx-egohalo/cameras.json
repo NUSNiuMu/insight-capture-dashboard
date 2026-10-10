@@ -1,0 +1,148 @@
+{
+  "ros_domain_id": 20,
+  "camera_dds_type": "cyclonedds",
+  "dashboard": {
+    "trajectory": {
+      "display_fps_limit": 30,
+      "image_qos_reliability": "reliable",
+      "pose_timeout_sec": 2.0,
+      "camera_stale_timeout_sec": 2.0,
+      "pose_publish_hz": 30.0
+    }
+  },
+  "cameras": [
+    {
+      "name": "insight3_a",
+      "enabled": true,
+      "namespace": "insight3_a",
+      "dashboard_image_stream": "infra1",
+      "dashboard_label": "Insight3 A Infrared",
+      "dashboard_pose_stream": "/insight_global/insight3_a/pose",
+      "dashboard_rotation_deg": 0,
+      "teleop_role": "right_hand",
+      "tcp_frame_id": "right_tcp",
+      "avatar_model": "assets/models/vis_assembly.glb",
+      "camera_center_to_tcp": {
+        "translation_m": [
+          0.0,
+          0.08,
+          0.18
+        ],
+        "rotation_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "dashboard_row": 0,
+      "dashboard_column": 0
+    },
+    {
+      "name": "insight3_b",
+      "enabled": true,
+      "namespace": "insight3_b",
+      "dashboard_image_stream": "infra1",
+      "dashboard_label": "Insight3 B Infrared",
+      "dashboard_pose_stream": "/insight_global/insight3_b/pose",
+      "dashboard_rotation_deg": 0,
+      "teleop_role": "left_hand",
+      "tcp_frame_id": "left_tcp",
+      "avatar_model": "assets/models/vis_assembly.glb",
+      "camera_center_to_tcp": {
+        "translation_m": [
+          0.0,
+          0.08,
+          0.18
+        ],
+        "rotation_xyzw": [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "dashboard_row": 1,
+      "dashboard_column": 0
+    },
+    {
+      "name": "egohalo",
+      "namespace": "egohalo",
+      "ros_domain_id": 0,
+      "enabled": true,
+      "dashboard_label": "EgoHalo",
+      "teleop_role": "head",
+      "dashboard_pose_stream": "/insight9_sparse_map/pose",
+      "dashboard_cov_stream": "",
+      "record_topics": [
+        "/egohalo/camera/vio_image",
+        "/egohalo/camera/vio_status"
+      ],
+      "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",
+      "dashboard_streams": [
+        {
+          "name": "egohalo_side_left",
+          "label": "EgoHalo 左前",
+          "topic": "/egohalo/camera/left/image_raw/h264",
+          "camera_info_topic": "/egohalo/camera/left/camera_info",
+          "type": "h264",
+          "width": 1200,
+          "height": 1600,
+          "row": 2,
+          "column": 0
+        },
+        {
+          "name": "egohalo_stereo_left",
+          "label": "EgoHalo 前置左",
+          "topic": "/egohalo/camera/stereo/left/image_raw/h264",
+          "camera_info_topic": "/egohalo/camera/stereo/left/camera_info",
+          "type": "h264",
+          "width": 1200,
+          "height": 1600,
+          "row": 2,
+          "column": 1
+        },
+        {
+          "name": "egohalo_stereo_right",
+          "label": "EgoHalo 前置右",
+          "topic": "/egohalo/camera/stereo/right/image_raw/h264",
+          "camera_info_topic": "/egohalo/camera/stereo/right/camera_info",
+          "type": "h264",
+          "width": 1200,
+          "height": 1600,
+          "row": 3,
+          "column": 0
+        },
+        {
+          "name": "egohalo_side_right",
+          "label": "EgoHalo 右前",
+          "topic": "/egohalo/camera/right/image_raw/h264",
+          "camera_info_topic": "/egohalo/camera/right/camera_info",
+          "type": "h264",
+          "width": 1200,
+          "height": 1600,
+          "row": 3,
+          "column": 1
+        }
+      ]
+    }
+  ],
+  "mapping": {
+    "left_image_topic": "/egohalo/rectified/left/image",
+    "right_image_topic": "/egohalo/rectified/right/image",
+    "left_info_topic": "/egohalo/rectified/left/camera_info",
+    "right_info_topic": "/egohalo/rectified/right/camera_info",
+    "vio_topic": "/egohalo/camera/vio_100hz",
+    "imu_frame": "egohalo_camera_imu",
+    "left_frame": "egohalo_rectified_left",
+    "right_frame": "egohalo_rectified_right"
+  },
+  "egohalo_rectification": {
+    "namespace": "egohalo",
+    "output_width": 544,
+    "output_height": 640,
+    "output_hz": 5.0,
+    "source_fps": 30.0,
+    "horizontal_fov_deg": 90.0
+  }
+}

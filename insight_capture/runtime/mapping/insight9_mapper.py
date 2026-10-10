@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import queue
 import sys
 import threading
@@ -1924,6 +1925,7 @@ class Insight9SparseMapper(Node):
 def build_parser() -> argparse.ArgumentParser:
     root = Path(__file__).resolve().parents[3]
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=root / "config" / "cameras.json")
     parser.add_argument(
         "--superglue-checkout",
         default=str(root / "data" / "models" / "SuperGluePretrainedNetwork"),
@@ -2070,7 +2072,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args, ros_args = build_parser().parse_known_args()
+    parser = build_parser()
+    initial, _ = parser.parse_known_args()
+    if initial.config.is_file():
+        setup = json.loads(initial.config.read_text())
+        allowed = {"left_image_topic", "right_image_topic", "left_info_topic", "right_info_topic",
+                   "vio_topic", "imu_frame", "left_frame", "right_frame", "map_frame", "mapping_camera_frame"}
+        mapping = setup.get("mapping", {})
+        if set(mapping) - allowed:
+            parser.error(f"Unknown mapping configuration: {sorted(set(mapping) - allowed)}")
+        parser.set_defaults(**mapping)
+        os.environ["ROS_DOMAIN_ID"] = str(setup["ros_domain_id"])
+    args, ros_args = parser.parse_known_args()
     rclpy.init(args=ros_args)
     node: Optional[Insight9SparseMapper] = None
     executor: Optional[MultiThreadedExecutor] = None

@@ -25,7 +25,7 @@ from insight_capture.legacy.composite_bag import MANIFEST_NAME
 from .playback import _read_bag_topics
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 PLAYBACK_FPS = 30.0
 PLAYBACK_MAX_DIMENSION = 720
 REVIEW_WIDTH = 1280
@@ -924,12 +924,15 @@ class PreparedPlaybackManager:
                 shutil.rmtree(temporary)
             temporary.mkdir(parents=True)
             preparation_started = time.perf_counter()
+            self._review_codec_discontinuities = {}
             scan_started = time.perf_counter()
             scan = self._scan(bag_path, cameras, poses)
             scan_sec = time.perf_counter() - scan_started
             self._check_cancelled()
             image_stamps = scan["image_stamps"]
             start_ns = max(values[0] for values in image_stamps.values())
+            if scan.get("decodable_starts"):
+                start_ns = max(start_ns, max(scan["decodable_starts"].values()))
             end_ns = min(values[-1] for values in image_stamps.values())
             frame_count = int(np.floor((end_ns - start_ns) * PLAYBACK_FPS / 1e9)) + 1
             if frame_count < 2:
@@ -995,7 +998,8 @@ class PreparedPlaybackManager:
                 "pass"
                 if total_duplicates == 0
                 and max_skew_ms <= 20.0
-                and {str(item["name"]) for item in cameras}.issubset(pose_coverage)
+                and not any(self._review_codec_discontinuities.values())
+                and {str(item.get("device_name") or item["name"]) for item in cameras}.issubset(pose_coverage)
                 and all(value >= 0.99 for value in pose_coverage.values())
                 else "warning"
             )
@@ -1040,6 +1044,7 @@ class PreparedPlaybackManager:
                     "duplicate_frames": total_duplicates,
                     "max_skew_ms": round(max_skew_ms, 3),
                     "pose_coverage": pose_coverage,
+                    "codec_discontinuities": self._review_codec_discontinuities,
                 },
                 "preparation_timings": {
                     "scan_sec": round(scan_sec, 3),
@@ -1150,7 +1155,9 @@ class PreparedPlaybackManager:
                 np.asarray(values["quaternions"], dtype=np.float64)[order][unique],
             )
         self._set_progress(0.1, "Bag timelines scanned")
-        return {"image_stamps": normalized_images, "poses": normalized_poses}
+        from .h264_review import first_decodable_stamps
+        starts = first_decodable_stamps(bag_path, cameras, self._check_cancelled)
+        return {"image_stamps": normalized_images, "poses": normalized_poses, "decodable_starts": starts}
 
     def _encode_review_video(
         self,
@@ -1160,6 +1167,9 @@ class PreparedPlaybackManager:
         output: Path,
         progress,
     ) -> tuple[tuple[int, int], int, str, dict[str, tuple[int, int]]]:
+        if any(camera.get("type") == "h264" for camera in cameras):
+            from .h264_review import encode_review
+            return encode_review(self, bag_path, cameras, selections, output, progress)
         from rclpy.serialization import deserialize_message
         from rosidl_runtime_py.utilities import get_message
 

@@ -202,7 +202,7 @@ def list_rosbag_locations(
         if review_manifest_path.is_file() and (bag_dir / "review" / "review.mp4").is_file():
             try:
                 review_manifest = json.loads(review_manifest_path.read_text())
-                if review_manifest.get("schema_version") == 5:
+                if review_manifest.get("schema_version") == 6:
                     review_state = "ready"
                     review_quality = (review_manifest.get("quality") or {}).get("state")
                 else:

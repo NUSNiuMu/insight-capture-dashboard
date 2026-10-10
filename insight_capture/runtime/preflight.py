@@ -68,9 +68,9 @@ class CapturePreflight:
                         cameras=missing_cameras,
                     )
                 )
-        elif len(self.node.cameras) != 3:
+        elif len({getattr(camera, "device_name", "") or camera.name for camera in self.node.cameras}) != 3:
             failures.append(self._failure(
-                "camera_count", f"应有三台相机，当前配置{len(self.node.cameras)}台"
+                "camera_count", "应配置两台手部设备和一台头部设备"
             ))
         if not calibration_mode:
             camera_health, camera_failures = evaluate_cameras(

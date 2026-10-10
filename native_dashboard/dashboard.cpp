@@ -126,6 +126,7 @@ void Dashboard::poll() {
             u.setScheme(u.scheme() == "https" ? "wss" : "ws");
             u.setPort(c["webrtc_port"].toInt(8766));
             list.append(QVariantMap{{"name", c["name"].toString()},
+                                    {"device", c["device_name"].toString(c["name"].toString())},
                                     {"label", c["label"].toString()},
                                     {"endpoint", u},
                                     {"media", QUrl()}});

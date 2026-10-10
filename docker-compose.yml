@@ -239,6 +239,32 @@ services:
         condition: service_started
     restart: "no"
 
+  device-domain-relay:
+    profiles: ["egohalo"]
+    image: insight-dashboard:latest
+    network_mode: host
+    ipc: host
+    volumes:
+      - .:/workspaces/insight_capture
+    command: ["python3", "-u", "-m", "insight_capture.runtime.ros.domain_relay", "--config", "/workspaces/insight_capture/config/cameras.json"]
+    stop_signal: SIGINT
+    restart: unless-stopped
+
+  egohalo-stereo-rectifier:
+    profiles: ["egohalo"]
+    image: insight-dashboard:latest
+    network_mode: host
+    ipc: host
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      - .:/workspaces/insight_capture
+    command: ["python3", "-u", "-m", "insight_capture.runtime.mapping.egohalo_rectifier", "--config", "/workspaces/insight_capture/config/cameras.json"]
+    stop_signal: SIGINT
+    restart: unless-stopped
+
 volumes:
   superglue-ipc:
   superglue-engines:

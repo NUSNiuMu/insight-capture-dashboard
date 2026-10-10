@@ -252,3 +252,5 @@ COLMAP（3.9.1，CUDA sm_87，GUI 关闭）和 `looper-vio-colmap-handoff` 流�
 都是跟**当前这批相机/这台设备**绑定的配置（均由 `select_device.sh`
 从 `config/devices/<name>/` 生成，不是手改的）。换了相机后需要更新命名空间、
 图像流和全局重定位 topic，不能直接沿用另一台设备的配置。
+
+EgoHalo 候选设备配置与 Native Qt 验证边界见 [EgoHalo 接入说明](docs/EGOHALO_NATIVE.md)。
