@@ -133,15 +133,16 @@ def capture_check_speech(payload: object) -> Optional[str]:
     }
     messages = []
     needs_recalibration = state == "recalibrate"
-    for camera_id in ("insight3_a", "insight3_b", "insight9_a"):
+    for camera_id in dict.fromkeys((*camera_names, *comparisons)):
         comparison = comparisons.get(camera_id)
         if not isinstance(comparison, dict):
             continue
         camera_state = str(comparison.get("state") or "pass")
         if camera_state == "pass":
             continue
-        name = camera_names[camera_id]
-        if camera_id == "insight9_a":
+        name = camera_names.get(camera_id, camera_id)
+        if comparison.get("role") == "head" or camera_id == "insight9_a":
+            name = "头部相机"
             reason = str(comparison.get("reason") or "").lower()
             if "stale" in reason:
                 messages.append(

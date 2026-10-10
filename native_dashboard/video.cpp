@@ -1,5 +1,6 @@
 #include "video.h"
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPointer>
@@ -16,6 +17,7 @@ struct AnswerContext {
     GstElement *peer;
 };
 NativeVideo::NativeVideo(QQuickItem *parent) : QQuickItem(parent) {
+    m_traceFrames = qEnvironmentVariable("INSIGHT_LATENCY_TRACE") == "1";
     m_clock.start();
     connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit, this, &NativeVideo::stop);
     m_restart.setSingleShot(true);
@@ -51,6 +53,13 @@ void NativeVideo::setMedia(const QUrl &v) {
     if (v == m_media)
         return;
     m_media = v;
+    emit sourceChanged();
+    reconnect();
+}
+void NativeVideo::setSourceSize(const QSize &value) {
+    if (value == m_sourceSize)
+        return;
+    m_sourceSize = value;
     emit sourceChanged();
     reconnect();
 }
@@ -91,8 +100,10 @@ void NativeVideo::syncWindow() {
         auto *caps = gst_pad_get_current_caps(pad);
         if (caps) {
             GstVideoInfo info;
-            if (gst_video_info_from_caps(&info, caps))
+            if (gst_video_info_from_caps(&info, caps)) {
+                m_displaySize = QSize(info.width, info.height);
                 size = QSizeF(info.width, info.height).scaled(size, Qt::KeepAspectRatio);
+            }
             gst_caps_unref(caps);
         }
         gst_object_unref(pad);
@@ -134,6 +145,7 @@ void NativeVideo::stop() {
         QMutexLocker lock(&m_timingMutex);
         m_decodeStarts.clear();
         m_decodeTimes.clear();
+        m_frameTrace.clear();
         m_timingIndex = 0;
     }
     m_stopping = false;
@@ -158,8 +170,20 @@ void NativeVideo::start() {
     if (m_media.isEmpty()) {
         m_pipeline = gst_pipeline_new(nullptr);
         auto *peer = gst_element_factory_make("webrtcbin", "peer");
+        QByteArray liveDecode(decode);
+        const int longest = qMax(m_sourceSize.width(), m_sourceSize.height());
+        if (longest > 0) {
+            const double factor = qMin(1.0, 720.0 / longest);
+            const int width = qMax(2, int(m_sourceSize.width() * factor) / 2 * 2);
+            const int height = qMax(2, int(m_sourceSize.height() * factor) / 2 * 2);
+            // I420 forces a separate VIC surface even when no resize is needed.
+            const auto scaling = QString("nvvidconv ! video/x-raw(memory:NVMM),format=I420,width=%1,height=%2 ! "
+                                         "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream ! ")
+                                     .arg(width).arg(height).toUtf8();
+            liveDecode.replace("nv3dsink name=display", scaling + "nv3dsink name=display");
+        }
         m_decode = gst_parse_bin_from_description(
-            QByteArray(decode).replace("nv3dsink", sinkName).constData(), TRUE, &error);
+            liveDecode.replace("nv3dsink", sinkName).constData(), TRUE, &error);
         if (!peer || !m_decode || error) {
             if (peer)
                 gst_object_unref(peer);
@@ -214,6 +238,11 @@ void NativeVideo::start() {
         gst_object_unref(decoder);
     }
     m_sink = gst_bin_get_by_name(GST_BIN(m_pipeline), "display");
+    if (m_sink && m_traceFrames && m_media.isEmpty()) {
+        auto *pad = gst_element_get_static_pad(m_sink, "sink");
+        gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, sinkTiming, this, nullptr);
+        gst_object_unref(pad);
+    }
     if (!m_sink || !GST_IS_VIDEO_OVERLAY(m_sink)) {
         fail("视频 sink 不支持原生窗口");
         return;
@@ -423,6 +452,49 @@ void NativeVideo::seek(double seconds) {
                                 GstSeekFlags(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
                                 qint64(qMax(0.0, seconds) * GST_SECOND));
 }
+static QString frameFingerprint(GstBuffer *buffer) {
+    GstMapInfo map{};
+    if (!gst_buffer_map(buffer, &map, GST_MAP_READ))
+        return {};
+    QString key;
+    // h264parse emits byte-stream AUs; match the first VCL NAL independently of SPS/PPS.
+    for (gsize i = 0; i + 4 < map.size; ++i) {
+        if (map.data[i] || map.data[i + 1] || map.data[i + 2] != 1)
+            continue;
+        const gsize start = i + 3;
+        const int kind = map.data[start] & 31;
+        if (kind != 1 && kind != 5)
+            continue;
+        gsize end = map.size;
+        for (gsize j = start + 1; j + 3 < map.size; ++j)
+            if (!map.data[j] && !map.data[j + 1] && map.data[j + 2] == 1) {
+                end = j;
+                break;
+            }
+        while (end > start && !map.data[end - 1])
+            --end;
+        key = QString::fromLatin1(QCryptographicHash::hash(
+            QByteArray(reinterpret_cast<const char *>(map.data + start), qMin<gsize>(64, end - start)),
+            QCryptographicHash::Sha256).toHex().left(32));
+        break;
+    }
+    gst_buffer_unmap(buffer, &map);
+    return key;
+}
+
+GstPadProbeReturn NativeVideo::sinkTiming(GstPad *, GstPadProbeInfo *info, gpointer user) {
+    auto *buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+    if (!buffer || !GST_BUFFER_PTS_IS_VALID(buffer))
+        return GST_PAD_PROBE_OK;
+    auto *self = static_cast<NativeVideo *>(user);
+    const quint64 now = gst_util_get_timestamp();
+    QMutexLocker lock(&self->m_timingMutex);
+    auto it = self->m_frameTrace.find(GST_BUFFER_PTS(buffer));
+    if (it != self->m_frameTrace.end())
+        it.value()["sink_input_ns"] = qulonglong(now);
+    return GST_PAD_PROBE_OK;
+}
+
 GstPadProbeReturn NativeVideo::decodeTiming(GstPad *pad, GstPadProbeInfo *info, gpointer user) {
     const auto *buffer = GST_PAD_PROBE_INFO_BUFFER(info);
     if (!buffer || !GST_BUFFER_PTS_IS_VALID(buffer))
@@ -431,10 +503,18 @@ GstPadProbeReturn NativeVideo::decodeTiming(GstPad *pad, GstPadProbeInfo *info, 
     const quint64 pts = GST_BUFFER_PTS(buffer), now = gst_util_get_timestamp();
     QMutexLocker lock(&self->m_timingMutex);
     if (GST_PAD_DIRECTION(pad) == GST_PAD_SINK) {
+        if (self->m_traceFrames) {
+            self->m_frameTrace[pts] = {{"key", frameFingerprint(const_cast<GstBuffer *>(buffer))},
+                                      {"decode_input_ns", qulonglong(now)}};
+            while (self->m_frameTrace.size() > 120)
+                self->m_frameTrace.erase(self->m_frameTrace.begin());
+        }
         self->m_decodeStarts[pts] = now;
         while (self->m_decodeStarts.size() > 120)
             self->m_decodeStarts.erase(self->m_decodeStarts.begin());
     } else {
+        if (self->m_traceFrames && self->m_frameTrace.contains(pts))
+            self->m_frameTrace[pts]["decode_output_ns"] = qulonglong(now);
         auto it = self->m_decodeStarts.find(pts);
         if (it != self->m_decodeStarts.end()) {
             const double ms = double(now - it.value()) / GST_MSECOND;
@@ -451,12 +531,18 @@ GstPadProbeReturn NativeVideo::decodeTiming(GstPad *pad, GstPadProbeInfo *info, 
 }
 QVariantMap NativeVideo::diagnostics() const {
     QVector<double> timings;
+    QVariantList frameTrace;
     {
         QMutexLocker lock(&m_timingMutex);
         timings = m_decodeTimes;
+        for (const auto &frame : m_frameTrace)
+            frameTrace.append(frame);
     }
     std::sort(timings.begin(), timings.end());
     return {{"camera", m_name},
+            {"frame_trace", frameTrace},
+            {"display_width", m_displaySize.width()},
+            {"display_height", m_displaySize.height()},
             {"decode_samples", timings.size()},
             {"decode_median_ms", timings.isEmpty() ? -1.0 : timings[timings.size() / 2]},
             {"decode_p95_ms", timings.isEmpty() ? -1.0 : timings[qMin(timings.size() - 1, timings.size() * 95 / 100)]},

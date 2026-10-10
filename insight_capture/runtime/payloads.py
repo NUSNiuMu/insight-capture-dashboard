@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import os
 from typing import Dict, Optional
 from urllib.parse import quote
 
@@ -16,6 +17,7 @@ from insight_capture.core.models import CameraFrame
 class PayloadBuilder:
     def __init__(self, owner) -> None:
         self.owner = owner
+        self._trace_latency = os.environ.get("INSIGHT_LATENCY_TRACE") == "1"
 
     def build_pose_payload(
         self, trace_cursor: Optional[Dict[str, object]] = None
@@ -103,6 +105,11 @@ class PayloadBuilder:
                     ],
                     "gripper_opening": self.owner.gripper_opening_percent(pose.name),
                 }
+                if self._trace_latency:
+                    entry["latency_trace"] = {
+                        "source_stamp_ns": self.owner.last_pose_source_stamp.get(pose.name, 0),
+                        "received_ns": int(self.owner.last_pose_received_time[pose.name] * 1e9),
+                    }
                 poses.append(entry)
                 if raw_sample is not None and visible and pose.teleop_role in ("left_hand", "right_hand"):
                     hand_entries.append(entry)

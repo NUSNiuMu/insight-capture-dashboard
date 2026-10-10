@@ -8,10 +8,10 @@ import queue
 import threading
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 from insight_capture.media.h264_decode import H264Decoder
+from insight_capture.media.h264 import H264ReferenceSequence
 from insight_capture.runtime.mapping.fisheye import FisheyeRectification
 from insight_capture.runtime.mapping.geometry import matrix_from_transform
 
@@ -93,42 +93,48 @@ def main():
         headers = {}
         last_output = None
         last_input = None
+        sequence = H264ReferenceSequence()
+        period = int(1e9 / output_hz)
+        def selected(pts):
+            bucket = int(round(pts / period))
+            return calibration[0] is not None and bucket != last_output and abs(pts - bucket * period) <= sample_tolerance_ns
         try:
-            decoder = H264Decoder()
+            decoder = H264Decoder(pixel_format="GRAY8", low_latency=True)
             while not stop.is_set():
                 try:
                     message = queues[index].get(timeout=.1)
                 except queue.Empty:
                     continue
                 stamp = message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec
-                if reset[index].is_set() or (last_input is not None and not 0 < stamp-last_input <= max_gap_ns):
+                data = bytes(message.data)
+                contiguous = sequence.observe(data)
+                capture_gap = contiguous is True and last_input is not None and 0 < stamp - last_input < min(8, sequence.modulus - 1) * 1e9 / source_fps
+                if reset[index].is_set() or contiguous is False or (last_input is not None and not 0 < stamp-last_input <= max_gap_ns and not capture_gap):
                     decoder.gate.reset()
                     if last_input is not None and stamp <= last_input:
                         decoder.close()
-                        decoder = H264Decoder()
+                        decoder = H264Decoder(pixel_format="GRAY8", low_latency=True)
                         headers.clear()
                         last_output = None
                     reset[index].clear()
                 last_input = stamp
-                if decoder.push(bytes(message.data), stamp):
+                if decoder.push(data, stamp):
                     headers[stamp] = copy.deepcopy(message.header)
                 for _ in range(16):
-                    result = decoder.pull(5_000_000)
+                    result = decoder.pull(5_000_000, select_frame=selected)
                     if result is None:
                         break
                     pts, image = result
                     header = headers.pop(pts, None)
                     value = calibration[0]
-                    if header is None or value is None:
+                    if header is None or value is None or image is None:
                         continue
-                    period = int(1e9 / output_hz)
                     bucket = int(round(pts / period))
                     # Both eyes select the same exposure using the shared source clock.
                     if bucket == last_output or abs(pts - bucket * period) > sample_tolerance_ns:
                         continue
                     last_output = bucket
-                    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-                    rectified = value.rectify(index, gray)
+                    rectified = value.rectify(index, image)
                     output = Image()
                     header.frame_id = rect_frames[index]
                     output.header = header

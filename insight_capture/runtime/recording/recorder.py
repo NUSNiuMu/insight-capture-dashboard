@@ -156,7 +156,7 @@ def build_recording_topic_catalog(
             prefix = f"/{namespace}/camera/"
             global_prefix = (
                 "/insight9_sparse_map/"
-                if namespace == "insight9_a"
+                if camera.get("teleop_role") == "head" or namespace == "insight9_a"
                 else f"/insight_global/{namespace}/"
             )
             if topic.startswith(prefix):

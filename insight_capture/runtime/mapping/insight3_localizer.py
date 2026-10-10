@@ -1957,10 +1957,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     parser = build_parser()
-    parser.add_argument("--camera-config", type=Path, default=Path(__file__).resolve().parents[3] / "config/cameras.json")
     args, ros_args = parser.parse_known_args()
-    if args.camera_config.is_file():
-        setup = json.loads(args.camera_config.read_text())
+    camera_config = Path(args.camera_config)
+    if camera_config.is_file():
+        setup = json.loads(camera_config.read_text())
         os.environ["ROS_DOMAIN_ID"] = str(setup["ros_domain_id"])
     rclpy.init(args=ros_args)
     node: Optional[Insight3GlobalLocalizer] = None

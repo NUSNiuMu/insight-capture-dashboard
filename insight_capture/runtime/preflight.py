@@ -92,7 +92,7 @@ class CapturePreflight:
             and self.require_mapping
             and (not insight9.get("online") or insight9.get("state") == "error")
         ):
-            failures.append(self._failure("mapping_not_ready", "Insight9建图状态未就绪"))
+            failures.append(self._failure("mapping_not_ready", "头部建图状态未就绪"))
         if not calibration_mode and self.require_localization:
             for name in ("insight3_a", "insight3_b"):
                 status = statuses.get(name) if isinstance(statuses.get(name), dict) else {}

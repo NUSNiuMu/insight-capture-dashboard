@@ -18,6 +18,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
 from insight_capture.core.performance import track
 
 from insight_capture.core.models import CameraFrame
+from insight_capture.media.cdr import compressed_image_view
 
 WEBRTC_JPEG_FALLBACK_INTERVAL_SEC = 0.5
 RECORDING_WEBRTC_PREVIEW_FPS = 10.0
@@ -39,6 +40,12 @@ class ImagePipeline:
         def callback(msg) -> None:
             if is_live == self.owner._playback_mode:
                 return
+            if topic_type == "h264" and isinstance(msg, bytes):
+                try:
+                    msg = compressed_image_view(msg)
+                except (ValueError, IndexError) as exc:
+                    self.owner.get_logger().warning(f"Invalid H.264 image: {exc}", throttle_duration_sec=5)
+                    return
             with self.owner.camera_input_lock:
                 self.owner.camera_input_times[camera_name].append(time.monotonic())
             if not self.owner._playback_mode:

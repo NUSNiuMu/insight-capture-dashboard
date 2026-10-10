@@ -44,23 +44,24 @@ def evaluate_calibration_cameras(
 ) -> Tuple[Dict[str, Dict], list[Dict]]:
     """Check that every mapping camera has fresh image and native VIO data."""
     current = time.monotonic() if now is None else float(now)
-    cameras = {camera.name: camera for camera in node.cameras}
-    image_health, _ = evaluate_cameras(
-        node,
-        stale_sec,
-        now=current,
-        camera_names=CALIBRATION_CAMERA_NAMES,
-    )
+    groups = {}
+    for camera in node.cameras:
+        groups.setdefault(getattr(camera, "device_name", "") or camera.name, []).append(camera)
+    required_names = [pose.name for pose in getattr(node, "poses", [])] or CALIBRATION_CAMERA_NAMES
+    image_health, _ = evaluate_cameras(node, stale_sec, now=current)
     health: Dict[str, Dict] = {}
     unavailable: list[Dict] = []
     liveness_times = getattr(node, "camera_liveness_times", {})
 
-    for name in CALIBRATION_CAMERA_NAMES:
-        camera = cameras.get(name)
-        image = image_health.get(name, {})
-        image_age = image.get("age_sec")
-        image_fresh = bool(image.get("fresh"))
-        vio_seen = float(liveness_times.get(name, 0.0))
+    for name in required_names:
+        streams = groups.get(name, [])
+        camera = streams[0] if streams else None
+        images = [image_health[stream.name] for stream in streams]
+        ages = [image["age_sec"] for image in images]
+        image_age = max(ages) if ages and all(age is not None for age in ages) else None
+        image_fresh = bool(images) and all(image["fresh"] for image in images)
+        image_fps = min((image["fps"] for image in images), default=0.0)
+        vio_seen = max((float(liveness_times.get(stream.name, 0.0)) for stream in streams), default=0.0)
         vio_age = None if vio_seen <= 0.0 else max(0.0, current - vio_seen)
         vio_fresh = vio_age is not None and vio_age <= stale_sec
         missing = []
@@ -76,7 +77,7 @@ def evaluate_calibration_cameras(
             "ready": not missing,
             "image_fresh": image_fresh,
             "image_age_sec": image_age,
-            "image_fps": image.get("fps", 0.0),
+            "image_fps": image_fps,
             "vio_fresh": vio_fresh,
             "vio_age_sec": vio_age,
         }

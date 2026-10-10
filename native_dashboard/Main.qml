@@ -14,6 +14,7 @@ ApplicationWindow {
     color: "#eee7d5"
     property int previewFps: dashboard.targetFps
     property real sceneFps: view.renderStats.fps
+    property bool multiStreamLayout: !dashboard.playback && cameraGroups().some(function(group) { return group.streams.length > 1 })
     // Match the web ArcRotateCamera after reflecting its Z axis.
     property real yaw: 90 - 1.2 * 180 / Math.PI
     property real pitch: 1.1 * 180 / Math.PI - 90
@@ -77,24 +78,27 @@ ApplicationWindow {
         GridLayout {
             id: workspace
             Layout.fillWidth: true; Layout.fillHeight: true
-            columns: dashboard.playback ? 1 : 2
+            columns: 2
             rowSpacing: 12; columnSpacing: 12
             GridLayout {
                 id: cameraDock
-                Layout.row: dashboard.playback ? 1 : 0; Layout.column: 0
-                Layout.preferredWidth: dashboard.playback ? -1 : Math.max(280, Math.min(360, root.width * 0.24))
-                Layout.maximumWidth: dashboard.playback ? Infinity : Layout.preferredWidth
+                Layout.row: 0; Layout.column: 0
+                Layout.preferredWidth: 2
                 Layout.minimumWidth: 0
-                Layout.preferredHeight: dashboard.playback ? (workspace.height-workspace.rowSpacing)*0.44 : -1
-                Layout.fillWidth: dashboard.playback; Layout.fillHeight: true
-                columns: dashboard.playback ? Math.max(1, cameraRepeater.count) : 1
+                Layout.preferredHeight: -1
+                Layout.fillWidth: true; Layout.fillHeight: true
+                columns: root.multiStreamLayout ? 3 : Math.max(1, cameraRepeater.count)
                 rowSpacing: 10; columnSpacing: 12
                 Repeater {
                     id: cameraRepeater; model: root.cameraGroups()
                     delegate: GridLayout {
-                        id: cameraGroup; required property var modelData
+                        id: cameraGroup; required property var modelData; required property int index
                         columns: modelData.streams.length > 1 ? 2 : 1
-                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: modelData.streams.length > 1 ? 2 : 1
+                        Layout.row: root.multiStreamLayout ? (modelData.streams.length > 1 ? 0 : index) : 0
+                        Layout.column: root.multiStreamLayout ? (modelData.streams.length > 1 ? 1 : 0) : index
+                        Layout.columnSpan: root.multiStreamLayout && modelData.streams.length > 1 ? 2 : 1
+                        Layout.rowSpan: root.multiStreamLayout && modelData.streams.length > 1 ? 2 : 1
+                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: modelData.streams.length > 1 ? 2 : 1; Layout.preferredHeight: modelData.streams.length > 1 ? 2 : 1
                         function eachVideo(fn) { for(var j=0;j<streamRepeater.count;++j)fn(streamRepeater.itemAt(j).player) }
                         Repeater {
                             id: streamRepeater; model: cameraGroup.modelData.streams
@@ -102,11 +106,12 @@ ApplicationWindow {
                                 id: cameraCard; required property var modelData
                                 property alias player: video
                                 Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 1; color: "#fffaf0"; radius: 9
-                                Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: cameraCard.modelData.label; width: cameraGroup.modelData.streams.length > 1 ? parent.width-20 : parent.width-110; elide: Text.ElideRight; font.bold: true; color: "#514b3e" }
+                                Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: cameraCard.modelData.label; width: parent.width-110; elide: Text.ElideRight; font.bold: true; color: "#514b3e" }
                                 Label { id: cameraStatus; anchors.top: cameraTitle.bottom; anchors.left: parent.left; anchors.margins: 10; text: video.status; elide: Text.ElideRight; width: parent.width-20; font.pixelSize: 11; color: "#84775f" }
-                                Label { visible: cameraGroup.modelData.streams.length === 1; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " fps"; color: "#a27723"; font.bold: true }
+                                Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " fps"; color: "#a27723"; font.bold: true }
                                 NativeVideo {
                                     id: video; visible: !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.margins: 6
+                                    sourceSize: Qt.size(cameraCard.modelData.width || 0, cameraCard.modelData.height || 0)
                                     cameraName: cameraCard.modelData.name; endpoint: cameraCard.modelData.endpoint; media: cameraCard.modelData.media; targetFps: root.previewFps
                                     onStatsChanged: { if (dashboard.playback) { root.playTime = position; dashboard.setPlaybackTime(position) } }
                                 }
@@ -118,8 +123,9 @@ ApplicationWindow {
             }
             Rectangle {
                 id: scenePanel
-                Layout.row: 0; Layout.column: dashboard.playback ? 0 : 1
-                Layout.preferredHeight: dashboard.playback ? (workspace.height-workspace.rowSpacing)*0.56 : -1
+                Layout.preferredWidth: 1
+                Layout.row: 0; Layout.column: 1
+                Layout.preferredHeight: -1
                 Layout.minimumWidth: 0; Layout.fillHeight: true; Layout.fillWidth: true; color: "#f6efdf"; radius: 10
                 ColumnLayout {
                     anchors.fill: parent; spacing: 0

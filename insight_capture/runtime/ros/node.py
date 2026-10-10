@@ -16,7 +16,7 @@ import numpy as np
 try:
     import rclpy
     from geometry_msgs.msg import PoseStamped
-    from rclpy.callback_groups import ReentrantCallbackGroup
+    from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
     from rclpy.node import Node
     from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
     from rclpy.qos_event import SubscriptionEventCallbacks
@@ -27,6 +27,7 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     rclpy = None
     PoseStamped = None
     ReentrantCallbackGroup = None
+    MutuallyExclusiveCallbackGroup = None
     Node = object
     QoSProfile = None
     ReliabilityPolicy = None
@@ -117,6 +118,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         trajectory_config = config.get("trajectory", {})
         # Reliable image QoS prevents whole-frame loss from fragmented UDP samples.
         self.image_qos_reliability = str(trajectory_config.get("image_qos_reliability", "best_effort"))
+        self.ros_executor_threads = max(0, int(trajectory_config.get("ros_executor_threads", 0)))
         self.pose_publish_hz = max(1.0, float(trajectory_config.get("pose_publish_hz", pose_publish_hz)))
         self.display_fps_limit = min(
             120.0,
@@ -168,11 +170,12 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self.trace_generation = 0
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
+        self.last_pose_source_stamp = {}
         pose_topics = {pose.name: pose.topic for pose in self.poses}
         self._native_vio_pose_names = {
-            camera.name
+            camera.device_name or camera.name
             for camera in self.cameras
-            if pose_topics.get(camera.name)
+            if pose_topics.get(camera.device_name or camera.name)
             == f"/{camera.namespace}/camera/vio_100hz"
         }
         # Native VIO stays available when a camera is switched to raw-only
@@ -337,34 +340,43 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             self.dashboard_subscriptions.append(playback_sub)
             self.get_logger().info(f"Trajectory: {pose.name} <- {pose.topic}")
 
+        liveness_topics = {}
         for camera in self.cameras:
             native_vio_topic = f"/{camera.namespace}/camera/vio_100hz"
-            if camera.name in self._native_vio_pose_names:
+            if (camera.device_name or camera.name) in self._native_vio_pose_names:
                 continue
+            liveness_topics.setdefault(native_vio_topic, []).append(camera.name)
+        for native_vio_topic, camera_names in liveness_topics.items():
             liveness_sub = self.create_subscription(
                 PoseStamped,
                 native_vio_topic,
-                self._make_camera_liveness_callback(camera.name),
+                self._make_camera_liveness_callback(camera_names),
                 liveness_qos,
                 callback_group=self.ros_callback_group,
                 event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.append(liveness_sub)
             self.get_logger().info(
-                f"Camera liveness: {camera.name} <- {native_vio_topic}"
+                f"Camera liveness: {', '.join(camera_names)} <- {native_vio_topic}"
             )
 
     def _create_dashboard_image_subscriptions(self) -> None:
         # Depth 20 absorbs executor stalls without overwriting recording frames.
         image_qos = make_image_qos(depth=20, reliability=self.image_qos_reliability)
         for camera in self.cameras:
+            # Stateful H.264 must enter the queue in DDS order, even under executor load.
+            image_group = (
+                MutuallyExclusiveCallbackGroup()
+                if camera.topic_type == "h264" else self.ros_callback_group
+            )
             msg_type = CompressedImage if camera.topic_type in ("compressed", "h264") else RosImage
             sub = self.create_subscription(
                 msg_type,
                 camera.topic,
                 self._make_dashboard_image_callback(camera.name, camera.topic_type),
                 image_qos,
-                callback_group=self.ros_callback_group,
+                callback_group=image_group,
+                raw=camera.topic_type == "h264",
                 event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.append(sub)
@@ -378,7 +390,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                     camera.name, camera.topic_type, is_live=False
                 ),
                 image_qos,
-                callback_group=self.ros_callback_group,
+                callback_group=image_group,
+                raw=camera.topic_type == "h264",
                 event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.append(playback_sub)
@@ -488,14 +501,17 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                     float(msg.pose.orientation.w),
                 ),
             )
-            self._record_pose_sample(pose_name, pose_sample)
+            self._record_pose_sample(pose_name, pose_sample, self._stamp_to_ns(msg.header.stamp))
 
         return callback
 
     def _make_camera_liveness_callback(self, camera_name: str):
+        names = [camera_name] if isinstance(camera_name, str) else camera_name
         def callback(_msg: PoseStamped) -> None:
             if not self._playback_mode:
-                self.camera_liveness_times[camera_name] = time.monotonic()
+                received = time.monotonic()
+                for name in names:
+                    self.camera_liveness_times[name] = received
 
         return callback
 
@@ -632,13 +648,17 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         return ImagePipeline._jpeg_dimensions(data)
 
 
-    def _record_pose_sample(self, pose_name: str, pose_sample: PoseSample) -> None:
+    def _record_pose_sample(self, pose_name: str, pose_sample: PoseSample, source_stamp_ns=0) -> None:
         received = time.monotonic()
         if pose_name in self._native_vio_pose_names:
             self.camera_liveness_times[pose_name] = received
+            for camera in self.cameras:
+                if camera.device_name == pose_name:
+                    self.camera_liveness_times[camera.name] = received
         with self.pose_lock:
             self.latest_pose_sample[pose_name] = pose_sample
             self.last_pose_received_time[pose_name] = received
+            self.last_pose_source_stamp[pose_name] = source_stamp_ns
             self.trace_sequences[pose_name] += 1
             self.raw_traces[pose_name].append(pose_sample.position)
             self.raw_trace_sequences[pose_name].append(self.trace_sequences[pose_name])

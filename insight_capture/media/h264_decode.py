@@ -6,19 +6,28 @@ from insight_capture.media.h264 import H264Gate
 
 
 class H264Decoder:
-    def __init__(self, hardware=True):
+    def __init__(self, hardware=True, pixel_format="BGR", low_latency=False):
+        if pixel_format not in {"BGR", "GRAY8"}:
+            raise ValueError("Decoder output must be BGR or GRAY8")
+        self.channels = 3 if pixel_format == "BGR" else 1
         import gi
         gi.require_version("Gst", "1.0")
         from gi.repository import Gst
         self.Gst = Gst
         Gst.init(None)
         self.gate = H264Gate()
-        decoder = "nvv4l2decoder ! nvvidconv ! video/x-raw,format=BGRx ! " if hardware else "avdec_h264 ! "
+        if hardware:
+            # Only verified I/P live sources may bypass DPB; replay keeps normal ordering.
+            decoder = "nvv4l2decoder " + ("disable-dpb=true enable-max-performance=true " if low_latency else "") + "! nvvidconv ! "
+            if pixel_format == "BGR":
+                decoder += "video/x-raw,format=BGRx ! videoconvert ! "
+        else:
+            decoder = "avdec_h264 ! videoconvert ! "
         self.pipeline = Gst.parse_launch(
             "appsrc name=source format=time is-live=false block=false "
             "caps=video/x-h264,stream-format=byte-stream,alignment=au ! "
             "h264parse ! " + decoder +
-            "videoconvert ! video/x-raw,format=BGR ! appsink name=sink sync=false max-buffers=16 drop=false"
+            f"video/x-raw,format={pixel_format} ! appsink name=sink sync=false max-buffers=16 drop=false"
         )
         self.source = self.pipeline.get_by_name("source")
         self.sink = self.pipeline.get_by_name("sink")
@@ -39,7 +48,7 @@ class H264Decoder:
             raise RuntimeError("H.264 decoder rejected an access unit")
         return True
 
-    def pull(self, timeout_ns=0):
+    def pull(self, timeout_ns=0, select_frame=None):
         sample = self.sink.emit("try-pull-sample", int(timeout_ns))
         if sample is None:
             error = self.pipeline.get_bus().pop_filtered(self.Gst.MessageType.ERROR)
@@ -49,14 +58,17 @@ class H264Decoder:
         caps = sample.get_caps().get_structure(0)
         width, height = caps.get_value("width"), caps.get_value("height")
         buffer = sample.get_buffer()
+        if select_frame is not None and not select_frame(int(buffer.pts)):
+            return int(buffer.pts), None
         ok, info = buffer.map(self.Gst.MapFlags.READ)
         if not ok:
             raise RuntimeError("Cannot map decoded H.264 frame")
         try:
-            # GStreamer aligns packed BGR rows to four bytes.
-            stride = (width * 3 + 3) & ~3
+            # GStreamer aligns packed rows to four bytes.
+            stride = (width * self.channels + 3) & ~3
             pixels = np.frombuffer(info.data, np.uint8).reshape(height, stride)
-            frame = pixels[:, :width * 3].reshape(height, width, 3).copy()
+            shape = (height, width, 3) if self.channels == 3 else (height, width)
+            frame = pixels[:, :width * self.channels].reshape(shape).copy()
             return int(buffer.pts), frame
         finally:
             buffer.unmap(info)

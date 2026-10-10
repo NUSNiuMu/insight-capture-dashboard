@@ -4,6 +4,7 @@
   "dashboard": {
     "trajectory": {
       "display_fps_limit": 30,
+      "ros_executor_threads": 1,
       "image_qos_reliability": "reliable",
       "pose_timeout_sec": 2.0,
       "camera_stale_timeout_sec": 2.0,

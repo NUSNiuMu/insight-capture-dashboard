@@ -116,6 +116,7 @@ class Dashboard : public QObject {
     QHash<QString, Pose *> m_poseByName;
     QList<Pose *> m_poseOrder;
     QVariantList m_cameras, m_liveCameras, m_tasks, m_bags;
+    QVariantList m_poseTrace;
     QVariantMap m_state;
     QString m_message = "正在连接后端", m_requestedPlayback;
     QJsonObject m_manifest, m_latestLive;

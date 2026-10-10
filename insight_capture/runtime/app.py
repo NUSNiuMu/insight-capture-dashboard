@@ -13,10 +13,11 @@ import traceback
 
 try:
     import rclpy
-    from rclpy.executors import MultiThreadedExecutor
+    from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
 except Exception:  # pragma: no cover - help and import work outside ROS
     rclpy = None
     MultiThreadedExecutor = None
+    SingleThreadedExecutor = None
 
 from insight_capture.api import WebDashboardServer
 from insight_capture.api.context import DashboardContext
@@ -132,7 +133,9 @@ def main() -> None:
         settings.results_root,
     )
 
-    executor = MultiThreadedExecutor()
+    # Small ordered callbacks avoid thread-pool/GIL contention at high message rates.
+    threads = node.ros_executor_threads
+    executor = SingleThreadedExecutor() if threads == 1 else MultiThreadedExecutor(num_threads=threads or None)
     executor.add_node(node)
     spin_thread = threading.Thread(
         target=_run_executor,

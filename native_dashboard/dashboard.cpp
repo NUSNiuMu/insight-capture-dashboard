@@ -1,4 +1,5 @@
 #include "dashboard.h"
+#include <chrono>
 #include "model.h"
 #include <QCryptographicHash>
 #include <QDir>
@@ -127,6 +128,8 @@ void Dashboard::poll() {
             u.setPort(c["webrtc_port"].toInt(8766));
             list.append(QVariantMap{{"name", c["name"].toString()},
                                     {"device", c["device_name"].toString(c["name"].toString())},
+                                    {"width", c["width"].toInt()},
+                                    {"height", c["height"].toInt()},
                                     {"label", c["label"].toString()},
                                     {"endpoint", u},
                                     {"media", QUrl()}});
@@ -288,6 +291,15 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
             p->lastGeometry = m_clock.elapsed();
         }
         p->notify();
+        if (qEnvironmentVariable("INSIGHT_LATENCY_TRACE") == "1" && d.contains("latency_trace")) {
+            auto timing = d["latency_trace"].toObject().toVariantMap();
+            timing["name"] = p->name;
+            timing["applied_ns"] = qlonglong(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+            m_poseTrace.append(timing);
+            while (m_poseTrace.size() > 360)
+                m_poseTrace.removeFirst();
+        }
     }
     if (needSnapshot && !playback()) {
         m_poseSocket.abort();
@@ -420,6 +432,8 @@ void Dashboard::activatePlayback(const QJsonObject &status) {
         }
         post("/api/playback/activate", {{"bag_name", m_requestedPlayback}}, [this, manifest](QJsonObject) {
             m_manifest = manifest;
+            m_message = manifest["quality"].toObject()["state"] == "warning"
+                            ? "回放就绪，质量检查有警告" : "回放已就绪";
             m_playbackStarting = false;
             clearTraces();
             m_haveOrigin = false;
@@ -512,7 +526,8 @@ QVariantMap Dashboard::diagnostics() const {
                                 {"visible", p->visible},
                                 {"points", p->points.size()},
                                 {"model", p->modelSource.toString()}});
-    return {{"connected", m_connected}, {"poses", data}, {"playback", playback()}, {"message", m_message}};
+    return {{"connected", m_connected}, {"poses", data}, {"pose_trace", m_poseTrace},
+            {"playback", playback()}, {"message", m_message}};
 }
 void Dashboard::shutdown() {
     m_stopping = true;

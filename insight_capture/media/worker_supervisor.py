@@ -352,6 +352,8 @@ class WorkerSupervisor:
             self.owner._webrtc_available_cached = available
             with self.owner._webrtc_metrics_lock:
                 for camera_name, metrics in self.owner._webrtc_main_metrics.items():
+                    if camera_name in self._h264_queues:
+                        metrics["h264"] = self._h264_queues[camera_name].stats()
                     prior = previous_main.get(camera_name, {})
                     for total_key, rate_key in (
                         ("queued", "queued_fps"),

@@ -16,6 +16,7 @@ class NativeVideo : public QQuickItem {
     Q_PROPERTY(QString cameraName READ cameraName WRITE setCameraName NOTIFY sourceChanged)
     Q_PROPERTY(QUrl endpoint READ endpoint WRITE setEndpoint NOTIFY sourceChanged)
     Q_PROPERTY(QUrl media READ media WRITE setMedia NOTIFY sourceChanged)
+    Q_PROPERTY(QSize sourceSize READ sourceSize WRITE setSourceSize NOTIFY sourceChanged)
     Q_PROPERTY(int targetFps READ targetFps WRITE setTargetFps NOTIFY sourceChanged)
     Q_PROPERTY(QString status READ status NOTIFY statsChanged)
     Q_PROPERTY(double renderedFps READ renderedFps NOTIFY statsChanged)
@@ -27,6 +28,7 @@ class NativeVideo : public QQuickItem {
     QString cameraName() const { return m_name; }
     QUrl endpoint() const { return m_endpoint; }
     QUrl media() const { return m_media; }
+    QSize sourceSize() const { return m_sourceSize; }
     int targetFps() const { return m_fps; }
     QString status() const { return m_status; }
     double renderedFps() const { return m_renderedFps; }
@@ -36,6 +38,7 @@ class NativeVideo : public QQuickItem {
     void setEndpoint(const QUrl &value);
     void setMedia(const QUrl &value);
     void setTargetFps(int value);
+    void setSourceSize(const QSize &value);
     void setPaused(bool value);
     Q_INVOKABLE void seek(double seconds);
     Q_INVOKABLE void reconnect();
@@ -62,8 +65,10 @@ class NativeVideo : public QQuickItem {
     static void iceCandidate(GstElement *, guint, gchar *, gpointer);
     static void answerCreated(GstPromise *, gpointer);
     static GstPadProbeReturn decodeTiming(GstPad *, GstPadProbeInfo *, gpointer);
+    static GstPadProbeReturn sinkTiming(GstPad *, GstPadProbeInfo *, gpointer);
     QString m_name, m_status = "未连接";
     QUrl m_endpoint, m_media;
+    QSize m_sourceSize, m_displaySize;
     QPointer<QWindow> m_surface;
     QWebSocket m_socket;
     QTimer m_timer, m_restart;
@@ -82,4 +87,6 @@ class NativeVideo : public QQuickItem {
     QMap<quint64, quint64> m_decodeStarts;
     QVector<double> m_decodeTimes;
     int m_timingIndex = 0;
+    bool m_traceFrames = false;
+    QMap<quint64, QVariantMap> m_frameTrace;
 };
