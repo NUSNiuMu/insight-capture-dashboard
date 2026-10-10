@@ -77,3 +77,29 @@ Insight3 显示约 25 FPS，解码 P95 约 19 ms。三路轨迹约 27 Hz；EgoHa
 验证：95 项回归检查；真实 CDR 与 ROS 序列化一致、所有截断样本被拒绝；1541 个录制 H.264 帧核对参考关系；原样跨域核对 241 条图像和 784 条 VIO 的 CDR 哈希一致。95 项检查和阶段时延结果不能替代长期无丢帧录制、运动定位与光学源到屏幕验收。
 
 低延迟设置参考 [NVIDIA Jetson GStreamer 文档](https://docs.nvidia.com/jetson/archives/r36.3/DeveloperGuide/SD/Multimedia/AcceleratedGstreamer.html)；抖动缓冲边界参考 [GStreamer rtpjitterbuffer](https://gstreamer.freedesktop.org/documentation/rtpmanager/rtpjitterbuffer.html)。
+
+### Ego USB 离线影响 Insight3 的修复
+
+2026-10-10 在 Ego USB 已拔掉、仅两台 Insight3 在线时，独立 Fast DDS/CycloneDDS 接收器都出现约 2 秒间断。相机源时间戳随后跳过多帧；USB 网卡入站包也暂停，主机 UDP 接收缓冲错误计数没有增加。抓包发现 Insight3 A 反复 ARP 查询已失效的主机地址 `169.254.10.2`，部分早于拔插创建的 DDS 进程仍绑定此地址。刷新唯一 ROS 服务栈后，两台 Insight3 恢复约 30 FPS，表明失效 DDS 地址是此次故障的重要触发条件。
+
+候选 profile 新增 `ros_transport.exclude_host_addresses`：Dashboard、mapper、localizer 和 rectifier 在首个 ROS 初始化前生成 Fast DDS UDP 网卡白名单，排除 Ego 专用 USB 地址，保留当前其余接口、loopback 与共享内存传输。用户显式提供的 DDS XML 或其他 RMW 配置优先；旧 profile 不启用此行为。依据 [Fast DDS interface whitelist](https://fast-dds.docs.eprosima.com/en/2.x/fastdds/transport/whitelist.html) 和 [ROS 2 XML 配置说明](https://fast-dds.docs.eprosima.com/en/2.x/fastdds/ros2/ros2_configure.html)。
+
+Ego 配置中的 `relay_host_address` 用于跨域桥接生命周期：源 USB 地址未分配时不创建 DDS 子进程；地址消失后停止子进程、撤回目标域 participant；重新出现后创建新子进程。该子进程同时接触源域与目标域，不使用上述本地域网卡排除规则。没有配置此字段的旧源域保留原行为。现场 Ego 实际重连仍待用户接入后验证。
+
+相机 API 的输入/处理帧率改为按两秒墙钟窗口统计，停顿时间也进入分母；此前仅用首尾已收到帧的间隔，可能在“发一秒、停两秒”时仍显示约 30 FPS。实际显示帧率仍以 Qt 渲染计数为准。
+
+部署防护后的约 90 秒 Native Qt 观察：
+
+| 指标 | Insight3 A | Insight3 B |
+| --- | --- | --- |
+| 实际渲染 FPS | 29.86 | 29.92 |
+| 输入 FPS 中位 / 最低 | 30.0 / 29.5 | 30.0 / 29.5 |
+| 显示入口帧间隔 P95 / 最大 | 42.6 / 87.4 ms | 39.5 / 90.9 ms |
+| 大于 100 ms 的显示入口帧间隔 | 0 | 0 |
+| API 抽样的图像年龄最大 | 38.7 ms | 36.2 ms |
+| API 抽样的 VIO 年龄最大 | 18.0 ms | 10.3 ms |
+| 硬件解码 P95 | 5.6 ms | 6.4 ms |
+
+观察窗口为约 89.91 秒、90 次状态采样，每路配对约 2680 个 Qt sink 时间点；诊断缓存中采样开始前的启动帧没有计入帧间隔。启动协商另有短间隔增加。这里的显示入口帧间隔与接收年龄仍不是光学端到端时延。
+
+108 项回归检查通过；独立 ROS 测试域真实验证跨域桥接上线、离线撤回、再次上线恢复转发。现场两台 Insight3 恢复约 30 FPS；Ego 实物拔插恢复和完整六路更新版验证待后续接入。逐帧诊断在复测后关闭。

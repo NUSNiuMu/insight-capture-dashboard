@@ -30,6 +30,7 @@ from insight_capture.runtime.bootstrap import (
 )
 from insight_capture.composition import build_runtime_services
 from insight_capture.runtime.ros import PoseBridgeNode, make_image_qos, make_qos
+from insight_capture.runtime.ros.network import configure_ros_network
 
 __all__ = [
     "PoseBridgeNode",
@@ -113,6 +114,7 @@ def main() -> None:
         raise RuntimeError("rclpy is not available in this environment")
 
     os.environ.setdefault("ROS_DOMAIN_ID", str(settings.ros_domain_id))
+    configure_ros_network(settings.raw_config)
     rclpy.init(args=None)
     node = PoseBridgeNode(
         settings.config_path,

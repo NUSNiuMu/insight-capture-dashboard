@@ -9,6 +9,7 @@ import multiprocessing
 from pathlib import Path
 
 from insight_capture.core.config import dashboard_streams, enabled_cameras
+from insight_capture.runtime.ros.network import local_ipv4_addresses
 
 
 def relay_topics(camera):
@@ -108,24 +109,42 @@ def main():
             groups.setdefault(source, []).append(camera)
     # Do not fork an initialized DDS runtime; children construct their own contexts.
     context = multiprocessing.get_context("spawn")
-    workers = []
+    workers = {}
+    if not groups:
+        return
     try:
-        for source, cameras in groups.items():
-            worker = context.Process(target=_relay_domain, args=(domain, source, cameras))
-            worker.start()
-            workers.append(worker)
-        while workers:
-            for worker in workers:
+        while True:
+            addresses = local_ipv4_addresses()
+            active = {
+                source for source, cameras in groups.items()
+                if all(not camera.get("relay_host_address")
+                       or camera["relay_host_address"] in addresses for camera in cameras)
+            }
+            for source in set(workers) - active:
+                worker = workers.pop(source)
+                if worker.is_alive():
+                    os.kill(worker.pid, signal.SIGINT)
+                worker.join(timeout=6)
+                if worker.is_alive():
+                    worker.kill()
+                    worker.join()
+                print(f"Source domain {source} USB link absent; relay disposed", flush=True)
+            for source, worker in workers.items():
                 if worker.exitcode is not None:
                     raise RuntimeError(f"Device relay exited unexpectedly: {worker.exitcode}")
-            time.sleep(.1)
+            for source in active - workers.keys():
+                worker = context.Process(target=_relay_domain, args=(domain, source, groups[source]))
+                worker.start()
+                workers[source] = worker
+            # Disposing a removed link also withdraws its target-domain locators.
+            time.sleep(.5)
     except KeyboardInterrupt:
         pass
     finally:
-        for worker in workers:
+        for worker in workers.values():
             if worker.is_alive():
                 os.kill(worker.pid, signal.SIGINT)
-        for worker in workers:
+        for worker in workers.values():
             worker.join(timeout=6)
             if worker.is_alive():
                 worker.kill()

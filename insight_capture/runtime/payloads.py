@@ -12,6 +12,7 @@ from insight_capture.core.localization_settings import load_gripper_mask_height_
 import numpy as np
 
 from insight_capture.core.models import CameraFrame
+from insight_capture.media.rate import observed_frame_rate
 
 
 class PayloadBuilder:
@@ -146,23 +147,9 @@ class PayloadBuilder:
                     input_times = list(
                         self.owner.camera_input_times.get(camera.name, [])
                     )
-                recent_input_times = [
-                    item for item in input_times if now - item <= 2.0
-                ]
-                input_fps = 0.0
-                if len(recent_input_times) >= 2:
-                    input_span = max(
-                        recent_input_times[-1] - recent_input_times[0], 1e-6
-                    )
-                    input_fps = (
-                        len(recent_input_times) - 1
-                    ) / input_span
+                input_fps = observed_frame_rate(input_times, now)
                 frame_times = list(self.owner.camera_frame_times.get(camera.name, []))
-                recent_times = [item for item in frame_times if now - item <= 2.0]
-                fps = 0.0
-                if len(recent_times) >= 2:
-                    span = max(recent_times[-1] - recent_times[0], 1e-6)
-                    fps = (len(recent_times) - 1) / span
+                fps = observed_frame_rate(frame_times, now)
                 input_age = None if not input_times else now - input_times[-1]
                 stale = input_age is None or input_age > self.owner.camera_stale_timeout_sec
                 liveness_seen = float(

@@ -1962,6 +1962,8 @@ def main() -> int:
     if camera_config.is_file():
         setup = json.loads(camera_config.read_text())
         os.environ["ROS_DOMAIN_ID"] = str(setup["ros_domain_id"])
+        from insight_capture.runtime.ros.network import configure_ros_network
+        configure_ros_network(setup)
     rclpy.init(args=ros_args)
     node: Optional[Insight3GlobalLocalizer] = None
     try:

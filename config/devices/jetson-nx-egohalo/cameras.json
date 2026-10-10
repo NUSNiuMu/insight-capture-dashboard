@@ -125,7 +125,8 @@
           "row": 3,
           "column": 1
         }
-      ]
+      ],
+      "relay_host_address": "169.254.10.2"
     }
   ],
   "mapping": {
@@ -145,5 +146,10 @@
     "output_hz": 5.0,
     "source_fps": 30.0,
     "horizontal_fov_deg": 90.0
+  },
+  "ros_transport": {
+    "exclude_host_addresses": [
+      "169.254.10.2"
+    ]
   }
 }

@@ -2083,6 +2083,8 @@ def main() -> int:
             parser.error(f"Unknown mapping configuration: {sorted(set(mapping) - allowed)}")
         parser.set_defaults(**mapping)
         os.environ["ROS_DOMAIN_ID"] = str(setup["ros_domain_id"])
+        from insight_capture.runtime.ros.network import configure_ros_network
+        configure_ros_network(setup)
     args, ros_args = parser.parse_known_args()
     rclpy.init(args=ros_args)
     node: Optional[Insight9SparseMapper] = None

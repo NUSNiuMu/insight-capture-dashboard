@@ -14,6 +14,7 @@ from insight_capture.media.h264_decode import H264Decoder
 from insight_capture.media.h264 import H264ReferenceSequence
 from insight_capture.runtime.mapping.fisheye import FisheyeRectification
 from insight_capture.runtime.mapping.geometry import matrix_from_transform
+from insight_capture.runtime.ros.network import configure_ros_network
 
 
 def main():
@@ -23,6 +24,7 @@ def main():
     config = json.loads(args.config.read_text())
     settings = config["egohalo_rectification"]
     os.environ["ROS_DOMAIN_ID"] = str(config["ros_domain_id"])
+    configure_ros_network(config)
     import rclpy
     from rclpy.time import Time
     from rclpy.qos import qos_profile_sensor_data
