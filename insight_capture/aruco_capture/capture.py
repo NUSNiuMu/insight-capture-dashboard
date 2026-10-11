@@ -27,7 +27,8 @@ class Capture:
     def __init__(self, config_path, output):
         self.root = Path(output).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
-        self.config = json.loads(Path(config_path).read_text())
+        self.config_path = Path(config_path)
+        self.config = json.loads(self.config_path.read_text())
         self.default_rgb = self.config.get("rgb", [])
         override = self.root / "_devices.json"
         if override.is_file():

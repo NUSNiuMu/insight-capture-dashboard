@@ -55,7 +55,7 @@ docker run -d --name insight-aruco-capture --network host --init \
   --device-cgroup-rule='c 188:* rw' \
   --device-cgroup-rule='c 166:* rw' \
   -v /dev:/host-dev:ro \
-  -v "$PWD/config/devices/x86-aruco/capture.json:/app/config/devices/x86-aruco/capture.json:ro" \
+  -v "$PWD/config/devices/x86-aruco/capture.json:/app/config/devices/x86-aruco/capture.json" \
   -v "$PWD/outputs:/app/outputs" \
   insight-aruco-capture:local
 ```
@@ -72,6 +72,12 @@ python3 -m insight_capture.aruco_capture.app --config config/devices/x86-aruco/c
 ```
 
 依赖见 `deploy/aruco/Dockerfile`。镜像使用 ROS Humble/Ubuntu 22.04 的多架构基础镜像，不包含 Jetson、TensorRT、模型权重或浏览器。相机发现使用 host 网络；设备须与主机网络互通，`ros_domain_id` 须与 Insight9 一致。
+
+使用方式参考如下视频：
+
+<video src="./source/二指UMI数采指南.mp4" controls width="360"></video>
+
+（GitHub 网页预览支持直接播放内嵌视频；若在不支持 `<video>` 标签的 Markdown 查看器里看不到播放器，可点击 [二指UMI数采指南.mp4](./source/二指UMI数采指南.mp4) 下载后用本地播放器打开。）
 
 ## 配置输入
 
@@ -124,7 +130,9 @@ USB RGB 示例，替换 `rgb` 中对应项：
 - 成功收到图像或有效编码器数据后，自动清除对应设备的故障；其他设备故障和 VIO 重置等录制错误保留。原始采集缺失时间仍进入 QC，重连不会补造数据。
 - 扫描只枚举视频采集节点，过滤元数据节点。优先绑定 `/dev/v4l/by-id/`、`/dev/serial/by-id/` 的设备标识；没有设备标识时使用 `by-path` 的 USB 插口标识。编号改变后会重新解析链接；既没有稳定标识又更换了编号时，请重新扫描选择，不能自动猜测左右设备。
   - **已知坑**：同型号 UVC 相机（本机用的 DECXIN）经常上报**完全相同**的 `by-id` 厂商字符串，多台同型号相机接上后 `/dev/v4l/by-id/` 只解析得出一组符号链接，没法用它区分具体是哪一台——这种情况必须改用 `by-path`（USB 物理插口）绑定，重插到别的口才需要重新扫描，不能指望 by-id 兜底。
-- 页面选择保存到 `outputs/aruco-capture/_devices.json`，下次启动自动加载，仅覆盖 RGB/串口输入，不修改 Git 中的配置模板。要调整串口数值到米的标定，可修改该文件对应 `left`/`right` 标定字段后重启，或清除覆盖文件后使用模板配置。
+- 页面选择保存到 `outputs/aruco-capture/_devices.json`，下次启动自动加载。要调整串口数值到米的标定，可修改该文件对应 `left`/`right` 标定字段后重启，或清除覆盖文件后使用模板配置。
+- 应用设备选择成功后，RGB/串口绑定还会**顺带同步写回** `config/devices/x86-aruco/capture.json`（Compose 把它挂载为宿主机可写，不再是 `:ro`），这样换了主机、换了 USB 口重新扫描绑定一次之后，模板文件本身就是最新的 by-path/by-id，不用再手动编辑 JSON；这一步是尽力而为，写失败（比如还没用新版 compose 重建、挂载仍是只读）只会在容器日志里打一行提示，不影响本次设备切换本身。
+- 每路 RGB 的采集帧率（`fps`）现在也能在设备面板里直接改，和选设备端口用的是同一个"应用设备选择"流程——提交后会重启对应的 ffmpeg 采集子进程，带上新的 `-framerate`。
 - UVC 采集需要 ffmpeg 显式指定 `-input_format mjpeg`（`usb_worker` 已加），否则可能协商到相机的 YUYV 模式——同分辨率下 YUYV 常明显慢于 MJPG（比如 720p 下 YUYV 只有 10fps，MJPG 能到 60fps）。某路 RGB 实测帧率明显低于配置的 `fps` 时，先用 `v4l2-ctl -d <device> --list-formats-ext` 确认该分辨率下两种格式各自的帧率上限，不要只怀疑软件层。
 - Insight9 图像、CameraInfo、TF 和 VIO 继续使用原 ROS 配置；扫描 USB 相机不会替代 Insight9 的 ROS/VIO 驱动。VIO 接收中断超过 2 秒后恢复，会更换轨迹参考系代次；正在录制的后续位姿无效，需要停止后新建录制，避免拼接未知坐标系。
 - **Insight9 掉线自动重连**：ROS2 的中间件（`rmw_fastrtps_cpp`/`rmw_cyclonedds_cpp`，从 ROS2 Foxy 起）是"一个进程一个 DDS Participant"，不是"一个 Node 一个 Participant"——网络接口扫描只在进程启动那一刻做一次。如果 Insight9 的 USB 网卡（ROS Native 模式下表现为一张 `169.254.x.x` link-local 接口）是在容器**启动之后**才插上的，光等待或重新订阅是发现不了的，必须重建整个 rclpy 参与者才能重新扫描接口。工作台内置了一个后台看门狗（`sources.py` 的 `watch_head_interface`，每 1 秒检查一次）：一旦发现"Insight9 图像/VIO 数据不新鲜 且 出现了之前没见过的网络接口"，就自动重建一次 ROS 层——**只重建订阅 Insight9 的那部分**，UVC 相机和串口线程全程不受影响，不会跟着一起断线重连。日常仍建议先插好 Insight9 再启动容器；顺序反了也不需要手动重启，等 1-2 秒看门狗会自己处理。
@@ -144,7 +152,9 @@ Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、
 
 **页面操作**（实时采集页"设备连接与端口"→对应编码器行下方的"夹爪标定"子面板）：
 1. 点"开始标定"（同一个按钮，标定中会变成"退出标定并保存"）
-2. 把夹爪开到一个已知宽度，用卡尺量出毫米数，填进"开合度 (mm)"输入框（步长 10），点"记录点"；至少两个不同角度重复这一步
+2. 把夹爪开到一个已知宽度，用卡尺量出毫米数或使用标定尺测量（示例见下图），填进"开合度 (mm)"输入框（步长 10），点"记录点"；至少两个不同角度重复这一步
+
+   <img src="./source/标定示例.jpg" alt="标定尺测量开合度示例" width="320">
 3. 点"退出标定并保存"提交；面板下方日志区会实时显示固件的角度遥测、每次记录确认（"第 N 点：角度 X° → 开合度 Ymm"）和最终"标定已保存，共 N 点"或具体报错
 4. 发现某个点录错了：点"重新标定"（对应 `start_cal`，固件端标定点计数清零，工作台侧也清空当页已显示的记录列表），从头补录——固件没有单点覆盖/删除命令，录错了只能整段重录，不能只改一个点
 
@@ -215,7 +225,9 @@ T_reference_TCP = inverse(T_world_IMU_start)
 
 前 8 个来自 `cube_markers.py`/`pose.py` 的 `_solve_target()`（`MultiCubeMarkerEstimator.last_reasons`，跟主 Dashboard 共用同一套检测代码，纯附加字段，不影响主 Dashboard 现有调用），后 3 个是 `pose.py` `observe()` 里已有的录制级判断。
 
-RGB/串口跨设备同步首版使用**主机接收时间**最近邻，默认容差 40 ms；保留 ROS 源时间戳供检查。它不是硬件同步，USB 缓冲、串口延迟及链路抖动要等具体设备到位后实测。队列溢出有计数，所有缺失时间段仍计入 QC 分母。同一张源图像最多对应一个有效输出帧，不把重复补帧计作新的有效采样。
+`pose.py` 的 `DirectPose` 初始化时用 `dataclasses.replace(...)` 把 `apply_corrections` 强制设为 `False`、`min_markers` 强制设为 `1`，**不管 `capture.json` 的 `cube_marker_relative_localization.apply_corrections`/`min_markers`填的是什么都会被覆盖**——当前模板里这两个字段分别是 `true`/`1`，其中 `apply_corrections: true` 对这个独立工作台完全不生效（只有主 Dashboard 走的另一套代码路径会用到），不要指望改它能打开多面校正。真正生效、影响单标记 IPPE 候选筛选和多标记 RANSAC 的是 `min_inlier_ratio`（当前 `0.6`）、`max_reprojection_error_px`（当前 `2.5` px）、`min_depth_m`/`max_depth_m`（当前 `0.1`–`3.0` m），这几个阈值改了立即生效，不需要重新构建镜像。
+
+RGB/串口跨设备同步首版使用**主机接收时间**最近邻，容差取 `sync_tolerance_ms`（当前配置 `10` ms）；保留 ROS 源时间戳供检查。它不是硬件同步，USB 缓冲、串口延迟及链路抖动要等具体设备到位后实测。队列溢出有计数，所有缺失时间段仍计入 QC 分母。同一张源图像最多对应一个有效输出帧，不把重复补帧计作新的有效采样。
 
 状态为 `[left_10d, right_10d]`，每臂 `xyz + rotation_6d（旋转矩阵前两行）+ width_m`。导出仅保留人工标注范围内、所有配置视频与双臂状态同时有效的连续区间，不连接缺失帧前后的轨迹。`action` 是下一采样时刻的绝对状态；区间最后一帧只作为动作目标，不单独输出训练行。每段至少连续三帧观测，产生至少两行训练数据。
 
@@ -239,17 +251,21 @@ RGB/串口跨设备同步首版使用**主机接收时间**最近邻，默认容
 
 ## Cube Marker 布局
 
-每只手臂的定位 cube 贴 **5 个** ArUco 标记（字典 `DICT_4X4_50`），左手 ID 用 `1-5`，右手 ID 用 `7-11`，配置在 `config/devices/x86-aruco/capture.json` 的 `cube_marker_relative_localization.targets[].markers` 里（`gripper_left`/`gripper_right` 各一份）。四个面的几何延续了主 Dashboard `insight3_a`/`insight3_b` 的既有标定（详见 `docs/UMI_CUBE_MARKER_LOCALIZATION.md`），顶面额外多贴了一枚 ID，两个 ID 对应同一物理面：
+每只手臂的定位 cube 贴 **5 个** ArUco 标记（字典 `DICT_4X4_50`），左手 ID 用 `1-5`，右手 ID 用 `7-11`，配置在 `config/devices/x86-aruco/capture.json` 的 `cube_marker_relative_localization.targets[].markers` 里（`gripper_left`/`gripper_right` 各一份）。
 
-| 面 | 左手 ID | 右手 ID | Cube 坐标 |
+**坐标系**延续 `docs/UMI_CUBE_MARKER_LOCALIZATION.md` 里的约定：原点在 cube 几何中心，方向与夹爪相机 `camera_center` 光学坐标一致——`+X` 从相机画面看向右，`+Y` 看向下，`+Z` 从 cube 指向夹爪相机/指尖方向。当前这套 cube 比主 Dashboard 的 70 mm 款小一号：半边长 `25 mm`（外边长 `50 mm`），标记黑框半宽 `21.4 mm`（印刷边长约 `42.8 mm`，四周留边约 `3.6 mm`）；`cube_from_camera_center` 在这份配置里是单位变换（平移为零），即这里直接把 cube 几何中心当作 `camera_center` 参考点，夹爪相机光心到指尖的真实偏移全部放在 `tcp` 字段里（右手 `[0.0925, -0.031, -0.10475]` m，左手 `[-0.0925, -0.031, -0.10475]` m，旋转均为单位阵）。
+
+五个面覆盖除底面（`+Y`，贴夹爪机构、基本不可见）外的全部朝向，每个面只贴一枚标记，不再有同一面重复贴两个 ID 的情况：
+
+| 面 | Cube 坐标 | 左手 ID | 右手 ID |
 | --- | --- | --- | --- |
-| 顶面（主） | 2 | 8 | `Y = -35 mm` |
-| 顶面（副，同一面另一枚标记） | 1 | 7 | `Y = -35 mm` |
-| 后面 | 3 | 9 | `Z = -35 mm` |
-| 左面 | 4 | 10 | `X = -35 mm` |
-| 右面 | 5 | 11 | `X = +35 mm` |
+| 顶面 | `Y = -25 mm` | 1 | 7 |
+| 左面 | `X = -25 mm` | 2 | 10 |
+| 后面 | `Z = -25 mm` | 3 | 9 |
+| 右面 | `X = +25 mm` | 4 | 8 |
+| 正面（朝夹爪相机/指尖一侧） | `Z = +25 mm` | 5 | 11 |
 
-顶面贴两枚不同 ID 的标记（1/2、7/8）是因为头部相机俯视时最常看到的就是这一面，多一枚标记提高遮挡/角度变化下的识别覆盖率；其余三面（后/左/右）各一枚。跟主 Dashboard 一样，每个 `corners_cube_m` 必须严格按 OpenCV ArUco 返回的 `top-left, top-right, bottom-right, bottom-left` 顺序填写，顺序错了 `solvePnP` 不会报错但位姿会解错。
+“正面”这枚是相对主 Dashboard 4 面方案新增的第 5 面——主 Dashboard 的 `insight3_a`/`insight3_b` 只贴顶/后/左/右 4 面（`+Z` 朝向夹爪自己的相机，通常被遮挡，没必要贴），这里额外贴出来是为了在头部相机（视角和夹爪自带相机不同）从更多角度都能看到至少一枚标记。跟主 Dashboard 一样，每个 `corners_cube_m` 必须严格按 OpenCV ArUco 返回的 `top-left, top-right, bottom-right, bottom-left` 顺序填写，顺序错了 `solvePnP` 不会报错但位姿会解错——每个面在 JSON 里的 4 个角点请直接对照上面的坐标表和面朝向核对，不要凭感觉改。
 
 ## 代码位置
 

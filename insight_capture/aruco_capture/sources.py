@@ -352,6 +352,7 @@ class SourceManager:
                     capture.root / "_devices.json",
                     {**settings, "fps": capture.config.get("fps", 20)},
                 )
+                _sync_device_template(capture, settings)
             except Exception:
                 self.close()
                 capture.config.update(old)
@@ -361,6 +362,23 @@ class SourceManager:
         finally:
             with capture.lock:
                 capture.reconfiguring = False
+
+
+def _sync_device_template(capture, settings):
+    """Best-effort: mirror the just-applied rgb/serial device bindings back
+    into the on-disk capture.json template (bind-mounted read-write from the
+    host), so the next deployment/rebuild already starts from today's working
+    by-path/by-id device identities instead of whatever the template shipped
+    with. Never lets a write failure (e.g. the host mount is still read-only)
+    fail the device switch itself — that already succeeded and is persisted
+    separately via _devices.json."""
+    try:
+        template = json.loads(capture.config_path.read_text())
+        template["rgb"] = settings["rgb"]
+        template["serial"] = settings["serial"]
+        write_json(capture.config_path, template)
+    except (OSError, ValueError) as exc:
+        print(f"[devices] 无法同步设备绑定到 {capture.config_path}: {exc}")
 
 
 def validate_bindings(value, current):

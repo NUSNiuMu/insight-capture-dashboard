@@ -17,5 +17,5 @@ services:
       - "c 166:* rw"
     volumes:
       - /dev:/host-dev:ro
-      - ../../config/devices/x86-aruco/capture.json:/app/config/devices/x86-aruco/capture.json:ro
+      - ../../config/devices/x86-aruco/capture.json:/app/config/devices/x86-aruco/capture.json
       - ../../outputs:/app/outputs

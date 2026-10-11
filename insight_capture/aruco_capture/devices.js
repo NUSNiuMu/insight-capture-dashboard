@@ -128,6 +128,18 @@ export class DevicePanel {
       d.append(
         make("small", "优先固定设备标识；无标识的端口变号后，请重新扫描选择。"),
       );
+      const extra = make("div", undefined, "rgb-options"),
+        fps = make("input"),
+        fpsLabel = make("label", "帧率");
+      fps.type = "number";
+      fps.min = 1;
+      fps.max = 120;
+      fps.value = item.fps ?? 30;
+      fps.dataset.fps = item.name;
+      fps.id = "fps-" + item.name;
+      fpsLabel.htmlFor = fps.id;
+      extra.append(fpsLabel, fps, make("span", "Hz"));
+      d.append(extra);
       $("deviceFields").append(d);
     }
     for (let i = 0; i < 2; i++) {
@@ -303,6 +315,10 @@ export class DevicePanel {
         next.device = select.value;
         delete next.topic;
         delete next.compressed;
+        const fps = $("deviceFields").querySelector(
+          `input[data-fps="${item.name}"]`,
+        );
+        if (fps) next.fps = Number(fps.value);
       }
       result.rgb.push(next);
     }

@@ -1514,10 +1514,26 @@ dialog p {
 .device-row small {
   font-size: 10px;
 }
-.serial-options {
+.serial-options,
+.rgb-options {
   display: flex;
   gap: 7px;
   align-items: center;
+}
+.rgb-options {
+  margin-top: 6px;
+}
+.rgb-options label {
+  font-size: 10px;
+  white-space: nowrap;
+}
+.rgb-options input {
+  width: 60px;
+  font-size: 12px;
+}
+.rgb-options span {
+  font-size: 10px;
+  color: var(--muted);
 }
 .serial-options label {
   font-size: 10px;
