@@ -17,9 +17,15 @@
 
 现场确认 EgoHalo 的 ROS domain 为 0，Insight3 为 20。配置驱动的 `device-domain-relay` 只转发源域与目标域不同的设备，每个源域使用独立进程，直接转发序列化 CDR 字节，减少图像解包/重打包，原样保留 header 时间戳、CameraInfo 与 TF；不修改设备配置。EgoHalo 使用开机计时，不能把其时间戳直接当作 UTC。
 
-`egohalo-stereo-rectifier` 消费前置双目 H.264、equidistant CameraInfo 和 TF，使用实时低延迟硬件解码、只复制选中的灰度帧后输出 544×640、5 Hz、90° 水平视场的虚拟针孔双目，发布匹配的新内参与光学外参。共享源时钟选择同一曝光。该尺寸匹配当前 SuperPoint/SuperGlue 引擎。测得水平基线约 7 cm。
+`egohalo-stereo-rectifier` 消费四路 H.264、equidistant CameraInfo 和 TF，每个物理相机只解码一次，再组成前置双目、左侧重叠双目、右侧重叠双目。各组输出 544×640、5 Hz、90° 水平视场的虚拟针孔图像和对应内外参，以共享源时钟选择同一曝光。该尺寸匹配当前 SuperPoint/SuperGlue 引擎。四路共同参与地图观测和 Insight3 匹配，详细坐标、门限及验证见 [EGOHALO_MAPPING.md](EGOHALO_MAPPING.md)。
 
 Mapper 输入话题与坐标系由配置覆盖。内部 `/insight9_sparse_map/*` 是保留的兼容接口名，不代表仍使用 Insight9 数据。Insight3 全局定位消费这张共享地图。EgoHalo 没有原 Insight9 RGB 立方标记输入，所以此配置关闭 cube-marker 校正，保留特征地图定位与采集前置检查。
+
+### 2026-10-12：四路建图与统一位姿
+
+现场运动后生成约 765 个确认地图点；A、B 在 30 秒状态采样中均持续通过真实几何匹配。三路全局位姿在独立 6 秒 ROS 观察中各收到 180 条消息，使用同一地图坐标。
+
+排查模型相对位置时发现现场预览仍使用三套独立原始 VIO。现已切到配置模板规定的 `/insight_global/insight3_a/pose`、`/insight_global/insight3_b/pose`、`/insight9_sparse_map/pose`；默认 Qt 保留，用户确认 B 相对头部的位置正确。匹配成立不能替代模型安装外参的尺寸测量，绝对精度、全范围运动和长时间漂移仍需单独验收。此前原始 VIO 预览记录仅代表当时状态。
 
 ## 部署与切回
 

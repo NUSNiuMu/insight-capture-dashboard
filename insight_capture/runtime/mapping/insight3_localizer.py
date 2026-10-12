@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
-"""把两路 Insight3 定位到 Insight9 建立的同一稀疏地图。
+"""Localize both Insight3 cameras in the configured head camera's sparse map.
 
-每路相机保留独立的 VIO、PnP 共识、EKF 和轨迹状态，但共享 Insight9 描述子地图与
-校准关键帧。首次定位优先执行“Insight3 图像到关键帧图像”的 SuperGlue 直接匹配；
-失败或后续重定位再使用查询 SuperPoint 描述子到全局三维地图的匹配。
+Each camera retains its own VIO, geometric consensus and pose filter. Shared
+rig references provide image context for SuperGlue; descriptor-map matching
+remains available when direct reference matching fails.
 """
 
 from __future__ import annotations
@@ -58,6 +58,7 @@ from insight_capture.runtime.mapping import (  # noqa: E402
     rotation_distance_deg,
     select_timestamp,
 )
+from insight_capture.runtime.mapping.rig import ReferenceSelector
 from insight_capture.core.localization_settings import (  # noqa: E402
     DEFAULT_GRIPPER_MASK_HEIGHT_RATIO,
     load_gripper_mask_height_ratio,
@@ -274,6 +275,7 @@ class CalibrationReference:
     image: np.ndarray
     pixels: np.ndarray
     map_points: np.ndarray
+    view: str = "front"
 
 
 class CameraState:
@@ -334,6 +336,10 @@ class Insight3GlobalLocalizer(Node):
         super().__init__("insight3_global_localizer")
         self._args = args
         self._map_frame = args.map_frame
+        confidence = getattr(args, "direct_match_min_confidence", None)
+        self._direct_match_min_confidence = float(0.2 if confidence is None else confidence)
+        if not 0.0 <= self._direct_match_min_confidence <= 1.0:
+            raise ValueError("direct match confidence must be between zero and one")
         if args.calibration_keyframe_association_px <= 0.0:
             raise ValueError(
                 "calibration keyframe association distance must be positive"
@@ -393,6 +399,10 @@ class Insight3GlobalLocalizer(Node):
         self._calibration_images: dict[int, np.ndarray] = {}
         self._calibration_points: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         self._calibration_reference: Optional[CalibrationReference] = None
+        self._calibration_references = {}
+        self._reference_selector = ReferenceSelector()
+        self._map_generation = 0
+        self._map_session = None
         self._cameras = {
             name: CameraState(
                 name,
@@ -493,6 +503,15 @@ class Insight3GlobalLocalizer(Node):
             self._on_calibration_keyframe_points,
             calibration_qos,
         )
+        self.create_subscription(String, "/insight9_sparse_map/status", self._on_mapping_status, 1)
+        for view in getattr(args, "reference_views", []):
+            if view == "front":
+                continue
+            base = "/insight9_sparse_map/calibration_keyframe/" + view
+            self.create_subscription(Image, base + "/image",
+                lambda message, v=view: self._on_calibration_keyframe_image(message, v), calibration_qos)
+            self.create_subscription(PointCloud2, base + "/points",
+                lambda message, v=view: self._on_calibration_keyframe_points(message, v), calibration_qos)
         self._camera_subscriptions = []
         for name in CAMERAS:
             image_topic = args.image_topic_template.format(name=name)
@@ -619,6 +638,7 @@ class Insight3GlobalLocalizer(Node):
 
     def _reset_mapping_state(self, response: Empty.Response) -> Empty.Response:
         with self._map_lock:
+            self._map_generation += 1
             self._map_points = np.empty((0, 3), dtype=np.float32)
             self._normalized_map_descriptors = np.empty(
                 (0, 256), dtype=np.float32
@@ -627,6 +647,8 @@ class Insight3GlobalLocalizer(Node):
             self._calibration_images.clear()
             self._calibration_points.clear()
             self._calibration_reference = None
+            self._calibration_references.clear()
+            self._reference_selector.reset()
         for state in self._cameras.values():
             with state.lock:
                 state.history.clear()
@@ -674,6 +696,20 @@ class Insight3GlobalLocalizer(Node):
             self._marker_worker.join(timeout=3.0)
         return super().destroy_node()
 
+    def _on_mapping_status(self, message):
+        try:
+            payload = json.loads(message.data)
+            metadata = payload.get("capture_validation", {})
+            session_id = metadata.get("session_id")
+            session = (session_id, int(metadata.get("session_generation", 0)))
+        except (ValueError, TypeError):
+            return
+        if not session_id:
+            return
+        previous, self._map_session = self._map_session, session
+        if previous is not None and previous != session:
+            self._on_reset(Empty.Request(), Empty.Response())
+
     def _on_feature_map(self, message: PointCloud2) -> None:
         """原子替换共享三维描述子地图，并预归一化供重复查询使用。"""
 
@@ -682,6 +718,10 @@ class Insight3GlobalLocalizer(Node):
         except ValueError as exc:
             self.get_logger().error(f"rejected feature map: {exc}")
             return
+        with self._map_lock:
+            map_cleared = bool(len(self._map_points) and not len(points))
+        if map_cleared:
+            self._on_reset(Empty.Request(), Empty.Response())
         if len(points) > self._args.max_map_features:
             indices = np.linspace(
                 0, len(points) - 1, self._args.max_map_features, dtype=np.int64
@@ -697,7 +737,7 @@ class Insight3GlobalLocalizer(Node):
             self._map_points = points
             self._normalized_map_descriptors = normalized_descriptors
 
-    def _on_calibration_keyframe_image(self, message: Image) -> None:
+    def _on_calibration_keyframe_image(self, message: Image, view="front") -> None:
         """缓存校准关键帧图像，等待同时间戳的 UV/XYZ 点云。"""
 
         stamp_ns = stamp_to_ns(message.header.stamp)
@@ -707,10 +747,10 @@ class Insight3GlobalLocalizer(Node):
             self.get_logger().error(f"rejected calibration keyframe image: {exc}")
             return
         with self._calibration_reference_lock:
-            self._calibration_images[stamp_ns] = image
-            self._assemble_calibration_reference(stamp_ns)
+            self._calibration_images[(view, stamp_ns)] = image
+            self._assemble_calibration_reference((view, stamp_ns))
 
-    def _on_calibration_keyframe_points(self, message: PointCloud2) -> None:
+    def _on_calibration_keyframe_points(self, message: PointCloud2, view="front") -> None:
         """缓存校准关键帧 UV/XYZ，等待同时间戳的图像。"""
 
         stamp_ns = stamp_to_ns(message.header.stamp)
@@ -721,36 +761,42 @@ class Insight3GlobalLocalizer(Node):
             return
         with self._calibration_reference_lock:
             if not len(map_points):
-                self._calibration_images.clear()
-                self._calibration_points.clear()
-                self._calibration_reference = None
+                for cache in (self._calibration_images, self._calibration_points):
+                    for key in list(cache):
+                        if key[0] == view:
+                            del cache[key]
+                self._calibration_references.pop(view, None)
+                if view == "front":
+                    self._calibration_reference = None
                 return
-            self._calibration_points[stamp_ns] = (pixels, map_points)
-            self._assemble_calibration_reference(stamp_ns)
+            self._calibration_points[(view, stamp_ns)] = (pixels, map_points)
+            self._assemble_calibration_reference((view, stamp_ns))
 
-    def _assemble_calibration_reference(self, stamp_ns: int) -> None:
-        """仅在图像和点云齐备时发布新的不可变校准参考。"""
-
+    def _assemble_calibration_reference(self, key: tuple[str, int]) -> None:
         """Pair image and geometry callbacks while holding the reference lock."""
 
-        image = self._calibration_images.get(stamp_ns)
-        geometry = self._calibration_points.get(stamp_ns)
+        image = self._calibration_images.get(key)
+        geometry = self._calibration_points.get(key)
         if image is None or geometry is None:
             self._trim_calibration_parts()
             return
         pixels, map_points = geometry
-        self._calibration_reference = CalibrationReference(
-            stamp_ns=stamp_ns,
+        reference = CalibrationReference(
+            stamp_ns=key[1], view=key[0],
             image=image,
             pixels=pixels,
             map_points=map_points,
         )
-        self._calibration_images.clear()
-        self._calibration_points.clear()
+        self._calibration_references[key[0]] = reference
+        if key[0] == "front":
+            self._calibration_reference = reference
+        self._calibration_images.pop(key, None)
+        self._calibration_points.pop(key, None)
+        self._trim_calibration_parts()
 
     def _trim_calibration_parts(self) -> None:
         for cache in (self._calibration_images, self._calibration_points):
-            while len(cache) > 3:
+            while len(cache) > 3 * max(1, len(getattr(self._args, "reference_views", []))):
                 del cache[min(cache)]
 
     def _image_callback(self, name: str):
@@ -1360,12 +1406,15 @@ class Insight3GlobalLocalizer(Node):
             with self._map_lock:
                 # Feature-map callbacks replace these arrays atomically. Local
                 # references remain immutable for this localization pass.
+                map_generation = self._map_generation
                 map_points = self._map_points
                 map_descriptors = self._normalized_map_descriptors
             with self._calibration_reference_lock:
-                calibration_reference = self._calibration_reference
+                references = dict(self._calibration_references)
             for name, state in self._cameras.items():
                 now = time.monotonic()
+                ready_references = sorted(references.values(), key=lambda r: r.view)
+                calibration_reference = self._reference_selector.select(name, references)
                 with state.lock:
                     if now < state.next_process_monotonic:
                         continue
@@ -1440,6 +1489,7 @@ class Insight3GlobalLocalizer(Node):
                     state.last_image_stamp_ns = stamp_ns
                     state.next_process_monotonic = now + period
                     localization_config = state.consensus.config
+                self._reference_selector.advance(name)
                 started = time.perf_counter()
                 try:
                     image = grayscale_image(message)
@@ -1451,11 +1501,10 @@ class Insight3GlobalLocalizer(Node):
                     diagnostics: dict[str, object] = {}
                     inference_ms: Optional[float] = None
                     direct_summary: dict[str, object] = {}
-                    # 尚未全局初始化时优先做图像到图像 SuperGlue：它保留关键点上下文，
-                    # 通常比把查询描述子直接扫全局地图更适合跨设备首次校准。
+                    # Keep image context for both initialization and tracking;
+                    # descriptor-only matching is the fallback for wider maps.
                     if (
-                        not localized_before
-                        and calibration_reference_ready
+                        calibration_reference_ready
                         and calibration_reference is not None
                     ):
                         if image.shape == calibration_reference.image.shape:
@@ -1477,6 +1526,8 @@ class Insight3GlobalLocalizer(Node):
                                     max_distance_px=(
                                         self._args.calibration_keyframe_association_px
                                     ),
+                                    match_scores=direct_matches.scores,
+                                    min_confidence=self._direct_match_min_confidence,
                                 )
                             )
                             inference_ms = direct_matches.backend_inference_ms
@@ -1505,6 +1556,9 @@ class Insight3GlobalLocalizer(Node):
                                     direct_matches.left_points
                                 ),
                                 "direct_3d_matches": len(direct_image_points),
+                                "direct_confident_matches": int(np.count_nonzero(
+                                    direct_matches.scores >= self._direct_match_min_confidence
+                                )),
                                 "calibration_keyframe_stamp_ns": (
                                     calibration_reference.stamp_ns
                                 ),
@@ -1590,15 +1644,25 @@ class Insight3GlobalLocalizer(Node):
                     diagnostics["calibration_keyframe_ready"] = (
                         calibration_reference_ready
                     )
+                    diagnostics.update(direct_summary)
+                    diagnostics["direct_match_min_confidence"] = self._direct_match_min_confidence
                     diagnostics["calibration_keyframe_points"] = (
                         len(calibration_reference.map_points)
                         if calibration_reference is not None
                         else 0
                     )
+                    diagnostics["reference_view"] = None if calibration_reference is None else calibration_reference.view
+                    diagnostics["reference_views_ready"] = [r.view for r in ready_references]
+                    diagnostics["image_stamp_ns"] = stamp_ns
                     diagnostics["gripper_mask_height_ratio"] = (
                         self._gripper_mask_height_ratio
                     )
                     with state.lock:
+                        if map_generation != self._map_generation:
+                            continue
+                        if calibration_reference is not None and direct_summary:
+                            self._reference_selector.observe(name, calibration_reference.view,
+                                bool(direct_summary.get("direct_accepted")))
                         # 单帧 PnP 只进入候选窗口；达到多帧一致性后才更新全局修正。
                         transition = state.consensus.observe(candidate)
                         measurement = state.consensus.correction
@@ -1905,6 +1969,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--calibration-keyframe-association-px", type=float, default=0.75
     )
+    parser.add_argument("--direct-match-min-confidence", type=float, default=None)
     parser.add_argument(
         "--image-topic-template",
         default="/insight_mapping/{name}/infra1/image_rect_raw",
@@ -1964,6 +2029,14 @@ def main() -> int:
         os.environ["ROS_DOMAIN_ID"] = str(setup["ros_domain_id"])
         from insight_capture.runtime.ros.network import configure_ros_network
         configure_ros_network(setup)
+        from insight_capture.runtime.mapping.rig import stereo_views
+        args.reference_views = [v["name"] for v in stereo_views(setup)]
+        if args.direct_match_min_confidence is None:
+            args.direct_match_min_confidence = setup.get("mapping", {}).get(
+                "direct_match_min_confidence", 0.2
+            )
+        if args.reference_views:
+            args.reference_views.append("front_right")
     rclpy.init(args=ros_args)
     node: Optional[Insight3GlobalLocalizer] = None
     try:

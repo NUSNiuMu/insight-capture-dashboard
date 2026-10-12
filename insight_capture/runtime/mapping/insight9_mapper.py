@@ -60,6 +60,8 @@ from insight_capture.runtime.mapping.bundle_adjustment import (  # noqa: E402
     BundleAdjustmentResult,
     optimize_local_bundle,
 )
+from insight_capture.runtime.mapping.rig import stereo_views
+from insight_capture.runtime.mapping.rig_inputs import RigInputs
 from insight_capture.runtime.mapping.pose_graph import (  # noqa: E402
     KeyframePoseGraph,
     PoseGraphConfig,
@@ -275,6 +277,9 @@ class MappingKeyframe:
     right_pixels: np.ndarray
     descriptors: np.ndarray
     scores: np.ndarray
+    view: str = "front"
+    left_projection: Optional[np.ndarray] = None
+    right_projection: Optional[np.ndarray] = None
 
 
 @dataclass(frozen=True)
@@ -297,6 +302,7 @@ class CalibrationKeyframe:
     image: np.ndarray
     pixels: np.ndarray
     map_points: np.ndarray
+    eye: int = 0
 
 
 class Insight9SparseMapper(Node):
@@ -545,18 +551,23 @@ class Insight9SparseMapper(Node):
             qos_profile_sensor_data,
             callback_group=self._vio_callback_group,
         )
-        self.create_subscription(
-            Image, args.left_image_topic, self._on_left, qos_profile_sensor_data
-        )
-        self.create_subscription(
-            Image, args.right_image_topic, self._on_right, qos_profile_sensor_data
-        )
-        self.create_subscription(
-            CameraInfo, args.left_info_topic, self._on_left_info, qos_profile_sensor_data
-        )
-        self.create_subscription(
-            CameraInfo, args.right_info_topic, self._on_right_info, qos_profile_sensor_data
-        )
+        self._rig = None
+        if getattr(args, "stereo_views", []):
+            self._rig = RigInputs(self, args.stereo_views)
+            self._work = self._rig.queue
+        else:
+            self.create_subscription(
+                Image, args.left_image_topic, self._on_left, qos_profile_sensor_data
+            )
+            self.create_subscription(
+                Image, args.right_image_topic, self._on_right, qos_profile_sensor_data
+            )
+            self.create_subscription(
+                CameraInfo, args.left_info_topic, self._on_left_info, qos_profile_sensor_data
+            )
+            self.create_subscription(
+                CameraInfo, args.right_info_topic, self._on_right_info, qos_profile_sensor_data
+            )
         self.create_timer(0.5, self._publish_map)
         if args.publish_debug_topics:
             self.create_timer(
@@ -579,6 +590,8 @@ class Insight9SparseMapper(Node):
     def _on_reset(self, _request: Empty.Request, response: Empty.Response) -> Empty.Response:
         """原子地开启新建图会话，并使旧地图、回环和发布缓存同时失效。"""
 
+        if self._rig is not None:
+            self._rig.reset()
         with self._vio_rate_lock:
             self._last_input_vio_stamp_ns = -1
             self._next_vio_buffer_stamp_ns = 0
@@ -661,6 +674,8 @@ class Insight9SparseMapper(Node):
     def _reset_loop_closure(self) -> None:
         """在持有 graph lock 时清除回环、图和冻结参考的会话状态。"""
 
+        if self._rig is not None:
+            self._rig.reset()
         with self._graph_lock:
             self._pose_graph.clear()
             self._mapping_keyframes.clear()
@@ -740,6 +755,9 @@ class Insight9SparseMapper(Node):
     def _resolve_extrinsic(self) -> None:
         """从 TF 获取 IMU 到左目及双目中心外参，未就绪时保持等待。"""
 
+        if self._rig is not None:
+            self._rig.refresh()
+            return
         if self._imu_to_left is not None and self._imu_to_center is not None:
             return
         imu_to_left = self._imu_to_left
@@ -952,6 +970,10 @@ class Insight9SparseMapper(Node):
 
         period = 1.0 / max(self._args.mapping_hz, 0.1)
         while not self._stop.is_set():
+            if self._rig is not None:
+                remaining = period - (time.monotonic() - self._last_mapping_attempt_monotonic)
+                if remaining > 0 and self._stop.wait(remaining):
+                    break
             try:
                 pair = self._work.get(timeout=0.25)
             except queue.Empty:
@@ -960,13 +982,23 @@ class Insight9SparseMapper(Node):
                 break
             now = time.monotonic()
             elapsed = now - self._last_mapping_attempt_monotonic
-            if elapsed < period:
+            if elapsed < period and self._rig is None:
                 continue
             # 限制所有尝试而非仅成功关键帧；缺位姿或静止时也不能退化成全帧率重试。
             self._last_mapping_attempt_monotonic = now
-            calibration = self._calibration
-            imu_to_left = self._imu_to_left
-            imu_to_center = self._imu_to_center
+            view = getattr(pair, "view", "front")
+            if self._rig is not None:
+                geometry = self._rig.snapshot(pair)
+                if geometry is None:
+                    continue
+                calibration = geometry.calibration
+                imu_to_left = geometry.imu_to_left
+                imu_to_center = geometry.imu_to_center
+                geometry_revision = geometry.revision
+            else:
+                calibration = self._calibration
+                imu_to_left = self._imu_to_left
+                imu_to_center = self._imu_to_center
             pose = self._pose_buffer.lookup(pair.stamp_ns)
             deadline = time.monotonic() + self._args.pose_wait_ms / 1000.0
             while (
@@ -988,7 +1020,7 @@ class Insight9SparseMapper(Node):
                 continue
             # T_odom_left = T_odom_imu * T_imu_left；关键帧判定使用未回环修正的局部运动。
             odom_to_left = compose_transform(matrix_from_pose(pose), imu_to_left)
-            if not self._is_keyframe(odom_to_left):
+            if not self._is_keyframe(odom_to_left, view):
                 continue
             with self._graph_lock:
                 session_generation = self._session_generation
@@ -1033,9 +1065,13 @@ class Insight9SparseMapper(Node):
                         matches.descriptors[source], dtype=np.float16
                     ).copy(),
                     scores=np.asarray(matches.scores[source], dtype=np.float16).copy(),
+                    view=view, left_projection=calibration.left_projection.copy(),
+                    right_projection=calibration.right_projection.copy(),
                 )
                 with self._graph_lock:
-                    if session_generation != self._session_generation:
+                    if session_generation != self._session_generation or (
+                        self._rig is not None and geometry_revision != self._rig.revision
+                    ):
                         continue
                     graph_target_id: Optional[int] = None
                     if self._pose_graph_active and self._pose_graph.full:
@@ -1121,24 +1157,42 @@ class Insight9SparseMapper(Node):
                         len(anchor_map_points)
                         >= self._args.calibration_keyframe_min_points
                     ):
-                        with self._calibration_keyframe_lock:
-                            self._calibration_keyframe = CalibrationKeyframe(
-                                keyframe_id=next_keyframe_id,
-                                stamp_ns=pair.stamp_ns,
-                                image=left.copy(),
-                                pixels=np.asarray(
-                                    matches.left_points[source], dtype=np.float32
-                                ).copy(),
-                                map_points=np.asarray(
-                                    anchor_map_points, dtype=np.float32
-                                ).copy(),
-                            )
-                            self._calibration_keyframe_dirty = True
-                            self._calibration_keyframe_clear_dirty = False
-                self._last_keyframe_transform = odom_to_left
+                        reference_specs = [(view, 0)]
+                        if self._rig is not None:
+                            spec = next(v for v in self._rig.views if v["name"] == view)
+                            reference_specs = [(view, int(spec.get("reference_eye") == "right"))]
+                            if view == "front":
+                                reference_specs.append(("front_right", 1))
+                        for reference_name, eye in reference_specs:
+                            reference = CalibrationKeyframe(
+                                keyframe_id=next_keyframe_id, stamp_ns=pair.stamp_ns,
+                                image=(left if eye == 0 else right).copy(),
+                                pixels=np.asarray((matches.left_points if eye == 0 else matches.right_points)[source], dtype=np.float32).copy(),
+                                map_points=np.asarray(anchor_map_points, dtype=np.float32).copy(), eye=eye)
+                            if reference_name == "front":
+                                with self._calibration_keyframe_lock:
+                                    self._calibration_keyframe = reference
+                                    self._calibration_keyframe_dirty = True
+                                    self._calibration_keyframe_clear_dirty = False
+                            else:
+                                with self._rig.lock:
+                                    self._rig.references[reference_name] = reference
+                                    self._rig.reference_dirty.add(reference_name)
+                    if self._rig is not None:
+                        with self._rig.lock:
+                            self._rig.last_keyframes[view] = odom_to_left
+                            self._rig.keyframes[view] += 1
+                            self._rig.metrics[view] = {
+                                "stereo_matches": len(matches.left_points),
+                                "triangulated": len(triangulated.points_left),
+                                "stereo_delta_ms": abs(pair.left_stamp_ns - pair.right_stamp_ns) / 1e6,
+                            }
+                    else:
+                        self._last_keyframe_transform = odom_to_left
                 self._schedule_bundle_adjustment(calibration)
                 self._latest_stats = {
                     "state": "mapping",
+                    "view": view,
                     "keyframe": self._keyframe_id,
                     "detected_left": matches.detected_left,
                     "detected_right": matches.detected_right,
@@ -1218,6 +1272,7 @@ class Insight9SparseMapper(Node):
                     right_pixels=np.asarray(keyframe.right_pixels, dtype=np.float32).copy(),
                     descriptors=np.asarray(keyframe.descriptors, dtype=np.float32).copy(),
                     scores=np.asarray(keyframe.scores, dtype=np.float32).copy(),
+                    left_projection=keyframe.left_projection, right_projection=keyframe.right_projection,
                 )
                 for keyframe in keyframes
                 if keyframe.keyframe_id in poses
@@ -1720,12 +1775,13 @@ class Insight9SparseMapper(Node):
             self._landmarks = rebuilt
             self._pointcloud_dirty = True
             self._feature_map_dirty = True
+        self._refresh_rig_reference_geometry(poses)
         return update
 
-    def _is_keyframe(self, transform: np.ndarray) -> bool:
+    def _is_keyframe(self, transform: np.ndarray, view="front") -> bool:
         """平移或旋转任一变化达到门限时选择新关键帧。"""
 
-        previous = self._last_keyframe_transform
+        previous = self._last_keyframe_transform if self._rig is None else self._rig.last_keyframes.get(view)
         if previous is None:
             return True
         translation = float(np.linalg.norm(transform[:3, 3] - previous[:3, 3]))
@@ -1776,6 +1832,8 @@ class Insight9SparseMapper(Node):
             )
             self._last_feature_publish_monotonic = now
         self._publish_calibration_keyframe(now)
+        if self._rig is not None:
+            self._publish_rig_references()
         status = String()
         status_payload = dict(self._latest_stats)
         with self._bundle_stats_lock:
@@ -1783,6 +1841,8 @@ class Insight9SparseMapper(Node):
         status_payload["map_point_count"] = point_count
         status_payload["center_extrinsic_ready"] = self._imu_to_center is not None
         status_payload["pose_frame"] = self._camera_frame
+        if self._rig is not None:
+            status_payload["rig"] = self._rig.status()
         with self._graph_lock:
             status_payload["capture_validation"] = (
                 self._capture_validation_status_unlocked()
@@ -1817,11 +1877,56 @@ class Insight9SparseMapper(Node):
             "recent_validations": list(self._recent_capture_validations),
         }
 
+    def _publish_rig_references(self):
+        with self._rig.lock:
+            now = time.monotonic()
+            dirty = set(self._rig.reference_dirty)
+            if now - self._rig.last_reference_publish >= 5.0:
+                dirty.update(self._rig.reference_publishers)
+                self._rig.last_reference_publish = now
+            self._rig.reference_dirty.clear()
+            references = dict(self._rig.references)
+        for name in dirty:
+            reference = references.get(name)
+            header = Header()
+            header.frame_id = self._map_frame
+            header.stamp = self.get_clock().now().to_msg() if reference is None else ns_to_stamp(reference.stamp_ns)
+            image_publisher, points_publisher = self._rig.reference_publishers[name]
+            if reference is not None:
+                image_publisher.publish(mono_image_message(header, reference.image))
+            points_publisher.publish(calibration_keyframe_cloud(header,
+                np.empty((0, 2), dtype=np.float32) if reference is None else reference.pixels,
+                np.empty((0, 3), dtype=np.float32) if reference is None else reference.map_points))
+
+    def _refresh_rig_reference_geometry(self, poses):
+        keyframes = {item.keyframe_id: item for item in self._mapping_keyframes}
+        with self._calibration_keyframe_lock:
+            reference = self._calibration_keyframe
+            if reference is not None:
+                keyframe = keyframes.get(reference.keyframe_id)
+                pose = poses.get(reference.keyframe_id)
+                if keyframe is not None and pose is not None:
+                    self._calibration_keyframe = replace(reference,
+                        pixels=keyframe.left_pixels.copy(),
+                        map_points=transform_points(pose, keyframe.points_left).astype(np.float32))
+                    self._calibration_keyframe_dirty = True
+        if self._rig is None:
+            return
+        with self._rig.lock:
+            for name, reference in list(self._rig.references.items()):
+                keyframe = keyframes.get(reference.keyframe_id)
+                pose = poses.get(reference.keyframe_id)
+                if keyframe is not None and pose is not None:
+                    self._rig.references[name] = replace(reference,
+                        pixels=(keyframe.left_pixels if reference.eye == 0 else keyframe.right_pixels).copy(),
+                        map_points=transform_points(pose, keyframe.points_left).astype(np.float32))
+                    self._rig.reference_dirty.add(name)
+
     def _publish_calibration_keyframe(self, now: float) -> None:
         with self._calibration_keyframe_lock:
             keyframe = self._calibration_keyframe
             keyframe_due = (
-                self._calibration_keyframe_dirty
+                (self._calibration_keyframe_dirty or now - self._last_calibration_keyframe_publish_monotonic >= 5.0)
                 and keyframe is not None
                 and now - self._last_calibration_keyframe_publish_monotonic
                 >= CALIBRATION_KEYFRAME_PUBLISH_INTERVAL_SEC
@@ -2073,15 +2178,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     parser = build_parser()
+    parser.set_defaults(stereo_views=[])
     initial, _ = parser.parse_known_args()
     if initial.config.is_file():
         setup = json.loads(initial.config.read_text())
         allowed = {"left_image_topic", "right_image_topic", "left_info_topic", "right_info_topic",
-                   "vio_topic", "imu_frame", "left_frame", "right_frame", "map_frame", "mapping_camera_frame"}
+                   "vio_topic", "imu_frame", "left_frame", "right_frame", "map_frame", "mapping_camera_frame", "stereo_views",
+                   "direct_match_min_confidence"}
+        stereo_views(setup)
         mapping = setup.get("mapping", {})
         if set(mapping) - allowed:
             parser.error(f"Unknown mapping configuration: {sorted(set(mapping) - allowed)}")
-        parser.set_defaults(**mapping)
+        parser.set_defaults(**{key: value for key, value in mapping.items()
+                               if key != "direct_match_min_confidence"})
         os.environ["ROS_DOMAIN_ID"] = str(setup["ros_domain_id"])
         from insight_capture.runtime.ros.network import configure_ros_network
         configure_ros_network(setup)

@@ -12,6 +12,7 @@ class FisheyeRectification:
     projections: tuple
     maps: tuple
     size: tuple
+    source_size: tuple = None
 
     @classmethod
     def create(cls, left_info, right_info, right_from_left, size=(544, 640), horizontal_fov_deg=90.0):
@@ -50,7 +51,9 @@ class FisheyeRectification:
             raise ValueError("Stereo eye ordering must produce positive left-to-right disparity")
         maps = tuple(cv2.fisheye.initUndistortRectifyMap(k, d, r, p, size, cv2.CV_32FC1)
                      for k, d, r, p in zip(intrinsics, distortions, (r1, r2), (p1, p2)))
-        return cls((r1, r2), (p1, p2), maps, size)
+        return cls((r1, r2), (p1, p2), maps, size, (left_info.width, left_info.height))
 
     def rectify(self, index, frame):
+        if self.source_size is not None and frame.shape[:2] != self.source_size[::-1]:
+            raise ValueError("Decoded image dimensions differ from rig calibration")
         return cv2.remap(frame, *self.maps[index], interpolation=cv2.INTER_LINEAR)

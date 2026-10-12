@@ -310,6 +310,8 @@ def associate_reference_points(
     reference_object_points: np.ndarray,
     *,
     max_distance_px: float = 0.75,
+    match_scores: Optional[np.ndarray] = None,
+    min_confidence: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """把直接图像匹配中的参考端 UV 关联回关键帧已有的三维点。
 
@@ -329,6 +331,16 @@ def associate_reference_points(
         raise ValueError("reference image and object points must have matching rows")
     if max_distance_px <= 0.0:
         raise ValueError("reference association distance must be positive")
+    if not 0.0 <= min_confidence <= 1.0:
+        raise ValueError("match confidence must be between zero and one")
+    if match_scores is not None:
+        # Reject ambiguous image matches before assigning map XYZ; geometric
+        # inlier, coverage and multi-frame confirmation gates remain unchanged.
+        scores = np.asarray(match_scores).reshape(-1)
+        if len(scores) != len(query):
+            raise ValueError("match scores must have matching rows")
+        keep = np.isfinite(scores) & (scores >= min_confidence)
+        query, matched_reference = query[keep], matched_reference[keep]
     if not len(query) or not len(reference):
         return (
             np.empty((0, 2), dtype=np.float32),

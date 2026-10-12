@@ -99,6 +99,8 @@ class BundleAdjustmentFrame:
     right_pixels: np.ndarray
     descriptors: np.ndarray
     scores: np.ndarray
+    left_projection: Optional[np.ndarray] = None
+    right_projection: Optional[np.ndarray] = None
 
     def __post_init__(self) -> None:
         pose = np.asarray(self.pose)
@@ -118,6 +120,11 @@ class BundleAdjustmentFrame:
             raise ValueError("descriptors must have shape N x D")
         if scores.reshape(-1).shape != (count,):
             raise ValueError("scores must have one value per observation")
+        if (self.left_projection is None) != (self.right_projection is None):
+            raise ValueError("Both per-view projection matrices are required")
+        for projection in (self.left_projection, self.right_projection):
+            if projection is not None and (projection.shape != (3, 4) or not np.isfinite(projection).all()):
+                raise ValueError("Per-view projections must be finite 3x4 matrices")
 
 
 @dataclass(frozen=True)
@@ -359,8 +366,11 @@ def optimize_local_bundle(
             homogeneous = np.concatenate(
                 (points_left, np.ones((len(indices), 1), dtype=np.float64)), axis=1
             )
-            projected_left = homogeneous @ left_projection.T
-            projected_right = homogeneous @ right_projection.T
+            frame = frames[frame_index]
+            left_model = left_projection if frame.left_projection is None else frame.left_projection
+            right_model = right_projection if frame.right_projection is None else frame.right_projection
+            projected_left = homogeneous @ left_model.T
+            projected_right = homogeneous @ right_model.T
             valid = (projected_left[:, 2] > 1e-5) & (
                 projected_right[:, 2] > 1e-5
             )
