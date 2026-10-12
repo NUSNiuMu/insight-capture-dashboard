@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from collections import deque
+from itertools import combinations
 from typing import Optional
 
 import cv2
@@ -31,8 +32,8 @@ class GlobalLocalizationConfig:
     min_grid_cells: int = 4
     confirmation_frames: int = 3
     confirmation_window: int = 5
-    confirmation_translation_m: float = 0.20
-    confirmation_rotation_deg: float = 12.0
+    confirmation_translation_m: float = 0.05
+    confirmation_rotation_deg: float = 3.0
 
 
 @dataclass(frozen=True)
@@ -388,44 +389,61 @@ class LocalizationConsensus:
             raise ValueError("confirmation frames must be positive")
         if config.confirmation_window < config.confirmation_frames:
             raise ValueError("confirmation window must cover required frames")
+        if any(not np.isfinite(value) or value <= 0 for value in (
+            config.confirmation_translation_m, config.confirmation_rotation_deg
+        )):
+            raise ValueError("confirmation tolerances must be positive")
         self._window: deque[Optional[LocalizationCandidate]] = deque(
             maxlen=config.confirmation_window
+        )
+
+    def consistent(self, left: np.ndarray, right: np.ndarray) -> bool:
+        """Check agreement of complete map-to-odom transforms."""
+        return (
+            float(np.linalg.norm(left[:3, 3] - right[:3, 3]))
+            <= self.config.confirmation_translation_m
+            and rotation_distance_deg(left, right)
+            <= self.config.confirmation_rotation_deg
         )
 
     def observe(self, candidate: Optional[LocalizationCandidate]) -> dict[str, object]:
         self._window.append(candidate)
         available = [item for item in self._window if item is not None]
         best_cluster: list[LocalizationCandidate] = []
-        for reference in available:
-            cluster = []
-            for item in available:
-                translation = float(
-                    np.linalg.norm(
-                        reference.map_to_odom[:3, 3] - item.map_to_odom[:3, 3]
-                    )
-                )
-                rotation = rotation_distance_deg(
-                    reference.map_to_odom, item.map_to_odom
-                )
-                if (
-                    translation <= self.config.confirmation_translation_m
-                    and rotation <= self.config.confirmation_rotation_deg
-                ):
-                    cluster.append(item)
-            if len(cluster) >= len(best_cluster):
-                best_cluster = cluster
+        # A star-shaped cluster can span twice the tolerance. Require every
+        # pair to agree and include the current observation, not stale support.
+        for size in range(len(available), 0, -1):
+            for cluster in combinations(available, size):
+                if candidate is not None and all(item is not candidate for item in cluster):
+                    continue
+                if all(self.consistent(a.map_to_odom, b.map_to_odom)
+                       for a, b in combinations(cluster, 2)):
+                    best_cluster = list(cluster)
+                    break
+            if best_cluster:
+                break
         progress = len(best_cluster)
-        if progress >= self.config.confirmation_frames:
-            translations = np.asarray(
-                [item.map_to_odom[:3, 3] for item in best_cluster]
-            )
-            accepted = best_cluster[-1].map_to_odom.copy()
-            accepted[:3, 3] = np.median(translations, axis=0)
-            self.correction = accepted
+        # Repeated support for a different solution is evidence of ambiguity,
+        # even when one branch holds a 3-of-5 majority.
+        ambiguous = len(available) - progress >= 2
+        confirmed = candidate is not None and progress >= self.config.confirmation_frames and not ambiguous
+        if confirmed:
+            # Keep translation and orientation from the same geometric solve.
+            def distance(item):
+                return sum(
+                    np.linalg.norm(item.map_to_odom[:3, 3] - other.map_to_odom[:3, 3])
+                    / self.config.confirmation_translation_m
+                    + rotation_distance_deg(item.map_to_odom, other.map_to_odom)
+                    / self.config.confirmation_rotation_deg
+                    for other in best_cluster
+                )
+            self.correction = min(best_cluster, key=distance).map_to_odom.copy()
             self._window.clear()
             progress = 0
         return {
             "localized": self.correction is not None,
+            "observation_confirmed": confirmed,
+            "pose_ambiguous": ambiguous,
             "confirmation_progress": progress,
             "confirmation_required": self.config.confirmation_frames,
             "confirmation_window": self.config.confirmation_window,

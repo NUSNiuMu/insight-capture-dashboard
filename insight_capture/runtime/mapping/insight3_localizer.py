@@ -1666,6 +1666,14 @@ class Insight3GlobalLocalizer(Node):
                         # 单帧 PnP 只进入候选窗口；达到多帧一致性后才更新全局修正。
                         transition = state.consensus.observe(candidate)
                         measurement = state.consensus.correction
+                        diagnostics["geometric_accepted"] = diagnostics["accepted"]
+                        if candidate is not None and (
+                            transition["pose_ambiguous"]
+                            or measurement is None
+                            or not state.consensus.consistent(candidate.map_to_odom, measurement)
+                        ):
+                            diagnostics["accepted"] = False
+                            diagnostics["rejection"] = "pose_consensus_pending"
                         measurement_changed = (
                             measurement is not None
                             and (
@@ -1717,7 +1725,8 @@ class Insight3GlobalLocalizer(Node):
                             )
                         else:
                             tracking_mode = (
-                                "vio_only" if localized else "unlocalized"
+                                "verifying" if candidate is not None
+                                else ("vio_only" if localized else "unlocalized")
                             )
                         transition["tracking_mode"] = tracking_mode
                         transition["ekf_initialized"] = state.pose_filter.initialized
@@ -1993,8 +2002,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-grid-cells", type=int, default=4)
     parser.add_argument("--confirmation-frames", type=int, default=3)
     parser.add_argument("--confirmation-window", type=int, default=5)
-    parser.add_argument("--confirmation-translation-m", type=float, default=0.20)
-    parser.add_argument("--confirmation-rotation-deg", type=float, default=12.0)
+    parser.add_argument("--confirmation-translation-m", type=float, default=0.05)
+    parser.add_argument("--confirmation-rotation-deg", type=float, default=3.0)
     parser.add_argument("--path-points", type=int, default=200)
     parser.add_argument("--path-interval-ms", type=int, default=50)
     parser.add_argument("--path-publish-hz", type=float, default=2.0)
