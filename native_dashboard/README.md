@@ -104,3 +104,10 @@ native_dashboard/run.sh --fps 30 --quit-after 60 --diagnostics /tmp/insight-nati
 CPU 来自客户端进程累计 ticks，不包含后端和 GPU；原始样本归档在本机 `~/workspaces/insight_capture_tests/native_dashboard_20260909/`。
 
 以上是短时、未录制情况下的验证，不等于现场满负载录制或长时运行验收。视频输出计数也不是屏幕扫描次数；没有把不同时间采集的网页数据当作严格 A/B 性能结论。
+
+
+## 定位状态
+
+视频卡片显示地图匹配、定位确认中、VIO 外推、未定位、位姿输入中断或设备离线；Ego 显示建图状态。绿色地图匹配代表当前几何观测与已确认修正一致，VIO 外推表示沿用已有坐标关系，不能据模型可见或后端连接推断定位可靠。空间视图显示确认地图点数；回放显示录制回放。诊断 JSON 的 `localization` 包含每设备的模式、标签和颜色。
+
+六路建图竞争优化与验证边界见 [性能记录](../docs/NATIVE_PERFORMANCE.md)，候选一致性和相对位置排查见 [Ego 建图说明](../docs/EGOHALO_MAPPING.md)。

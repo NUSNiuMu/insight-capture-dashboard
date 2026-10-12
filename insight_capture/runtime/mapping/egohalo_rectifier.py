@@ -1,14 +1,17 @@
 """Decode each Ego camera once and publish calibrated overlapping stereo views."""
 
 import argparse
+from array import array
 import copy
 import json
 import os
 import queue
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
+import cv2
 
 from insight_capture.media.h264_decode import H264Decoder
 from insight_capture.media.h264 import H264ReferenceSequence
@@ -24,6 +27,9 @@ def main():
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     settings = config["egohalo_rectification"]
+    # Four source workers already run concurrently; nested OpenCV parallelism
+    # competes with capture, pose handling and inference on the Jetson cores.
+    cv2.setNumThreads(max(1, int(settings.get("opencv_threads", 1))))
     os.environ["ROS_DOMAIN_ID"] = str(config["ros_domain_id"])
     configure_ros_network(config)
     import rclpy
@@ -55,6 +61,9 @@ def main():
     reset = {name: threading.Event() for name in sources}
     stop = threading.Event()
     failed = threading.Event()
+    metrics = {name: dict(received=0, queue_resets=0, reference_resets=0,
+                          decoded=0, selected=0, published={},
+                          rectify_ms=0.0, message_ms=0.0, publish_ms=0.0) for name in sources}
     source_fps = float(settings.get("source_fps", 30.0))
     output_hz = float(settings["output_hz"])
     if not 0 < output_hz <= source_fps:
@@ -132,7 +141,7 @@ def main():
             bucket = int(round(pts / period))
             return calibration[0] is not None and bucket != last_output and abs(pts - bucket * period) <= sample_tolerance_ns
         try:
-            decoder = H264Decoder(pixel_format="GRAY8", low_latency=True)
+            decoder = H264Decoder(pixel_format="GRAY8", low_latency=True, frame_selector=selected)
             while not stop.is_set():
                 try:
                     message = queues[index].get(timeout=.1)
@@ -143,10 +152,11 @@ def main():
                 contiguous = sequence.observe(data)
                 capture_gap = contiguous is True and last_input is not None and 0 < stamp - last_input < min(8, sequence.modulus - 1) * 1e9 / source_fps
                 if reset[index].is_set() or contiguous is False or (last_input is not None and not 0 < stamp-last_input <= max_gap_ns and not capture_gap):
+                    metrics[index]["reference_resets"] += 1
                     decoder.gate.reset()
                     if last_input is not None and stamp <= last_input:
                         decoder.close()
-                        decoder = H264Decoder(pixel_format="GRAY8", low_latency=True)
+                        decoder = H264Decoder(pixel_format="GRAY8", low_latency=True, frame_selector=selected)
                         headers.clear()
                         last_output = None
                     reset[index].clear()
@@ -154,7 +164,9 @@ def main():
                 if decoder.push(data, stamp):
                     headers[stamp] = copy.deepcopy(message.header)
                 for _ in range(16):
-                    result = decoder.pull(5_000_000, select_frame=selected)
+                    # Most decoded frames are rejected; do not wait for an
+                    # appsink sample on every compressed input packet.
+                    result = decoder.pull(0, select_frame=selected)
                     if result is None:
                         break
                     pts, image = result
@@ -168,7 +180,10 @@ def main():
                         continue
                     last_output = bucket
                     for name, side, eye, frame, rectification in value[1][index]:
+                        started = time.perf_counter()
                         rectified = rectification.rectify(eye, image)
+                        metrics[index]["rectify_ms"] += (time.perf_counter() - started) * 1000
+                        started = time.perf_counter()
                         output = Image()
                         out_header = copy.deepcopy(header)
                         out_header.frame_id = frame
@@ -176,7 +191,9 @@ def main():
                         output.height, output.width = rectified.shape
                         output.encoding = "mono8"
                         output.step = output.width
-                        output.data = rectified.tobytes()
+                        # The ROS setter validates bytes element by element;
+                        # a typed byte array takes its validated bulk path.
+                        output.data = array("B", rectified.tobytes())
                         info = CameraInfo()
                         info.header = out_header
                         info.width, info.height = rectification.size
@@ -185,8 +202,18 @@ def main():
                         info.k = rectification.projections[eye][:, :3].flatten().tolist()
                         info.r = np.eye(3).flatten().tolist()
                         info.p = rectification.projections[eye].flatten().tolist()
+                        metrics[index]["message_ms"] += (time.perf_counter() - started) * 1000
+                        started = time.perf_counter()
                         info_publishers[(name, side)].publish(info)
                         publishers[(name, side)].publish(output)
+                        metrics[index]["publish_ms"] += (time.perf_counter() - started) * 1000
+                        key = name + "/" + side
+                        published = metrics[index]["published"]
+                        published[key] = published.get(key, 0) + 1
+                for discarded in decoder.take_discarded_timestamps():
+                    headers.pop(discarded, None)
+                metrics[index]["decoded"] = decoder.decoded_frames
+                metrics[index]["selected"] = decoder.selected_frames
                 if len(headers) > 60:
                     raise RuntimeError("Decoder source timestamps are not being matched")
         except Exception as exc:
@@ -204,9 +231,11 @@ def main():
         def on_image(message, index=index):
             if message.format.lower() != "h264":
                 return
+            metrics[index]["received"] += 1
             try:
                 queues[index].put_nowait(message)
             except queue.Full:
+                metrics[index]["queue_resets"] += 1
                 reset[index].set()
                 while True:
                     try:
@@ -219,6 +248,14 @@ def main():
         thread.start()
         threads.append(thread)
     node.create_timer(.5, configure)
+    def publish_metrics():
+        value = calibration[0]
+        status_publisher.publish(String(data=json.dumps(dict(
+            state="ready" if value is not None else "waiting_calibration",
+            calibration_id=value[0] if value is not None else None,
+            opencv_threads=cv2.getNumThreads(), sources=metrics,
+        ))))
+    node.create_timer(1.0, publish_metrics)
     try:
         while rclpy.ok() and not stop.is_set():
             rclpy.spin_once(node, timeout_sec=.1)

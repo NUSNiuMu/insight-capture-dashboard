@@ -98,7 +98,7 @@ ApplicationWindow {
                 Label { text: "INSIGHT"; font.pixelSize: 24; font.bold: true; color: "#b87813" }
                 Label { text: "原生采集台"; font.pixelSize: 21; color: "#494438" }
                 Rectangle { width: 9; height: 9; radius: 5; color: dashboard.connected ? "#70ac82" : "#c27a6a" }
-                Label { text: dashboard.connected ? "姿态在线" : "姿态未连接"; color: "#776d5a" }
+                Label { text: dashboard.connected ? "后端已连接" : "后端未连接"; color: "#776d5a" }
                 Item { Layout.fillWidth: true }
                 Label { text: dashboard.playback ? "回放" : "实时"; font.bold: true; color: "#9a711e" }
                 ComboBox { model: [25,30]; currentIndex: dashboard.targetFps===30?1:0; onActivated: root.previewFps=Number(currentText); implicitWidth: 75 }
@@ -139,7 +139,14 @@ ApplicationWindow {
                                 property alias player: video
                                 Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 1; color: "#fffaf0"; radius: 9
                                 Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: cameraCard.modelData.label; width: parent.width-110; elide: Text.ElideRight; font.bold: true; color: "#514b3e" }
-                                Label { id: cameraStatus; anchors.top: cameraTitle.bottom; anchors.left: parent.left; anchors.margins: 10; text: video.status; elide: Text.ElideRight; width: parent.width-20; font.pixelSize: 11; color: "#84775f" }
+                                Label {
+                                    id: cameraStatus
+                                    property var localization: dashboard.localization[cameraCard.modelData.device || cameraCard.modelData.name] || {}
+                                    anchors.top: cameraTitle.bottom; anchors.left: parent.left; anchors.margins: 10
+                                    text: dashboard.playback ? "录制回放" : (localization.label || "等待定位状态")
+                                    elide: Text.ElideRight; width: parent.width-20; font.pixelSize: 11
+                                    color: dashboard.playback ? "#51778e" : (localization.color || "#84775f")
+                                }
                                 Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " fps"; color: "#a27723"; font.bold: true }
                                 NativeVideo {
                                     id: video; visible: !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.topMargin: 6; anchors.bottomMargin: 6
@@ -165,7 +172,7 @@ ApplicationWindow {
                     RowLayout {
                         Layout.fillWidth: true; Layout.margins: 12
                         Label { text: "空间视图"; font.bold: true; color: "#514b3e" }
-                        Label { text: (dashboard.state.mapPoints || 0) + " 个地图点"; color: "#84775f" }
+                        Label { text: "确认地图点 " + (dashboard.state.mapPoints || 0); color: "#84775f" }
                         Item { Layout.fillWidth: true }
                         CheckBox { text: "保留轨迹"; checked: dashboard.keepTrail; onToggled: dashboard.keepTrail = checked }
                         Button { text: "清轨迹"; onClicked: dashboard.command("clear") }

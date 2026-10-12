@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import ctypes
+from collections import OrderedDict
+import hashlib
 import time
 from pathlib import Path
 import numpy as np
@@ -319,6 +321,8 @@ class TensorRTMatcher:
         keypoint_threshold: float,
     ) -> None:
         self._keypoint_threshold = float(keypoint_threshold)
+        self._feature_cache = OrderedDict()
+        self._feature_cache_hits = self._feature_cache_misses = 0
         self._cuda = CudaRuntime()
         self._superpoint = TensorRTEngine(
             self._cuda, engine_dir / "superpoint_fp16.plan"
@@ -345,14 +349,33 @@ class TensorRTMatcher:
     def extract(self, image: np.ndarray):
         """提取有效 SuperPoint 槽位；低分固定输出槽在此过滤。"""
 
+        image = np.ascontiguousarray(image)
+        key = (image.shape, image.dtype.str, self._keypoint_threshold,
+               hashlib.blake2b(image.tobytes(), digest_size=16).digest())
+        cached = self._feature_cache.get(key)
+        if cached is not None:
+            self._feature_cache.move_to_end(key)
+            self._feature_cache_hits += 1
+            return cached
+        self._feature_cache_misses += 1
         output = self._superpoint({"image": self._image_tensor(image)})
         scores = output["scores"]
         keep = scores > self._keypoint_threshold
-        return (
+        features = (
             output["keypoints"][keep].astype(np.float32, copy=False),
             output["descriptors"][keep].astype(np.float32, copy=False),
             scores[keep].astype(np.float32, copy=False),
         )
+        # Keyframes recur across localization attempts. Cache only features,
+        # never map XYZ or pose corrections; new pixels always require inference.
+        self._feature_cache[key] = features
+        if len(self._feature_cache) > 8:
+            self._feature_cache.popitem(last=False)
+        return features
+
+    def feature_cache_stats(self):
+        return dict(entries=len(self._feature_cache), hits=self._feature_cache_hits,
+                    misses=self._feature_cache_misses)
 
     def warmup(self, height: int = 640, width: int = 544, runs: int = 2) -> None:
         """在 worker 宣告健康前预热 context、CUDA kernel 和显存缓冲。"""

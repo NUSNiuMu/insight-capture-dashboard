@@ -80,6 +80,7 @@ class Dashboard : public QObject {
     Q_PROPERTY(double duration READ duration NOTIFY camerasChanged)
     Q_PROPERTY(int targetFps READ targetFps CONSTANT)
     Q_PROPERTY(QVariantMap cameraAvailability READ cameraAvailability NOTIFY availabilityChanged)
+    Q_PROPERTY(QVariantMap localization READ localization NOTIFY localizationChanged)
   public:
     Dashboard(QUrl server, int fps, QObject *parent = nullptr);
     QVariantList cameras() const { return m_cameras; }
@@ -94,6 +95,7 @@ class Dashboard : public QObject {
     double duration() const { return m_manifest["duration_s"].toDouble(); }
     int targetFps() const { return m_fps; }
     QVariantMap cameraAvailability() const { return m_cameraAvailability; }
+    QVariantMap localization() const { return m_localization; }
     void start();
     void setKeepTrail(bool value);
     Q_INVOKABLE void command(const QString &action, const QString &value = QString());
@@ -109,12 +111,16 @@ class Dashboard : public QObject {
     void posesChanged();
     void stateChanged();
     void availabilityChanged();
+    void localizationChanged();
 
   private:
     void fetch(const QString &path, std::function<void(QJsonObject)> done);
     void post(const QString &path, const QJsonObject &body, std::function<void(QJsonObject)> done = {});
     void request(const QString &path, const QJsonObject *body, std::function<void(QJsonObject)> done);
     void poll();
+    void updateLocalization();
+    static QVariantMap localizationSummary(const QVariantMap &status, bool imageOnline,
+                                           bool vioFresh, bool head);
     void refreshBags();
     void connectPose();
     void acceptPose(const QJsonObject &payload);
@@ -135,6 +141,7 @@ class Dashboard : public QObject {
     QVariantList m_poseTrace;
     QVariantMap m_state;
     QVariantMap m_cameraAvailability;
+    QVariantMap m_localization, m_nativeVioFresh;
     QHash<QObject *, QList<QPointer<QObject>>> m_gripperNodes;
     QHash<QObject *, double> m_gripperOpenings;
     QString m_message = "正在连接后端", m_requestedPlayback;
@@ -144,5 +151,6 @@ class Dashboard : public QObject {
          m_playbackStarting = false;
     QVector3D m_origin;
     qint64 m_lastPose = 0;
+    qint64 m_lastCameraUpdate = -1, m_lastMappingUpdate = -1;
     int m_pollCount = 0;
 };

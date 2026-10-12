@@ -42,11 +42,14 @@ Dashboard::Dashboard(QUrl server, int fps, QObject *parent) : QObject(parent), m
             return;
         m_latestLive = p;
         m_lastPose = m_clock.elapsed();
+        const bool connectionChanged = !m_connected;
         m_connected = true;
         if (m_message == "正在连接后端")
             m_message = "后端已连接";
         if (!playback())
             acceptPose(p);
+        if (connectionChanged)
+            emit stateChanged();
     });
     connect(&m_poseSocket, &QWebSocket::disconnected, this, [this] {
         m_connected = false;
@@ -119,12 +122,16 @@ void Dashboard::request(const QString &path, const QJsonObject *body, std::funct
     });
 }
 void Dashboard::poll() {
+    updateLocalization();
     fetch("/api/cameras", [this](QJsonObject data) {
         QVariantList list;
         QVariantMap availability;
+        QVariantMap vioFresh;
         for (auto value : data["cameras"].toArray()) {
             auto c = value.toObject();
             availability[c["name"].toString()] = !c["stale"].toBool();
+            const auto device = c["device_name"].toString(c["name"].toString());
+            vioFresh[device] = vioFresh.value(device).toBool() || c["native_vio_fresh"].toBool(true);
             QUrl u = m_server;
             u.setScheme(u.scheme() == "https" ? "wss" : "ws");
             u.setPort(c["webrtc_port"].toInt(8766));
@@ -155,26 +162,37 @@ void Dashboard::poll() {
                 emit camerasChanged();
             }
         }
+        m_lastCameraUpdate = m_clock.elapsed();
+        m_nativeVioFresh = vioFresh;
+        updateLocalization();
     });
     fetch("/api/recording/status", [this](QJsonObject d) {
+        const auto previous = m_state;
         m_state["recording"] = d["recording"].toBool();
         m_state["output"] = d["output_path"].toString();
         m_state["task"] = d["task_status"].toObject().toVariantMap();
         m_state["take"] = d["current_take"].toObject().toVariantMap();
-        emit stateChanged();
+        if (m_state != previous)
+            emit stateChanged();
     });
     fetch("/api/mapping", [this](QJsonObject d) {
+        const auto previousPoints = m_state.value("mapPoints");
         m_state["mapPoints"] = d["map_point_count"].toInt();
         m_state["mapping"] = d["statuses"].toObject().toVariantMap();
-        emit stateChanged();
+        m_lastMappingUpdate = m_clock.elapsed();
+        updateLocalization();
+        if (previousPoints != m_state.value("mapPoints"))
+            emit stateChanged();
     });
     fetch("/api/playback/status", [this](QJsonObject d) {
+        const auto previous = m_state;
         m_state["playbackState"] = d["state"].toString();
         m_state["playbackProgress"] = d["progress"].toDouble();
         if (!m_requestedPlayback.isEmpty() && !m_playbackStarting && !playback() &&
             d.contains("manifest_url"))
             activatePlayback(d);
-        emit stateChanged();
+        if (m_state != previous)
+            emit stateChanged();
     });
     if (m_pollCount++ % 5 == 0) {
         fetch("/api/tasks", [this](QJsonObject d) {
@@ -188,12 +206,86 @@ void Dashboard::poll() {
             refreshBags();
     }
     if (!playback() && m_clock.elapsed() - m_lastPose > 3000) {
+        const bool changed = m_connected;
         m_connected = false;
         for (auto *p : m_poseOrder) {
-            p->visible = false;
-            p->notify();
+            if (p->visible) {
+                p->visible = false;
+                emit p->poseChanged();
+            }
         }
-        emit stateChanged();
+        if (changed)
+            emit stateChanged();
+    }
+}
+
+QVariantMap Dashboard::localizationSummary(const QVariantMap &status, bool imageOnline,
+                                          bool vioFresh, bool head) {
+    auto result = [](const QString &mode, const QString &label, const QString &color) {
+        return QVariantMap{{"mode", mode}, {"label", label}, {"color", color}};
+    };
+    const QString waiting = "#84775f", warning = "#aa741b", good = "#417b51", bad = "#b45d51";
+    if (!imageOnline)
+        return result("offline", "设备离线", bad);
+    if (!vioFresh)
+        return result("waiting_pose", "位姿输入中断", warning);
+    if (!status.value("online").toBool())
+        return result("service_offline", head ? "建图服务离线" : "定位服务离线", bad);
+    if (status.value("state") == "error")
+        return result("error", head ? "建图异常" : "定位异常", bad);
+    if (!head && status.contains("camera_info_ready") && !status.value("camera_info_ready").toBool())
+        return result("waiting_calibration", "等待标定", waiting);
+    if (!head && status.contains("extrinsic_ready") && !status.value("extrinsic_ready").toBool())
+        return result("waiting_extrinsic", "等待外参", waiting);
+    if (head) {
+        const auto views = status.value("rig").toMap().value("views").toMap();
+        for (const auto &view : views)
+            if (!view.toMap().value("ready").toBool())
+                return result("waiting_calibration", "等待标定", waiting);
+        if (status.value("state") == "waiting_for_inputs")
+            return result("waiting_inputs", "等待建图输入", waiting);
+        return result("mapping", "建图中", good);
+    }
+    const auto mode = status.value("tracking_mode").toString();
+    if (mode == "map_matched" && status.value("accepted").toBool())
+        return result("map_matched", "地图匹配", good);
+    if (mode == "verifying" || status.value("accepted").toBool())
+        return result("verifying", "定位确认中", warning);
+    if (status.value("localized").toBool())
+        return result("vio_only", "VIO 外推", warning);
+    if (!status.value("calibration_keyframe_ready").toBool() &&
+        status.value("map_features").toInt() < status.value("need_map_features", 80).toInt())
+        return result("waiting_map", "等待地图", waiting);
+    return result("unlocalized", "未定位", warning);
+}
+
+void Dashboard::updateLocalization() {
+    QVariantMap counts, onlineCounts, summaries;
+    for (const auto &value : m_liveCameras) {
+        const auto camera = value.toMap();
+        const auto device = camera.value("device", camera.value("name")).toString();
+        counts[device] = counts.value(device).toInt() + 1;
+        if (m_cameraAvailability.value(camera.value("name").toString()).toBool())
+            onlineCounts[device] = onlineCounts.value(device).toInt() + 1;
+    }
+    const auto statuses = m_state.value("mapping").toMap();
+    const auto now = m_clock.elapsed();
+    for (auto it = counts.begin(); it != counts.end(); ++it) {
+        const auto device = it.key();
+        const bool head = !device.startsWith("insight3_");
+        auto status = statuses.value(head ? "insight9" : device).toMap();
+        if (m_lastMappingUpdate < 0 || now - m_lastMappingUpdate > 2500)
+            status["online"] = false;
+        const bool imageOnline = onlineCounts.value(device).toInt() > 0 &&
+                                 m_lastCameraUpdate >= 0 && now - m_lastCameraUpdate <= 2500;
+        auto summary = localizationSummary(status, imageOnline, m_nativeVioFresh.value(device, true).toBool(), head);
+        if (head && imageOnline && onlineCounts.value(device).toInt() < it.value().toInt())
+            summary = {{"mode", "partial_images"}, {"label", "部分图像离线"}, {"color", "#aa741b"}};
+        summaries[device] = summary;
+    }
+    if (summaries != m_localization) {
+        m_localization = summaries;
+        emit localizationChanged();
     }
 }
 void Dashboard::refreshBags() {
@@ -600,6 +692,7 @@ QVariantMap Dashboard::diagnostics() const {
                                 {"geometry_updates", qulonglong(p->geometry->revision())},
                                 {"model", p->modelSource.toString()}});
     return {{"connected", m_connected}, {"poses", data}, {"pose_trace", m_poseTrace},
+            {"localization", m_localization},
             {"playback", playback()}, {"message", m_message}};
 }
 void Dashboard::shutdown() {

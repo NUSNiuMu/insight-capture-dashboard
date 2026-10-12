@@ -183,7 +183,8 @@
     "output_height": 640,
     "output_hz": 5.0,
     "source_fps": 30.0,
-    "horizontal_fov_deg": 90.0
+    "horizontal_fov_deg": 90.0,
+    "opencv_threads": 1
   },
   "ros_transport": {
     "exclude_host_addresses": [

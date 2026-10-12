@@ -98,6 +98,8 @@ class InferenceServer:
                         "compute_capability": list(
                             self.matcher.compute_capability
                         ),
+                        "feature_cache": (self.matcher.feature_cache_stats()
+                                          if hasattr(self.matcher, "feature_cache_stats") else {}),
                     },
                 )
                 return
