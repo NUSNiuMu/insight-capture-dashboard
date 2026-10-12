@@ -3,6 +3,14 @@ set -euo pipefail
 native_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 checkout_dir="$(dirname -- "$native_dir")"
 build_dir="${INSIGHT_NATIVE_BUILD_DIR:-$checkout_dir/.native-build}"
+builder_image="${INSIGHT_NATIVE_BUILDER_IMAGE:-insight-qt-builder:jammy}"
+if [[ "${1:-}" == --prepare-builder && $# == 1 ]]; then
+    docker build --network host --pull=false -t "$builder_image" -f "$native_dir/Dockerfile.build" "$native_dir"
+    exit 0
+elif [[ $# != 0 ]]; then
+    echo 'Usage: build.sh [--prepare-builder]' >&2
+    exit 2
+fi
 if [[ "$(uname -m)" != aarch64 ]]; then
     echo 'This trial build targets an aarch64 Jetson host.' >&2
     exit 1
@@ -16,10 +24,14 @@ if [[ -n "${INSIGHT_NATIVE_BUILD_CONTAINER:-}" ]]; then
     docker exec "$INSIGHT_NATIVE_BUILD_CONTAINER" python3 /src/native_dashboard/export_runtime.py /src/.native-build/qt-runtime.tar
     docker exec "$INSIGHT_NATIVE_BUILD_CONTAINER" chown -R "$(id -u):$(id -g)" /src/.native-build
 else
-    docker build --network host -t insight-qt-builder:jammy -f "$native_dir/Dockerfile.build" "$native_dir"
-    docker run --rm --network host -v "$checkout_dir:/src" -v "$build_dir:/src/.native-build" insight-qt-builder:jammy \
+    if ! docker image inspect "$builder_image" >/dev/null 2>&1; then
+        echo "Local Qt builder is unavailable: $builder_image" >&2
+        echo 'Prepare it while online with ./native_dashboard/build.sh --prepare-builder, or load a saved builder image.' >&2
+        exit 1
+    fi
+    docker run --rm --network none --pull=never -v "$checkout_dir:/src" -v "$build_dir:/src/.native-build" "$builder_image" \
         bash -c 'cmake -S /src/native_dashboard -B /src/.native-build -DCMAKE_BUILD_TYPE=Release && cmake --build /src/.native-build -j2 && python3 /src/native_dashboard/export_runtime.py /src/.native-build/qt-runtime.tar'
-    docker run --rm --network host -v "$build_dir:/out" insight-qt-builder:jammy chown -R "$(id -u):$(id -g)" /out
+    docker run --rm --network none --pull=never -v "$build_dir:/out" "$builder_image" chown -R "$(id -u):$(id -g)" /out
 fi
 mkdir -p "$build_dir/runtime"
 tar -xf "$build_dir/qt-runtime.tar" -C "$build_dir/runtime"

@@ -16,9 +16,11 @@ Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬
 
 不带参数时默认连接本机 `http://127.0.0.1:8765`，以 30 FPS 目标全屏启动；缺少可执行文件/Qt 运行库，或原生源码与 QML 资源比可执行文件更新时自动构建。Dashboard 后端需保持运行。传入参数时按指定参数启动。
 
-构建需要 Docker 和本机 Jetson Multimedia API 头文件。Qt 在独立 Ubuntu 22.04 构建容器内安装，运行库导出到 `.native-build/runtime`；运行时使用宿主机已有的 NVIDIA/GStreamer 驱动，避免替换 JetPack 多媒体栈。非标准 SDK 目录可通过 `JETSON_MM_HEADERS` 指定。
+构建需要 Docker、本地 Qt 构建镜像和本机 Jetson Multimedia API 头文件。首次准备或更新构建镜像时，在有外网的环境执行 `./native_dashboard/build.sh --prepare-builder`；也可通过 `docker load` 导入保存的镜像。Qt 在独立 Ubuntu 22.04 构建容器内安装，运行库导出到 `.native-build/runtime`；运行时使用宿主机已有的 NVIDIA/GStreamer 驱动，避免替换 JetPack 多媒体栈。非标准 SDK 目录可通过 `JETSON_MM_HEADERS` 指定。
 
-构建和临时容器使用 host 网络，避免 Jetson 内核缺少 `iptables raw` 表时默认 Docker bridge 无法创建；无需修改系统防火墙。
+日常构建容器使用 `--network none --pull=never`，不访问外网、不自动拉取镜像，也不依赖 Docker bridge。联网准备构建镜像时使用 host 网络；无需修改系统防火墙。构建镜像不存在时立即提示准备步骤，不在启动时联网安装依赖。
+
+断外网使用的准备要求和验证范围见 [离线使用](OFFLINE.md)。已准备好的可执行文件和运行库可直接启动，不需要 Docker 构建；如果只有 `qt-runtime.tar` 而运行库未解包，启动脚本会从本地归档恢复它。
 
 `--server` 可以指定后端地址。本机 loopback 地址且后端支持时，Insight3 原始图像通过 `/ws/native` 直接进入 VIC 显示；Ego 原始 H.264 通过同一通道进入 NVDEC。远程地址、旧后端和旧 Insight9 JPEG 输入使用 WebRTC，端口取相机 API，仍需 ICE 可达。可用 `INSIGHT_NATIVE_TRANSPORT=webrtc ./native_dashboard/run.sh` 作旧链路对照。当前客户端使用 Jetson 专用解码器，尚未适配普通 PC。
 
