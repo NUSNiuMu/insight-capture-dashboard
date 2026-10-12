@@ -1,4 +1,5 @@
 #include "dashboard.h"
+#include "workspace.h"
 #include "video.h"
 #include <QCommandLineParser>
 #include <QFile>
@@ -48,8 +49,10 @@ int main(int argc, char **argv) {
     qmlRegisterUncreatableType<TrailGeometry>("Insight.Native", 1, 0, "TrailGeometry",
                                               "Created by dashboard");
     Dashboard dashboard(server, qBound(1, args.value("fps").toInt(), 30));
+    Workspace workspace(server);
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("dashboard", &dashboard);
+    engine.rootContext()->setContextProperty("workspace", &workspace);
     engine.rootContext()->setContextProperty("startFullScreen", args.isSet("fullscreen"));
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())
@@ -63,6 +66,9 @@ int main(int argc, char **argv) {
             QVariant videos;
             QMetaObject::invokeMethod(engine.rootObjects().first(), "videoDiagnostics",
                                       Q_RETURN_ARG(QVariant, videos));
+            state["workspace"] = workspace.data();
+            state["workspaceErrors"] = workspace.errors();
+            state["workspaceBusy"] = workspace.busy();
             state["videos"] = videos.value<QJSValue>().toVariant();
             QVariant spatial;
             QMetaObject::invokeMethod(engine.rootObjects().first(), "spatialDiagnostics",

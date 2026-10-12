@@ -3,7 +3,19 @@ set -euo pipefail
 native_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 build_dir="${INSIGHT_NATIVE_BUILD_DIR:-$(dirname -- "$native_dir")/.native-build}"
 qt_lib="$build_dir/runtime/usr/lib/aarch64-linux-gnu"
+needs_build=0
 if [[ ! -x "$build_dir/insight-native" || ! -d "$qt_lib" ]]; then
+    needs_build=1
+else
+    # Merged QML resources are embedded in the executable, not loaded from disk.
+    while IFS= read -r native_source; do
+        if [[ "$native_source" -nt "$build_dir/insight-native" ]]; then
+            needs_build=1
+            break
+        fi
+    done < <(find "$native_dir" -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.qml' -o -name '*.js' -o -name '*.qrc' -o -name '*.vert' -o -name '*.frag' -o -name 'CMakeLists.txt' \) -print)
+fi
+if [[ "$needs_build" == 1 ]]; then
     "$native_dir/build.sh"
 fi
 if [[ $# -eq 0 ]]; then

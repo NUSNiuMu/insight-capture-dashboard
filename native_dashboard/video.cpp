@@ -78,6 +78,18 @@ void NativeVideo::setSourceSize(const QSize &value) {
     emit sourceChanged();
     reconnect();
 }
+void NativeVideo::setActive(bool value) {
+    if (m_active == value) return;
+    m_active = value;
+    if (m_media.isEmpty()) {
+        if (value) reconnect();
+        else stop();
+    } else if (m_pipeline) {
+        gst_element_set_state(m_pipeline, value && !m_paused ? GST_STATE_PLAYING : GST_STATE_PAUSED);
+    } else if (value) reconnect();
+    syncWindow();
+    emit sourceChanged();
+}
 void NativeVideo::setSourceOnline(bool value) {
     if (value == m_sourceOnline)
         return;
@@ -139,11 +151,11 @@ void NativeVideo::syncWindow() {
     m_surface->setGeometry(qRound(pos.x() + (width() - size.width()) / 2),
                            qRound(pos.y() + (height() - size.height()) / 2), qMax(1, qRound(size.width())),
                            qMax(1, qRound(size.height())));
-    m_surface->setVisible(isVisible() && (m_sourceOnline || !m_media.isEmpty()) &&
+    m_surface->setVisible(m_active && isVisible() && (m_sourceOnline || !m_media.isEmpty()) &&
                           window()->isVisible() && width() > 1 && height() > 1);
 }
 void NativeVideo::reconnect() {
-    if (m_complete && (m_sourceOnline || !m_media.isEmpty()))
+    if (m_active && m_complete && (m_sourceOnline || !m_media.isEmpty()))
         m_restart.start(150);
 }
 void NativeVideo::stop() {
@@ -187,7 +199,7 @@ void NativeVideo::stop() {
 void NativeVideo::start() {
     stop();
     syncWindow();
-    if (!m_surface || m_name.isEmpty() || m_endpoint.isEmpty() || (!m_sourceOnline && m_media.isEmpty()))
+    if (!m_active || !m_surface || m_name.isEmpty() || m_endpoint.isEmpty() || (!m_sourceOnline && m_media.isEmpty()))
         return;
     m_useNative = m_media.isEmpty() && !m_nativeEndpoint.isEmpty();
     if (m_useNative) {
@@ -590,7 +602,7 @@ void NativeVideo::poll() {
 void NativeVideo::setPaused(bool value) {
     m_paused = value;
     if (m_pipeline)
-        gst_element_set_state(m_pipeline, value ? GST_STATE_PAUSED : GST_STATE_PLAYING);
+        gst_element_set_state(m_pipeline, value || !m_active ? GST_STATE_PAUSED : GST_STATE_PLAYING);
     emit statsChanged();
 }
 void NativeVideo::seek(double seconds) {
@@ -706,5 +718,6 @@ QVariantMap NativeVideo::diagnostics() const {
             {"sample_ms", m_lastPoll},
             {"position", m_position},
             {"paused", m_paused},
+            {"active", m_active},
             {"generation", m_generation.load()}};
 }

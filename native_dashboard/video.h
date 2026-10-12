@@ -19,6 +19,7 @@ class NativeVideo : public QQuickItem {
     Q_PROPERTY(QUrl nativeEndpoint READ nativeEndpoint WRITE setNativeEndpoint NOTIFY sourceChanged)
     Q_PROPERTY(QUrl media READ media WRITE setMedia NOTIFY sourceChanged)
     Q_PROPERTY(QSize sourceSize READ sourceSize WRITE setSourceSize NOTIFY sourceChanged)
+    Q_PROPERTY(bool active READ active WRITE setActive NOTIFY sourceChanged)
     Q_PROPERTY(bool sourceOnline READ sourceOnline WRITE setSourceOnline NOTIFY sourceChanged)
     Q_PROPERTY(int targetFps READ targetFps WRITE setTargetFps NOTIFY sourceChanged)
     Q_PROPERTY(QString status READ status NOTIFY statsChanged)
@@ -33,6 +34,8 @@ class NativeVideo : public QQuickItem {
     QUrl nativeEndpoint() const { return m_nativeEndpoint; }
     QUrl media() const { return m_media; }
     QSize sourceSize() const { return m_sourceSize; }
+    bool active() const { return m_active; }
+    void setActive(bool value);
     bool sourceOnline() const { return m_sourceOnline; }
     int targetFps() const { return m_fps; }
     QString status() const { return m_status; }
@@ -90,7 +93,7 @@ class NativeVideo : public QQuickItem {
     int m_nativeFormat = 0;
     QSize m_nativeSize;
     quint64 m_nativeEpoch = 0, m_nativeReceived = 0;
-    bool m_complete = false, m_stopping = false, m_paused = false, m_sourceOnline = true;
+    bool m_active = true, m_complete = false, m_stopping = false, m_paused = false, m_sourceOnline = true;
     int m_fps = 25;
     std::atomic<int> m_generation{0};
     std::atomic<quint64> m_latestFrameDrops{0};

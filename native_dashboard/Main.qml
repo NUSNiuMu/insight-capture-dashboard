@@ -5,6 +5,7 @@ import QtQuick.Layouts
 import QtQuick3D
 import QtQuick3D.AssetUtils
 import Insight.Native 1.0
+import "pages"
 
 ApplicationWindow {
     id: root
@@ -12,6 +13,8 @@ ApplicationWindow {
     visibility: startFullScreen ? Window.FullScreen : Window.Windowed
     title: "Insight · 原生采集台"
     color: "#eee7d5"
+    property string currentPage: "spatial"
+    property bool spatialActive: currentPage === "spatial"
     property int previewFps: dashboard.targetFps
     property real sceneFps: view.renderStats.fps
     property bool multiStreamLayout: !dashboard.playback && cameraGroups().some(function(group) { return group.streams.length > 1 })
@@ -27,13 +30,29 @@ ApplicationWindow {
     property string confirmAction: ""
     property string confirmValue: ""
     font.family: "Noto Sans CJK SC"
+    font.pixelSize: 14
+    palette.button: "#fffaf0"
+    palette.base: "#fffaf0"
+    palette.highlight: "#b87813"
+    palette.buttonText: "#494438"
+    palette.text: "#25251f"
     function confirm(action, value, description) {
         confirmAction = action; confirmValue = value; confirmDialog.title = description; confirmDialog.open()
     }
     function spatialDiagnostics() { var result=[]; for(var i=0;i<poseRepeater.count;++i)result.push(poseRepeater.objectAt(i).diagnostics()); return result }
     function controlPositions() {
-        var result={}; var items={scene:scenePanel,cameraDock:cameraDock,record:recordButton,activate:activateButton,load:loadButton,live:liveButton,pause:pauseButton,check:checkButton,timeline:timeline}
+        var result={page:root.currentPage}; var items={scene:scenePanel,cameraDock:cameraDock,record:recordButton,activate:activateButton,load:loadButton,live:liveButton,pause:pauseButton,check:checkButton,timeline:timeline}
         for(var key in items) { var item=items[key];var p=item.mapToItem(null,item.width/2,item.height/2);result[key]={x:p.x,y:p.y,width:item.width,height:item.height,enabled:item.enabled} }
+        var nav = root.findChildrenForDiagnostics(sidebar)
+        for(var j=0;j<nav.length;++j){var button=nav[j];var pos=button.mapToItem(null,button.width/2,button.height/2);result[button.objectName]={x:pos.x,y:pos.y,width:button.width,height:button.height,enabled:button.enabled}}
+        var controls=root.findChildrenForDiagnostics(pageLoader).concat(root.findChildrenForDiagnostics(Overlay.overlay))
+        for(var k=0;k<controls.length;++k){var c=controls[k];var cp=c.mapToItem(null,c.width/2,c.height/2);result[c.objectName]={x:cp.x,y:cp.y,width:c.width,height:c.height,enabled:c.enabled,visible:c.visible,text:c.text===undefined ? "" : c.text,checked:c.checked===undefined ? false : c.checked}}
+        return result
+    }
+    function findChildrenForDiagnostics(item) {
+        var result=[]
+        if(item.objectName)result.push(item)
+        for(var i=0;i<item.children.length;++i)result=result.concat(findChildrenForDiagnostics(item.children[i]))
         return result
     }
     function videoDiagnostics() { var result=[]; allVideos(function(v){var d=v.diagnostics();d.viewportWidth=v.width;d.viewportHeight=v.height;result.push(d)}); return result }
@@ -70,7 +89,7 @@ ApplicationWindow {
         var groups = cameraGroups(), widths = [], singles = 0, multi = 0
         for (var i = 0; i < groups.length; ++i) {
             var group = groups[i]
-            if (group.streams.some(function(stream) { return !(stream.width > 0 && stream.height > 0) })) return workspace.width * 2 / 3
+            if (group.streams.some(function(stream) { return !(stream.width > 0 && stream.height > 0) })) return spatialWorkspace.width * 2 / 3
             var groupHeight = multiStreamLayout && group.streams.length === 1 ? (height - cameraDock.rowSpacing) / 2 : height
             var width = cameraGroupWidth(group, groupHeight)
             widths.push(width)
@@ -79,7 +98,7 @@ ApplicationWindow {
         }
         var natural = multiStreamLayout ? singles + multi + cameraDock.columnSpacing : widths.reduce(function(sum, width) { return sum + width }, 0) + Math.max(0, widths.length - 1) * cameraDock.columnSpacing
         // Keep complete images and give unused horizontal space to the scene.
-        return Math.min(natural, workspace.width * 2 / 3)
+        return Math.min(natural, spatialWorkspace.width * 2 / 3)
     }
     Shortcut { sequence: "Escape"; onActivated: root.visibility = Window.Windowed }
     Shortcut { sequence: "F11"; onActivated: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
@@ -89,14 +108,21 @@ ApplicationWindow {
         onAccepted: dashboard.command(root.confirmAction, root.confirmValue)
         Label { text: "操作将应用于当前设备。"; padding: 16 }
     }
-    ColumnLayout {
-        anchors.fill: parent; anchors.margins: 14; spacing: 12
+    RowLayout {
+        anchors.fill: parent; spacing: 0
+        Sidebar {
+            id: sidebar; Layout.preferredWidth: compact ? 62 : 196; Layout.fillHeight: true
+            compact: root.width < 1500; currentPage: root.currentPage
+            onSelected: function(page){root.currentPage=page}
+        }
+        ColumnLayout {
+        Layout.fillWidth: true; Layout.fillHeight: true; Layout.margins: 14; spacing: 12
         Rectangle {
             Layout.fillWidth: true; height: 72; color: "#fffaf0"; radius: 10
             RowLayout {
                 anchors.fill: parent; anchors.margins: 15; spacing: 18
                 Label { text: "INSIGHT"; font.pixelSize: 24; font.bold: true; color: "#b87813" }
-                Label { text: "原生采集台"; font.pixelSize: 21; color: "#494438" }
+                Label { text: root.spatialActive ? "原生采集台" : (pageLoader.titles[root.currentPage] || ""); font.pixelSize: 21; color: "#494438" }
                 Rectangle { width: 9; height: 9; radius: 5; color: dashboard.connected ? "#70ac82" : "#c27a6a" }
                 Label { text: dashboard.connected ? "后端已连接" : "后端未连接"; color: "#776d5a" }
                 Item { Layout.fillWidth: true }
@@ -106,15 +132,27 @@ ApplicationWindow {
                 Button { text: "全屏"; onClicked: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
             }
         }
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 28; Layout.minimumHeight: 28; Layout.maximumHeight: 28
+            BusyIndicator { running: Object.keys(workspace.busy).some(function(k){return workspace.busy[k]}); visible: running; implicitWidth: 28; implicitHeight: 28 }
+            Label { text: Object.keys(workspace.errors).map(function(k){return workspace.errors[k]}).join(" · "); textFormat: Text.PlainText; color: "#c2453d"; elide: Text.ElideRight; Layout.fillWidth: true; ToolTip.visible: errorMouse.containsMouse; ToolTip.text: text; MouseArea { id: errorMouse; anchors.fill: parent; hoverEnabled: true } }
+        }
+        WorkspacePages {
+            id: pageLoader; Layout.fillWidth: true; Layout.fillHeight: true
+            visible: !root.spatialActive; active: visible; page: root.spatialActive ? "" : root.currentPage
+            onOpenSpatial: function(bag){root.currentPage="spatial";root.playPaused=false;dashboard.command("playback",bag)}
+        }
         GridLayout {
-            id: workspace
+            visible: root.spatialActive
+            id: spatialWorkspace
             Layout.fillWidth: true; Layout.fillHeight: true
             columns: 2
             rowSpacing: 12; columnSpacing: 12
             GridLayout {
                 id: cameraDock
                 Layout.row: 0; Layout.column: 0
-                Layout.preferredWidth: root.cameraDockWidth(workspace.height)
+                Layout.preferredWidth: root.cameraDockWidth(spatialWorkspace.height)
                 Layout.minimumWidth: 0
                 Layout.preferredHeight: -1
                 Layout.fillWidth: false; Layout.fillHeight: true
@@ -149,7 +187,7 @@ ApplicationWindow {
                                 }
                                 Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " fps"; color: "#a27723"; font.bold: true }
                                 NativeVideo {
-                                    id: video; visible: !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.topMargin: 6; anchors.bottomMargin: 6
+                                    id: video; active: root.spatialActive; visible: root.spatialActive && !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.topMargin: 6; anchors.bottomMargin: 6
                                     sourceSize: Qt.size(cameraCard.modelData.width || 0, cameraCard.modelData.height || 0)
                                     sourceOnline: dashboard.playback || dashboard.cameraAvailability[cameraCard.modelData.name] !== false
                                     cameraName: cameraCard.modelData.name; endpoint: cameraCard.modelData.endpoint; nativeEndpoint: cameraCard.modelData.nativeEndpoint || ""; media: cameraCard.modelData.media; targetFps: root.previewFps
@@ -258,6 +296,7 @@ ApplicationWindow {
             }
         }
         Rectangle {
+            visible: root.spatialActive
             Layout.fillWidth: true; Layout.preferredHeight: controls.implicitHeight+22; color: "#fffaf0"; radius: 10
             ColumnLayout {
                 id: controls; anchors.fill: parent; anchors.margins: 11; spacing: 8
@@ -286,5 +325,6 @@ ApplicationWindow {
                 Label { text: dashboard.state.recording ? "● 录制中  " + (dashboard.state.output || "") : dashboard.message; Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
             }
         }
+    }
     }
 }

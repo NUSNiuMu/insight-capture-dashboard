@@ -4,7 +4,7 @@ Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬
 
 当前 EgoHalo 接入与优化位于 `feat/egohalo-native` 分支。优化前基线已标记为 `native-qt-stable-2026-10-10`（稳定版本地 Qt，提交 `723ed28`）；标签保持不变。网页仍可远程访问，客户发布和 kiosk 开机入口需另行部署。
 
-完整功能与 UI 的逐页对齐范围见 [迁移清单](PARITY.md)。
+9 个原生页面的功能与验证范围见 [对齐清单](PARITY.md)。侧边栏与网页使用相同的入口顺序和分组，默认仍进入采集/空间页。
 
 ## 构建与启动
 
@@ -14,7 +14,7 @@ Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬
 ./native_dashboard/run.sh
 ```
 
-不带参数时默认连接本机 `http://127.0.0.1:8765`，以 30 FPS 目标全屏启动；缺少可执行文件或 Qt 运行库时自动构建。Dashboard 后端需保持运行。传入参数时按指定参数启动。
+不带参数时默认连接本机 `http://127.0.0.1:8765`，以 30 FPS 目标全屏启动；缺少可执行文件/Qt 运行库，或原生源码与 QML 资源比可执行文件更新时自动构建。Dashboard 后端需保持运行。传入参数时按指定参数启动。
 
 构建需要 Docker 和本机 Jetson Multimedia API 头文件。Qt 在独立 Ubuntu 22.04 构建容器内安装，运行库导出到 `.native-build/runtime`；运行时使用宿主机已有的 NVIDIA/GStreamer 驱动，避免替换 JetPack 多媒体栈。非标准 SDK 目录可通过 `JETSON_MM_HEADERS` 指定。
 
@@ -47,7 +47,7 @@ native_dashboard/run.sh --fps 30 --quit-after 60 --diagnostics /tmp/insight-nati
 
 实时 H.264 解码启用 `disable-dpb=true`，避免 Insight3 的解码缓冲积累。仅适用于当前无 B 帧的实时编码流，MP4 回放保留正常 DPB。诊断文件中的 `decode_median_ms` / `decode_p95_ms` 匹配解码器输入和输出的 PTS，统计最近最多 120 帧，不包含相机曝光、网络和屏幕扫描延迟；无有效样本为 -1。排查时可用 `INSIGHT_NATIVE_DECODER_DPB=1` 临时恢复默认 DPB 做对照。[NVIDIA 低延迟模式说明](https://docs.nvidia.com/jetson/archives/r36.4.3/DeveloperGuide/SD/Multimedia/AcceleratedGstreamer.html#supported-decoder-features-with-gstreamer-1-0)。
 
-这是采集/回放主界面的试验，不覆盖网页的数据集导出、标注、设备设置等全部页面，尚未作为客户发布入口。长时间运行、断电恢复和现场录制质量仍需后续验收。
+本地客户端已接入任务、录制库、数据集导出、评分、手部姿态、优化、独立录制和设置页面，尚未作为客户发布入口。长时间运行、断电恢复和现场录制质量仍需后续验收。
 
 ## 验证原则
 
