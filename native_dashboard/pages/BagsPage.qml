@@ -108,10 +108,10 @@ PageFrame {
             }
         }
     }
-    ResultPanel {
-        heading: "完整性报告"
-        value: workspace.data.integrity || {}
-        visible: !!workspace.data.integrity
+    IntegrityPanel {
+        report: workspace.data.integrity || null
+        checking: !!workspace.busy.integrity
+        error: workspace.errors.integrity || ""
     }
     Ui.Dialog {
         id: removeDialog

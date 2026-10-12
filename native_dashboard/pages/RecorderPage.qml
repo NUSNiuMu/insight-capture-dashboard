@@ -11,9 +11,10 @@ PageFrame {
     property var status: workspace.data.recording || {}
     property var catalog: workspace.data.topics || {}
     property var directories: workspace.data.directories || {}
-    property bool locked: !!status.recording || !!workspace.busy.action
+    property bool finalizing: status.merge_state === "merging" || status.merge_state === "finalizing"
+    property bool locked: !!status.recording || finalizing || !!workspace.busy.action
     heading: "Recorder · 录制"
-    description: "选择 ROS 话题和存储目录，查看录制及停止后的完整性结果。"
+    description: "选择 ROS 话题和存储目录，查看录制与保存状态。完整性检查请前往评分或录制库。"
     function browse(path) {
         workspace.request("directories", "/api/recording/storage/directories" + (path ? "?path=" + encodeURIComponent(path) : ""));
     }
@@ -73,9 +74,49 @@ PageFrame {
             }
         }
     }
-    ResultPanel {
+    Ui.Section {
         heading: "录制状态"
-        value: page.status
+        RowLayout {
+            Layout.fillWidth: true
+            Ui.Badge {
+                text: page.status.recording ? "录制中" : page.finalizing ? "正在保存" : page.status.merge_state === "error" ? "保存失败" : "待命"
+                tone: page.status.recording ? "success" : page.status.merge_state === "error" ? "danger" : page.finalizing ? "accent" : "neutral"
+            }
+            Label {
+                text: page.status.recording ? "正在采集所选话题" : page.finalizing ? "正在合并录制，请等待保存完成…" : page.status.merge_state === "done" ? "录制已保存" + ((page.status.merge_timings || {}).total_sec !== undefined ? " · 耗时 " + Number(page.status.merge_timings.total_sec).toFixed(1) + " 秒" : "") : "准备开始录制"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: Ui.Theme.secondary
+                font.pixelSize: 14
+            }
+        }
+        Label {
+            text: page.status.output_path || ""
+            visible: text.length > 0
+            textFormat: Text.PlainText
+            Layout.fillWidth: true
+            wrapMode: Text.WrapAnywhere
+            color: Ui.Theme.muted
+            font.pixelSize: 13
+        }
+        Label {
+            text: page.status.merge_error || ""
+            visible: text.length > 0
+            textFormat: Text.PlainText
+            Layout.fillWidth: true
+            wrapMode: Text.WrapAnywhere
+            color: Ui.Theme.red
+        }
+        Label {
+            property var taskStatus: page.status.task_status || {}
+            property var stats: taskStatus.stats || {}
+            text: taskStatus.active ? ((taskStatus.task || {}).name || "当前任务") + " · 已录制 " + (stats.recorded_takes || 0) + " 条 · 下一条 " + (stats.next_take_id || 1) : "暂无活动任务"
+            Layout.fillWidth: true
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            color: Ui.Theme.muted
+            font.pixelSize: 13
+        }
     }
     Ui.Section {
         eyebrow: "02  RECORDING STORAGE"
@@ -88,9 +129,22 @@ PageFrame {
                 font.bold: true
             }
             Label {
-                text: page.directories.path || "正在读取…"
+                text: (page.status.storage || {}).active_path || "正在读取…"
                 Layout.fillWidth: true
-                wrapMode: Text.Wrap
+                wrapMode: Text.WrapAnywhere
+                color: Ui.Theme.ink
+                font.pixelSize: 14
+            }
+            Ui.Badge {
+                property var space: page.status.disk_space || {}
+                text: space.free_bytes !== undefined ? "可用 " + (Number(space.free_bytes) / (1024 * 1024 * 1024)).toFixed(1) + " GB · " + (Number(space.free_ratio) * 100).toFixed(0) + "%" : "可用空间未知"
+                tone: space.free_ratio < 0.1 ? "danger" : space.free_ratio < 0.3 ? "accent" : "neutral"
+            }
+            Label {
+                text: "正在浏览：" + (page.directories.path || "正在读取…")
+                Layout.fillWidth: true
+                wrapMode: Text.WrapAnywhere
+                color: Ui.Theme.muted
             }
             RowLayout {
                 Ui.Button {

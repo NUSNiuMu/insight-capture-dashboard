@@ -43,7 +43,7 @@ void Workspace::request(const QString &key, const QString &path, const QString &
     emit changed();
     QNetworkRequest req(url);
     // Integrity and rosbag enumeration can scan large on-device recordings.
-    req.setTransferTimeout(key == "integrity" || key == "bags" || key == "handFrames" ? 120000 : 15000);
+    req.setTransferTimeout(key == "integrity" || key == "scoringIntegrity" || key == "bags" || key == "handFrames" ? 120000 : 15000);
     req.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::AlwaysNetwork);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::SameOriginRedirectPolicy);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");

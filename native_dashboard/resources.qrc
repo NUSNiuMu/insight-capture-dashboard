@@ -8,12 +8,14 @@
     <file>pages/DatasetsPage.qml</file>
     <file>pages/HandPosePage.qml</file>
     <file>pages/HandTracking.js</file>
+    <file>pages/IntegrityPanel.qml</file>
     <file>pages/NativePlot.qml</file>
     <file>pages/OptimizationPage.qml</file>
     <file>pages/PageFrame.qml</file>
     <file>pages/RecorderPage.qml</file>
     <file>pages/ResultPanel.qml</file>
     <file>pages/ScoringPage.qml</file>
+    <file>pages/ScoringResults.qml</file>
     <file>pages/SessionsPage.qml</file>
     <file>pages/SettingsPage.qml</file>
     <file>pages/Sidebar.qml</file>

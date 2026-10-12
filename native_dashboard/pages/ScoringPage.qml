@@ -7,7 +7,11 @@ PageFrame {
     id: page
     property var shell
     property var pending: null
-    property bool running: (workspace.data.scoring || {}).status === "running" || !!workspace.busy.scoringStart || !!workspace.busy.integrity
+    property var integrityReport: null
+    property string integrityBag: ""
+    property bool awaitingResult: false
+    property var scoring: workspace.data.scoring || {}
+    property bool running: scoring.status === "running" || !!workspace.busy.scoringStart || !!workspace.busy.scoringIntegrity
     heading: "Scoring · 评分"
     description: "先检查图像流完整性，再运行轨迹评分。"
     Ui.Section {
@@ -36,12 +40,15 @@ PageFrame {
                 highlighted: true
                 enabled: !!bag.selector && !page.running && !dashboard.state.recording
                 onClicked: {
+                    page.integrityReport = null;
+                    page.integrityBag = bag.selector;
+                    page.awaitingResult = true;
                     page.pending = {
                         "bag_name": bag.selector
                     };
                     if (topic.text.trim())
                         page.pending.topic = topic.text.trim();
-                    workspace.request("integrity", "/api/integrity/run", "POST", {
+                    workspace.request("scoringIntegrity", "/api/integrity/run", "POST", {
                             "bag_name": bag.selector
                         });
                 }
@@ -52,40 +59,39 @@ PageFrame {
         running: page.running
         visible: running
     }
-    ResultPanel {
-        heading: "完整性报告"
-        value: workspace.data.integrity || {}
+    IntegrityPanel {
+        report: page.integrityBag === bag.selector ? page.integrityReport : null
+        checking: !!workspace.busy.scoringIntegrity
+        error: page.integrityBag === bag.selector ? (workspace.errors.scoringIntegrity || "") : ""
     }
-    GridLayout {
-        Layout.fillWidth: true
-        columns: page.width < 950 ? 1 : 3
-        rowSpacing: 14
-        columnSpacing: 14
-        Repeater {
-            model: ((workspace.data.scoring || {}).result || {}).cameras || []
-            delegate: Ui.StatCard {
-                required property var modelData
-                label: modelData.topic || "轨迹评分"
-                value: modelData.error ? "—" : String(modelData.score) + " / 100"
-                detail: modelData.error || modelData.quality || ""
-                Layout.fillWidth: true
-            }
-        }
-    }
-    ResultPanel {
+    Ui.Section {
         heading: "评分结果"
-        value: workspace.data.scoring || {}
+        Layout.fillWidth: true
+        Label {
+            text: workspace.errors.scoringStart || workspace.errors.scoring || (page.scoring.status === "error" ? page.scoring.error || "评分失败" : page.running ? "正在评分…" : page.awaitingResult ? "正在读取评分结果…" : page.scoring.status === "done" ? "已评分：" + (page.scoring.bag_name || "") : "选择录制并运行检查，结果将显示在这里。")
+            textFormat: Text.PlainText
+            color: workspace.errors.scoringStart || workspace.errors.scoring || page.scoring.status === "error" ? Ui.Theme.red : Ui.Theme.muted
+            Layout.fillWidth: true
+            wrapMode: Text.WrapAnywhere
+        }
+        ScoringResults {
+            result: !page.awaitingResult && !page.running && page.scoring.status === "done" ? page.scoring.result || null : null
+            Layout.fillWidth: true
+        }
     }
     Connections {
         target: workspace
         function onCompleted(key, success) {
-            if (key === "integrity" && page.pending) {
+            if (key === "scoringIntegrity" && page.pending) {
+                page.integrityReport = success ? workspace.data.scoringIntegrity : null;
                 var body = page.pending;
                 page.pending = null;
                 workspace.request("scoringStart", "/api/scoring/run", "POST", body);
             }
             if (key === "scoringStart" && success)
                 shell.poll();
+            if (key === "scoring" && success && !page.pending && !workspace.busy.scoringStart && !workspace.busy.scoringIntegrity)
+                page.awaitingResult = false;
         }
     }
 }
