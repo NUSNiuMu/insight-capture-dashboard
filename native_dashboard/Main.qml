@@ -15,6 +15,9 @@ ApplicationWindow {
     property int previewFps: dashboard.targetFps
     property real sceneFps: view.renderStats.fps
     property bool multiStreamLayout: !dashboard.playback && cameraGroups().some(function(group) { return group.streams.length > 1 })
+    property real cameraChromeHeight: 32 + cameraTitleMetrics.height + cameraStatusMetrics.height
+    FontMetrics { id: cameraTitleMetrics; font: root.font }
+    FontMetrics { id: cameraStatusMetrics; font.family: root.font.family; font.pixelSize: 11 }
     // Match the web ArcRotateCamera after reflecting its Z axis.
     property real yaw: 90 - 1.2 * 180 / Math.PI
     property real pitch: 1.1 * 180 / Math.PI - 90
@@ -33,7 +36,7 @@ ApplicationWindow {
         for(var key in items) { var item=items[key];var p=item.mapToItem(null,item.width/2,item.height/2);result[key]={x:p.x,y:p.y,width:item.width,height:item.height,enabled:item.enabled} }
         return result
     }
-    function videoDiagnostics() { var result=[]; allVideos(function(v){result.push(v.diagnostics())}); return result }
+    function videoDiagnostics() { var result=[]; allVideos(function(v){var d=v.diagnostics();d.viewportWidth=v.width;d.viewportHeight=v.height;result.push(d)}); return result }
     function allVideos(fn) {
         for (var i=0; i<cameraRepeater.count; ++i) cameraRepeater.itemAt(i).eachVideo(fn)
     }
@@ -49,6 +52,34 @@ ApplicationWindow {
             groups[positions[key]].streams.push(camera)
         }
         return groups
+    }
+    function cameraGroupWidth(group, height) {
+        var columns = group.streams.length > 1 ? 2 : 1
+        var rows = Math.max(1, Math.ceil(group.streams.length / columns))
+        var imageHeight = Math.max(1, (height - (rows - 1) * cameraDock.rowSpacing) / rows - cameraChromeHeight)
+        var ratios = []
+        for (var i = 0; i < columns; ++i) ratios.push(0)
+        for (var j = 0; j < group.streams.length; ++j) {
+            var stream = group.streams[j]
+            var ratio = stream.width > 0 && stream.height > 0 ? stream.width / stream.height : 1
+            ratios[j % columns] = Math.max(ratios[j % columns], ratio)
+        }
+        return ratios.reduce(function(sum, ratio) { return sum + ratio * imageHeight }, 0) + (columns - 1) * cameraDock.columnSpacing
+    }
+    function cameraDockWidth(height) {
+        var groups = cameraGroups(), widths = [], singles = 0, multi = 0
+        for (var i = 0; i < groups.length; ++i) {
+            var group = groups[i]
+            if (group.streams.some(function(stream) { return !(stream.width > 0 && stream.height > 0) })) return workspace.width * 2 / 3
+            var groupHeight = multiStreamLayout && group.streams.length === 1 ? (height - cameraDock.rowSpacing) / 2 : height
+            var width = cameraGroupWidth(group, groupHeight)
+            widths.push(width)
+            if (group.streams.length === 1) singles = Math.max(singles, width)
+            else multi = Math.max(multi, width)
+        }
+        var natural = multiStreamLayout ? singles + multi + cameraDock.columnSpacing : widths.reduce(function(sum, width) { return sum + width }, 0) + Math.max(0, widths.length - 1) * cameraDock.columnSpacing
+        // Keep complete images and give unused horizontal space to the scene.
+        return Math.min(natural, workspace.width * 2 / 3)
     }
     Shortcut { sequence: "Escape"; onActivated: root.visibility = Window.Windowed }
     Shortcut { sequence: "F11"; onActivated: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
@@ -83,10 +114,10 @@ ApplicationWindow {
             GridLayout {
                 id: cameraDock
                 Layout.row: 0; Layout.column: 0
-                Layout.preferredWidth: 2
+                Layout.preferredWidth: root.cameraDockWidth(workspace.height)
                 Layout.minimumWidth: 0
                 Layout.preferredHeight: -1
-                Layout.fillWidth: true; Layout.fillHeight: true
+                Layout.fillWidth: false; Layout.fillHeight: true
                 columns: root.multiStreamLayout ? 3 : Math.max(1, cameraRepeater.count)
                 rowSpacing: 10; columnSpacing: 12
                 Repeater {
@@ -94,11 +125,12 @@ ApplicationWindow {
                     delegate: GridLayout {
                         id: cameraGroup; required property var modelData; required property int index
                         columns: modelData.streams.length > 1 ? 2 : 1
+                        rowSpacing: cameraDock.rowSpacing; columnSpacing: cameraDock.columnSpacing
                         Layout.row: root.multiStreamLayout ? (modelData.streams.length > 1 ? 0 : index) : 0
                         Layout.column: root.multiStreamLayout ? (modelData.streams.length > 1 ? 1 : 0) : index
                         Layout.columnSpan: root.multiStreamLayout && modelData.streams.length > 1 ? 2 : 1
                         Layout.rowSpan: root.multiStreamLayout && modelData.streams.length > 1 ? 2 : 1
-                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: modelData.streams.length > 1 ? 2 : 1; Layout.preferredHeight: modelData.streams.length > 1 ? 2 : 1
+                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: root.cameraGroupWidth(modelData, root.multiStreamLayout && modelData.streams.length === 1 ? (cameraDock.height-cameraDock.rowSpacing)/2 : cameraDock.height); Layout.preferredHeight: modelData.streams.length > 1 ? 2 : 1
                         function eachVideo(fn) { for(var j=0;j<streamRepeater.count;++j)fn(streamRepeater.itemAt(j).player) }
                         Repeater {
                             id: streamRepeater; model: cameraGroup.modelData.streams
@@ -110,7 +142,7 @@ ApplicationWindow {
                                 Label { id: cameraStatus; anchors.top: cameraTitle.bottom; anchors.left: parent.left; anchors.margins: 10; text: video.status; elide: Text.ElideRight; width: parent.width-20; font.pixelSize: 11; color: "#84775f" }
                                 Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " fps"; color: "#a27723"; font.bold: true }
                                 NativeVideo {
-                                    id: video; visible: !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.margins: 6
+                                    id: video; visible: !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.topMargin: 6; anchors.bottomMargin: 6
                                     sourceSize: Qt.size(cameraCard.modelData.width || 0, cameraCard.modelData.height || 0)
                                     sourceOnline: dashboard.playback || dashboard.cameraAvailability[cameraCard.modelData.name] !== false
                                     cameraName: cameraCard.modelData.name; endpoint: cameraCard.modelData.endpoint; nativeEndpoint: cameraCard.modelData.nativeEndpoint || ""; media: cameraCard.modelData.media; targetFps: root.previewFps
