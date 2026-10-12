@@ -204,7 +204,7 @@ ApplicationWindow {
                                 id: poseRepeater; model: dashboard.poses
                                 delegate: Node {
                                     id: poseRoot; required property var modelData
-                                    function diagnostics() { return {name:modelData.name, status:avatar.status, error:avatar.errorString, boundsMin:[avatar.bounds.minimum.x,avatar.bounds.minimum.y,avatar.bounds.minimum.z], boundsMax:[avatar.bounds.maximum.x,avatar.bounds.maximum.y,avatar.bounds.maximum.z], position:[modelData.position.x,modelData.position.y,modelData.position.z], scale:modelData.modelScale, rotation:[modelData.rotation.x,modelData.rotation.y,modelData.rotation.z,modelData.rotation.scalar], modelRotation:[modelData.modelRotation.x,modelData.modelRotation.y,modelData.modelRotation.z,modelData.modelRotation.scalar]} }
+                                    function diagnostics() { return {name:modelData.name, status:avatar.status, error:avatar.errorString, boundsMin:[avatar.bounds.minimum.x,avatar.bounds.minimum.y,avatar.bounds.minimum.z], boundsMax:[avatar.bounds.maximum.x,avatar.bounds.maximum.y,avatar.bounds.maximum.z], position:[modelData.displayPosition.x,modelData.displayPosition.y,modelData.displayPosition.z], sourcePosition:[modelData.position.x,modelData.position.y,modelData.position.z], scale:modelData.modelScale, rotation:[modelData.displayRotation.x,modelData.displayRotation.y,modelData.displayRotation.z,modelData.displayRotation.scalar], sourceRotation:[modelData.rotation.x,modelData.rotation.y,modelData.rotation.z,modelData.rotation.scalar], modelRotation:[modelData.modelRotation.x,modelData.modelRotation.y,modelData.modelRotation.z,modelData.modelRotation.scalar]} }
                                     Model {
                                         geometry: poseRoot.modelData.trail
                                         visible: poseRoot.modelData.trailEnabled && poseRoot.modelData.pointCount > 1
@@ -221,7 +221,7 @@ ApplicationWindow {
                                         }
                                     }
                                     Node {
-                                        visible: poseRoot.modelData.visible; position: poseRoot.modelData.position; rotation: poseRoot.modelData.rotation
+                                        visible: poseRoot.modelData.visible; position: poseRoot.modelData.displayPosition; rotation: poseRoot.modelData.displayRotation
                                         Node {
                                             position: poseRoot.modelData.modelOffset; rotation: poseRoot.modelData.modelRotation
                                             scale: Qt.vector3d(poseRoot.modelData.modelScale,poseRoot.modelData.modelScale,poseRoot.modelData.modelScale)

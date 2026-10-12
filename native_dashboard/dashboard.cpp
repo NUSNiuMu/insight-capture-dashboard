@@ -311,6 +311,7 @@ void Dashboard::clearTraces() {
         p->firstSeq = 1;
         p->geometry->setPoints({});
         p->geometryDirty = false;
+        p->displayFilter.reset();
         p->notify();
     }
 }
@@ -354,6 +355,8 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         }
         const auto previousPosition = p->position;
         const auto previousRotation = p->rotation;
+        const auto previousDisplayPosition = p->displayPosition();
+        const auto previousDisplayRotation = p->displayRotation();
         const auto previousOffset = p->modelOffset;
         const auto previousModelRotation = p->modelRotation;
         const auto previousScale = p->modelScale;
@@ -425,13 +428,16 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         const bool traceChanged = previousSeq != p->lastSeq || previousGeneration != p->generation ||
                                   previousFirstSeq != p->firstSeq || keptChanged ||
                                   (snapshot && previousPoints != p->points);
+        p->displayFilter.update(p->position, p->rotation, m_clock.elapsed(),
+            playback() || !previousVisible || !p->visible || previousGeneration != p->generation);
         p->geometryDirty |= (m_keep ? keptChanged : traceChanged) || previousVisible != p->visible;
         if (p->trailEnabled && p->geometryDirty && m_clock.elapsed() - p->lastGeometry >= 100) {
             p->geometry->setPoints(m_keep ? p->kept : (p->visible ? p->points : QVector<QVector3D>()));
             p->lastGeometry = m_clock.elapsed();
             p->geometryDirty = false;
         }
-        if (previousVisible != p->visible || previousPosition != p->position || previousRotation != p->rotation)
+        if (previousVisible != p->visible || previousPosition != p->position || previousRotation != p->rotation ||
+            previousDisplayPosition != p->displayPosition() || previousDisplayRotation != p->displayRotation())
             emit p->poseChanged();
         if (previousOffset != p->modelOffset || previousModelRotation != p->modelRotation || previousScale != p->modelScale)
             emit p->modelChanged();
@@ -442,6 +448,7 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         if (qEnvironmentVariable("INSIGHT_LATENCY_TRACE") == "1" && d.contains("latency_trace")) {
             auto timing = d["latency_trace"].toObject().toVariantMap();
             timing["name"] = p->name;
+            timing["display_position_lag_mm"] = (p->position - p->displayPosition()).length() * 10;
             timing["applied_ns"] = qlonglong(std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
             m_poseTrace.append(timing);

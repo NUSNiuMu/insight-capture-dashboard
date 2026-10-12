@@ -13,6 +13,7 @@
 #include <QVariantList>
 #include <QWebSocket>
 #include <functional>
+#include "pose_filter.h"
 
 class Pose : public QObject {
     Q_OBJECT
@@ -22,6 +23,8 @@ class Pose : public QObject {
     Q_PROPERTY(bool visible MEMBER visible NOTIFY poseChanged)
     Q_PROPERTY(QVector3D position MEMBER position NOTIFY poseChanged)
     Q_PROPERTY(QQuaternion rotation MEMBER rotation NOTIFY poseChanged)
+    Q_PROPERTY(QVector3D displayPosition READ displayPosition NOTIFY poseChanged)
+    Q_PROPERTY(QQuaternion displayRotation READ displayRotation NOTIFY poseChanged)
     Q_PROPERTY(QUrl modelSource MEMBER modelSource NOTIFY modelChanged)
     Q_PROPERTY(float modelScale MEMBER modelScale NOTIFY modelChanged)
     Q_PROPERTY(QVector3D modelOffset MEMBER modelOffset NOTIFY modelChanged)
@@ -40,6 +43,9 @@ class Pose : public QObject {
     bool keepMode = false;
     QVector3D position, modelOffset;
     QQuaternion rotation, modelRotation;
+    DisplayPoseFilter displayFilter;
+    QVector3D displayPosition() const { return displayFilter.position; }
+    QQuaternion displayRotation() const { return displayFilter.rotation; }
     QUrl modelSource;
     float modelScale = 20;
     double opening = 1;
