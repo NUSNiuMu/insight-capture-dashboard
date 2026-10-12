@@ -2,7 +2,8 @@
 #include "workspace.h"
 #include "video.h"
 #include <QCommandLineParser>
-#include <QFile>
+#include <QSaveFile>
+#include <QDateTime>
 #include <QGuiApplication>
 #include <QJSValue>
 #include <QJsonDocument>
@@ -57,6 +58,17 @@ int main(int argc, char **argv) {
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty())
         return 3;
+    auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+    QVariantList pageFrames;
+    if (window) QObject::connect(window, &QQuickWindow::frameSwapped, &app, [&] {
+        const auto start = window->property("pageSwitchStartedAt").toLongLong();
+        if (start > 0 && window->property("pageFirstFrameAt").toLongLong() == 0) {
+            const auto now = QDateTime::currentMSecsSinceEpoch();
+            window->setProperty("pageFirstFrameAt", now);
+            pageFrames.append(QVariantMap{{"page",window->property("currentPage")},{"first_frame_ms",now-start}});
+            if (pageFrames.size()>100) pageFrames.removeFirst();
+        }
+    });
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &dashboard, &Dashboard::shutdown);
     const QString path = args.value("diagnostics");
     QTimer diagnosticTimer;
@@ -66,6 +78,8 @@ int main(int argc, char **argv) {
             QVariant videos;
             QMetaObject::invokeMethod(engine.rootObjects().first(), "videoDiagnostics",
                                       Q_RETURN_ARG(QVariant, videos));
+            state["page_frames"] = pageFrames;
+            state["workspace_requests"] = workspace.diagnostics();
             state["workspace"] = workspace.data();
             state["workspaceErrors"] = workspace.errors();
             state["workspaceBusy"] = workspace.busy();
@@ -78,10 +92,15 @@ int main(int argc, char **argv) {
             QMetaObject::invokeMethod(engine.rootObjects().first(), "controlPositions",
                                       Q_RETURN_ARG(QVariant, controls));
             state["controls"] = controls.value<QJSValue>().toVariant();
+            QVariant navigation;
+            QMetaObject::invokeMethod(engine.rootObjects().first(), "navigationDiagnostics", Q_RETURN_ARG(QVariant,navigation));
+            state["navigation"] = navigation.value<QJSValue>().toVariant();
             state["sceneFps"] = engine.rootObjects().first()->property("sceneFps");
-            QFile f(path);
-            if (f.open(QIODevice::WriteOnly))
+            QSaveFile f(path);
+            if (f.open(QIODevice::WriteOnly)) {
                 f.write(QJsonDocument::fromVariant(state).toJson());
+                f.commit();
+            }
         });
         diagnosticTimer.start(1000);
     }

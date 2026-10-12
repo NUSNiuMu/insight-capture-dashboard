@@ -79,13 +79,31 @@ void NativeVideo::setSourceSize(const QSize &value) {
     reconnect();
 }
 void NativeVideo::setActive(bool value) {
-    if (m_active == value) return;
-    m_active = value;
+    if (m_active.exchange(value) == value) return;
+    m_resumeFresh = false;
     if (m_media.isEmpty()) {
-        if (value) reconnect();
-        else stop();
+        if (value) {
+            m_resumeStarted = m_clock.elapsed();
+            m_resumeMs = -1;
+            m_resumeBaseline = m_rendered;
+            if (m_sink) {
+                GstStructure *stats = nullptr;
+                g_object_get(m_sink, "stats", &stats, nullptr);
+                if (stats) {
+                    guint64 baseline = 0;
+                    gst_structure_get_uint64(stats, "rendered", &baseline);
+                    m_resumeBaseline = baseline;
+                    gst_structure_free(stats);
+                }
+            }
+            if (!m_pipeline && m_socket.state() == QAbstractSocket::UnconnectedState)
+                reconnect();
+        }
+        // Retain live reference frames and connections; hidden sinks discard output.
+        if (m_timer.isActive()) m_timer.setInterval(value ? 33 : 250);
     } else if (m_pipeline) {
         gst_element_set_state(m_pipeline, value && !m_paused ? GST_STATE_PLAYING : GST_STATE_PAUSED);
+        m_resumeFresh = value;
     } else if (value) reconnect();
     syncWindow();
     emit sourceChanged();
@@ -151,11 +169,11 @@ void NativeVideo::syncWindow() {
     m_surface->setGeometry(qRound(pos.x() + (width() - size.width()) / 2),
                            qRound(pos.y() + (height() - size.height()) / 2), qMax(1, qRound(size.width())),
                            qMax(1, qRound(size.height())));
-    m_surface->setVisible(m_active && isVisible() && (m_sourceOnline || !m_media.isEmpty()) &&
+    m_surface->setVisible(m_active && (m_resumeFresh || !m_media.isEmpty()) && isVisible() && (m_sourceOnline || !m_media.isEmpty()) &&
                           window()->isVisible() && width() > 1 && height() > 1);
 }
 void NativeVideo::reconnect() {
-    if (m_active && m_complete && (m_sourceOnline || !m_media.isEmpty()))
+    if (m_complete && (m_sourceOnline || !m_media.isEmpty()))
         m_restart.start(150);
 }
 void NativeVideo::stop() {
@@ -183,6 +201,9 @@ void NativeVideo::stop() {
     m_nativeReceived = 0;
     m_nativeFormat = 0;
     m_bus = nullptr;
+    m_resumeFresh = false;
+    m_resumeBaseline = 0;
+    m_resumeStarted = m_clock.elapsed();
     m_renderedFps = 0;
     m_rendered = m_dropped = m_lastRendered = 0;
     m_latestFrameDrops = 0;
@@ -199,7 +220,7 @@ void NativeVideo::stop() {
 void NativeVideo::start() {
     stop();
     syncWindow();
-    if (!m_active || !m_surface || m_name.isEmpty() || m_endpoint.isEmpty() || (!m_sourceOnline && m_media.isEmpty()))
+    if (!m_surface || m_name.isEmpty() || m_endpoint.isEmpty() || (!m_sourceOnline && m_media.isEmpty()))
         return;
     m_useNative = m_media.isEmpty() && !m_nativeEndpoint.isEmpty();
     if (m_useNative) {
@@ -301,7 +322,7 @@ void NativeVideo::startPipeline() {
         gst_object_unref(decoder);
     }
     m_sink = gst_bin_get_by_name(GST_BIN(m_pipeline), "display");
-    if (m_sink && m_traceFrames && m_media.isEmpty()) {
+    if (m_sink && m_media.isEmpty()) {
         auto *pad = gst_element_get_static_pad(m_sink, "sink");
         gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_BUFFER, sinkTiming, this, nullptr);
         gst_object_unref(pad);
@@ -325,12 +346,12 @@ void NativeVideo::startPipeline() {
         reinterpret_cast<gpointer>(handle), nullptr);
     m_status = m_useNative ? "本机直通 · 原生显示" : m_media.isEmpty() ? "正在协商 H.264" : "正在加载回放";
     m_lastPoll = m_lastProgress = m_clock.elapsed();
-    if (gst_element_set_state(m_pipeline, m_paused ? GST_STATE_PAUSED : GST_STATE_PLAYING) ==
+    if (gst_element_set_state(m_pipeline, m_paused || (!m_active && !m_media.isEmpty()) ? GST_STATE_PAUSED : GST_STATE_PLAYING) ==
         GST_STATE_CHANGE_FAILURE) {
         fail("视频管线启动失败");
         return;
     }
-    m_timer.start(33);
+    m_timer.start(m_active ? 33 : 250);
     if (m_media.isEmpty() && !m_useNative) {
         QUrl url = m_endpoint;
         url.setPath("/ws/webrtc");
@@ -410,6 +431,11 @@ void NativeVideo::handleNativeFrame(const QByteArray &message) {
     if (format == 4 && gst_app_src_get_current_level_buffers(GST_APP_SRC(m_appsrc)) >= 8) {
         // Reconnect at a complete IDR instead of dropping dependent H.264 pictures.
         m_restart.start(0);
+        return;
+    }
+    if (!m_active && format != 4) {
+        // Raw/JPEG inputs have no reference chain; skip their hidden VIC work.
+        ++m_hiddenRawSkips;
         return;
     }
     const auto now = gst_util_get_timestamp();
@@ -573,7 +599,7 @@ void NativeVideo::poll() {
             emit statsChanged();
         }
     }
-    if (now - m_lastPoll >= 1000 && m_sink) {
+    if ((now - m_lastPoll >= 1000 || (m_active && !m_resumeFresh)) && m_sink) {
         GstStructure *stats = nullptr;
         g_object_get(m_sink, "stats", &stats, nullptr);
         guint64 rendered = 0, dropped = 0;
@@ -589,13 +615,17 @@ void NativeVideo::poll() {
             m_lastProgress = now;
             m_status = m_useNative ? "本机直通 · 原生显示" : "NVDEC · 原生显示";
         }
+        if (m_active && !m_resumeFresh && rendered > m_resumeBaseline) {
+            m_resumeFresh = true;
+            m_resumeMs = double(now - m_resumeStarted);
+        }
         m_rendered = rendered;
         m_dropped = dropped;
         m_lastRendered = rendered;
         m_lastPoll = now;
         syncWindow();
         emit statsChanged();
-        if (m_media.isEmpty() && now - m_lastProgress > 12000)
+        if (m_active && m_media.isEmpty() && now - m_lastProgress > 12000)
             fail("视频停帧，重连中");
     }
 }
@@ -646,6 +676,11 @@ GstPadProbeReturn NativeVideo::sinkTiming(GstPad *, GstPadProbeInfo *info, gpoin
     if (!buffer || !GST_BUFFER_PTS_IS_VALID(buffer))
         return GST_PAD_PROBE_OK;
     auto *self = static_cast<NativeVideo *>(user);
+    if (!self->m_active) {
+        ++self->m_hiddenFrameDrops;
+        return GST_PAD_PROBE_DROP;
+    }
+    if (!self->m_traceFrames) return GST_PAD_PROBE_OK;
     const quint64 now = gst_util_get_timestamp();
     QMutexLocker lock(&self->m_timingMutex);
     auto it = self->m_frameTrace.find(GST_BUFFER_PTS(buffer));
@@ -718,6 +753,10 @@ QVariantMap NativeVideo::diagnostics() const {
             {"sample_ms", m_lastPoll},
             {"position", m_position},
             {"paused", m_paused},
-            {"active", m_active},
+            {"active", m_active.load()},
+            {"resume_to_render_ms", m_resumeMs},
+            {"fresh_surface", m_resumeFresh},
+            {"hidden_output_drops", qulonglong(m_hiddenFrameDrops.load())},
+            {"hidden_raw_skips", qulonglong(m_hiddenRawSkips)},
             {"generation", m_generation.load()}};
 }

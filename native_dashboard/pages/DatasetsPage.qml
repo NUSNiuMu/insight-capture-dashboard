@@ -7,6 +7,8 @@ PageFrame {
     id: page
     property var shell
     property var selected: []
+    property var availableBags: ((workspace.data.bags || {}).bags || []).map(function(b) { return String(b.id || b.name); })
+    onAvailableBagsChanged: selected = selected.filter(function(id) { return availableBags.indexOf(id) >= 0; })
     property var status: workspace.data.export || {}
     property bool locked: status.status === "running" || !!workspace.busy.action
     heading: "Datasets · 数据集"

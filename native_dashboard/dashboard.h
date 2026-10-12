@@ -104,6 +104,7 @@ class Dashboard : public QObject {
     QVariantMap localization() const { return m_localization; }
     void start();
     void setKeepTrail(bool value);
+    Q_INVOKABLE void setSpatialActive(bool value);
     Q_INVOKABLE void command(const QString &action, const QString &value = QString());
     Q_INVOKABLE void setPlaybackTime(double seconds);
     Q_INVOKABLE void updateGripper(QObject *root, double opening);
@@ -153,6 +154,7 @@ class Dashboard : public QObject {
     QString m_message = "正在连接后端", m_requestedPlayback;
     QJsonObject m_manifest, m_latestLive;
     QSet<QString> m_pending;
+    bool m_spatialActive = true;
     bool m_connected = false, m_keep = false, m_haveOrigin = false, m_stopping = false,
          m_playbackStarting = false;
     QVector3D m_origin;

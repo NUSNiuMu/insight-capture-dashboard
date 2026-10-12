@@ -15,6 +15,24 @@ ApplicationWindow {
     title: "Insight · 原生采集台"
     color: Ui.Theme.paper
     property string currentPage: "spatial"
+    property real pageSwitchStartedAt: 0
+    property real pageFirstFrameAt: 0
+    property bool lastRecording: false
+    property string lastTaskState: ""
+    onCurrentPageChanged: {
+        pageSwitchStartedAt=Date.now();pageFirstFrameAt=0
+        dashboard.setSpatialActive(currentPage==="spatial")
+    }
+    Connections {
+        target: dashboard
+        function onStateChanged() {
+            var recording=!!dashboard.state.recording
+            var task=JSON.stringify(dashboard.state.task || {})
+            if(recording!==root.lastRecording)workspace.invalidate()
+            else if(task!==root.lastTaskState){workspace.invalidate("tasks");workspace.invalidate("sessions")}
+            root.lastRecording=recording;root.lastTaskState=task
+        }
+    }
     property bool spatialActive: currentPage === "spatial"
     property int previewFps: dashboard.targetFps
     property real sceneFps: view.renderStats.fps
@@ -56,6 +74,7 @@ ApplicationWindow {
         for(var i=0;i<item.children.length;++i)result=result.concat(findChildrenForDiagnostics(item.children[i]))
         return result
     }
+    function navigationDiagnostics() { return {created:pageLoader.cacheStats,last:pageLoader.lastSwitch} }
     function videoDiagnostics() { var result=[]; allVideos(function(v){var d=v.diagnostics();d.viewportWidth=v.width;d.viewportHeight=v.height;result.push(d)}); return result }
     function allVideos(fn) {
         for (var i=0; i<cameraRepeater.count; ++i) cameraRepeater.itemAt(i).eachVideo(fn)
@@ -141,7 +160,7 @@ ApplicationWindow {
         }
         WorkspacePages {
             id: pageLoader; Layout.fillWidth: true; Layout.fillHeight: true
-            visible: !root.spatialActive; active: visible; page: root.spatialActive ? "" : root.currentPage
+            visible: !root.spatialActive; page: root.spatialActive ? "" : root.currentPage
             onOpenSpatial: function(bag){root.currentPage="spatial";root.playPaused=false;dashboard.command("playback",bag)}
         }
         GridLayout {

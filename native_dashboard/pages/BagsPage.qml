@@ -11,6 +11,7 @@ PageFrame {
     description: "查看录制完整性、评分和回放准备状态。"
     RowLayout {
         Ui.Button {
+            objectName: "bags-all"
             text: "全部目录"
             highlighted: !!shell && shell.scope === "all"
             onClicked: {
@@ -19,6 +20,7 @@ PageFrame {
             }
         }
         Ui.Button {
+            objectName: "bags-current"
             text: "当前目录"
             highlighted: !!shell && shell.scope === "current"
             onClicked: {

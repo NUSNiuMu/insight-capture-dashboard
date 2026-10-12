@@ -93,10 +93,17 @@ class NativeVideo : public QQuickItem {
     int m_nativeFormat = 0;
     QSize m_nativeSize;
     quint64 m_nativeEpoch = 0, m_nativeReceived = 0;
-    bool m_active = true, m_complete = false, m_stopping = false, m_paused = false, m_sourceOnline = true;
+    std::atomic<bool> m_active{true};
+    bool m_resumeFresh = false;
+    quint64 m_resumeBaseline = 0;
+    qint64 m_resumeStarted = 0;
+    double m_resumeMs = -1;
+    bool m_complete = false, m_stopping = false, m_paused = false, m_sourceOnline = true;
     int m_fps = 25;
     std::atomic<int> m_generation{0};
     std::atomic<quint64> m_latestFrameDrops{0};
+    std::atomic<quint64> m_hiddenFrameDrops{0};
+    quint64 m_hiddenRawSkips = 0;
     std::atomic<int> m_boundedJitterBuffers{0};
     quint64 m_lastRendered = 0, m_rendered = 0, m_dropped = 0;
     qint64 m_lastPoll = 0, m_lastProgress = 0;

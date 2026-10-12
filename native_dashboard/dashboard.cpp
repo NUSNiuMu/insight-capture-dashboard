@@ -62,6 +62,18 @@ Dashboard::Dashboard(QUrl server, int fps, QObject *parent) : QObject(parent), m
             m_reconnect.start(1500);
     });
 }
+void Dashboard::setSpatialActive(bool value) {
+    if (m_spatialActive == value) return;
+    m_spatialActive = value;
+    if (value) for (auto *p : m_poseOrder) {
+        if (p->geometryDirty && p->trailEnabled) {
+            p->geometry->setPoints(m_keep ? p->kept : (p->visible ? p->points : QVector<QVector3D>()));
+            p->geometryDirty = false;
+            p->lastGeometry = m_clock.elapsed();
+        }
+        p->notify();
+    }
+}
 void Dashboard::start() {
     poll();
     connectPose();
@@ -433,6 +445,8 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         p->displayFilter.update(p->position, p->rotation, m_clock.elapsed(),
             playback() || !previousVisible || !p->visible || previousGeneration != p->generation);
         p->geometryDirty |= (m_keep ? keptChanged : traceChanged) || previousVisible != p->visible;
+        // Consume every trace delta while hidden, but defer scene notifications and geometry.
+        if (!m_spatialActive) continue;
         if (p->trailEnabled && p->geometryDirty && m_clock.elapsed() - p->lastGeometry >= 100) {
             p->geometry->setPoints(m_keep ? p->kept : (p->visible ? p->points : QVector<QVector3D>()));
             p->lastGeometry = m_clock.elapsed();
@@ -698,9 +712,11 @@ QVariantMap Dashboard::diagnostics() const {
                                 {"visible", p->visible},
                                 {"points", p->points.size()},
                                 {"kept_points", p->kept.size()},
+                                {"trace_seq", p->lastSeq},
+                                {"trace_generation", p->generation},
                                 {"geometry_updates", qulonglong(p->geometry->revision())},
                                 {"model", p->modelSource.toString()}});
-    return {{"connected", m_connected}, {"poses", data}, {"pose_trace", m_poseTrace},
+    return {{"connected", m_connected}, {"spatial_active", m_spatialActive}, {"poses", data}, {"pose_trace", m_poseTrace},
             {"localization", m_localization},
             {"playback", playback()}, {"message", m_message}};
 }
