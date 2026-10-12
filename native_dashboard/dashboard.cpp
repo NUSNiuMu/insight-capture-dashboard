@@ -247,6 +247,8 @@ QVariantMap Dashboard::localizationSummary(const QVariantMap &status, bool image
         return result("mapping", "建图中", good);
     }
     const auto mode = status.value("tracking_mode").toString();
+    if (status.value("stationary_constraint").toMap().value("active").toBool())
+        return result("stationary", "静止约束", warning);
     if (mode == "map_matched" && status.value("accepted").toBool())
         return result("map_matched", "地图匹配", good);
     if (mode == "verifying" || status.value("accepted").toBool())

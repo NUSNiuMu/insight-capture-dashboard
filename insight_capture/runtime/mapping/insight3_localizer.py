@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import cv2
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -59,6 +60,7 @@ from insight_capture.runtime.mapping import (  # noqa: E402
     select_timestamp,
 )
 from insight_capture.runtime.mapping.rig import ReferenceSelector
+from insight_capture.runtime.mapping.stationary_constraint import StationaryPoseConstraint, VisualRestEvidence
 from insight_capture.core.localization_settings import (  # noqa: E402
     DEFAULT_GRIPPER_MASK_HEIGHT_RATIO,
     load_gripper_mask_height_ratio,
@@ -304,6 +306,10 @@ class CameraState:
         self.pose_filter = RelocalizationEkf(ekf_config)
         self.relocalization_policy = AdaptiveRelocalizationPolicy(adaptive_config)
         self.vio_stitcher = VioContinuityStitcher(vio_continuity_config)
+        self.stationary = StationaryPoseConstraint()
+        self.visual_rest = VisualRestEvidence()
+        self.stationary_enabled = True
+        self.last_confirmed_map_monotonic = float("-inf")
         self.vio_tracking_status = "UNKNOWN"
         self.vio_tracking_status_monotonic = 0.0
         self.last_relocalization_measurement: Optional[np.ndarray] = None
@@ -414,6 +420,10 @@ class Insight3GlobalLocalizer(Node):
             )
             for name in CAMERAS
         }
+        for name, state in self._cameras.items():
+            state.stationary_enabled = not getattr(args, "disable_stationary_constraint", False) and not (
+                self._cube_marker_config.enabled and self._cube_marker_config.apply_corrections
+                and name in self._cube_marker_config.targets)
         marker_consensus_config = GlobalLocalizationConfig(
             min_matches=4,
             min_inliers=4,
@@ -656,6 +666,9 @@ class Insight3GlobalLocalizer(Node):
                 state.vio_stitcher.reset()
                 state.consensus = LocalizationConsensus(state.consensus.config)
                 state.pose_filter.reset()
+                state.stationary.reset()
+                state.visual_rest = VisualRestEvidence()
+                state.last_confirmed_map_monotonic = float("-inf")
                 state.last_relocalization_measurement = None
                 state.last_marker_measurement = None
                 state.marker_observations = 0
@@ -1206,6 +1219,9 @@ class Insight3GlobalLocalizer(Node):
                             state.consensus.config
                         )
                         state.pose_filter.reset()
+                        state.stationary.reset()
+                        state.visual_rest = VisualRestEvidence()
+                        state.last_confirmed_map_monotonic = float("-inf")
                         state.last_relocalization_measurement = None
                         state.last_marker_measurement = None
                         if state.marker_consensus is not None:
@@ -1263,7 +1279,26 @@ class Insight3GlobalLocalizer(Node):
                     state.last_global_pose_publish_ns = sample.stamp_ns
                     if correction is None or extrinsic is None:
                         continue
-                    transform = correction @ matrix_from_pose(sample) @ extrinsic
+                    odom_pose = matrix_from_pose(sample)
+                    now = time.monotonic()
+                    estimate = state.pose_filter.estimate
+                    entry_allowed = state.stationary.active or (
+                        now - state.last_confirmed_map_monotonic <= 3.0
+                        and np.linalg.norm(estimate[:3, 3] - correction[:3, 3]) <= .003
+                        and rotation_distance_deg(estimate, correction) <= .3)
+                    constrained, changed = state.stationary.observe_pose(
+                        odom_pose, correction, now,
+                        state.vio_tracking_status == "TRACKING_STATIC" and status_age_sec <= 1.5
+                        and state.stationary_enabled, sample.stamp_ns / 1e9, entry_allowed)
+                    if changed:
+                        state.consensus = LocalizationConsensus(state.consensus.config)
+                        state.last_relocalization_measurement = None
+                        if not state.stationary.active:
+                            state.last_confirmed_map_monotonic = float("-inf")
+                    if constrained is not None:
+                        state.pose_filter.reinitialize(constrained)
+                        correction = constrained
+                    transform = correction @ odom_pose @ extrinsic
                     sample_stamp = Time(nanoseconds=sample.stamp_ns).to_msg()
                     global_poses.append(
                         pose_message(transform, sample_stamp, self._map_frame)
@@ -1489,10 +1524,33 @@ class Insight3GlobalLocalizer(Node):
                     state.last_image_stamp_ns = stamp_ns
                     state.next_process_monotonic = now + period
                     localization_config = state.consensus.config
+                    motion_epoch = state.stationary.epoch
+                    visual_rest = state.visual_rest
                 self._reference_selector.advance(name)
                 started = time.perf_counter()
                 try:
                     image = grayscale_image(message)
+                    rest_evidence = visual_rest.observe(
+                        image, time.monotonic(), self._gripper_mask_height_ratio)
+                    with state.lock:
+                        if map_generation != self._map_generation or motion_epoch != state.stationary.epoch:
+                            continue
+                        was_active = state.stationary.active
+                        state.stationary.observe_image(rest_evidence, time.monotonic())
+                        if was_active and not state.stationary.active:
+                            state.consensus = LocalizationConsensus(state.consensus.config)
+                            state.last_relocalization_measurement = None
+                            state.last_confirmed_map_monotonic = float("-inf")
+                        if state.stationary.active:
+                            # Verified rest is a world-pose constraint, not a
+                            # new map observation. Avoid repeated noisy PnP/GPU work.
+                            state.status = dict(state.status, state="stationary",
+                                tracking_mode="stationary", accepted=False,
+                                geometric_accepted=False, rejection=None,
+                                correction_mode="stationary_constraint",
+                                image_stamp_ns=stamp_ns, total_ms=round(
+                                    (time.perf_counter() - started) * 1000, 1))
+                            continue
                     # PnP 使用左目成像模型；最终发布时再转换到双目中心设备坐标。
                     odom_to_left = compose_transform(
                         matrix_from_pose(pose), imu_to_left
@@ -1658,7 +1716,9 @@ class Insight3GlobalLocalizer(Node):
                         self._gripper_mask_height_ratio
                     )
                     with state.lock:
-                        if map_generation != self._map_generation:
+                        if map_generation != self._map_generation or motion_epoch != state.stationary.epoch:
+                            continue
+                        if state.stationary.active:
                             continue
                         if calibration_reference is not None and direct_summary:
                             self._reference_selector.observe(name, calibration_reference.view,
@@ -1684,6 +1744,8 @@ class Insight3GlobalLocalizer(Node):
                                 )
                             )
                         )
+                        if diagnostics["accepted"] and measurement is not None:
+                            state.last_confirmed_map_monotonic = time.monotonic()
                         if measurement_changed:
                             # 小漂移由 EKF 平滑吸收，大漂移立即跳转并切分显示轨迹。
                             correction_update = state.relocalization_policy.apply(
@@ -1756,6 +1818,15 @@ class Insight3GlobalLocalizer(Node):
                         }
                 except Exception as exc:
                     with state.lock:
+                        if map_generation != self._map_generation or motion_epoch != state.stationary.epoch:
+                            continue
+                        was_active = state.stationary.active
+                        state.stationary.observe_image({"quiet": False}, time.monotonic())
+                        if was_active:
+                            state.consensus = LocalizationConsensus(state.consensus.config)
+                            state.last_relocalization_measurement = None
+                        state.visual_rest.reset()
+                        state.last_confirmed_map_monotonic = float("-inf")
                         state.consensus.observe(None)
                         localized = state.pose_filter.initialized
                         state.status = {
@@ -1927,6 +1998,12 @@ class Insight3GlobalLocalizer(Node):
                     and vio_status_age_sec <= 1.0
                 )
                 status["vio_continuity"] = vio_continuity
+                status["stationary_constraint"] = state.stationary.status()
+                if state.stationary.active:
+                    status.update(state="stationary", tracking_mode="stationary",
+                                  accepted=False, correction_mode="stationary_constraint")
+                elif status.get("tracking_mode") == "stationary":
+                    status.update(state="vio_only", tracking_mode="vio_only", accepted=False)
                 status["cube_marker"] = dict(state.marker_status)
             status["gripper_mask_height_ratio"] = self._gripper_mask_height_ratio
             status["cube_marker_enabled"] = (
@@ -2026,12 +2103,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vio-stitch-translation-m", type=float, default=0.03)
     parser.add_argument("--vio-stitch-rotation-deg", type=float, default=5.0)
     parser.add_argument("--vio-stitch-max-gap-ms", type=float, default=50.0)
+    parser.add_argument("--disable-stationary-constraint", action="store_true")
     return parser
 
 
 def main() -> int:
     parser = build_parser()
     args, ros_args = parser.parse_known_args()
+    cv2.setNumThreads(1)
     camera_config = Path(args.camera_config)
     if camera_config.is_file():
         setup = json.loads(camera_config.read_text())
