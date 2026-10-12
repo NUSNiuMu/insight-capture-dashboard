@@ -1,1 +1,38 @@
-<RCC><qresource prefix="/"><file>Main.qml</file><file>trail.vert</file><file>trail.frag</file><file>pages/BagPicker.qml</file><file>pages/BagsPage.qml</file><file>pages/DatasetsPage.qml</file><file>pages/HandPosePage.qml</file><file>pages/HandTracking.js</file><file>pages/NativePlot.qml</file><file>pages/OptimizationPage.qml</file><file>pages/PageFrame.qml</file><file>pages/RecorderPage.qml</file><file>pages/ResultPanel.qml</file><file>pages/ScoringPage.qml</file><file>pages/SessionsPage.qml</file><file>pages/SettingsPage.qml</file><file>pages/Sidebar.qml</file><file>pages/WorkspacePages.qml</file></qresource></RCC>
+<RCC>
+  <qresource prefix="/">
+    <file>Main.qml</file>
+    <file>trail.vert</file>
+    <file>trail.frag</file>
+    <file>pages/BagPicker.qml</file>
+    <file>pages/BagsPage.qml</file>
+    <file>pages/DatasetsPage.qml</file>
+    <file>pages/HandPosePage.qml</file>
+    <file>pages/HandTracking.js</file>
+    <file>pages/NativePlot.qml</file>
+    <file>pages/OptimizationPage.qml</file>
+    <file>pages/PageFrame.qml</file>
+    <file>pages/RecorderPage.qml</file>
+    <file>pages/ResultPanel.qml</file>
+    <file>pages/ScoringPage.qml</file>
+    <file>pages/SessionsPage.qml</file>
+    <file>pages/SettingsPage.qml</file>
+    <file>pages/Sidebar.qml</file>
+    <file>pages/WorkspacePages.qml</file>
+    <file>ui/Badge.qml</file>
+    <file>ui/Button.qml</file>
+    <file>ui/CheckBox.qml</file>
+    <file>ui/ComboBox.qml</file>
+    <file>ui/Dialog.qml</file>
+    <file>ui/Panel.qml</file>
+    <file>ui/ProgressBar.qml</file>
+    <file>ui/Section.qml</file>
+    <file>ui/Slider.qml</file>
+    <file>ui/StatCard.qml</file>
+    <file>ui/TextArea.qml</file>
+    <file>ui/TextField.qml</file>
+    <file>ui/Theme.qml</file>
+    <file>ui/fonts/InterVariable.ttf</file>
+    <file>ui/fonts/LICENSE.md</file>
+    <file>ui/qmldir</file>
+  </qresource>
+</RCC>

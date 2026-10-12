@@ -1,0 +1,13 @@
+singleton Theme 1.0 Theme.qml
+Badge 1.0 Badge.qml
+Button 1.0 Button.qml
+CheckBox 1.0 CheckBox.qml
+ComboBox 1.0 ComboBox.qml
+Dialog 1.0 Dialog.qml
+Panel 1.0 Panel.qml
+ProgressBar 1.0 ProgressBar.qml
+Section 1.0 Section.qml
+Slider 1.0 Slider.qml
+StatCard 1.0 StatCard.qml
+TextArea 1.0 TextArea.qml
+TextField 1.0 TextField.qml

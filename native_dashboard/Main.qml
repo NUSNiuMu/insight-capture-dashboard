@@ -6,13 +6,14 @@ import QtQuick3D
 import QtQuick3D.AssetUtils
 import Insight.Native 1.0
 import "pages"
+import "ui" as Ui
 
 ApplicationWindow {
     id: root
     width: 1600; height: 1000; visible: true
     visibility: startFullScreen ? Window.FullScreen : Window.Windowed
     title: "Insight · 原生采集台"
-    color: "#eee7d5"
+    color: Ui.Theme.paper
     property string currentPage: "spatial"
     property bool spatialActive: currentPage === "spatial"
     property int previewFps: dashboard.targetFps
@@ -29,7 +30,7 @@ ApplicationWindow {
     property bool playPaused: false
     property string confirmAction: ""
     property string confirmValue: ""
-    font.family: "Noto Sans CJK SC"
+    font.family: Ui.Theme.bodyFont
     font.pixelSize: 14
     palette.button: "#fffaf0"
     palette.base: "#fffaf0"
@@ -102,7 +103,7 @@ ApplicationWindow {
     }
     Shortcut { sequence: "Escape"; onActivated: root.visibility = Window.Windowed }
     Shortcut { sequence: "F11"; onActivated: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
-    Dialog {
+    Ui.Dialog {
         id: confirmDialog; anchors.centerIn: parent; modal: true; width: 400
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: dashboard.command(root.confirmAction, root.confirmValue)
@@ -111,31 +112,31 @@ ApplicationWindow {
     RowLayout {
         anchors.fill: parent; spacing: 0
         Sidebar {
-            id: sidebar; Layout.preferredWidth: compact ? 62 : 196; Layout.fillHeight: true
-            compact: root.width < 1500; currentPage: root.currentPage
+            id: sidebar; Layout.preferredWidth: compact ? 64 : 232; Layout.fillHeight: true
+            compact: root.width < 1200; currentPage: root.currentPage
             onSelected: function(page){root.currentPage=page}
         }
         ColumnLayout {
         Layout.fillWidth: true; Layout.fillHeight: true; Layout.margins: 14; spacing: 12
         Rectangle {
-            Layout.fillWidth: true; height: 72; color: "#fffaf0"; radius: 10
+            Layout.fillWidth: true; Layout.preferredHeight: 56; color: "transparent"
             RowLayout {
                 anchors.fill: parent; anchors.margins: 15; spacing: 18
-                Label { text: "INSIGHT"; font.pixelSize: 24; font.bold: true; color: "#b87813" }
-                Label { text: root.spatialActive ? "原生采集台" : (pageLoader.titles[root.currentPage] || ""); font.pixelSize: 21; color: "#494438" }
+                Label { text: "WORKSPACE /"; font.family: Ui.Theme.monoFont; font.pixelSize: 11; font.letterSpacing: 1; color: Ui.Theme.faint }
+                Label { text: root.spatialActive ? "原生采集台" : (pageLoader.titles[root.currentPage] || ""); font.pixelSize: 14; font.weight: Font.DemiBold; color: Ui.Theme.ink }
                 Rectangle { width: 9; height: 9; radius: 5; color: dashboard.connected ? "#70ac82" : "#c27a6a" }
-                Label { text: dashboard.connected ? "后端已连接" : "后端未连接"; color: "#776d5a" }
+                Label { text: dashboard.connected ? "已连接" : "未连接"; font.pixelSize: 12; color: Ui.Theme.muted }
                 Item { Layout.fillWidth: true }
-                Label { text: dashboard.playback ? "回放" : "实时"; font.bold: true; color: "#9a711e" }
-                ComboBox { model: [25,30]; currentIndex: dashboard.targetFps===30?1:0; onActivated: root.previewFps=Number(currentText); implicitWidth: 75 }
-                Label { text: "3D " + root.sceneFps.toFixed(1) + " FPS"; color: "#776d5a" }
-                Button { text: "全屏"; onClicked: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
+                Ui.Badge { text: dashboard.playback ? "回放" : "实时"; tone: "accent"; visible: root.spatialActive }
+                Ui.ComboBox { visible: root.spatialActive; model: [25,30]; currentIndex: dashboard.targetFps===30?1:0; onActivated: root.previewFps=Number(currentText); implicitWidth: 85 }
+                Label { visible: root.spatialActive; font.family: Ui.Theme.monoFont; font.pixelSize: 11; text: "3D " + root.sceneFps.toFixed(1) + " FPS"; color: "#776d5a" }
+                Ui.Button { text: "全屏"; onClicked: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
             }
         }
         RowLayout {
             Layout.fillWidth: true
-            Layout.preferredHeight: 28; Layout.minimumHeight: 28; Layout.maximumHeight: 28
-            BusyIndicator { running: Object.keys(workspace.busy).some(function(k){return workspace.busy[k]}); visible: running; implicitWidth: 28; implicitHeight: 28 }
+            Layout.preferredHeight: 18; Layout.minimumHeight: 18; Layout.maximumHeight: 18
+            BusyIndicator { running: Object.keys(workspace.busy).some(function(k){return workspace.busy[k]}); visible: running; implicitWidth: 18; implicitHeight: 18 }
             Label { text: Object.keys(workspace.errors).map(function(k){return workspace.errors[k]}).join(" · "); textFormat: Text.PlainText; color: "#c2453d"; elide: Text.ElideRight; Layout.fillWidth: true; ToolTip.visible: errorMouse.containsMouse; ToolTip.text: text; MouseArea { id: errorMouse; anchors.fill: parent; hoverEnabled: true } }
         }
         WorkspacePages {
@@ -175,7 +176,7 @@ ApplicationWindow {
                             delegate: Rectangle {
                                 id: cameraCard; required property var modelData
                                 property alias player: video
-                                Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 1; color: "#fffaf0"; radius: 9
+                                Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 1; color: Ui.Theme.surface; radius: 12; border.color: Ui.Theme.line
                                 Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: cameraCard.modelData.label; width: parent.width-110; elide: Text.ElideRight; font.bold: true; color: "#514b3e" }
                                 Label {
                                     id: cameraStatus
@@ -186,6 +187,11 @@ ApplicationWindow {
                                     color: dashboard.playback ? "#51778e" : (localization.color || "#84775f")
                                 }
                                 Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " fps"; color: "#a27723"; font.bold: true }
+                                Rectangle {
+                                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom
+                                    anchors.topMargin: 6; anchors.bottomMargin: 6; color: "#17130c"; radius: 8
+                                    Label { anchors.centerIn: parent; text: dashboard.cameraAvailability[cameraCard.modelData.name]===false ? "设备离线 · 等待连接" : "等待视频预览"; color: "#a39885"; font.pixelSize: 12; visible: !dashboard.playback && video.renderedFps<=0 }
+                                }
                                 NativeVideo {
                                     id: video; active: root.spatialActive; visible: root.spatialActive && !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.topMargin: 6; anchors.bottomMargin: 6
                                     sourceSize: Qt.size(cameraCard.modelData.width || 0, cameraCard.modelData.height || 0)
@@ -204,23 +210,23 @@ ApplicationWindow {
                 Layout.preferredWidth: 1
                 Layout.row: 0; Layout.column: 1
                 Layout.preferredHeight: -1
-                Layout.minimumWidth: 0; Layout.fillHeight: true; Layout.fillWidth: true; color: "#f6efdf"; radius: 10
+                Layout.minimumWidth: 0; Layout.fillHeight: true; Layout.fillWidth: true; color: Ui.Theme.surface; radius: 12; border.color: Ui.Theme.line
                 ColumnLayout {
                     anchors.fill: parent; spacing: 0
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.margins: 12
-                        Label { text: "空间视图"; font.bold: true; color: "#514b3e" }
-                        Label { text: "确认地图点 " + (dashboard.state.mapPoints || 0); color: "#84775f" }
+                    Flow {
+                        Layout.fillWidth: true; Layout.margins: 12; spacing: 8
+                        Label { height: 42; verticalAlignment: Text.AlignVCenter; text: "空间视图"; font.bold: true; color: "#514b3e" }
+                        Label { height: 42; verticalAlignment: Text.AlignVCenter; text: "确认地图点 " + (dashboard.state.mapPoints || 0); color: "#84775f" }
                         Item { Layout.fillWidth: true }
-                        CheckBox { text: "保留轨迹"; checked: dashboard.keepTrail; onToggled: dashboard.keepTrail = checked }
-                        Button { text: "清轨迹"; onClicked: dashboard.command("clear") }
-                        Button { text: "复位视角"; onClicked: { root.yaw=90-1.2*180/Math.PI;root.pitch=1.1*180/Math.PI-90;root.distance=580;orbit.position=Qt.vector3d(0,90,0) } }
+                        Ui.CheckBox { text: "保留轨迹"; checked: dashboard.keepTrail; onToggled: dashboard.keepTrail = checked }
+                        Ui.Button { text: "清轨迹"; onClicked: dashboard.command("clear") }
+                        Ui.Button { text: "复位视角"; onClicked: { root.yaw=90-1.2*180/Math.PI;root.pitch=1.1*180/Math.PI-90;root.distance=580;orbit.position=Qt.vector3d(0,90,0) } }
                     }
                     Item {
                         Layout.fillWidth: true; Layout.fillHeight: true
                         View3D {
                             id: view; anchors.fill: parent
-                            environment: SceneEnvironment { clearColor: "#eee7d5"; backgroundMode: SceneEnvironment.Color; antialiasingMode: SceneEnvironment.NoAA }
+                            environment: SceneEnvironment { clearColor: Ui.Theme.paper; backgroundMode: SceneEnvironment.Color; antialiasingMode: SceneEnvironment.NoAA }
                             Node {
                                 id: orbit; position: Qt.vector3d(0,90,0); eulerRotation: Qt.vector3d(root.pitch,root.yaw,0)
                                 PerspectiveCamera { id: camera; z: root.distance; fieldOfView: 0.8 * 180 / Math.PI; clipNear: 1; clipFar: 8000 }
@@ -288,7 +294,7 @@ ApplicationWindow {
                         Layout.fillWidth: true; Layout.margins: 10
                         Repeater {
                             model: dashboard.poses
-                            delegate: CheckBox { required property var modelData; text: modelData.role + " · " + modelData.pointCount + " 点"; checked: modelData.trailEnabled; onToggled: modelData.setTrail(checked) }
+                            delegate: Ui.CheckBox { required property var modelData; text: modelData.role + " · " + modelData.pointCount + " 点"; checked: modelData.trailEnabled; onToggled: modelData.setTrail(checked) }
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -297,30 +303,30 @@ ApplicationWindow {
         }
         Rectangle {
             visible: root.spatialActive
-            Layout.fillWidth: true; Layout.preferredHeight: controls.implicitHeight+22; color: "#fffaf0"; radius: 10
+            Layout.fillWidth: true; Layout.preferredHeight: controls.implicitHeight+22; color: Ui.Theme.surface; radius: 12; border.color: Ui.Theme.line
             ColumnLayout {
                 id: controls; anchors.fill: parent; anchors.margins: 11; spacing: 8
                 RowLayout {
                     Label { text: "采集任务"; color: "#776d5a" }
-                    ComboBox { id: task; Layout.preferredWidth: 190; model: dashboard.tasks; textRole: "name"; valueRole: "task_id"; enabled: !dashboard.state.recording }
-                    Button { id: activateButton; text: "进入任务"; enabled: task.count>0&&!dashboard.state.recording&&!dashboard.playback; onClicked: dashboard.command("task",task.currentValue) }
-                    Button { text: "结束任务"; enabled: !dashboard.state.recording; onClicked: dashboard.command("endTask") }
+                    Ui.ComboBox { id: task; Layout.preferredWidth: 190; model: dashboard.tasks; textRole: "name"; valueRole: "task_id"; enabled: !dashboard.state.recording }
+                    Ui.Button { id: activateButton; text: "进入任务"; enabled: task.count>0&&!dashboard.state.recording&&!dashboard.playback; onClicked: dashboard.command("task",task.currentValue) }
+                    Ui.Button { text: "结束任务"; enabled: !dashboard.state.recording; onClicked: dashboard.command("endTask") }
                     Rectangle { width: 1; height: 25; color: "#ddd1b9" }
-                    Button { id: recordButton; text: dashboard.state.recording ? "停止录制" : "开始录制"; highlighted: true; enabled: (dashboard.state.recording||dashboard.connected)&&!dashboard.playback; onClicked: dashboard.command(dashboard.state.recording?"stop":"record") }
-                    Button { text: "作废最近一条"; enabled: !dashboard.state.recording; onClicked: root.confirm("reject","operator_rejected","确认作废最近一条记录？") }
+                    Ui.Button { id: recordButton; tone: dashboard.state.recording ? "danger" : "primary"; text: dashboard.state.recording ? "停止录制" : "开始录制"; highlighted: true; enabled: (dashboard.state.recording||dashboard.connected)&&!dashboard.playback; onClicked: dashboard.command(dashboard.state.recording?"stop":"record") }
+                    Ui.Button { text: "作废最近一条"; tone: "danger"; enabled: !dashboard.state.recording; onClicked: root.confirm("reject","operator_rejected","确认作废最近一条记录？") }
                     Item { Layout.fillWidth: true }
-                    Button { id: checkButton; text: "采集检查"; onClicked: dashboard.command("check") }
-                    Button { text: "新建地图"; enabled: !dashboard.state.recording&&!dashboard.playback; onClicked: root.confirm("reset","","确认重置当前地图？") }
+                    Ui.Button { id: checkButton; text: "采集检查"; onClicked: dashboard.command("check") }
+                    Ui.Button { text: "新建地图"; enabled: !dashboard.state.recording&&!dashboard.playback; onClicked: root.confirm("reset","","确认重置当前地图？") }
                 }
                 RowLayout {
                     Label { text: "录制回放"; color: "#776d5a" }
-                    ComboBox { id: bag; Layout.fillWidth: true; model: dashboard.bags; textRole: "name"; valueRole: "selector"; enabled: !dashboard.state.recording }
-                    Button { text: "刷新"; onClicked: dashboard.command("refreshBags") }
-                    Button { id: loadButton; text: "载入"; enabled: bag.count>0&&!dashboard.state.recording&&!dashboard.playback; onClicked: dashboard.command("playback",bag.currentValue) }
-                    Button { id: pauseButton; text: root.playPaused ? "继续" : "暂停"; enabled: dashboard.playback; onClicked: { root.playPaused=!root.playPaused;root.allVideos(function(v){v.paused=root.playPaused}) } }
-                    Slider { id: timeline; Layout.preferredWidth: 190; from: 0; to: Math.max(1,dashboard.duration); value: root.playTime; enabled: dashboard.playback; onMoved: root.allVideos(function(v){v.seek(timeline.value)}) }
+                    Ui.ComboBox { id: bag; Layout.fillWidth: true; model: dashboard.bags; textRole: "name"; valueRole: "selector"; enabled: !dashboard.state.recording }
+                    Ui.Button { text: "刷新"; onClicked: dashboard.command("refreshBags") }
+                    Ui.Button { id: loadButton; text: "载入"; enabled: bag.count>0&&!dashboard.state.recording&&!dashboard.playback; onClicked: dashboard.command("playback",bag.currentValue) }
+                    Ui.Button { id: pauseButton; text: root.playPaused ? "继续" : "暂停"; enabled: dashboard.playback; onClicked: { root.playPaused=!root.playPaused;root.allVideos(function(v){v.paused=root.playPaused}) } }
+                    Ui.Slider { id: timeline; Layout.preferredWidth: 190; from: 0; to: Math.max(1,dashboard.duration); value: root.playTime; enabled: dashboard.playback; onMoved: root.allVideos(function(v){v.seek(timeline.value)}) }
                     Label { text: dashboard.playback ? root.playTime.toFixed(1)+" / "+dashboard.duration.toFixed(1)+" s" : (dashboard.state.playbackState || "idle"); color: "#84775f" }
-                    Button { id: liveButton; text: "返回实时"; enabled: dashboard.playback; onClicked: { root.playPaused=false;dashboard.command("live") } }
+                    Ui.Button { id: liveButton; text: "返回实时"; enabled: dashboard.playback; onClicked: { root.playPaused=false;dashboard.command("live") } }
                 }
                 Label { text: dashboard.state.recording ? "● 录制中  " + (dashboard.state.output || "") : dashboard.message; Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
             }
