@@ -38,6 +38,7 @@ let mode = "capture",
   frameBusy = false,
   frameVersion = 0,
   liveRows = [],
+  trailMode = true,
   cursor = 0,
   epoch = -1,
   liveStreams = [],
@@ -320,8 +321,10 @@ function readiness(s) {
 function livePeriodMs() {
   return Math.max(8, Math.round(1000 / (status?.fps || 20)));
 }
+const sampleRateEdit = { until: 0, pending: false, committedAt: 0 };
 async function pollStatus() {
   try {
+    const requested = performance.now();
     const s = await api("/api/status");
     status = s;
     liveStreams = s.streams;
@@ -330,7 +333,14 @@ async function pollStatus() {
     $("elapsed").textContent = seconds(s.elapsed_s, 1);
     $("recordingState").textContent = s.recording ? "正在录制" : "未录制";
     $("recordingState").className = "badge" + (s.recording ? " recording" : "");
-    if (document.activeElement !== $("sampleRate")) $("sampleRate").value = s.fps;
+    // Never let the poll overwrite the field mid-edit, while a commit is in
+    // flight, or with a response that was requested before that commit.
+    const editingRate =
+      document.activeElement === $("sampleRate") ||
+      sampleRateEdit.pending ||
+      performance.now() < sampleRateEdit.until ||
+      requested < sampleRateEdit.committedAt;
+    if (!editingRate) $("sampleRate").value = s.fps;
     $("sampleRate").disabled = !!s.recording;
     $("recordName").disabled = !!s.recording;
     if (document.activeElement !== $("vioEnabled")) $("vioEnabled").checked = s.vio_enabled;
@@ -371,6 +381,12 @@ async function pollStatus() {
   }
   setTimeout(pollStatus, livePeriodMs());
 }
+function recentRows(rows, seconds) {
+  if (!trailMode || !rows.length) return rows;
+  const now = rows[rows.length - 1].t;
+  const cutoff = rows.findIndex((r) => now - r.t <= seconds);
+  return cutoff <= 0 ? rows : rows.slice(cutoff);
+}
 async function pollLive() {
   if (mode === "capture" && status && !document.hidden) {
     try {
@@ -393,7 +409,7 @@ async function pollLive() {
           liveRows.push({ t: r.t, arms });
         }
         liveRows = liveRows.slice(-2400);
-        scene.setData(liveRows, lastPoseTime === 0);
+        scene.setData(recentRows(liveRows, 5), lastPoseTime === 0);
         lastPoseTime = cursor;
       }
       if (!frameBusy && mode === "capture") {
@@ -450,6 +466,8 @@ function changeMode() {
   $("sourceAlerts").hidden =
     mode !== "capture" || !$("sourceAlerts").textContent;
   $("sessionBar").hidden = mode !== "review";
+  $("trailToggle").hidden = mode !== "capture";
+  $("clearTrail").hidden = mode !== "capture";
   $("stage").hidden = mode === "quality";
   $("armCards").hidden = mode === "quality";
   $("reviewPanel").hidden = mode !== "review";
@@ -458,7 +476,7 @@ function changeMode() {
   scene.setVisible(mode !== "quality");
   if (mode === "capture") {
     videoCards(liveStreams);
-    scene.setData(liveRows, true);
+    scene.setData(recentRows(liveRows, 5), true);
     $("sceneEmpty").querySelector("strong").textContent = "等待双臂定位";
   } else {
     videoCards(review?.streams || liveStreams);
@@ -508,6 +526,7 @@ function updateSessionNav() {
   const index = stopped.findIndex((r) => r.name === selectedName);
   $("prevSession").disabled = index <= 0;
   $("nextSession").disabled = index === -1 || index >= stopped.length - 1;
+  $("deleteSession").disabled = index === -1 || reviewBusy || exportBusy;
 }
 bind("prevSession", async () => {
   const stopped = stoppedRecords();
@@ -520,6 +539,50 @@ bind("nextSession", async () => {
   if (index !== -1 && index < stopped.length - 1)
     await selectSession(stopped[index + 1].name);
 });
+async function deleteRecordings(names) {
+  const list = names
+    .map((name) => records.find((r) => r.name === name))
+    .filter(Boolean);
+  if (!list.length) return;
+  const exported = list.filter((r) => r.exported_to.length).length;
+  const ok = await confirmDelete(
+    "删除录制",
+    (list.length === 1
+      ? `将永久删除录制 ${list[0].name}`
+      : `将永久删除选中的 ${list.length} 条录制`) +
+      " 的原始视频、位姿、开合度和标注，不可撤销。" +
+      (exported
+        ? `其中 ${exported} 条已导出过，数据集文件夹里的副本不受影响。`
+        : "") +
+      "确定继续吗？",
+  );
+  if (!ok) return;
+  const deleted = new Set(),
+    failed = [];
+  for (const r of list) {
+    try {
+      await api("/api/sessions/" + encodeURIComponent(r.name), "DELETE");
+      deleted.add(r.name);
+      exportSelection.delete(r.name);
+    } catch (e) {
+      failed.push(`${r.name}：${e.message}`);
+    }
+  }
+  if (deleted.has(selectedName)) {
+    setDirty(false);
+    editorDirty = false;
+    await selectSession("");
+  }
+  await refresh();
+  notice(
+    failed.length
+      ? `已删除 ${deleted.size} 条；未删除：${failed.join("；")}`
+      : `已删除 ${deleted.size} 条录制`,
+    failed.length > 0,
+  );
+}
+bind("deleteSession", () => deleteRecordings([selectedName]));
+bind("deleteSelected", () => deleteRecordings([...exportSelection]));
 function discardApproval() {
   return new Promise((resolve) => {
     const d = $("discardDialog");
@@ -929,6 +992,7 @@ function renderQualitySessions() {
 function updateBatchExport() {
   $("batchExport").disabled =
     exportSelection.size === 0 || exportBusy || !!status?.recording;
+  $("deleteSelected").disabled = exportSelection.size === 0 || exportBusy;
 }
 $("datasetTarget").onchange = () => {
   $("newDatasetName").hidden = $("datasetTarget").value !== "__new__";
@@ -1069,16 +1133,51 @@ async function deleteDatasetSession(datasetName, sessionName) {
     notice(e.message, true);
   }
 }
-$("sampleRate").addEventListener("change", async () => {
+// Arrow/spin steps fire `change` on every press; commit once the user pauses
+// instead of racing one request per step against the status poll.
+let sampleRateTimer = null;
+async function commitSampleRate() {
+  clearTimeout(sampleRateTimer);
+  sampleRateTimer = null;
   const input = $("sampleRate"),
     fps = Number(input.value);
+  if (!Number.isInteger(fps) || fps < 1 || fps > 120) {
+    notice("采样率须为 1–120 的整数", true);
+    if (status) input.value = status.fps;
+    sampleRateEdit.until = 0;
+    return;
+  }
+  if (status && fps === status.fps) {
+    sampleRateEdit.until = 0;
+    return;
+  }
+  sampleRateEdit.pending = true;
   try {
     await api("/api/settings", "POST", { fps });
+    sampleRateEdit.committedAt = performance.now();
+    if (status) status.fps = fps;
     notice(`采样率已改为 ${fps} Hz，下次开始录制起生效`);
   } catch (e) {
     notice(e.message, true);
     if (status) input.value = status.fps;
+  } finally {
+    sampleRateEdit.pending = false;
+    sampleRateEdit.until = 0;
   }
+}
+$("sampleRate").addEventListener("input", () => {
+  sampleRateEdit.until = performance.now() + 1500;
+});
+$("sampleRate").addEventListener("change", () => {
+  sampleRateEdit.until = performance.now() + 1500;
+  clearTimeout(sampleRateTimer);
+  sampleRateTimer = setTimeout(commitSampleRate, 600);
+});
+$("sampleRate").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") commitSampleRate();
+});
+$("sampleRate").addEventListener("blur", () => {
+  if (sampleRateTimer) commitSampleRate();
 });
 $("vioEnabled").addEventListener("change", async () => {
   const input = $("vioEnabled"),
@@ -1298,6 +1397,14 @@ document
   .forEach((b) => (b.onclick = () => scene.view(b.dataset.view)));
 $("zoomIn").onclick = () => scene.zoom(0.8);
 $("zoomOut").onclick = () => scene.zoom(1.25);
+$("trailMode").onchange = () => {
+  trailMode = $("trailMode").checked;
+  if (mode === "capture") scene.setData(recentRows(liveRows, 5));
+};
+$("clearTrail").onclick = () => {
+  liveRows = [];
+  scene.setData([]);
+};
 async function toggleFullscreen(node) {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();

@@ -193,43 +193,97 @@ class RosLayer:
         self.node, self.listener, self.workers = node, listener, workers
 
 
-def _known_interfaces():
+def _interface_addresses():
+    """{(interface, IPv4)} for every interface that currently has an address.
+
+    DDS can only use an interface that already has an address when the
+    participant is created; Insight9's USB NIC appears several seconds before
+    it gets its 169.254.x.x address, so names alone are not enough."""
+    import fcntl
     import socket
+    import struct
 
-    return {name for _, name in socket.if_nameindex()}
+    result = set()
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for _, name in socket.if_nameindex():
+            try:
+                packed = fcntl.ioctl(
+                    probe.fileno(),
+                    0x8915,  # SIOCGIFADDR
+                    struct.pack("256s", name[:15].encode()),
+                )
+            except OSError:
+                continue
+            result.add((name, socket.inet_ntoa(packed[20:24])))
+    finally:
+        probe.close()
+    return result
 
 
-def watch_head_interface(capture, layer, stop, interval=1):
-    """While Insight9's head topics are stale, poll for newly appeared
-    network interfaces (its USB link in ROS-native mode) and rebuild the
-    rclpy participant once one shows up."""
-    known = _known_interfaces()
+def watch_head_interface(
+    capture, layer, stop, interval=1, settle=3, retry=(15, 30, 60)
+):
+    """While Insight9's head topics are stale, rebuild the rclpy participant
+    once the set of addressed network interfaces has changed and stayed
+    unchanged for `settle` seconds (its USB link in ROS-native mode). If data
+    still doesn't arrive, retry with backoff instead of waiting forever."""
+    built = _interface_addresses()
+    current, changed_at = built, time.monotonic()
+    restarted_at, attempts = None, 0
     while not stop.wait(interval):
         now = time.monotonic()
+        try:
+            latest = _interface_addresses()
+        except OSError:
+            continue
+        if latest != current:
+            current, changed_at = latest, now
         # Image and VIO come from the same Insight9 unit/driver — treat
         # either one going stale as "not fully connected", not just both.
         # Skip the VIO half when it's intentionally disabled (fixed-mount
-        # camera, no VIO ever expected): otherwise "always stale" would
-        # trigger a pointless reconnect the moment any new interface shows up.
+        # camera, no VIO ever expected).
         stale = now - capture.latest.get("image/head", 0) > 5 or (
             capture.config.get("vio_enabled", True)
             and now - capture.latest.get("vio/head", 0) > 5
         )
-        try:
-            current = _known_interfaces()
-        except OSError:
+        if not stale:
+            restarted_at, attempts = None, 0
             continue
-        if stale and current - known:
+        network_changed = current != built and now - changed_at >= settle
+        if network_changed:
+            attempts = 0
+        waited = (
+            restarted_at is not None
+            and 0 < attempts <= len(retry)
+            and now - restarted_at >= retry[attempts - 1]
+        )
+        if not (network_changed or waited):
+            continue
+        if not network_changed and attempts == len(retry):
+            attempts += 1
             capture.source_state(
-                "image/head", "connecting", "检测到新网卡，正在重新连接 Insight9"
+                "image/head",
+                "disconnected",
+                "多次重建 ROS 连接后仍未收到 Insight9 数据，请检查 USB 网线、"
+                "ROS_DOMAIN_ID 和话题配置；重新插拔后会自动再试",
             )
-            try:
-                layer.restart()
-            except Exception as exc:
-                capture.source_state(
-                    "image/head", "disconnected", f"重新连接失败: {exc}"
-                )
-        known = current
+            continue
+        attempts += 1
+        capture.source_state(
+            "image/head",
+            "connecting",
+            f"{'检测到网络变化' if network_changed else '仍未收到 Insight9 数据'}，"
+            f"正在重建 ROS 连接（第 {attempts} 次）",
+        )
+        try:
+            layer.restart()
+            built, restarted_at = current, time.monotonic()
+        except Exception as exc:
+            restarted_at = time.monotonic()
+            capture.source_state(
+                "image/head", "disconnected", f"重新连接失败: {exc}"
+            )
 
 
 def start_ros_layer(capture):

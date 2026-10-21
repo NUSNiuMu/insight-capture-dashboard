@@ -78,6 +78,12 @@ button:disabled {
 .quiet:hover {
   background: #2a405b;
 }
+.quiet.delete-action {
+  color: var(--red);
+}
+.quiet.delete-action:hover {
+  background: #4b2e3e;
+}
 .wide {
   width: 100%;
 }
@@ -325,7 +331,7 @@ main {
   background: var(--right);
 }
 .sample-rate input {
-  width: 42px;
+  width: 58px;
   background: #1c2b40;
   border: 1px solid #384b64;
   border-radius: 5px;
@@ -472,11 +478,29 @@ main {
 }
 .view-tools {
   display: flex;
+  align-items: center;
   gap: 0;
 }
 .view-tools button {
   padding: 4px 8px;
   font-size: 11px;
+}
+.trail-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 10px 4px 2px;
+  margin-right: 6px;
+  cursor: help;
+  white-space: nowrap;
+}
+.trail-toggle input {
+  cursor: pointer;
+}
+#clearTrail {
+  margin-right: 6px;
 }
 .scene-wrap {
   flex: 1;

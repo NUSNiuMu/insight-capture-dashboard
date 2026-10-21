@@ -58,6 +58,41 @@ def nearest(times, grid, tolerance, unique=False):
     return indices, valid
 
 
+def _head_clock(rows):
+    """Head frame times on the host timeline, plus the measured frame period.
+
+    Insight9 header stamps are evenly spaced, while host receive times jitter
+    by ~10 ms; shifting the stamps by the minimal observed receive latency
+    keeps the stamps' spacing on the same timeline as the other host-stamped
+    streams. Falls back to receive time if stamps are missing."""
+    if not rows:
+        return np.zeros(0), np.zeros(0, int), np.zeros(0, int), None
+    rowid = np.array([r[0] for r in rows])
+    receive = np.array([r[1] for r in rows], float)
+    stamp = np.array([r[2] or 0 for r in rows], np.int64)
+    if (stamp > 0).all():
+        order = np.argsort(stamp, kind="stable")
+        seconds = stamp[order] / 1e9
+        times = seconds + np.percentile(receive[order] - seconds, 1)
+    else:
+        order = np.argsort(receive, kind="stable")
+        times = receive[order]
+    steps = np.diff(times)
+    period = float(np.median(steps[steps > 0])) if (steps > 0).any() else None
+    return times, rowid[order], stamp[order], period
+
+
+def _offsets(times, indices, valid, reference):
+    if not valid.any():
+        return None
+    gap = np.abs(times[indices[valid]] - reference[valid]) * 1000
+    return {
+        "p50": round(float(np.percentile(gap, 50)), 2),
+        "p95": round(float(np.percentile(gap, 95)), 2),
+        "max": round(float(gap.max()), 2),
+    }
+
+
 def align(path):
     meta = json.loads((path / "session.json").read_text())
     if meta["status"] != "stopped":
@@ -72,15 +107,47 @@ def align(path):
         np.zeros((len(grid), 20), np.float32),
         np.zeros((len(grid), 20), bool),
     )
-    video, ratios, masks = {}, {}, {}
+    video, ratios, masks, offsets = {}, {}, {}, {}
     with connect(path) as db:
-        rows = db.execute(
-            "SELECT t,payload FROM samples WHERE kind='pose' ORDER BY t"
-        ).fetchall()
-        indices, fresh = nearest(
-            np.array([r[0] for r in rows]), grid, tolerance, unique=True
+        # Insight9 is the master clock: each grid row is bound to the head
+        # frame nearest to it (within half a frame period, so an fps that
+        # equals or divides the camera rate never aliases), and every other
+        # stream is then matched against that frame's own time — not the
+        # nominal grid tick — so `sync_tolerance_ms` is the true
+        # inter-device offset.
+        head_times, head_rowids, head_stamps, period = _head_clock(
+            db.execute(
+                "SELECT rowid,t,stamp_ns FROM samples WHERE kind='image' AND name='head' ORDER BY t"
+            ).fetchall()
         )
-        poses = [json.loads(r[1]) for r in rows]
+        head_window = (period or 1 / fps) / 2 + 0.002
+        hi, hf = nearest(head_times, grid, head_window, unique=True)
+        reference = np.where(hf, head_times[hi], grid) if len(head_times) else grid
+        video["head"] = (
+            head_rowids[hi] if len(head_times) else np.zeros(len(grid), int),
+            hf,
+        )
+        masks["video.head"] = hf
+        ratios["video.head"] = float(hf.mean()) if len(grid) else 0
+
+        # Pose rows are written with the same source stamp as the head
+        # image they were computed from, so they pair with it exactly.
+        rows = db.execute(
+            "SELECT t,stamp_ns,payload FROM samples WHERE kind='pose' ORDER BY t"
+        ).fetchall()
+        by_stamp = {r[1]: k for k, r in enumerate(rows) if r[1]}
+        indices = np.zeros(len(grid), int)
+        fresh = np.zeros(len(grid), bool)
+        for i in np.flatnonzero(hf):
+            k = by_stamp.get(int(head_stamps[hi[i]]))
+            if k is not None:
+                indices[i], fresh[i] = k, True
+        if not by_stamp:
+            indices, fresh = nearest(
+                np.array([r[0] for r in rows]), reference, head_window, unique=True
+            )
+            fresh &= hf
+        poses = [json.loads(r[2]) for r in rows]
         reasons = {"left": [None] * len(grid), "right": [None] * len(grid)}
         for side, offset in [("left", 0), ("right", 10)]:
             target = config["arms"][side]
@@ -98,7 +165,9 @@ def align(path):
                 "SELECT t,payload FROM samples WHERE kind='gripper' AND name=? ORDER BY t",
                 (side,),
             ).fetchall()
-            gi, gf = nearest(np.array([r[0] for r in rows_g]), grid, tolerance)
+            gripper_times = np.array([r[0] for r in rows_g])
+            gi, gf = nearest(gripper_times, reference, tolerance)
+            offsets["gripper." + side] = _offsets(gripper_times, gi, gf, reference)
             for i in np.flatnonzero(gf):
                 value = json.loads(rows_g[gi[i]][1])
                 if value.get("valid") and np.isfinite(value["width_m"]):
@@ -110,14 +179,14 @@ def align(path):
             ]:
                 masks[side + "." + key] = mask
                 ratios[side + "." + key] = float(mask.mean()) if len(grid) else 0
-        for name in ["head"] + [x["name"] for x in config.get("rgb", [])]:
+        for name in [x["name"] for x in config.get("rgb", [])]:
             rows_v = db.execute(
                 "SELECT rowid,t FROM samples WHERE kind='image' AND name=? ORDER BY t",
                 (name,),
             ).fetchall()
-            vi, vf = nearest(
-                np.array([r[1] for r in rows_v]), grid, tolerance, unique=True
-            )
+            image_times = np.array([r[1] for r in rows_v])
+            vi, vf = nearest(image_times, reference, tolerance, unique=True)
+            offsets["video." + name] = _offsets(image_times, vi, vf, reference)
             video[name] = (
                 np.array([rows_v[i][0] for i in vi])
                 if rows_v
@@ -147,8 +216,10 @@ def align(path):
         ),
         "queue_drops": meta.get("queue_drops", {}),
         "error": meta.get("error"),
-        "sync_policy": "nearest host receive time; head VIO interpolated at image source stamp",
+        "sync_policy": "rows anchored on Insight9 frames (source stamp); other streams nearest host receive time to that frame; head VIO interpolated at image source stamp",
         "sync_tolerance_ms": tolerance * 1000,
+        "head_period_ms": round(period * 1000, 3) if period else None,
+        "sync_offsets_ms": offsets,
     }
     return meta, grid, state, video, all_valid, report, reasons
 
@@ -210,6 +281,7 @@ def suggest_pause_segments(
     idle_gripper_speed_m_s=DEFAULT_IDLE_GRIPPER_SPEED_M_S,
     idle_gap_tolerance_s=DEFAULT_IDLE_GAP_TOLERANCE_S,
     minimum_duration_s=DEFAULT_MINIMUM_SEGMENT_DURATION_S,
+    duration_s=None,
 ):
     """建议以双臂静止时刻为界的片段草稿，供人工标注前预填任务文本。
 
@@ -269,19 +341,20 @@ def suggest_pause_segments(
         previous_cut = cut
 
     boundaries = [0, *cuts, frame_count]
+    limit = float(duration_s) if duration_s is not None else float(grid[-1]) + 1.0 / fps
     segments = []
     for start_index, end_index in zip(boundaries[:-1], boundaries[1:]):
-        if end_index <= start_index:
+        # Trim each draft to the frames that actually have video and both
+        # arms, so it never starts before the first usable frame or runs
+        # past the last one (or past the end of the recording).
+        usable = np.flatnonzero(good[start_index:end_index])
+        if not len(usable):
             continue
-        end_s = (
-            float(grid[end_index])
-            if end_index < frame_count
-            else float(grid[-1]) + 1.0 / fps
-        )
+        first, last = start_index + usable[0], start_index + usable[-1]
         segments.append(
             {
-                "start_s": float(grid[start_index]),
-                "end_s": end_s,
+                "start_s": round(float(grid[first]), 3),
+                "end_s": round(min(float(grid[last]) + 1.0 / fps, limit), 3),
                 "task": "",
                 "hands": "both",
             }

@@ -107,6 +107,8 @@
             ‹ 上一项</button
           ><button id="nextSession" class="quiet" aria-label="下一条录制">
             下一项 ›</button
+          ><button id="deleteSession" class="quiet delete-action">
+            删除录制</button
           ><span id="sessionMeta" class="muted"></span>
         </div>
         <div id="stage" class="stage">
@@ -121,7 +123,19 @@
             <div class="panel-heading">
               <h2>双臂 3D 轨迹</h2>
               <div class="view-tools">
-                <button
+                <label
+                  id="trailToggle"
+                  class="trail-toggle"
+                  title="开启后画布只保留最近 5 秒轨迹；关闭显示完整的实时轨迹缓存。只影响画布显示，不影响录制数据。"
+                  ><input id="trailMode" type="checkbox" checked />托尾
+                  5s</label
+                ><button
+                  id="clearTrail"
+                  class="quiet"
+                  aria-label="清空画布轨迹，不影响录制数据"
+                >
+                  清空画布</button
+                ><button
                   id="sceneFullscreen"
                   class="quiet"
                   aria-label="全屏查看三维轨迹"
@@ -338,10 +352,14 @@
           <section class="panel quality-sessions-panel">
             <div class="panel-heading">
               <h3>录制记录 · 导出到 LeRobot v3</h3>
-              <button id="refreshQualitySessions" class="quiet">刷新列表</button>
+              <div>
+                <button id="deleteSelected" class="quiet delete-action">
+                  删除选中录制</button
+                ><button id="refreshQualitySessions" class="quiet">刷新列表</button>
+              </div>
             </div>
             <p class="muted">
-              点击一条记录查看其采集质量；勾选复选框加入本次批量导出。只保留标注范围内，视频、双臂位姿和开合度同时有效的连续片段。
+              点击一条记录查看其采集质量；勾选复选框选择要批量导出或删除的录制。导出只保留标注范围内，视频、双臂位姿和开合度同时有效的连续片段。
             </p>
             <div id="qualitySessions" class="quality-session-list"></div>
             <div class="export-controls">

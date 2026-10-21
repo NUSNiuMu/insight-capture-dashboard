@@ -1,5 +1,37 @@
 const B = window.BABYLON;
 const colors = { left: "#83abff", right: "#ffb77d" };
+let labelSequence = 0;
+function makeLabel(scene, text, position, color, options = {}) {
+  const { fontSize = 48, width = 0.16, height = 0.08 } = options;
+  const id = "label" + labelSequence++ + ":" + text;
+  const texture = new B.DynamicTexture(
+    id,
+    { width: 256, height: 128 },
+    scene,
+    false,
+  );
+  texture.hasAlpha = true;
+  texture.drawText(
+    text,
+    null,
+    null,
+    `bold ${fontSize}px sans-serif`,
+    color,
+    "transparent",
+    true,
+  );
+  const material = new B.StandardMaterial(id, scene);
+  material.diffuseTexture = texture;
+  material.emissiveColor = B.Color3.White();
+  material.disableLighting = true;
+  material.backFaceCulling = false;
+  const plane = B.MeshBuilder.CreatePlane(id, { width, height }, scene);
+  plane.material = material;
+  plane.billboardMode = B.Mesh.BILLBOARDMODE_ALL;
+  plane.position = position;
+  plane.isPickable = false;
+  return plane;
+}
 export class Trajectory {
   constructor(canvas, empty) {
     this.empty = empty;
@@ -59,6 +91,27 @@ export class Trajectory {
           this.scene,
         );
         line.color = B.Color3.FromHexString(color);
+        makeLabel(this.scene, name, new B.Vector3(...pos).scale(1.2), color, {
+          fontSize: 64,
+          width: 0.07,
+          height: 0.07,
+        });
+      }
+      // Scale reference: a couple of meter ticks along +X/+Y on top of the
+      // 10 cm floor grid, so distance reads off the canvas itself.
+      const tickColor = "#7b93af";
+      for (const d of [0.5, 1]) {
+        const text = d.toFixed(1) + " m";
+        for (const position of [
+          new B.Vector3(d, 0.035, 0.001),
+          new B.Vector3(0.035, d, 0.001),
+        ]) {
+          makeLabel(this.scene, text, position, tickColor, {
+            fontSize: 40,
+            width: 0.1,
+            height: 0.05,
+          });
+        }
       }
       this.tips = {};
       for (const side of ["left", "right"]) {

@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import sqlite3
 from pathlib import Path
 
@@ -55,8 +56,13 @@ def create_app(capture):
             raise web.HTTPNotFound()
         return capture.root.parent / "lerobot_datasets" / name
 
+    # Browsers heuristically cache files that have Last-Modified but no
+    # Cache-Control, so after a redeploy they could keep running the old
+    # frontend; force a (cheap, ETag-based) revalidation every load.
+    no_cache = {"Cache-Control": "no-cache"}
+
     async def index(request):
-        return web.FileResponse(Path(__file__).with_name("index.html"))
+        return web.FileResponse(Path(__file__).with_name("index.html"), headers=no_cache)
 
     async def asset(request):
         name = request.match_info["asset"]
@@ -69,7 +75,7 @@ def create_app(capture):
             path = Path(__file__).with_name(name)
         else:
             raise web.HTTPNotFound()
-        return web.FileResponse(path)
+        return web.FileResponse(path, headers=no_cache)
 
     async def trajectory(request):
         after = int(request.query.get("after", 0))
@@ -242,7 +248,9 @@ def create_app(capture):
 
         def compute():
             meta, grid, state, video, good, report, _reasons = align(path)
-            return suggest_pause_segments(grid, state, good, report["fps"])
+            return suggest_pause_segments(
+                grid, state, good, report["fps"], duration_s=meta["duration_s"]
+            )
 
         return web.json_response(await asyncio.to_thread(compute))
 
@@ -304,6 +312,15 @@ def create_app(capture):
         return web.json_response(
             await asyncio.to_thread(review_data, session(request), True)
         )
+
+    async def delete_session(request):
+        path = session(request)
+        if path.name == capture.active:
+            raise ValueError("正在录制这条记录，请先停止录制")
+        if path.name in busy:
+            raise ValueError("这条录制正在导出，请等待导出完成")
+        await asyncio.to_thread(shutil.rmtree, path)
+        return web.json_response({"deleted": path.name})
 
     async def datasets_list(request):
         return web.json_response(
@@ -392,6 +409,7 @@ def create_app(capture):
             web.get("/api/sessions/{name}/segments/auto", auto_segments),
             web.get("/api/sessions/{name}/qc", qc),
             web.get("/api/sessions/{name}/review", review),
+            web.delete("/api/sessions/{name}", delete_session),
             web.get("/api/datasets", datasets_list),
             web.get("/api/datasets/{name}", datasets_detail),
             web.post("/api/datasets/{name}/export", datasets_export),

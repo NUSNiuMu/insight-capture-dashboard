@@ -1,6 +1,6 @@
 {
   "ros_domain_id": 0,
-  "fps": 20,
+  "fps": 30,
   "sync_tolerance_ms": 10,
   "head": {
     "image_topic": "/base_insight9/camera/color/image_rect_raw/compressed",
