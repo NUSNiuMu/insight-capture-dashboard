@@ -48,7 +48,7 @@
       "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:9.2:1.0-video-index0",
       "width": 1280,
       "height": 720,
-      "fps": 30,
+      "fps": 60,
       "auto_exposure": false,
       "exposure_time_absolute": 156
     },
@@ -57,7 +57,7 @@
       "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:9.1:1.0-video-index0",
       "width": 1280,
       "height": 720,
-      "fps": 30,
+      "fps": 60,
       "auto_exposure": false,
       "exposure_time_absolute": 156
     },
@@ -66,7 +66,7 @@
       "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:9.4:1.0-video-index0",
       "width": 1280,
       "height": 720,
-      "fps": 30,
+      "fps": 60,
       "auto_exposure": false,
       "exposure_time_absolute": 156
     },
@@ -75,7 +75,7 @@
       "device": "/dev/v4l/by-path/pci-0000:00:14.0-usb-0:9.3:1.0-video-index0",
       "width": 1280,
       "height": 720,
-      "fps": 30,
+      "fps": 60,
       "auto_exposure": false,
       "exposure_time_absolute": 156
     }

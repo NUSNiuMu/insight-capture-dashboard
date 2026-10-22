@@ -5,14 +5,20 @@ import copy
 import os
 import select
 import subprocess
+import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 
 from insight_capture.runtime.mapping.geometry import PoseSample, matrix_from_transform
 from .devices import local_device, scan_devices, valid_device
 from .capture import write_json
+from .v4l2_reader import HEADER as FRAME_HEADER
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _create_ros_node(capture):
@@ -528,6 +534,9 @@ def usb_worker(capture, item, stop=None):
 
     while not stopped(capture, stop):
         process = None
+        # Reader stderr goes to a file, read only when it exits: a pipe that
+        # is never drained could fill up and stall the reader.
+        errors = tempfile.TemporaryFile()
         try:
             capture.source_state(key, "connecting", "等待相机，自动重连中", device)
             path = local_device(device) # 转换到docker容器内的设备路径
@@ -546,43 +555,23 @@ def usb_worker(capture, item, stop=None):
                     stderr=subprocess.DEVNULL,
                     timeout=2,
                 )
-            # A child process bounds V4L2 driver stalls as well as unplug failures.
-            args = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-nostdin",
-                "-probesize",
-                "32",
-                "-analyzeduration",
-                "0",
-                "-f",
-                "v4l2",
-            ]
-            args += ["-input_format", "mjpeg"]
-            if "fps" in item:
-                args += ["-framerate", str(item["fps"])]
-            if "width" in item and "height" in item:
-                args += ["-video_size", f"{item['width']}x{item['height']}"]
-            args += [
-                "-i",
-                path,
-                "-an",
-                "-threads",
-                "1",
-                "-c:v",
-                "mjpeg",
-                "-q:v",
-                "3",
-                "-flush_packets",
-                "1",
-                "-f",
-                "image2pipe",
-                "pipe:1",
-            ]
+            # A child process bounds V4L2 driver stalls as well as unplug
+            # failures. It passes the camera's own JPEG through untouched and
+            # stamps each frame with the V4L2 kernel capture time, so the
+            # recorded time no longer includes decode/re-encode/pipe delays.
             process = subprocess.Popen(
-                args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+                [
+                    sys.executable,
+                    "-m",
+                    "insight_capture.aruco_capture.v4l2_reader",
+                    path,
+                    str(item.get("width", 0)),
+                    str(item.get("height", 0)),
+                    str(item.get("fps", 0)),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=errors,
+                cwd=PACKAGE_ROOT,
             )
             data = bytearray()
             last_frame = time.monotonic()
@@ -592,20 +581,36 @@ def usb_worker(capture, item, stop=None):
                 ready, _, _ = select.select([process.stdout], [], [], 0.2)
                 if not ready:
                     continue
-                chunk = os.read(process.stdout.fileno(), 65536)
+                chunk = os.read(process.stdout.fileno(), 1 << 20)
                 if not chunk:
-                    raise OSError("相机断开或无法读取，请检查权限、占用和采集格式")
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    errors.seek(0)
+                    reason = errors.read().decode(errors="replace").strip()
+                    raise OSError(
+                        reason.splitlines()[-1]
+                        if reason
+                        else "相机断开或无法读取，请检查权限、占用和采集格式"
+                    )
                 data.extend(chunk)
                 if len(data) > 32 * 1024 * 1024:
                     raise ValueError("相机图像超过缓冲上限")
-                while (end := data.find(b"\xff\xd9")) >= 0:
-                    start = data.find(b"\xff\xd8")
-                    jpeg = bytes(data[start : end + 2]) if 0 <= start < end else None
-                    del data[: end + 2]
-                    if jpeg and not stopped(capture, stop):
+                while len(data) >= FRAME_HEADER.size:
+                    stamp_ns, size = FRAME_HEADER.unpack_from(data)
+                    if len(data) < FRAME_HEADER.size + size:
+                        break
+                    jpeg = bytes(data[FRAME_HEADER.size : FRAME_HEADER.size + size])
+                    del data[: FRAME_HEADER.size + size]
+                    if not stopped(capture, stop):
                         last_frame = time.monotonic()
                         capture.source_state(key, "ready", "", device)
-                        capture.submit("image", item["name"], 0, jpeg, last_frame)
+                        # The kernel capture time doubles as the sample time,
+                        # so RGB rows are aligned on when the frame was taken.
+                        capture.submit(
+                            "image", item["name"], stamp_ns, jpeg, stamp_ns / 1e9
+                        )
         except (OSError, ValueError) as exc:
             if not stopped(capture, stop):
                 capture.source_state(key, "disconnected", str(exc), device)
@@ -618,6 +623,7 @@ def usb_worker(capture, item, stop=None):
                     process.kill()
                     process.wait(timeout=1)
                 process.stdout.close()
+            errors.close()
         stop.wait(1)
 
 

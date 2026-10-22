@@ -205,7 +205,7 @@ class Capture:
                     {
                         "config": self.config,
                         "started_unix_ns": time.time_ns(),
-                        "clock": "host_monotonic_receive",
+                        "clock": "host_monotonic; USB RGB at V4L2 capture, other sources at receive",
                         "status": "recording",
                         "calibration": self.calibration,
                     },

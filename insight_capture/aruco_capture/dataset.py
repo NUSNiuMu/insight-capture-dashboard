@@ -354,7 +354,10 @@ def suggest_pause_segments(
         segments.append(
             {
                 "start_s": round(float(grid[first]), 3),
-                "end_s": round(min(float(grid[last]) + 1.0 / fps, limit), 3),
+                # Floor, not round: rounding up could land a fraction of a
+                # millisecond past the recording and fail validate_segments.
+                "end_s": math.floor(min(float(grid[last]) + 1.0 / fps, limit) * 1000)
+                / 1000,
                 "task": "",
                 "hands": "both",
             }
