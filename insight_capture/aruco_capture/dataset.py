@@ -24,6 +24,7 @@ from insight_capture.postprocess.datasets.lerobot import (
 )
 from insight_capture.runtime.mapping.geometry import rotation_distance_deg
 from .capture import write_json
+from .pose_track import OFFLINE_DB, pose_settings, smooth_arm
 
 # Ported from the auto_pause episode splitter in
 # insight_capture/legacy/umi_zarr.py: a hand is "idle" once its linear,
@@ -108,6 +109,13 @@ def align(path):
         np.zeros((len(grid), 20), bool),
     )
     video, ratios, masks, offsets = {}, {}, {}, {}
+    track = pose_settings(path, meta)
+    if track["source"] == "offline":
+        if not (path / OFFLINE_DB).is_file():
+            raise ValueError("离线重算结果不存在，请重新离线重算或切回实时轨迹")
+        pose_db = sqlite3.connect(f"file:{path / OFFLINE_DB}?mode=ro", uri=True)
+    else:
+        pose_db = None
     with connect(path) as db:
         # Insight9 is the master clock: each grid row is bound to the head
         # frame nearest to it (within half a frame period, so an fps that
@@ -132,9 +140,11 @@ def align(path):
 
         # Pose rows are written with the same source stamp as the head
         # image they were computed from, so they pair with it exactly.
-        rows = db.execute(
+        rows = (pose_db or db).execute(
             "SELECT t,stamp_ns,payload FROM samples WHERE kind='pose' ORDER BY t"
         ).fetchall()
+        if pose_db:
+            pose_db.close()
         by_stamp = {r[1]: k for k, r in enumerate(rows) if r[1]}
         indices = np.zeros(len(grid), int)
         fresh = np.zeros(len(grid), bool)
@@ -161,6 +171,12 @@ def align(path):
                             matrix[:3, 3], matrix[:2, :3].reshape(-1)
                         ]
                         valid[i, offset : offset + 9] = True
+            smooth_arm(
+                state[:, offset : offset + 9],
+                valid[:, offset : offset + 9].all(1),
+                fps,
+                track["filter_hz"],
+            )
             rows_g = db.execute(
                 "SELECT t,payload FROM samples WHERE kind='gripper' AND name=? ORDER BY t",
                 (side,),
@@ -200,6 +216,11 @@ def align(path):
         all_valid &= mask
     ratios["all_required"] = float(all_valid.mean()) if len(grid) else 0
     masks["all_required"] = all_valid
+    refinement = (
+        (track["offline"] or {}).get("corner_refinement")
+        if track["source"] == "offline"
+        else config["cube_marker_relative_localization"].get("corner_refinement", "none")
+    )
     report = {
         "missing_intervals": {
             name: intervals(~mask, fps) for name, mask in masks.items()
@@ -220,6 +241,15 @@ def align(path):
         "sync_tolerance_ms": tolerance * 1000,
         "head_period_ms": round(period * 1000, 3) if period else None,
         "sync_offsets_ms": offsets,
+        "pose_trajectory": {
+            "source": track["source"],
+            "corner_refinement": refinement,
+            "filter": (
+                f"hampel(7, 3 sigma) + zero-phase butterworth(2) {track['filter_hz']:g} Hz"
+                if track["filter_hz"]
+                else "none"
+            ),
+        },
     }
     return meta, grid, state, video, all_valid, report, reasons
 
@@ -603,6 +633,7 @@ def export(path):
                     "max_depth_m": marker_config["max_depth_m"],
                     "sync_tolerance_ms": report["sync_tolerance_ms"],
                 },
+                "pose_trajectory": report["pose_trajectory"],
                 "source": {
                     "format_profile": "x86_aruco_single_session",
                     "session": path.name,
@@ -1203,6 +1234,7 @@ def export_to_dataset(path, output_root):
             {
                 "source_session": path.name,
                 "episodes": len(episodes),
+                "pose_trajectory": report["pose_trajectory"],
                 "frames": offset,
                 "tasks": session_tasks,
             }
@@ -1234,6 +1266,7 @@ def export_to_dataset(path, output_root):
                     "max_depth_m": marker_config["max_depth_m"],
                     "sync_tolerance_ms": report["sync_tolerance_ms"],
                 },
+                "pose_trajectory": report["pose_trajectory"],
                 "tasks": all_tasks,
                 "source_datasets": source_datasets,
                 "size_bytes": _directory_size(output_root),

@@ -54,7 +54,7 @@ class Capture:
             or not 0 < self.config.get("sync_tolerance_ms", 40) <= 100
         ):
             raise ValueError("fps 或同步容差超出范围")
-        self.pose = DirectPose(config_path, self.config)
+        self.pose = DirectPose(self.config)
         self.lock = threading.RLock()
         self.queue = queue.Queue(maxsize=128)
         self.stop_event = threading.Event()
@@ -284,10 +284,10 @@ class Capture:
                         head = self.pose.buffer.lookup(stamp)
                 # Insight9 is mounted rotated; rotate only the copy that gets
                 # recorded/previewed/exported. ArUco pose detection below keeps
-                # decoding the original `value` bytes, so the intrinsics/extrinsic
+                # using the un-rotated `bgr` decode, so the intrinsics/extrinsic
                 # calibration (tied to the camera's physical, un-rotated frame)
                 # stays valid.
-                display_value = value
+                display_value, bgr = value, None
                 if kind == "image" and name == "head":
                     bgr = cv2.imdecode(np.frombuffer(value, np.uint8), cv2.IMREAD_COLOR)
                     if bgr is not None:
@@ -338,8 +338,12 @@ class Capture:
                                 for x in self.pose.config.targets
                             }
                         else:
-                            gray = cv2.imdecode(
-                                np.frombuffer(value, np.uint8), cv2.IMREAD_GRAYSCALE
+                            # Reuse the colour decode above: one JPEG decode
+                            # per head frame leaves time for corner refinement.
+                            gray = (
+                                cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+                                if bgr is not None
+                                else None
                             )
                             if gray is None:
                                 raise ValueError("无法解码头部图像")

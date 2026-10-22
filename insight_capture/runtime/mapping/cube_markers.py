@@ -101,6 +101,12 @@ def load_cube_marker_config(path: Path) -> CubeMarkerConfig:
         payload = {}
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"failed to read cube marker config: {exc}") from exc
+    return parse_cube_marker_config(payload)
+
+
+def parse_cube_marker_config(payload: Mapping) -> CubeMarkerConfig:
+    """Parse the ``cube_marker_relative_localization`` section of a loaded config."""
+
     section = payload.get("cube_marker_relative_localization", {})
     if not isinstance(section, Mapping):
         raise ValueError("cube_marker_relative_localization must be an object")

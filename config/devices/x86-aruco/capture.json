@@ -2,6 +2,7 @@
   "ros_domain_id": 0,
   "fps": 30,
   "sync_tolerance_ms": 10,
+  "pose_filter_hz": 6,
   "head": {
     "image_topic": "/base_insight9/camera/color/image_rect_raw/compressed",
     "info_topic": "/base_insight9/camera/color/camera_info",
@@ -106,6 +107,7 @@
     "enabled": true,
     "apply_corrections": true,
     "dictionary": "DICT_4X4_50",
+    "corner_refinement": "contour",
     "image_topic": "/base_insight9/camera/color/image_rect_raw/compressed",
     "camera_info_topic": "/base_insight9/camera/color/camera_info",
     "min_markers": 1,

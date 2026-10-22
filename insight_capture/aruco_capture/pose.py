@@ -8,7 +8,7 @@ import numpy as np
 from insight_capture.runtime.mapping.cube_markers import (
     CubePoseEstimate,
     MultiCubeMarkerEstimator,
-    load_cube_marker_config,
+    parse_cube_marker_config,
 )
 from insight_capture.runtime.mapping.geometry import (
     matrix_from_pose,
@@ -18,12 +18,75 @@ from insight_capture.runtime.mapping.geometry import (
 from insight_capture.runtime.mapping.synchronization import PoseBuffer
 
 
+REFINEMENTS = {
+    "none": cv2.aruco.CORNER_REFINE_NONE,
+    "subpix": cv2.aruco.CORNER_REFINE_SUBPIX,
+    "contour": cv2.aruco.CORNER_REFINE_CONTOUR,
+    "apriltag": cv2.aruco.CORNER_REFINE_APRILTAG,
+}
+
+
+def marker_detector(dictionary, refinement):
+    """ArUco detector with the named corner refinement.
+
+    Default parameters leave corners unrefined (pixel-quantised), which on a
+    ~100 px marker is several degrees of single-face rotation noise.
+    "apriltag" is the most precise but costs ~50 ms on a full 1088x1920
+    frame, so "roi_apriltag" runs it only on a crop around each marker found
+    by a fast unrefined pass."""
+    if refinement == "roi_apriltag":
+        return RoiAprilTagDetector(dictionary)
+    if refinement not in REFINEMENTS:
+        raise ValueError(f"unknown corner_refinement: {refinement}")
+    parameters = cv2.aruco.DetectorParameters()
+    parameters.cornerRefinementMethod = REFINEMENTS[refinement]
+    return cv2.aruco.ArucoDetector(dictionary, parameters)
+
+
+class RoiAprilTagDetector:
+    def __init__(self, dictionary, margin=0.6):
+        self.coarse = marker_detector(dictionary, "none")
+        self.fine = marker_detector(dictionary, "apriltag")
+        self.margin = margin
+
+    def detectMarkers(self, image):
+        corners, ids, rejected = self.coarse.detectMarkers(image)
+        if ids is None:
+            return corners, ids, rejected
+        height, width = image.shape[:2]
+        refined = []
+        for corner, marker_id in zip(corners, ids.reshape(-1)):
+            corner = corner.reshape(4, 2)
+            low, high = corner.min(0), corner.max(0)
+            pad = (high - low).max() * self.margin
+            x0, y0 = np.maximum(np.floor(low - pad).astype(int), 0)
+            x1, y1 = np.minimum(np.ceil(high + pad).astype(int), [width, height])
+            fine, fine_ids, _ = self.fine.detectMarkers(image[y0:y1, x0:x1])
+            best = corner
+            for candidate, candidate_id in zip(
+                fine, () if fine_ids is None else fine_ids.reshape(-1)
+            ):
+                candidate = candidate.reshape(4, 2) + [x0, y0]
+                # Refinement moves corners by a pixel or two; anything more is
+                # a different quad (or corner order) and is ignored.
+                if candidate_id == marker_id and np.abs(candidate - corner).max() < 3:
+                    best = candidate
+            refined.append(best.reshape(1, 4, 2).astype(np.float32))
+        return tuple(refined), ids, rejected
+
+
 class DirectPose(MultiCubeMarkerEstimator):
-    def __init__(self, path, config):
+    def __init__(self, config, refinement=None):
         super().__init__(
             replace(
-                load_cube_marker_config(path), apply_corrections=False, min_markers=1
+                parse_cube_marker_config(config), apply_corrections=False, min_markers=1
             )
+        )
+        self.refinement = refinement or config[
+            "cube_marker_relative_localization"
+        ].get("corner_refinement", "none")
+        self._detector = marker_detector(
+            self._detector.getDictionary(), self.refinement
         )
         self.settings = config
         self.buffer = PoseBuffer()
@@ -124,7 +187,18 @@ class DirectPose(MultiCubeMarkerEstimator):
             camera, transform, tuple(marker_ids), 4, 4, 1.0, median, maximum
         )
 
-    def observe(self, gray, intrinsic, head_pose, imu_from_rgb, seconds):
+    def markers(self, gray):
+        corners, ids, _ = self._detector.detectMarkers(gray)
+        if ids is None:
+            return {}
+        return {
+            int(marker_id): np.asarray(corner, np.float64).reshape(4, 2)
+            for corner, marker_id in zip(corners, ids.reshape(-1))
+        }
+
+    def observe(
+        self, gray, intrinsic, head_pose, imu_from_rgb, seconds, detections=None
+    ):
         # head_pose is None when VIO is disabled (camera rigidly mounted): the
         # IMU frame is then treated as coinciding with world, so the cube's
         # pose is tracked purely relative to the fixed camera, with no VIO
@@ -134,7 +208,11 @@ class DirectPose(MultiCubeMarkerEstimator):
         self.time = seconds
         if self.reference is None:
             self.reference = np.linalg.inv(world_from_imu)
-        estimates = self.detect(gray, intrinsic)
+        # Offline recompute detects markers in worker processes and replays
+        # them here, so the temporal state below stays sequential.
+        estimates = self.estimate(
+            self.markers(gray) if detections is None else detections, intrinsic
+        )
         result = {}
         for name in self.config.targets:
             estimate = estimates.get(name)

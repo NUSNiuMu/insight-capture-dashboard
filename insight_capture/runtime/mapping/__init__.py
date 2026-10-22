@@ -42,6 +42,7 @@ from .cube_markers import (
     MultiCubeMarkerEstimator,
     grayscale_marker_image,
     load_cube_marker_config,
+    parse_cube_marker_config,
     marker_map_to_odom,
 )
 from .superglue_backend import (
@@ -114,6 +115,7 @@ __all__ = [
     "left_to_stereo_center",
     "load_tcp_frame_calibrations",
     "load_cube_marker_config",
+    "parse_cube_marker_config",
     "matrix_from_pose",
     "matrix_from_transform",
     "localize_features",

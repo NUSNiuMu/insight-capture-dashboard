@@ -169,6 +169,33 @@
                 </button>
               </div>
             </div>
+            <div id="poseTools" class="pose-tools" hidden>
+              <label
+                title="回放、自动分段与导出都使用这里选择的轨迹，两者始终一致"
+                >轨迹来源
+                <select id="poseSource">
+                  <option value="live">实时录制</option>
+                  <option value="offline">离线重算</option>
+                </select></label
+              ><label
+                title="先剔除单面识别翻转的离群帧，再做零相位低通（不引入延迟）；0 表示不滤波，显示原始位姿"
+                >低通
+                <input
+                  id="poseFilter"
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  inputmode="decimal"
+                />
+                Hz</label
+              ><button
+                id="poseRecompute"
+                class="quiet"
+                title="用全帧 AprilTag 角点精化重新识别全部 Insight9 画面，结果另存，不改动原始录制"
+              >
+                离线重算</button
+              ><span id="poseStatus" class="muted"></span>
+            </div>
             <div class="scene-wrap">
               <canvas
                 id="scene"
@@ -240,7 +267,10 @@
               aria-label="已标注片段"
             ></div>
             <div class="track-label">
-              <span>动作片段</span><span>点击片段定位并编辑</span>
+              <span>动作片段</span
+              ><span
+                >点击片段定位并编辑 · <i class="unfilled-dot"></i>虚线为未填写任务</span
+              >
             </div>
             <div
               id="validityTrack"
@@ -259,6 +289,29 @@
               <div class="section-title">
                 <h3>动作片段</h3>
                 <span id="segmentCount" class="muted">0 个片段</span>
+              </div>
+              <div id="segmentGuide" class="segment-guide" hidden>
+                <ol id="guideSteps" class="guide-steps">
+                  <li title="点「自动分段（静止检测）」生成草稿，或拖动时间轴、用「设为当前」设置起止后添加">
+                    生成片段
+                  </li>
+                  <li title="点列表中的片段或时间轴上的色块，播放核对内容">
+                    选择片段
+                  </li>
+                  <li title="输入任务文本，按回车更新并自动跳到下一段未填写">
+                    填写任务
+                  </li>
+                  <li title="全部片段填好后点「保存全部标注」才会生效">保存</li>
+                </ol>
+                <div class="guide-status">
+                  <span id="guideText"></span
+                  ><button id="nextUnfilled" type="button" class="quiet" hidden>
+                    下一段未填写 ›
+                  </button>
+                </div>
+                <div class="guide-progress" aria-hidden="true">
+                  <i id="guideBar"></i>
+                </div>
               </div>
               <div id="segments"></div>
             </div>
@@ -307,7 +360,7 @@
                 autocomplete="off"
                 placeholder="例如：左手拿起杯子，交给右手…"
                 required
-              /><label for="hands">参与手臂</label
+              /><button id="fillAll" type="button" class="quiet fill-all" hidden></button><label for="hands">参与手臂</label
               ><select id="hands" name="hands">
                 <option value="both">双手</option>
                 <option value="left">左手</option>

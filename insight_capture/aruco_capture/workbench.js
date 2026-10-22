@@ -24,6 +24,7 @@ const reasonText = {
   pose_jump: "位姿跳变，当前帧无效",
   head_vio_reset: "VIO 重置，请重新录制",
   missing_head_pose_or_calibration: "缺少同步 VIO 或标定",
+  image_decode_failed: "画面解码失败",
 };
 let mode = "capture",
   status = null,
@@ -51,7 +52,10 @@ let mode = "capture",
   lastRenderedFrame = "",
   exportSelection = new Set(),
   datasets = [],
-  datasetDetailName = "";
+  datasetDetailName = "",
+  poseInfo = null,
+  poseTimer = null,
+  poseFilterTimer = null;
 const scene = new Trajectory($("scene"), $("sceneEmpty"));
 const devicePanel = new DevicePanel(api);
 const el = (tag, text, cls) => {
@@ -126,6 +130,8 @@ function updateControls() {
     $(id).disabled = !review || reviewBusy;
   $("sessions").disabled = reviewBusy || exportBusy;
   for (const id of ["from", "to", "task", "hands"]) $(id).disabled = reviewBusy;
+  for (const id of ["poseSource", "poseFilter", "poseRecompute"])
+    $(id).disabled = !review || reviewBusy || !!poseInfo?.job?.running;
   updateSessionNav();
   updateBatchExport();
 }
@@ -184,6 +190,9 @@ async function loadImage(card, url, valid = true, signal) {
     await image.decode();
     return { card, object };
   } catch {
+    // A deliberately cancelled request is not a missing frame: return
+    // nothing so the card keeps showing its current picture.
+    if (signal?.aborted) return null;
     return { card, object: null };
   }
 }
@@ -466,6 +475,7 @@ function changeMode() {
   $("sourceAlerts").hidden =
     mode !== "capture" || !$("sourceAlerts").textContent;
   $("sessionBar").hidden = mode !== "review";
+  $("poseTools").hidden = mode !== "review";
   $("trailToggle").hidden = mode !== "capture";
   $("clearTrail").hidden = mode !== "capture";
   $("stage").hidden = mode === "quality";
@@ -613,6 +623,9 @@ async function selectSession(name) {
   setDirty(false);
   editing = -1;
   currentTime = 0;
+  clearTimeout(poseTimer);
+  poseTimer = null;
+  renderPose(null);
   scene.setData([]);
   scene.cursor(null);
   armCards();
@@ -670,6 +683,7 @@ function installReview(data) {
   if (mode !== "capture") videoCards(data.streams);
   renderParts();
   renderQuality();
+  renderPose(data.pose);
   if (mode !== "capture") scene.setData(data.rows, true);
   seek(Math.min(currentTime, data.duration_s));
   $("playbackNote").textContent =
@@ -680,6 +694,116 @@ function installReview(data) {
     ),
   );
 }
+async function reloadReview() {
+  const t = currentTime;
+  installReview(await api(base() + "/review"));
+  seek(t);
+}
+function renderPose(pose) {
+  poseInfo = pose;
+  const job = pose?.job,
+    running = !!job?.running;
+  $("poseSource").value = pose?.source || "live";
+  $("poseSource").options[1].disabled = !pose?.offline;
+  if (document.activeElement !== $("poseFilter") && !poseFilterTimer)
+    $("poseFilter").value = pose ? pose.filter_hz : "";
+  $("poseStatus").className = !running && job?.error ? "muted error" : "muted";
+  $("poseStatus").textContent = !pose
+    ? ""
+    : running
+      ? `离线重算中 ${job.done} / ${job.total || "…"} 帧`
+      : job?.error
+        ? `离线重算失败：${job.error}`
+        : pose.offline
+          ? `离线结果 ${new Date(pose.offline.created_unix_ns / 1e6).toLocaleString("zh-CN", { hour12: false })} · 用时 ${pose.offline.elapsed_s} s`
+          : "尚未离线重算";
+  if (running && !poseTimer)
+    poseTimer = setTimeout(() => pollPose(selectedName), 1000);
+  updateControls();
+}
+async function pollPose(name) {
+  poseTimer = null;
+  if (name !== selectedName) return;
+  let pose;
+  try {
+    pose = await api(base() + "/pose");
+  } catch (e) {
+    notice(e.message, true);
+    return;
+  }
+  if (name !== selectedName) return;
+  const finished = !!poseInfo?.job?.running && !pose.job?.running;
+  if (finished && !pose.job.error && !dirty && !editorDirty) {
+    try {
+      await reloadReview();
+      notice("离线重算完成，已切换为离线轨迹；回放、自动分段与导出都使用此轨迹");
+    } catch (e) {
+      notice(e.message, true);
+    }
+    return;
+  }
+  renderPose(pose);
+  if (finished)
+    notice(
+      pose.job.error
+        ? `离线重算失败：${pose.job.error}`
+        : "离线重算完成；请先保存标注，再切换到离线轨迹查看",
+      !!pose.job.error,
+    );
+}
+async function changePose(values) {
+  if (dirty || editorDirty) {
+    renderPose(poseInfo);
+    notice("请先保存标注，再切换轨迹来源或低通设置", true);
+    return;
+  }
+  reviewBusy = true;
+  updateControls();
+  try {
+    await api(base() + "/pose", "POST", values);
+    await reloadReview();
+    notice(
+      values.source
+        ? values.source === "offline"
+          ? "已切换为离线重算轨迹"
+          : "已切换为实时录制轨迹"
+        : values.filter_hz
+          ? `低通截止频率已设为 ${values.filter_hz} Hz`
+          : "已关闭低通，显示原始位姿",
+    );
+  } catch (e) {
+    notice(e.message, true);
+    renderPose(poseInfo);
+  } finally {
+    reviewBusy = false;
+    updateControls();
+  }
+}
+function commitPoseFilter() {
+  clearTimeout(poseFilterTimer);
+  poseFilterTimer = null;
+  const text = $("poseFilter").value,
+    value = Number(text);
+  if (!poseInfo || text === "" || value === poseInfo.filter_hz) return;
+  changePose({ filter_hz: value });
+}
+$("poseSource").addEventListener("change", () =>
+  changePose({ source: $("poseSource").value }),
+);
+$("poseFilter").addEventListener("change", () => {
+  clearTimeout(poseFilterTimer);
+  poseFilterTimer = setTimeout(commitPoseFilter, 600);
+});
+$("poseFilter").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") commitPoseFilter();
+});
+bind("poseRecompute", async () => {
+  if (!review) throw Error("请先选择一条已停止的录制");
+  renderPose(await api(base() + "/pose/recompute", "POST"));
+  notice(
+    "已开始离线重算，完成后自动切换为离线轨迹；重算期间不能开始新的录制",
+  );
+});
 function seek(t) {
   if (!review) return;
   currentTime = Math.max(0, Math.min(Number(t), review.duration_s));
@@ -687,6 +811,7 @@ function seek(t) {
   $("playTime").textContent =
     `${seconds(currentTime)} / ${seconds(review.duration_s)}`;
   displayPose(currentTime);
+  highlightParts();
 }
 function displayPose(t) {
   if (!review) return;
@@ -696,7 +821,10 @@ function displayPose(t) {
   armCards(row?.arms, row?.grippers);
   $("frameLabel").textContent = `录制参考系 · ${seconds(t)} · 米`;
 }
-let replayAbort = null;
+let replayAbort = null,
+  replaySeq = 0;
+const replayPending = new WeakSet(),
+  replayShown = new WeakMap();
 function renderReplay() {
   if (
     review &&
@@ -704,25 +832,40 @@ function renderReplay() {
     !document.hidden &&
     lastRenderedFrame !== selectedName + ":" + currentTime
   ) {
-    // A newer scrub position always wins: cancel whatever frames are still
-    // in flight for the old one instead of waiting for them to finish, so
-    // fast dragging chases the latest slider position, not a stale queue.
-    replayAbort?.abort();
-    replayAbort = new AbortController();
+    // Scrubbing: a newer position always wins, so cancel whatever is still
+    // in flight. Playing: never cancel — that would leave no frame finished
+    // whenever a fetch takes longer than one tick — instead skip a card
+    // whose previous frame is still loading and show the newest that lands.
+    if (!playing || !replayAbort || replayAbort.signal.aborted) {
+      replayAbort?.abort();
+      replayAbort = new AbortController();
+    }
     const version = frameVersion,
       time = currentTime,
       signal = replayAbort.signal;
     lastRenderedFrame = selectedName + ":" + time;
-    for (const card of $("videos").children)
-      card.querySelector(".video-rate").textContent = seconds(time);
     for (const card of $("videos").children) {
+      card.querySelector(".video-rate").textContent = seconds(time);
+      if (playing && replayPending.has(card)) continue;
+      const seq = ++replaySeq;
+      replayPending.add(card);
       loadImage(
         card,
         base() + "/frame/" + encodeURIComponent(card.dataset.stream) + "?t=" + time,
         true,
         signal,
       ).then((result) => {
-        if (version === frameVersion) applyImages([result], version);
+        replayPending.delete(card);
+        if (!result) return;
+        if (version !== frameVersion || seq < (replayShown.get(card) || 0)) {
+          if (result.object) URL.revokeObjectURL(result.object);
+          return;
+        }
+        replayShown.set(card, seq);
+        applyImages([result], version);
+        // Stopped while this card was still catching up: redraw every card
+        // at the exact paused time.
+        if (!playing && time !== currentTime) lastRenderedFrame = "";
       });
     }
   }
@@ -752,6 +895,9 @@ function resetEditor() {
   $("add").textContent = "添加片段";
   $("cancelEdit").hidden = true;
   $("formError").textContent = "";
+  $("task").placeholder = "例如：左手拿起杯子，交给右手…";
+  highlightParts();
+  renderGuide();
 }
 function editPart(i) {
   const p = parts[i];
@@ -764,7 +910,81 @@ function editPart(i) {
   $("editorTitle").textContent = "编辑动作片段";
   $("add").textContent = "更新片段";
   $("cancelEdit").hidden = false;
+  $("formError").textContent = "";
+  $("task").placeholder = unfilled(p)
+    ? "填写后按回车：更新本段并跳到下一段未填写"
+    : "例如：左手拿起杯子，交给右手…";
   seek(p.start_s);
+  renderGuide();
+  document
+    .querySelector(`#segments .segment-row[data-index="${i}"]`)
+    ?.scrollIntoView({ block: "nearest" });
+}
+function unfilled(p) {
+  return !p?.task?.trim();
+}
+// Next segment without a task, searching forward from `after` (seconds) and
+// wrapping around; -1 when every segment is filled.
+function nextUnfilled(after = -Infinity) {
+  const i = parts.findIndex((p) => unfilled(p) && p.start_s > after);
+  return i >= 0 ? i : parts.findIndex(unfilled);
+}
+function focusUnfilled(after) {
+  const i = nextUnfilled(after);
+  if (i < 0) return false;
+  editPart(i);
+  $("task").focus();
+  return true;
+}
+// Three independent states: unfilled (amber, set when rendering), active =
+// open in the editor, current = under the playhead.
+function highlightParts() {
+  for (const node of document.querySelectorAll(
+    "#segments .segment-row, #segmentTrack button",
+  )) {
+    const i = Number(node.dataset.index),
+      p = parts[i];
+    node.classList.toggle("active", i === editing);
+    node.classList.toggle(
+      "current",
+      !!p && currentTime >= p.start_s && currentTime < p.end_s,
+    );
+  }
+}
+function renderGuide() {
+  $("segmentGuide").hidden = !review;
+  $("save").classList.remove("attention");
+  $("fillAll").hidden = true;
+  if (!review) return;
+  const total = parts.length,
+    missing = parts.filter(unfilled).length,
+    step = !total ? 1 : missing ? (editing >= 0 ? 3 : 2) : dirty ? 4 : 5;
+  [...$("guideSteps").children].forEach((li, i) => {
+    li.className = i + 1 < step ? "done" : i + 1 === step ? "current" : "";
+  });
+  $("guideBar").style.width = total
+    ? `${((total - missing) / total) * 100}%`
+    : "0";
+  const current = parts[editing];
+  $("guideText").textContent =
+    step === 1
+      ? "点「自动分段（静止检测）」生成片段草稿，或拖动时间轴、用「设为当前」设置起止后添加"
+      : step === 2
+        ? `已填写 ${total - missing} / ${total} 段，还有 ${missing} 段未填写任务（虚线标出）`
+        : step === 3
+          ? unfilled(current)
+            ? `正在填写第 ${editing + 1} 段：播放核对后输入任务，按回车进入下一段（剩 ${missing} 段）`
+            : `正在修改第 ${editing + 1} 段，改完点「更新片段」；还有 ${missing} 段未填写`
+          : step === 4
+            ? `全部 ${total} 段已填写，点「保存全部标注」后生效`
+            : `${total} 段标注已保存`;
+  $("nextUnfilled").hidden = !missing;
+  $("save").classList.toggle("attention", step === 4);
+  const others = parts.filter((p, i) => unfilled(p) && i !== editing).length;
+  if (editing >= 0 && others) {
+    $("fillAll").hidden = false;
+    $("fillAll").textContent = `把此任务文本也填到其余 ${others} 段未填写片段`;
+  }
 }
 function renderParts() {
   $("segments").replaceChildren();
@@ -777,12 +997,14 @@ function renderParts() {
   parts.forEach((p, i) => {
     const row = el("div", undefined, "segment-row"),
       b = el("button");
+    row.dataset.index = i;
+    row.classList.toggle("unfilled", unfilled(p));
     b.type = "button";
     b.append(
-      el("p", p.task),
+      el("p", p.task || "未填写任务"),
       el(
         "small",
-        `${seconds(p.start_s)} — ${seconds(p.end_s)} · ${title(p.hands || "both")}`,
+        `#${i + 1} · ${seconds(p.start_s)} — ${seconds(p.end_s)} · ${title(p.hands || "both")}`,
       ),
     );
     b.onclick = () => editPart(i);
@@ -806,15 +1028,19 @@ function renderParts() {
     row.append(b, remove);
     $("segments").append(row);
     if (review) {
-      const block = el("button", p.task, p.hands || "both");
+      const block = el("button", p.task || "未填写", p.hands || "both");
+      block.dataset.index = i;
+      block.classList.toggle("unfilled", unfilled(p));
       block.style.left = (p.start_s / review.duration_s) * 100 + "%";
       block.style.width =
         ((p.end_s - p.start_s) / review.duration_s) * 100 + "%";
-      block.title = `${p.task}：${seconds(p.start_s)} 至 ${seconds(p.end_s)}`;
+      block.title = `#${i + 1} ${p.task || "未填写任务"}：${seconds(p.start_s)} 至 ${seconds(p.end_s)}`;
       block.onclick = () => editPart(i);
       $("segmentTrack").append(block);
     }
   });
+  highlightParts();
+  renderGuide();
 }
 function metricLabel(key) {
   return (
@@ -1261,9 +1487,10 @@ $("cancelEdit").onclick = resetEditor;
 $("segmentForm").addEventListener("input", () => {
   editorDirty = true;
 });
-$("segmentForm").onsubmit = (e) => {
-  e.preventDefault();
-  if (!review || reviewBusy) return;
+// Validate the editor and write it into `parts`; returns the stored part, or
+// null with the reason shown under the form.
+function commitEditor() {
+  if (!review || reviewBusy) return null;
   const p = {
     start_s: Number($("from").value),
     end_s: Number($("to").value),
@@ -1285,8 +1512,8 @@ $("segmentForm").onsubmit = (e) => {
     error = "片段与已有标注重叠，请调整起止时间";
   if (error) {
     $("formError").textContent = error;
-    $("from").focus();
-    return;
+    (p.task ? $("from") : $("task")).focus();
+    return null;
   }
   if (editing >= 0) parts[editing] = p;
   else parts.push(p);
@@ -1294,9 +1521,61 @@ $("segmentForm").onsubmit = (e) => {
   setDirty(true);
   resetEditor();
   renderParts();
+  return p;
+}
+$("segmentForm").onsubmit = (e) => {
+  e.preventDefault();
+  const filling = editing >= 0 && unfilled(parts[editing]),
+    p = commitEditor();
+  if (!p || !filling || focusUnfilled(p.start_s)) return;
+  if (!parts.some(unfilled))
+    notice("全部片段都已填写任务，点「保存全部标注」后生效");
+};
+$("nextUnfilled").onclick = () => {
+  const from = editing >= 0 ? parts[editing].start_s : currentTime;
+  // Keep what was typed for the open segment instead of dropping it.
+  if (editorDirty && editing >= 0 && !commitEditor()) return;
+  focusUnfilled(from);
+};
+$("fillAll").onclick = () => {
+  const task = $("task").value.trim();
+  if (!task) {
+    $("formError").textContent = "请先在上面填写任务文本";
+    $("task").focus();
+    return;
+  }
+  const previous = parts.map((p) => ({ ...p }));
+  if (editing >= 0 && !commitEditor()) return;
+  let count = 0;
+  for (const p of parts)
+    if (unfilled(p)) {
+      p.task = task;
+      count++;
+    }
+  setDirty(true);
+  resetEditor();
+  renderParts();
+  notice(
+    `已把“${task}”同时填到其余 ${count} 段；可点任一段单独修改，确认后保存全部标注`,
+  );
+  const undo = el("button", "撤销批量填写", "quiet");
+  undo.type = "button";
+  undo.onclick = () => {
+    parts = previous;
+    setDirty(true);
+    resetEditor();
+    renderParts();
+    notice("已撤销批量填写");
+  };
+  $("message").append(undo);
 };
 bind("save", async () => {
   if (editorDirty) throw Error("请先添加或更新正在编辑的片段，再保存全部标注");
+  const missing = parts.filter(unfilled).length;
+  if (missing) {
+    focusUnfilled();
+    throw Error(`还有 ${missing} 段未填写任务，已定位到第 ${editing + 1} 段`);
+  }
   reviewBusy = true;
   updateControls();
   try {
@@ -1316,29 +1595,35 @@ bind("autoSegment", async () => {
   if (editorDirty) throw Error("请先添加或更新正在编辑的片段，再自动分段");
   reviewBusy = true;
   updateControls();
+  let suggestions;
   try {
-    const suggestions = await api(base() + "/segments/auto");
-    const previous = parts;
-    parts = suggestions;
-    setDirty(true);
-    resetEditor();
-    renderParts();
-    notice(
-      `已按双臂静止检测生成 ${suggestions.length} 个片段草稿，请逐段填写任务文本后保存；保存前可撤销。`,
-    );
-    const undo = el("button", "撤销自动分段", "quiet");
-    undo.type = "button";
-    undo.onclick = () => {
-      parts = previous;
-      setDirty(true);
-      renderParts();
-      notice("已撤销自动分段");
-    };
-    $("message").append(undo);
+    suggestions = await api(base() + "/segments/auto");
   } finally {
+    // Re-enable the form before focusing the task box below.
     reviewBusy = false;
     updateControls();
   }
+  const previous = parts;
+  parts = suggestions;
+  setDirty(true);
+  resetEditor();
+  renderParts();
+  focusUnfilled();
+  notice(
+    suggestions.length
+      ? `已按双臂静止检测生成 ${suggestions.length} 个片段草稿，并打开第 1 段：输入任务后按回车依次填写，全部填完再保存。`
+      : "没有检测到可用片段：录制中可能缺少连续有效的位姿，请手动添加。",
+  );
+  const undo = el("button", "撤销自动分段", "quiet");
+  undo.type = "button";
+  undo.onclick = () => {
+    parts = previous;
+    setDirty(true);
+    resetEditor();
+    renderParts();
+    notice("已撤销自动分段");
+  };
+  $("message").append(undo);
 });
 bind("qc", async () => {
   if (dirty || editorDirty) throw Error("请先保存标注，再重新评估");

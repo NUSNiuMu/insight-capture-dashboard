@@ -25,10 +25,14 @@ from .dataset import (
     suggest_pause_segments,
     validate_segments,
 )
+from .pose_track import pose_settings, recompute, update_pose_settings
 
 
 def create_app(capture):
+    # Sessions being exported or recomputed; recording waits for them too,
+    # since both saturate the CPU.
     busy = set()
+    pose_jobs, pose_tasks = {}, set()
 
     @web.middleware
     async def errors(request, handler):
@@ -162,7 +166,7 @@ def create_app(capture):
 
     async def start(request):
         if busy:
-            raise ValueError("请等待当前导出完成，再开始录制")
+            raise ValueError("请等待当前导出或离线重算完成，再开始录制")
         text = await request.text()
         label = json.loads(text).get("name") if text else None
         return web.json_response(
@@ -235,7 +239,7 @@ def create_app(capture):
         path = session(request)
         if request.method == "POST":
             if path.name == capture.active or path.name in busy:
-                raise ValueError("请等待录制或导出完成")
+                raise ValueError("请等待录制、导出或离线重算完成")
             values = await request.json()
             validate_segments(
                 values, json.loads((path / "session.json").read_text())["duration_s"]
@@ -267,6 +271,7 @@ def create_app(capture):
         write_json(path / "quality.json", report)
         result = {
             "quality": report,
+            "pose": pose_state(path),
             "segments": parts,
             "streams": list(video),
             "duration_s": meta["duration_s"],
@@ -313,12 +318,51 @@ def create_app(capture):
             await asyncio.to_thread(review_data, session(request), True)
         )
 
+    def pose_state(path):
+        return {**pose_settings(path), "job": pose_jobs.get(path.name)}
+
+    async def pose(request):
+        path = session(request)
+        if request.method == "POST":
+            if path.name in busy:
+                raise ValueError("请等待导出或离线重算完成，再切换轨迹")
+            await asyncio.to_thread(update_pose_settings, path, await request.json())
+        return web.json_response(await asyncio.to_thread(pose_state, path))
+
+    async def pose_recompute(request):
+        path = session(request)
+        if capture.active or capture.reconfiguring:
+            raise ValueError("请先停止录制再离线重算：重算会占满 CPU，影响实时采集")
+        if path.name in busy:
+            raise ValueError("这条录制正在导出或离线重算，请稍候")
+        busy.add(path.name)
+        job = pose_jobs[path.name] = {
+            "running": True, "done": 0, "total": 0, "error": None,
+        }
+
+        def progress(done, total):
+            job.update(done=done, total=total)
+
+        async def run():
+            try:
+                await asyncio.to_thread(recompute, path, progress)
+            except Exception as exc:  # reported to the page, not raised
+                job["error"] = str(exc) or type(exc).__name__
+            finally:
+                job["running"] = False
+                busy.discard(path.name)
+
+        task = asyncio.get_running_loop().create_task(run())
+        pose_tasks.add(task)
+        task.add_done_callback(pose_tasks.discard)
+        return web.json_response(pose_state(path))
+
     async def delete_session(request):
         path = session(request)
         if path.name == capture.active:
             raise ValueError("正在录制这条记录，请先停止录制")
         if path.name in busy:
-            raise ValueError("这条录制正在导出，请等待导出完成")
+            raise ValueError("这条录制正在导出或离线重算，请等待完成")
         await asyncio.to_thread(shutil.rmtree, path)
         return web.json_response({"deleted": path.name})
 
@@ -409,6 +453,9 @@ def create_app(capture):
             web.get("/api/sessions/{name}/segments/auto", auto_segments),
             web.get("/api/sessions/{name}/qc", qc),
             web.get("/api/sessions/{name}/review", review),
+            web.get("/api/sessions/{name}/pose", pose),
+            web.post("/api/sessions/{name}/pose", pose),
+            web.post("/api/sessions/{name}/pose/recompute", pose_recompute),
             web.delete("/api/sessions/{name}", delete_session),
             web.get("/api/datasets", datasets_list),
             web.get("/api/datasets/{name}", datasets_detail),
