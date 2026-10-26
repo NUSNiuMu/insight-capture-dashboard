@@ -150,29 +150,6 @@
         "right_info_topic": "/egohalo/rectified/right/camera_info",
         "left_frame": "egohalo_rectified_left",
         "right_frame": "egohalo_rectified_right"
-      },
-      {
-        "name": "left_overlap",
-        "left_source": "egohalo_side_left",
-        "right_source": "egohalo_stereo_left",
-        "left_image_topic": "/egohalo/rectified/left_overlap/left/image",
-        "left_info_topic": "/egohalo/rectified/left_overlap/left/camera_info",
-        "left_frame": "egohalo_rectified_left_overlap_left",
-        "right_image_topic": "/egohalo/rectified/left_overlap/right/image",
-        "right_info_topic": "/egohalo/rectified/left_overlap/right/camera_info",
-        "right_frame": "egohalo_rectified_left_overlap_right"
-      },
-      {
-        "name": "right_overlap",
-        "left_source": "egohalo_stereo_right",
-        "right_source": "egohalo_side_right",
-        "left_image_topic": "/egohalo/rectified/right_overlap/left/image",
-        "left_info_topic": "/egohalo/rectified/right_overlap/left/camera_info",
-        "left_frame": "egohalo_rectified_right_overlap_left",
-        "right_image_topic": "/egohalo/rectified/right_overlap/right/image",
-        "right_info_topic": "/egohalo/rectified/right_overlap/right/camera_info",
-        "right_frame": "egohalo_rectified_right_overlap_right",
-        "reference_eye": "right"
       }
     ],
     "direct_match_min_confidence": 0.5

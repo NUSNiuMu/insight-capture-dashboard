@@ -17,7 +17,7 @@
 
 现场确认 EgoHalo 的 ROS domain 为 0，Insight3 为 20。配置驱动的 `device-domain-relay` 只转发源域与目标域不同的设备，每个源域使用独立进程，直接转发序列化 CDR 字节，减少图像解包/重打包，原样保留 header 时间戳、CameraInfo 与 TF；不修改设备配置。EgoHalo 使用开机计时，不能把其时间戳直接当作 UTC。
 
-`egohalo-stereo-rectifier` 消费四路 H.264、equidistant CameraInfo 和 TF，每个物理相机只解码一次，再组成前置双目、左侧重叠双目、右侧重叠双目。各组输出 544×640、5 Hz、90° 水平视场的虚拟针孔图像和对应内外参，以共享源时钟选择同一曝光。该尺寸匹配当前 SuperPoint/SuperGlue 引擎。四路共同参与地图观测和 Insight3 匹配，详细坐标、门限及验证见 [EGOHALO_MAPPING.md](EGOHALO_MAPPING.md)。
+`egohalo-stereo-rectifier` 默认只消费前置左右两路 H.264、equidistant CameraInfo 和 TF，输出 544×640、5 Hz、90° 水平视场的虚拟针孔双目及对应内外参，以共享源时钟选择同一曝光。该尺寸匹配当前 SuperPoint/SuperGlue 引擎。Insight3 匹配只使用前置左右目参考；四路原始预览和录制保留。实现仍支持通过 `mapping.stereo_views` 加入左右侧重叠双目；2026-10-12 的四路验证属于此前配置。详细坐标、门限及验证见 [EGOHALO_MAPPING.md](EGOHALO_MAPPING.md)。
 
 Mapper 输入话题与坐标系由配置覆盖。内部 `/insight9_sparse_map/*` 是保留的兼容接口名，不代表仍使用 Insight9 数据。Insight3 全局定位消费这张共享地图。EgoHalo 没有原 Insight9 RGB 立方标记输入，所以此配置关闭 cube-marker 校正，保留特征地图定位与采集前置检查。
 
