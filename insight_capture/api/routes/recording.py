@@ -86,7 +86,18 @@ class RecordingRoutes:
         if "topics" in payload and not isinstance(topics, list):
             return web.json_response({"error": "Field 'topics' must be a list."}, status=400)
         bag_name = str(payload.get("bag_name", "")).strip() or None
-        return await self._start_with_preflight(topics=topics, bag_name=bag_name, automation=False)
+        native_request = (
+            request.remote in {"127.0.0.1", "::1"}
+            and "Sec-Fetch-Mode" not in request.headers
+        )
+        return await self._start_with_preflight(
+            topics=topics,
+            bag_name=bag_name,
+            automation=False,
+            relaxed_preflight=(
+                payload.get("native_relaxed_preflight") is True or native_request
+            ),
+        )
 
     async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
         current = self.context.recording_manager.status()
@@ -114,6 +125,7 @@ class RecordingRoutes:
         automation: bool,
         preflight_mode: str = "capture",
         track_take: bool = True,
+        relaxed_preflight: bool = False,
     ) -> web.Response:
         take_store = getattr(self.context, "take_store", None)
         if (
@@ -136,6 +148,29 @@ class RecordingRoutes:
                 refresh_topics=True,
                 mode=preflight_mode,
             )
+            if relaxed_preflight and preflight_mode == "capture":
+                relaxed_codes = {
+                    "mapping_not_ready",
+                    "localization_not_ready",
+                    "pose_stale",
+                    "recorder_topics_missing",
+                }
+                relaxed_failures = [
+                    item
+                    for item in report.get("failures", [])
+                    if item.get("code") in relaxed_codes
+                ]
+                report["failures"] = [
+                    item
+                    for item in report.get("failures", [])
+                    if item.get("code") not in relaxed_codes
+                ]
+                report["warnings"] = [
+                    *report.get("warnings", []),
+                    *relaxed_failures,
+                ]
+                report["relaxed_preflight"] = True
+                report["ok"] = not report["failures"]
             if not report.get("ok"):
                 speech = preflight_service.speech(report)
                 return web.json_response(

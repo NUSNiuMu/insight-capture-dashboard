@@ -82,7 +82,8 @@ PageFrame {
                 enabled: !page.locked && page.taskActive && page.selected.length > 0 && !dashboard.playback
                 onClicked: {
                     var body = {
-                        "topics": page.selected
+                        "topics": page.selected,
+                        "native_relaxed_preflight": true
                     };
                     if (name.text.trim())
                         body.bag_name = name.text.trim();

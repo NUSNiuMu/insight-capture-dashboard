@@ -573,9 +573,10 @@ void Dashboard::command(const QString &action, const QString &value) {
     }
     QString path;
     QJsonObject body;
-    if (action == "record")
+    if (action == "record") {
         path = "/api/recording/start";
-    else if (action == "stop")
+        body = {{"native_relaxed_preflight", true}};
+    } else if (action == "stop")
         path = "/api/recording/stop";
     else if (action == "check")
         path = "/api/capture-check/run";
