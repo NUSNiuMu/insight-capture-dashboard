@@ -117,9 +117,14 @@ void Dashboard::request(const QString &path, const QJsonObject *body, std::funct
         reply = m_http.get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply, path, done] {
         m_pending.remove(path);
+        const bool captureCommand = path == "/api/recording/start" || path == "/api/recording/stop";
+        if (captureCommand)
+            m_state["captureAction"] = "";
         auto value = reply->isOpen() ? QJsonDocument::fromJson(reply->readAll()).object() : QJsonObject();
         if (reply->error() != QNetworkReply::NoError) {
             m_message = value["speech"].toString(value["error"].toString(reply->errorString()));
+            if (captureCommand)
+                m_state["captureError"] = m_message;
             if (path.contains("playback")) {
                 m_playbackStarting = false;
                 if (path != "/api/playback/stop")
@@ -129,6 +134,8 @@ void Dashboard::request(const QString &path, const QJsonObject *body, std::funct
         } else {
             if (done)
                 done(value);
+            if (captureCommand)
+                emit stateChanged();
         }
         reply->deleteLater();
     });
@@ -540,6 +547,12 @@ void Dashboard::command(const QString &action, const QString &value) {
         emit stateChanged();
         return;
     }
+    if (action == "record" && !m_state["task"].toMap().value("active").toBool()) {
+        m_message = "当前未进入采集任务，请先选择任务并点击“进入任务”";
+        m_state["captureError"] = m_message;
+        emit stateChanged();
+        return;
+    }
     if (action == "live") {
         goLive();
         return;
@@ -579,8 +592,20 @@ void Dashboard::command(const QString &action, const QString &value) {
         body = {{"reason", value.isEmpty() ? "operator_rejected" : value}};
     } else
         return;
+    if (action == "record" || action == "stop") {
+        if (m_pending.contains(path))
+            return;
+        m_state["captureAction"] = action == "record" ? "starting" : "stopping";
+        m_state["captureError"] = "";
+        m_message = action == "record" ? "正在检查设备、校时并启动录制…" : "正在停止两端录制…";
+        emit stateChanged();
+    }
     post(path, body, [this, action](QJsonObject d) {
-        m_message = d["speech"].toString(d["error"].toString("操作完成"));
+        m_message = d["speech"].toString(d["error"].toString(action == "record" ? "录制已启动" : "操作完成"));
+        if (action == "task" || action == "endTask") {
+            m_state["task"] = d.toVariantMap();
+            m_state["captureError"] = "";
+        }
         if (action == "stop")
             refreshBags();
         if (action == "clear" || action == "reset") {

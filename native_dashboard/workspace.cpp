@@ -77,8 +77,8 @@ void Workspace::request(const QString &key, const QString &path, const QString &
                 m_viewData.insert(key, value);
             }
         } else
-            m_errors[key] = value.toMap().value("error", reply->error() == QNetworkReply::NoError ?
-                                               "后端响应不是有效数据" : reply->errorString());
+            m_errors[key] = value.toMap().value("speech", value.toMap().value("error",
+                reply->error() == QNetworkReply::NoError ? "后端响应不是有效数据" : reply->errorString()));
         emit changed();
         emit completed(key, ok);
         reply->deleteLater();

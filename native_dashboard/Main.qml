@@ -18,6 +18,9 @@ ApplicationWindow {
     property real pageSwitchStartedAt: 0
     property real pageFirstFrameAt: 0
     property bool lastRecording: false
+    property bool taskActive: !!(dashboard.state.task || {}).active
+    property string captureAction: dashboard.state.captureAction || ""
+    property bool captureLocked: !!dashboard.state.recording || !!dashboard.state.recordingBusy || captureAction.length > 0
     property string lastTaskState: ""
     onCurrentPageChanged: {
         pageSwitchStartedAt=Date.now();pageFirstFrameAt=0
@@ -156,7 +159,7 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.preferredHeight: 18; Layout.minimumHeight: 18; Layout.maximumHeight: 18
             BusyIndicator { running: Object.keys(workspace.busy).some(function(k){return workspace.busy[k]}); visible: running; implicitWidth: 18; implicitHeight: 18 }
-            Label { text: Object.keys(workspace.errors).map(function(k){return workspace.errors[k]}).join(" · "); textFormat: Text.PlainText; color: "#c2453d"; elide: Text.ElideRight; Layout.fillWidth: true; ToolTip.visible: errorMouse.containsMouse; ToolTip.text: text; MouseArea { id: errorMouse; anchors.fill: parent; hoverEnabled: true } }
+            Label { text: Object.keys(workspace.errors).map(function(k){return workspace.errors[k]}).join(" · ") || dashboard.state.captureError || (!root.taskActive && dashboard.connected && !dashboard.playback ? "当前未进入采集任务：请选择任务并点击“进入任务”，再开始录制。" : ""); textFormat: Text.PlainText; color: "#c2453d"; elide: Text.ElideRight; Layout.fillWidth: true; ToolTip.visible: errorMouse.containsMouse; ToolTip.text: text; MouseArea { id: errorMouse; anchors.fill: parent; hoverEnabled: true } }
         }
         WorkspacePages {
             id: pageLoader; Layout.fillWidth: true; Layout.fillHeight: true
@@ -327,11 +330,11 @@ ApplicationWindow {
                 id: controls; anchors.fill: parent; anchors.margins: 11; spacing: 8
                 RowLayout {
                     Label { text: "采集任务"; color: "#776d5a" }
-                    Ui.ComboBox { id: task; Layout.preferredWidth: 190; model: dashboard.tasks; textRole: "name"; valueRole: "task_id"; enabled: !dashboard.state.recording }
-                    Ui.Button { id: activateButton; text: "进入任务"; enabled: task.count>0&&!dashboard.state.recording&&!dashboard.playback; onClicked: dashboard.command("task",task.currentValue) }
-                    Ui.Button { text: "结束任务"; enabled: !dashboard.state.recording; onClicked: dashboard.command("endTask") }
+                    Ui.ComboBox { id: task; Layout.preferredWidth: 190; model: dashboard.tasks; textRole: "name"; valueRole: "task_id"; enabled: !root.captureLocked }
+                    Ui.Button { id: activateButton; text: "进入任务"; highlighted: !root.taskActive; enabled: task.count>0&&!dashboard.state.recording&&!dashboard.playback&&!dashboard.state.recordingBusy&&!root.captureAction; onClicked: dashboard.command("task",task.currentValue) }
+                    Ui.Button { text: "结束任务"; enabled: !root.captureLocked && root.taskActive; onClicked: dashboard.command("endTask") }
                     Rectangle { width: 1; height: 25; color: "#ddd1b9" }
-                    Ui.Button { id: recordButton; tone: dashboard.state.recording ? "danger" : "primary"; text: dashboard.state.recording ? "停止录制" : dashboard.state.recordingBusy ? "正在保存…" : "开始录制"; highlighted: true; enabled: (dashboard.state.recording||dashboard.connected)&&!dashboard.playback&&!dashboard.state.recordingBusy; onClicked: dashboard.command(dashboard.state.recording?"stop":"record") }
+                    Ui.Button { id: recordButton; tone: dashboard.state.recording ? "danger" : "primary"; text: root.captureAction === "starting" ? "正在起录…" : root.captureAction === "stopping" ? "正在停止…" : dashboard.state.recording ? "停止录制" : dashboard.state.recordingBusy ? "正在保存…" : !root.taskActive ? "先进入任务" : "开始录制"; highlighted: true; enabled: (dashboard.state.recording||dashboard.connected&&root.taskActive)&&!dashboard.playback&&!dashboard.state.recordingBusy&&!root.captureAction; onClicked: dashboard.command(dashboard.state.recording?"stop":"record") }
                     Ui.Button { text: "作废最近一条"; tone: "danger"; enabled: !dashboard.state.recording; onClicked: root.confirm("reject","operator_rejected","确认作废最近一条记录？") }
                     Item { Layout.fillWidth: true }
                     Ui.Button { id: checkButton; text: "采集检查"; onClicked: dashboard.command("check") }
@@ -347,7 +350,7 @@ ApplicationWindow {
                     Label { text: dashboard.playback ? root.playTime.toFixed(1)+" / "+dashboard.duration.toFixed(1)+" s" : (dashboard.state.playbackState || "idle"); color: "#84775f" }
                     Ui.Button { id: liveButton; text: "返回实时"; enabled: dashboard.playback; onClicked: { root.playPaused=false;dashboard.command("live") } }
                 }
-                Label { text: dashboard.state.recording ? "● 录制中  " + ((dashboard.state.distributed || {}).enabled ? "Ego TF 卡 + Jetson · " : "") + (dashboard.state.output || "") : dashboard.state.recordingBusy ? "正在确认两端保存并合并，请稍候…" : dashboard.message; Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
+                Label { text: root.captureAction === "starting" ? "正在检查设备、校时并启动录制，请稍候…" : root.captureAction === "stopping" ? "正在停止两端录制，请稍候…" : dashboard.state.recording ? "● 录制中  " + ((dashboard.state.distributed || {}).enabled ? "Ego TF 卡 + Jetson · " : "") + (dashboard.state.output || "") : dashboard.state.recordingBusy ? "正在确认两端保存并合并，请稍候…" : dashboard.message; Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
             }
         }
     }

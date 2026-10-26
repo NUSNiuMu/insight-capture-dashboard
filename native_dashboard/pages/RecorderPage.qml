@@ -13,7 +13,9 @@ PageFrame {
     property var directories: workspace.data.directories || {}
     property var distributed: status.distributed || {}
     property bool finalizing: status.merge_state === "merging" || status.merge_state === "finalizing"
-    property bool locked: !!status.recording || finalizing || !!workspace.busy.action
+    property bool locked: !!status.recording || finalizing || !!workspace.busy.action || !!dashboard.state.captureAction
+    property bool taskActive: !!(status.task_status || {}).active
+    property bool starting: false
     heading: "Recorder · 录制"
     description: distributed.enabled ? "Ego 四路视频录到头环 TF 卡；Jetson 保存腕部数据。停止后校验取回并按原始采集时间戳合并。" : "选择 ROS 话题和存储目录，查看录制与保存状态。完整性检查请前往评分或录制库。"
     function browse(path) {
@@ -41,6 +43,31 @@ PageFrame {
         heading: "录制控制"
         RowLayout {
             Layout.fillWidth: true
+            Ui.ComboBox {
+                id: captureTask
+                objectName: "recording-task"
+                Layout.fillWidth: true
+                model: dashboard.tasks
+                textRole: "name"
+                valueRole: "task_id"
+                enabled: !page.locked
+            }
+            Ui.Button {
+                objectName: "recording-enter-task"
+                text: "进入任务"
+                highlighted: !page.taskActive
+                enabled: !page.locked && captureTask.count > 0 && !dashboard.playback
+                onClicked: shell.mutate("/api/tasks/" + encodeURIComponent(captureTask.currentValue) + "/activate")
+            }
+        }
+        Label {
+            text: page.taskActive ? "当前任务：" + (((page.status.task_status || {}).task || {}).name || "") : "当前未进入采集任务，请先选择任务并点击“进入任务”。"
+            color: page.taskActive ? Ui.Theme.secondary : Ui.Theme.red
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+        }
+        RowLayout {
+            Layout.fillWidth: true
             Ui.TextField {
                 id: name
                 objectName: "recording-name"
@@ -50,15 +77,16 @@ PageFrame {
             }
             Ui.Button {
                 objectName: "recording-start"
-                text: "开始录制"
+                text: page.starting ? "正在起录…" : !page.taskActive ? "先进入任务" : "开始录制"
                 highlighted: true
-                enabled: !page.locked && page.selected.length > 0 && !dashboard.playback
+                enabled: !page.locked && page.taskActive && page.selected.length > 0 && !dashboard.playback
                 onClicked: {
                     var body = {
                         "topics": page.selected
                     };
                     if (name.text.trim())
                         body.bag_name = name.text.trim();
+                    page.starting = true;
                     shell.mutate("/api/recording/start", body);
                 }
             }
@@ -66,7 +94,7 @@ PageFrame {
                 objectName: "recording-stop"
                 tone: "danger"
                 text: "停止录制"
-                enabled: !!page.status.recording && !workspace.busy.action
+                enabled: !!page.status.recording && !workspace.busy.action && !dashboard.state.captureAction
                 onClicked: shell.mutate("/api/recording/stop")
             }
             Ui.Button {
@@ -316,6 +344,8 @@ PageFrame {
     Connections {
         target: workspace
         function onCompleted(key, success) {
+            if (key === "action")
+                page.starting = false;
             if (key === "topics" && success)
                 page.syncTopics();
         }
