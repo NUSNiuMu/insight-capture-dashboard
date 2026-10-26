@@ -170,6 +170,15 @@ class CapturePreflight:
                 "recorder_topics_missing", f"{len(missing)}个必要录制话题无发布者", topics=missing
             ))
 
+        distributed = None
+        if not calibration_mode:
+            check_distributed = getattr(self.recording_manager, "distributed_preflight", None)
+            if callable(check_distributed):
+                try:
+                    distributed = check_distributed()
+                except Exception as exc:
+                    failures.append(self._failure("distributed_not_ready", str(exc)))
+
         return {
             "type": "capture_preflight",
             "mode": mode,
@@ -180,6 +189,7 @@ class CapturePreflight:
             "camera_health": camera_health,
             "mapping": mapping,
             "storage": storage,
+            "distributed": distributed,
             "topics": {
                 "selected": selected,
                 "required": sorted(required_topics),

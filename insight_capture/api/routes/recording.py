@@ -90,7 +90,7 @@ class RecordingRoutes:
 
     async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
         current = self.context.recording_manager.status()
-        status = self.context.recording_manager.stop()
+        status = await asyncio.to_thread(self.context.recording_manager.stop)
         take_store = getattr(self.context, "take_store", None)
         take = (
             take_store.complete_current(status)
@@ -99,6 +99,12 @@ class RecordingRoutes:
             else None
         )
         return web.json_response({**status, "take": take})
+
+    async def _handle_recording_merge_retry(self, _request: web.Request) -> web.Response:
+        retry = getattr(self.context.recording_manager, "retry_merge", None)
+        if retry is None:
+            raise ValueError("Distributed recording is not configured.")
+        return web.json_response(await asyncio.to_thread(retry))
 
     async def _start_with_preflight(
         self,
@@ -192,6 +198,8 @@ class RecordingRoutes:
             actual_name = time.strftime("looper_record_%Y%m%d_%H%M%S")
         try:
             start_arguments = {"topics": topics, "bag_name": actual_name}
+            if hasattr(self.context.recording_manager, "distributed_preflight"):
+                start_arguments["task"] = take
             if track_take and take_store is not None:
                 start_arguments["output_subdirectory"] = (
                     take_store.recording_subdirectory()
@@ -202,7 +210,7 @@ class RecordingRoutes:
                 self.context.recording_manager.start, **start_arguments
             )
             if track_take and take_store is not None:
-                take = take_store.mark_recording(status.get("output_path"))
+                take = take_store.mark_recording(status.get("output_path"), recording_status=status)
         except Exception as exc:
             if track_take and take_store is not None:
                 take_store.fail_start(exc)

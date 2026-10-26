@@ -136,7 +136,7 @@ def build_recording_manager(
     """Build the recorder against the node's explicit image bridge."""
 
     runtime_config = settings.runtime_config
-    return RecordingManager(
+    manager = RecordingManager(
         raw_config=settings.raw_config,
         ros_domain_id=settings.ros_domain_id,
         rosbag_root=settings.rosbag_root,
@@ -160,3 +160,10 @@ def build_recording_manager(
         ),
         storage_browse_roots=settings.storage_browse_roots,
     )
+    distributed = settings.raw_config.get("distributed_recording", {})
+    if distributed.get("enabled"):
+        from insight_capture.runtime.recording.distributed import DistributedRecordingManager
+        return DistributedRecordingManager(
+            manager, distributed, settings.project_root / "outputs" / "distributed-recording.json"
+        )
+    return manager

@@ -194,6 +194,13 @@ def build_runtime_services(
         recording_manager,
         services.playback_configuration,
     )
+    on_session_finished = getattr(recording_manager, "add_session_finished_callback", None)
+    if callable(on_session_finished):
+        def finish_distributed_take(status):
+            take = services.take_store.current()
+            if take and (take.get("distributed") or {}).get("session_id") == (status.get("distributed") or {}).get("session_id"):
+                services.take_store.complete_current(status)
+        on_session_finished(finish_distributed_take)
     recording_manager.add_recording_completed_callback(
         lambda path: services.prepared_playback_manager.enqueue(
             services.bag_library.reference_for_path(path) or path.name

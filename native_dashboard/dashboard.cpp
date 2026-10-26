@@ -108,7 +108,7 @@ void Dashboard::post(const QString &path, const QJsonObject &body, std::function
 }
 void Dashboard::request(const QString &path, const QJsonObject *body, std::function<void(QJsonObject)> done) {
     QNetworkRequest req(m_server.resolved(QUrl(path)));
-    req.setTransferTimeout(path == "/api/rosbags" ? 30000 : 5000);
+    req.setTransferTimeout(path.startsWith("/api/recording/") && body ? 60000 : path == "/api/rosbags" ? 30000 : 5000);
     QNetworkReply *reply;
     if (body) {
         req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
@@ -182,6 +182,8 @@ void Dashboard::poll() {
         const auto previous = m_state;
         m_state["recording"] = d["recording"].toBool();
         m_state["output"] = d["output_path"].toString();
+        m_state["distributed"] = d["distributed"].toObject().toVariantMap();
+        m_state["recordingBusy"] = d["merge_state"].toString() == "merging" || d["merge_state"].toString() == "finalizing" || m_pending.contains("/api/recording/start") || m_pending.contains("/api/recording/stop");
         m_state["task"] = d["task_status"].toObject().toVariantMap();
         m_state["take"] = d["current_take"].toObject().toVariantMap();
         if (m_state != previous)

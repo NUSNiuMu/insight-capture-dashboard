@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from aiohttp import web
 
 from insight_capture.api.context import DashboardContext
@@ -12,12 +13,12 @@ class RuntimeRoutes:
         self.context = context
 
     async def _handle_preflight(self, _request: web.Request) -> web.Response:
-        report = self.context.capture_preflight.evaluate()
+        report = await asyncio.to_thread(self.context.capture_preflight.evaluate)
         report["speech"] = self.context.capture_preflight.speech(report)
         return web.json_response(report, status=200 if report["ok"] else 422)
 
     async def _handle_system_status(self, _request: web.Request) -> web.Response:
-        report = self.context.capture_preflight.evaluate()
+        report = await asyncio.to_thread(self.context.capture_preflight.evaluate)
         return web.json_response({
             "type": "system_status",
             "ready": bool(report.get("ok")),

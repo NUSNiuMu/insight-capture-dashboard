@@ -277,7 +277,7 @@ class RecordingManager:
         except OSError as exc:
             raise ValueError(f"Cannot read recording directory {target}: {exc}") from exc
         for child in children:
-            if child.name.startswith(".") or child.name in {"_outputs", "_staging"}:
+            if child.name.startswith(".") or child.name in {"_outputs", "_staging", "_distributed"}:
                 continue
             try:
                 resolved = child.resolve()

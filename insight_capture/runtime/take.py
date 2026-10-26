@@ -319,13 +319,15 @@ class SessionTakeStore:
             self._current_take_id = take_id
             return deepcopy(payload)
 
-    def mark_recording(self, output_path: object) -> Dict:
+    def mark_recording(self, output_path: object, recording_status: Optional[Dict] = None) -> Dict:
         with self._lock:
             payload = self.current()
             if payload is None:
                 raise RuntimeError("No take is reserved.")
             payload["state"] = "recording"
             payload["bag_path"] = str(output_path or "") or None
+            if (recording_status or {}).get("distributed"):
+                payload["distributed"] = recording_status["distributed"]
             self._write_json(self._path(payload["take_id"]), payload)
             return deepcopy(payload)
 
@@ -353,6 +355,10 @@ class SessionTakeStore:
             if isinstance(network, dict) and network.get("ok") is False:
                 reasons.append("recording network audit failed")
             image_audit = recording_status.get("image_header_audit") or {}
+            distributed = recording_status.get("distributed") or {}
+            if distributed.get("clock_violations"):
+                reasons.append("distributed clock synchronization audit failed")
+            reasons.extend(distributed.get("quality_issues") or [])
             if (
                 isinstance(image_audit, dict)
                 and image_audit.get("recording_quality_authoritative") is True
@@ -369,7 +375,7 @@ class SessionTakeStore:
                 "suspect" if reasons or quality_anomalies else "pass"
             )
             payload.update({
-                "state": "complete" if qc_state != "fail" else "finalization_failed",
+                "state": "finalizing" if recording_status.get("merge_state") in {"merging", "finalizing"} else "complete" if qc_state != "fail" else "finalization_failed",
                 "end_epoch_s": time.time(),
                 "bag_path": str(recording_status.get("output_path") or payload.get("bag_path") or "") or None,
                 "quick_qc": {
@@ -378,6 +384,7 @@ class SessionTakeStore:
                     "image_header_audit": image_audit or None,
                     "network_audit": network or None,
                 },
+                "distributed": distributed or None,
             })
             self._write_json(self._path(payload["take_id"]), payload)
             return deepcopy(payload)

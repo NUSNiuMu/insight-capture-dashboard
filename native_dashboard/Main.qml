@@ -331,7 +331,7 @@ ApplicationWindow {
                     Ui.Button { id: activateButton; text: "进入任务"; enabled: task.count>0&&!dashboard.state.recording&&!dashboard.playback; onClicked: dashboard.command("task",task.currentValue) }
                     Ui.Button { text: "结束任务"; enabled: !dashboard.state.recording; onClicked: dashboard.command("endTask") }
                     Rectangle { width: 1; height: 25; color: "#ddd1b9" }
-                    Ui.Button { id: recordButton; tone: dashboard.state.recording ? "danger" : "primary"; text: dashboard.state.recording ? "停止录制" : "开始录制"; highlighted: true; enabled: (dashboard.state.recording||dashboard.connected)&&!dashboard.playback; onClicked: dashboard.command(dashboard.state.recording?"stop":"record") }
+                    Ui.Button { id: recordButton; tone: dashboard.state.recording ? "danger" : "primary"; text: dashboard.state.recording ? "停止录制" : dashboard.state.recordingBusy ? "正在保存…" : "开始录制"; highlighted: true; enabled: (dashboard.state.recording||dashboard.connected)&&!dashboard.playback&&!dashboard.state.recordingBusy; onClicked: dashboard.command(dashboard.state.recording?"stop":"record") }
                     Ui.Button { text: "作废最近一条"; tone: "danger"; enabled: !dashboard.state.recording; onClicked: root.confirm("reject","operator_rejected","确认作废最近一条记录？") }
                     Item { Layout.fillWidth: true }
                     Ui.Button { id: checkButton; text: "采集检查"; onClicked: dashboard.command("check") }
@@ -347,7 +347,7 @@ ApplicationWindow {
                     Label { text: dashboard.playback ? root.playTime.toFixed(1)+" / "+dashboard.duration.toFixed(1)+" s" : (dashboard.state.playbackState || "idle"); color: "#84775f" }
                     Ui.Button { id: liveButton; text: "返回实时"; enabled: dashboard.playback; onClicked: { root.playPaused=false;dashboard.command("live") } }
                 }
-                Label { text: dashboard.state.recording ? "● 录制中  " + (dashboard.state.output || "") : dashboard.message; Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
+                Label { text: dashboard.state.recording ? "● 录制中  " + ((dashboard.state.distributed || {}).enabled ? "Ego TF 卡 + Jetson · " : "") + (dashboard.state.output || "") : dashboard.state.recordingBusy ? "正在确认两端保存并合并，请稍候…" : dashboard.message; Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
             }
         }
     }

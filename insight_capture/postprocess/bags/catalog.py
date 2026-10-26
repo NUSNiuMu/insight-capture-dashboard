@@ -59,7 +59,7 @@ class BagLibrary:
             child_names[:] = [
                 name
                 for name in child_names
-                if not name.startswith(".") and name not in {"_outputs", "_staging", "review"}
+                if not name.startswith(".") and name not in {"_outputs", "_staging", "_distributed", "review"}
             ]
             if (path / "metadata.yaml").is_file() or (path / MANIFEST_NAME).is_file():
                 child_names[:] = []

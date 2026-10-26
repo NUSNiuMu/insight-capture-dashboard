@@ -1,0 +1,80 @@
+# Ego TF 卡与 Jetson 腕部协同录制
+
+`jetson-nx-egohalo` 的 Qt 起停按钮统一控制两端：Ego 在自身 TF 卡保存四路原始 H.264、IMU、VIO、跟踪状态、CameraInfo 和静态 TF；Jetson 保存左右腕部数据，以及在线建图/定位产生的统一位姿。其他 profile 的录制方式不变。Qt 默认入口仍为 `./native_dashboard/run.sh`。
+
+## 操作与文件
+
+先进入数采任务，再开始录制。界面确认“两端录制中”后执行动作；起录包含 DDS 准备和至少一个 GOP 的头部视频准备时间。停止后界面依次显示两端保存确认、取回 Ego 数据、合并。完成前不能开始下一条或切换任务。Ego TF 卡原件不会自动删除。
+
+每条生成独立的 `session_id`，同时写入 Ego `capture.json` 和 Jetson 清单。任务集编号、任务名称、Jetson take 编号与 Ego 本地录制编号也会保留；两个设备上的 take 数字不必相等。配对依据是共同 `session_id`，不能只按文件名或起录时间猜测。
+
+相对于当前 Jetson 录制根目录，文件布局如下：
+
+```text
+_distributed/<session_id>.json           # 每条协调与校时清单
+_distributed/<session_id>_jetson/        # Jetson 原始 MCAP
+_distributed/<session_id>_ego/           # 校验后的 Ego 原始副本
+<task_id>/<bag_name>/                    # 合并后的标准 rosbag2 MCAP
+    distributed_session.json
+    time_alignment.json
+    recording_manifest.json
+    metadata.yaml
+    *.mcap
+```
+
+Ego 原件位于 `/userdata/sdcard/capture/`。实际 Jetson 存储根目录仍由原有外盘优先/备用存储逻辑决定；使用 NVMe 回退时仍显示告警。
+
+Qt 录制页显示共同编号、两端保存状态、每台设备时钟偏差与异常。Ego 录制内容固定为头环本地配置的完整数据，Jetson 话题选择不会关闭头环某一路。Jetson 原始包不再录 `/egohalo/` 的转发数据，避免把跨域接收缺口写成头部原件；实时预览和建图仍使用原有转发。
+
+## 时间同步规则
+
+参数放在 `config/devices/jetson-nx-egohalo/cameras.json` 的 `distributed_recording` 中：
+
+| 参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `max_clock_bound_ms` | 10 ms | 单台设备相对 Jetson 的测量界限 |
+| `max_pairwise_clock_bound_ms` | 10 ms | 任意两台设备的界限之和 |
+| `max_ntp_rtt_ms` | 10 ms | 采纳的 NTP 往返时延上限 |
+| `ntp_samples` | 5 | 每轮每台设备采样数，选择往返时延最小者 |
+| `clock_sample_interval_sec` | 5 s | 录制中的测量间隔 |
+| `keyframe_lead_in_sec` | 1.1 s | Ego 确认录制后的关键帧准备时间 |
+
+起录前、起录确认后、录制期间和停止时，向 Ego、Insight3 A/B 查询 NTP。检查响应源、原始请求时间戳、服务器同步标记及 stratum。使用四时间戳估计设备减 Jetson 的偏差，Linux 内核收包时间减少 Python 调度误差。单机界限为 `abs(offset) + RTT/2`，设备间界限取最大的两个单机界限之和。它基于 NTP 路径时延模型，不是物理曝光测量或绝对精度保证。
+
+起录检查失败时不启动两端。录制中失败不会丢弃数据或强行跳时钟，而是在清单和 take QC 中记录异常。Jetson 实时时钟与单调时钟的变化差也参与审计。每次测量的四个时间戳、偏差、RTT、门槛和结论都会保存。
+
+10 ms 是当前内部工程门槛，并非《Ego 数据采集规范》给定的数字。NTP 对齐设备时钟，不会令自由运行的六路相机同时曝光；最终还需按任务要求验证视频帧相位、姿态对齐和实际同步精度。此改动不改变相机分辨率，也不补齐 LeRobot 六路导出或独立二维手点检测。
+
+## 合并与验收
+
+合并按原始 `header.stamp` 的 UTC 时间进行，保留 CDR 消息内容，不按按钮时间或网络到达时间平移相机数据。带 Header 的合并包消息索引使用原始采集时间；无 Header 的状态/TF 消息保留原包时间。原始包保留原有接收时间以便追溯。
+
+取回使用 Ego 已保存文件的版本锁、4 MiB 分片和远端 SHA-256 校验，保存每个完整文件的 SHA-256。下载后检查 `capture.json` 的共同编号与保存状态。原始副本保留，即使合并失败也不删除。源 TF 卡变化、传输中断、版本变化或空间不足均报错，Qt 提供“重试取回与合并”；下一条录制不会覆盖此前原始包。
+
+合并要求六路都有数据、采集时间属于本次 UTC 区间且无回退。H.264 每路从带 SPS/PPS 的 IDR 开始，保留必要解码前导帧；`time_alignment.json` 中 `common_start_ns` / `common_end_ns` 是六路共同可解码区间，`episode_t0_ns` 指定相对时间原点。前导帧不应作为正式动作区间。原始视频不插帧、不改曝光时间。
+
+报告还包含各话题消息数、原始时间范围、估计缺口和相对主时间轴最近帧的 P95/最大时间差。最近帧时间差反映帧相位和缺口，不能当作 NTP 时钟误差。合并输出会重新读取核对全部消息计数，然后才发布到录制库。
+
+`video_header_quality` 默认按 0.1% 的图像时间戳缺口估计门槛检查，并另外统计 H.264 参考序列缺口；超标会让 take QC 显示可疑，合并成功不代表数据合格。时间戳缺口估计与编码参考帧丢失分别报告，不能相互替代。
+
+服务重启后使用已保存的起录命令和 `session_id` 恢复停止确认，不会自动发出一条新的起录命令。网络断开时保留“等待确认”；任一端提前结束会停止另一端并报告异常。不得用仅一端保存成功冒充完整双端录制。
+
+对历史已保存、但未成功合并的条目，可在有 ROS 环境的容器中手动重试：
+
+```bash
+python3 scripts/merge_distributed_recording.py \
+  --session /实际录制根目录/_distributed/共同编号.json \
+  --config config/cameras.json
+```
+
+此命令核对设备地址和两端保存状态，拒绝覆盖已有合并输出。Qt 的重试按钮用于当前最近一条。
+
+## 2026-10-26 设备验证
+
+实际从 Qt 启停，使用独立诊断任务，不改变既有叠杯任务数据。Ego TF 卡形成 139,260,413 字节的 MCAP，与取回文件 SHA-256 一致；Jetson 原始包只包含腕部及统一定位数据。合并包为 26 个话题、66,698 条消息，全部 CDR 内容与原件逐条哈希一致，所有带 Header 消息的合并索引时间等于原始采集时间。
+
+共同可解码区间为 32.4805 秒，8 轮 NTP 审计均通过，设备间偏差界限最大 3.7401 ms。头环本机 IMU 共 13,044 条，400 Hz 时间戳连续、估计缺失为零；相对头部前置左路的其他头部视频最近帧偏差最大约 0.203 ms，腕部 A/B 分别约 14.026/7.178 ms，包含自由运行相机的帧相位，不是时钟误差。
+
+四路 H.264 首帧均带 SPS/PPS/IDR，编码参考序列缺口为零。但头部前置左路有 3 个采集时间戳缺口，估计 0.307%，该条标为质量可疑。同步回放生成 974 帧、约 32.47 秒，报告 3 次重复选帧、最大选帧偏差 33.272 ms；三个统一位姿覆盖率均为 1。此结果证明双端存储、编号配对和时间戳合并路径可用，不能作为长期无丢帧或完整规范交付验收。
+
+20 项新增检查覆盖 NTP 应答/时钟跳变/超限、起录响应丢失、重启停止意图、发布后中断恢复、目录边界、下载分片与编号校验、原件目录隔离、take 保存及质量状态，以及模拟 MCAP 原始时间合并和异常拒绝；原 Ego profile/H.264/几何相关 4 项检查通过。现场证据在本机 `~/workspaces/insight_capture_tests/distributed_recording_20261026/`。

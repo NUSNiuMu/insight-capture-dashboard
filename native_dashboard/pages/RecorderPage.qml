@@ -11,10 +11,11 @@ PageFrame {
     property var status: workspace.data.recording || {}
     property var catalog: workspace.data.topics || {}
     property var directories: workspace.data.directories || {}
+    property var distributed: status.distributed || {}
     property bool finalizing: status.merge_state === "merging" || status.merge_state === "finalizing"
     property bool locked: !!status.recording || finalizing || !!workspace.busy.action
     heading: "Recorder · 录制"
-    description: "选择 ROS 话题和存储目录，查看录制与保存状态。完整性检查请前往评分或录制库。"
+    description: distributed.enabled ? "Ego 四路视频录到头环 TF 卡；Jetson 保存腕部数据。停止后校验取回并按原始采集时间戳合并。" : "选择 ROS 话题和存储目录，查看录制与保存状态。完整性检查请前往评分或录制库。"
     function browse(path) {
         workspace.request("directories", "/api/recording/storage/directories" + (path ? "?path=" + encodeURIComponent(path) : ""));
     }
@@ -75,6 +76,68 @@ PageFrame {
         }
     }
     Ui.Section {
+        visible: !!page.distributed.enabled
+        heading: "双端录制与时间同步"
+        Label {
+            text: "状态：" + ({idle: "待命", starting: "正在启动两端", recording: "两端录制中", stop_pending: "等待两端保存确认", saved: "两端已保存", copying: "正在校验取回 Ego 数据", merging: "正在按采集时间合并", done: "六路已合并", error: "需要检查"}[page.distributed.phase] || page.distributed.phase || "待命")
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+        }
+        Label {
+            text: "共同录制编号：" + (page.distributed.session_id || "起录时生成")
+            Layout.fillWidth: true
+            wrapMode: Text.WrapAnywhere
+            color: Ui.Theme.muted
+        }
+        Label {
+            text: "Ego TF 卡：" + (page.distributed.ego_path || "/userdata/sdcard/capture") + (page.distributed.remote_saved ? " · 已保存" : "")
+            Layout.fillWidth: true
+            wrapMode: Text.WrapAnywhere
+            color: Ui.Theme.muted
+        }
+        Label {
+            text: "Jetson 腕部原件：" + (page.distributed.jetson_path || "起录时生成") + (page.distributed.local_saved ? " · 已保存" : "")
+            Layout.fillWidth: true
+            wrapMode: Text.WrapAnywhere
+            color: Ui.Theme.muted
+        }
+        Repeater {
+            model: Object.keys((page.distributed.clock || {}).devices || {})
+            delegate: Label {
+                required property string modelData
+                property var clock: ((page.distributed.clock || {}).devices || {})[modelData] || {}
+                text: modelData + " · " + (clock.offset_ms !== undefined ? "时钟偏差 " + Number(clock.offset_ms).toFixed(2) + " ms · 偏差界限 " + Number(clock.offset_bound_ms).toFixed(2) + " ms" : clock.error || "未测量")
+                color: clock.ok ? Ui.Theme.secondary : Ui.Theme.red
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+            }
+        }
+        Label {
+            text: "起录门槛：单台及设备间偏差界限 ≤ " + ((page.distributed.clock || {}).max_clock_bound_ms || 10) + " ms；录制中持续检查。NTP 校时不代表硬件曝光同步。"
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            color: Ui.Theme.muted
+        }
+        Label {
+            text: (page.distributed.clock || {}).checked_at_epoch_s ? "最近检查：" + new Date(page.distributed.clock.checked_at_epoch_s * 1000).toLocaleTimeString() : "开始录制前自动检查时钟"
+            color: Ui.Theme.muted
+            Layout.fillWidth: true
+        }
+        Label {
+            text: page.distributed.error || (page.distributed.clock_violations || []).length ? (page.distributed.error || "本次时钟检查存在异常，需复核时间报告") : (page.distributed.quality_issues || []).length ? "本次视频连续性检查存在异常，需复核质量报告" : ""
+            visible: text.length > 0
+            Layout.fillWidth: true
+            wrapMode: Text.Wrap
+            color: Ui.Theme.red
+        }
+        Ui.Button {
+            visible: !!page.distributed.retry_merge
+            text: "重试取回与合并"
+            enabled: !workspace.busy.action
+            onClicked: shell.mutate("/api/recording/merge/retry")
+        }
+    }
+    Ui.Section {
         heading: "录制状态"
         RowLayout {
             Layout.fillWidth: true
@@ -83,7 +146,7 @@ PageFrame {
                 tone: page.status.recording ? "success" : page.status.merge_state === "error" ? "danger" : page.finalizing ? "accent" : "neutral"
             }
             Label {
-                text: page.status.recording ? "正在采集所选话题" : page.finalizing ? "正在合并录制，请等待保存完成…" : page.status.merge_state === "done" ? "录制已保存" + ((page.status.merge_timings || {}).total_sec !== undefined ? " · 耗时 " + Number(page.status.merge_timings.total_sec).toFixed(1) + " 秒" : "") : "准备开始录制"
+                text: page.status.recording ? (page.distributed.enabled ? "Ego TF 卡与 Jetson 正在独立保存" : "正在采集所选话题") : page.finalizing ? "正在保存和合并录制，请等待完成…" : page.status.merge_state === "done" ? "录制已保存" + ((page.status.merge_timings || {}).total_sec !== undefined ? " · 耗时 " + Number(page.status.merge_timings.total_sec).toFixed(1) + " 秒" : "") : "准备开始录制"
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: Ui.Theme.secondary
@@ -219,8 +282,8 @@ PageFrame {
                 anchors.fill: parent
                 Ui.CheckBox {
                     font.weight: Font.DemiBold
-                    text: group.modelData.label || group.modelData.namespace
-                    enabled: !page.locked
+                    text: (group.modelData.label || group.modelData.namespace) + (page.distributed.enabled && group.modelData.namespace === "egohalo" ? "（TF 卡自动录制）" : "")
+                    enabled: !page.locked && !(page.distributed.enabled && group.modelData.namespace === "egohalo")
                     checked: (group.modelData.topics || []).length > 0 && (group.modelData.topics || []).every(function (t) {
                             return page.selected.indexOf(t.name) >= 0;
                         })
@@ -242,7 +305,7 @@ PageFrame {
                         required property var modelData
                         Layout.fillWidth: true
                         text: modelData.name + " · " + (modelData.type || "")
-                        enabled: !page.locked
+                        enabled: !page.locked && !(page.distributed.enabled && modelData.name.indexOf("/egohalo/") === 0)
                         checked: page.selected.indexOf(modelData.name) >= 0
                         onToggled: page.toggle(modelData.name, checked)
                     }

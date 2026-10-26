@@ -43,7 +43,8 @@ class TaskRoutes:
         return web.json_response({**status, "speech": task_status_speech(status)})
 
     def _recording_conflict(self, action: str) -> web.Response | None:
-        if not self.context.recording_manager.status().get("recording"):
+        recording = self.context.recording_manager.status()
+        if not recording.get("recording") and recording.get("merge_state") not in {"merging", "finalizing"}:
             return None
         return web.json_response(
             {
@@ -71,11 +72,9 @@ class TaskRoutes:
         return web.json_response({"task": task})
 
     async def _handle_activate(self, request: web.Request) -> web.Response:
-        if self.context.recording_manager.status().get("recording"):
-            return web.json_response(
-                {"error": "Cannot change task while recording.", "speech": "正在录制，不能切换任务。"},
-                status=409,
-            )
+        conflict = self._recording_conflict("change")
+        if conflict is not None:
+            return conflict
         task_id = request.match_info.get("task_id", "").strip()
         previous = self.context.take_store.task_status()
         status = self.context.take_store.activate_task(task_id)
@@ -99,11 +98,9 @@ class TaskRoutes:
         return web.json_response({**status, "changed": not unchanged, "speech": speech})
 
     async def _handle_end(self, _request: web.Request) -> web.Response:
-        if self.context.recording_manager.status().get("recording"):
-            return web.json_response(
-                {"error": "Cannot end task while recording.", "speech": "正在录制，不能结束任务。"},
-                status=409,
-            )
+        conflict = self._recording_conflict("end")
+        if conflict is not None:
+            return conflict
         previous = self.context.take_store.task_status()
         if not previous.get("active"):
             return web.json_response({**previous, "speech": task_status_speech(previous)})
