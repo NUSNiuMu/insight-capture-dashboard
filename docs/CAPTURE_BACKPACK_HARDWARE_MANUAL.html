@@ -59,7 +59,7 @@ a { color:var(--teal); text-decoration:none; }
 </head>
 <body>
 <section class="page" id="cover">
-<div class="running"><span>INSIGHT / 硬件与连接</span><span>现场核验版 · V1.1</span></div>
+<div class="running"><span>INSIGHT / 硬件与连接</span><span>现场核验版 · V1.2</span></div>
 <p class="eyebrow">三相机 · 双手与头部 · 本地采集</p>
 <h1>数采背包<br>硬件说明手册</h1>
 <p class="lead">Jetson Orin NX 8GB + Insight3 × 2 + Insight9 × 1</p>
@@ -85,7 +85,7 @@ a { color:var(--teal); text-decoration:none; }
 </div>
 <p class="small">上图是逻辑拓扑，不是插针图。三根线接主机面板 USB 口，系统仍可能把这些口列在同一个 Hub 下。Hub 是否集成于载板或另行安装，需拆机照片或载板资料确认。</p>
 <h3>阅读导航</h3>
-<div class="toc"><div>硬件清单与计算主机 <b>03</b></div><div>主机面板接口 <b>04</b></div><div>电池与供电线路 <b>05</b></div><div>相机与采集信息 <b>06</b></div><div>分辨率与双目基线 <b>07</b></div><div>USB、网络与协议 <b>08</b></div><div>存储、串口与外设 <b>09</b></div><div>安装与走线 <b>10</b></div><div>启动、关机与恢复 <b>11</b></div><div>故障排查与检查命令 <b>12</b></div><div>证据、边界与待补规格 <b>13</b></div></div>
+<div class="toc"><div>硬件清单与计算主机 <b>03</b></div><div>主机面板接口 <b>04</b></div><div>电池与供电线路 <b>05</b></div><div>相机与采集信息 <b>06</b></div><div>分辨率、内参与基线 <b>07</b></div><div>USB、网络与协议 <b>08</b></div><div>存储、串口与外设 <b>09</b></div><div>安装与走线 <b>10</b></div><div>启动、关机与恢复 <b>11</b></div><div>故障排查与检查命令 <b>12</b></div><div>证据、边界与待补规格 <b>13</b></div></div>
 <footer><span>供电关系来自安装手册；数据关系结合本机实测</span><span>02 / 13</span></footer>
 </section>
 
@@ -153,13 +153,13 @@ a { color:var(--teal); text-decoration:none; }
 <tr><td>麦克风与播报</td><td>配置支持 USB 音频输入／输出，本次未枚举到 USB 声卡。</td><td>USB 音频驱动 → 主机语音服务；不经相机 DDS 链路。</td></tr>
 </tbody></table>
 <figure><div class="rotate compact"><img src="hardware-manual/camera-ports.jpg" alt="原安装手册中的相机侧面，可见供电连接与 USB-C 数据接口"></div><figcaption>原手册第 6 页相机接口示例。照片可见 USB-C 外形、12V⎓0.9A 和 5V⎓2A 标识；仅是该照片机身标注，不能推广成三台相机各自的功耗或替代供电许可。</figcaption></figure>
-<p class="small">“VIO”指视觉惯性里程计。Insight9＋Insight3 模式的实际输出分辨率和内部双目基线见第 7 页；帧率、IMU 频率和时间同步精度仍需单独验收。</p>
+<p class="small">“VIO”指视觉惯性里程计。Insight9＋Insight3 模式的实际输出分辨率、双目内参与内部基线见第 7 页；帧率、IMU 频率和时间同步精度仍需单独验收。</p>
 <footer><span>相机供电按第 5 页；采集内容按实际话题选择</span><span>06 / 13</span></footer>
 </section>
 
 <section class="page" id="camera-specs">
 <div class="running"><span>Insight9＋Insight3 模式</span><span>2026-10-27 实时参数核验</span></div>
-<h2>05 补充 / 分辨率与双目基线</h2>
+<h2>05 补充 / 分辨率、内参与基线</h2>
 <p>配置为 <code>jetson-nx</code>：头部 Insight9 一台，右手、左手 Insight3 各一台。分辨率统一按<strong>宽 × 高（像素）</strong>书写，为相机当前发布尺寸。</p>
 <h3>实际输出分辨率</h3>
 <table><thead><tr><th>设备／角色</th><th>图像流</th><th>每路分辨率</th></tr></thead><tbody>
@@ -169,12 +169,13 @@ a { color:var(--teal); text-decoration:none; }
 <tr><td>Insight3 B／左手</td><td>infra1 左目、infra2 右目</td><td>每目 <strong>544 × 640</strong></td></tr>
 </tbody></table>
 <p class="small">图像消息尺寸与 CameraInfo 逐路一致；彩色 JPEG 另经解码核对。以上不是传感器最大规格，也不是预览缩放或训练导出尺寸。</p>
-<h3>相机间距：同一设备内部的双目基线</h3>
-<table><thead><tr><th>设备</th><th>左右光心距离（标定值）</th><th>便于记忆的近似值</th></tr></thead><tbody>
-<tr><td>Insight9 A</td><td><strong>100.16 mm</strong></td><td>约 10 cm</td></tr>
-<tr><td>Insight3 A</td><td><strong>34.86 mm</strong></td><td>约 3.5 cm</td></tr>
-<tr><td>Insight3 B</td><td><strong>34.95 mm</strong></td><td>约 3.5 cm</td></tr>
+<h3>双目内参与内部基线</h3>
+<table><thead><tr><th>设备（左／右目）</th><th>fx（像素）</th><th>fy（像素）</th><th>双目基线</th></tr></thead><tbody>
+<tr><td>Insight9 A</td><td><strong>306.2473</strong></td><td><strong>306.2473</strong></td><td>100.16 mm</td></tr>
+<tr><td>Insight3 A</td><td><strong>307.9021</strong></td><td><strong>307.9021</strong></td><td>34.86 mm</td></tr>
+<tr><td>Insight3 B</td><td><strong>307.4051</strong></td><td><strong>307.4051</strong></td><td>34.95 mm</td></tr>
 </tbody></table>
+<p class="small">每行左右目焦距相同，适用于每目 544 × 640 图像。实时 CameraInfo 中 <code>fx=K[0]=P[0]</code>、<code>fy=K[4]=P[5]</code>；校正图像使用 P 中的焦距。这里记录当前发布内参，不推断工厂原始镜头参数；图像缩放后须同步缩放内参。</p>
 <div class="note"><strong>基线的含义：</strong>每台设备内部左、右镜头光心的距离。头部 Insight9 与两台手部 Insight3 之间、两只手之间的距离会随佩戴和动作变化，没有统一的固定基线；需由当时的相对位姿计算。</div>
 <h3>数值依据与使用范围</h3>
 <p>基线由实时 <code>/tf_static</code> 中各设备 <code>camera_left → camera_right</code> 的平移向量长度计算，并用左右 CameraInfo 投影矩阵交叉核对：<code>B = |P右[3]/P右[0] − P左[3]/P左[0]|</code>（米）。三台设备两种结果之差均小于 0.00001 mm。</p>
@@ -281,7 +282,7 @@ curl -fsS --max-time 5 http://127.0.0.1:8765/api/recording/status</pre>
 <table><thead><tr><th style="width:29%">来源</th><th>支持内容</th></tr></thead><tbody>
 <tr><td>原硬件安装手册<br>共 8 页</td><td><code>Insight_三相机系统_硬件安装手册.pdf</code>：设备清单、D-Tap 与 12V 分路、8-pin 一分三、USB 接线及五张实物照片。照片来源页：2、4、5、6、7。</td></tr>
 <tr><td>2026-10-10<br>11:33 +08:00 盘点</td><td>设备树、USB / PCIe 枚举、IP、CAN 状态、存储、音频、电源传感器；相机管理接口逐路读取及后端实际存储路径。</td></tr>
-<tr><td>2026-10-27<br>相机参数只读核验</td><td>三台相机的 7 路 CameraInfo 与对应图像尺寸、实时静态 TF；分辨率及内部双目基线见第 7 页。</td></tr>
+<tr><td>2026-10-27<br>相机参数只读核验</td><td>三台相机的 7 路 CameraInfo 与对应图像尺寸、实时静态 TF；分辨率、双目内参及内部基线见第 7 页。</td></tr>
 <tr><td>当前项目配置与文档</td><td><code>config/cameras.json</code> 的相机角色与预览流；<code>docs/USAGE.md</code>、<code>OPENCLAW_VOICE.md</code> 及前端手册中的使用和启动约束。</td></tr>
 </tbody></table>
 <p class="small">原始盘点摘要随手册保存：<a href="hardware-manual/inspection-2026-10-10.json"><code>hardware-manual/inspection-2026-10-10.json</code></a>。初版盘点没有订阅全速图像；10 月 27 日补充采用 12 秒有界只读订阅核对尺寸与外参。两次均未新建录制、重启服务或断电；尺寸核验不代替持续采集验收。</p>
@@ -294,7 +295,7 @@ curl -fsS --max-time 5 http://127.0.0.1:8765/api/recording/status</pre>
 <tr><td>性能与环境</td><td>整包重量、续航、环境适用范围，以及三路持续录制和同步精度验收。不得从链路速率推算这些指标。</td></tr>
 </tbody></table>
 <div class="note"><strong>更新原则：</strong>换载板、电池、相机、Hub 或线束后，重新核对接口与供电规格；更换 USB 端口或 IP 配置后，更新第 8 页映射。交接时保留这一页，避免把待确认项当成已认证规格。</div>
-<footer><span>V1.1 · 相机参数补充 · 2026-10-27</span><span>13 / 13</span></footer>
+<footer><span>V1.2 · 相机参数补充 · 2026-10-27</span><span>13 / 13</span></footer>
 </section>
 </body>
 </html>
