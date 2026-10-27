@@ -22,6 +22,9 @@ class StaticRoutes:
     async def _handle_recording_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.context.web_root / "recording.html")
 
+    async def _handle_mobile_page(self, _request: web.Request) -> web.FileResponse:
+        return web.FileResponse(self.context.web_root / "mobile.html", headers={"Cache-Control": "no-store"})
+
     async def _handle_images_page(self, _request: web.Request) -> web.FileResponse:
         raise web.HTTPFound("/3d")
 

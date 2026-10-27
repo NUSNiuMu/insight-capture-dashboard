@@ -47,6 +47,7 @@ for (const [name, buf] of Object.entries(preserved)) {
 }
 
 const pageFiles = [
+  ["mobile/index.html", "mobile.html"],
   ["review/index.html", "3d.html"],
   ["sessions/index.html", "sessions.html"],
   ["storage/index.html", "bags.html"],
@@ -62,6 +63,7 @@ for (const [source, target] of pageFiles) {
 }
 
 const pageScripts = [
+  ["mobile/app.js", "mobile.js"],
   ["review/app.js", "spatial.js"],
   ["sessions/app.js", "sessions.js"],
   ["storage/app.js", "bags.js"],
@@ -80,6 +82,7 @@ copyTree(path.join(srcDir, "review", "camera"), path.join(staticDir, "camera"));
 copyTree(path.join(srcDir, "review", "spatial"), path.join(staticDir, "spatial"));
 copyFile(path.join(srcDir, "advanced", "handpose", "viewer.js"), path.join(staticDir, "handpose", "viewer.js"));
 copyFile(path.join(srcDir, "styles.css"), path.join(staticDir, "styles.css"));
+copyFile(path.join(srcDir, "mobile", "style.css"), path.join(staticDir, "mobile.css"));
 copyFile(path.join(srcDir, "fonts", "InterVariable.woff2"), path.join(staticDir, "fonts", "InterVariable.woff2"));
 
 console.log("Built web dashboard into " + distDir);

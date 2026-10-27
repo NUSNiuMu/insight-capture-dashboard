@@ -771,7 +771,7 @@ class RecordingManager:
             network_snapshot_end = capture_network_snapshot()
             self._image_writer_active = False
             if not processes and not image_writer_active and not prior_exit_codes:
-                return self.status()
+                return self._status_unlocked()
             self.merge_state = "finalizing"
 
         if network_snapshot_start is not None:
@@ -1137,20 +1137,20 @@ class RecordingManager:
     def status(self) -> Dict[str, object]:
         with self._lock:
             self._cleanup_if_exited_unlocked()
-            catalog = self.topic_catalog
-            output_lines = list(self._output_lines)
-            recording = bool(self.processes) or self._image_writer_active
-            return {
-                "recording": recording,
-                "recording_mode": self.recording_mode,
-                "output_path": self.output_path,
-                "topic_catalog": catalog,
-                "recent_output": output_lines,
-                "network_audit": self._network_audit,
-                "image_header_audit": self._image_header_audit,
-                "merge_state": self.merge_state,
-                "merge_error": self.merge_error,
-                "merge_timings": dict(self.merge_timings),
-                "start_timings": dict(self.start_timings),
-                "storage": dict(self.storage_status),
-            }
+            return self._status_unlocked()
+
+    def _status_unlocked(self) -> Dict[str, object]:
+        return {
+            "recording": bool(self.processes) or self._image_writer_active,
+            "recording_mode": self.recording_mode,
+            "output_path": self.output_path,
+            "topic_catalog": self.topic_catalog,
+            "recent_output": list(self._output_lines),
+            "network_audit": self._network_audit,
+            "image_header_audit": self._image_header_audit,
+            "merge_state": self.merge_state,
+            "merge_error": self.merge_error,
+            "merge_timings": dict(self.merge_timings),
+            "start_timings": dict(self.start_timings),
+            "storage": dict(self.storage_status),
+        }

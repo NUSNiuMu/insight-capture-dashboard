@@ -9,6 +9,7 @@ from .routes.quality import CaptureCheckRoutes
 from .routes.gripper import GripperExtractionRoutes
 from .routes.handpose import HandPoseRoutes
 from .routes.mapping import MappingRoutes
+from .routes.mobile import MobileCaptureRoutes
 from .routes.native import NativePreviewRoutes
 from .routes.optimization import OptimizationRoutes
 from .routes.playback import PlaybackRoutes
@@ -37,6 +38,7 @@ def create_app(context: DashboardContext) -> web.Application:
     gripper = GripperExtractionRoutes(context)
     handpose = HandPoseRoutes(context)
     mapping = MappingRoutes(context)
+    mobile = MobileCaptureRoutes(context)
     recording = RecordingRoutes(context)
     runtime = RuntimeRoutes(context)
     sessions = SessionRoutes(context)
@@ -66,6 +68,8 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/cameras/{camera_name}/frame", cameras._handle_camera_frame)
     app.router.add_get("/api/images/capabilities", cameras._handle_image_capabilities)
     app.router.add_get("/api/recording/status", recording._handle_recording_status)
+    app.router.add_get("/api/mobile/status", mobile.status)
+    app.router.add_post("/api/mobile/{action}", mobile.command)
     app.router.add_get("/api/preflight", runtime._handle_preflight)
     app.router.add_get("/api/system/status", runtime._handle_system_status)
     app.router.add_post("/api/system/status", runtime._handle_system_status)
@@ -164,6 +168,7 @@ def create_app(context: DashboardContext) -> web.Application:
         app.router.add_get("/bags", static._handle_bags_page)
         app.router.add_get("/umi-dataset", static._handle_umi_dataset_page)
         app.router.add_get("/recording", static._handle_recording_page)
+        app.router.add_get("/mobile", static._handle_mobile_page)
         app.router.add_get("/scoring", static._handle_scoring_page)
         app.router.add_get("/optimization", static._handle_optimization_page)
         app.router.add_get("/handpose", static._handle_handpose_page)
@@ -176,6 +181,7 @@ def create_app(context: DashboardContext) -> web.Application:
         app.router.add_static("/optimization-runs/", str(runs_root), show_index=False)
 
     app.on_startup.append(websocket._on_startup)
+    app.on_shutdown.append(mobile.shutdown)
     app.on_shutdown.append(gripper._on_shutdown)
     app.on_shutdown.append(umi_export._on_shutdown)
     app.on_shutdown.append(handpose._on_shutdown)

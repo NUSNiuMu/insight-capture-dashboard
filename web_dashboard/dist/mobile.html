@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#122920">
+  <title>Insight9 · 手机采集</title>
+  <link rel="stylesheet" href="/static/mobile.css?v=20261027-1">
+</head>
+<body>
+  <main>
+    <header><div class="brand">INSIGHT<span>9</span></div><span id="connection" class="pill">连接中</span></header>
+    <div class="intro"><p class="eyebrow">现场采集控制台</p><h1>记录每一次行动。</h1><p>Insight9 头部相机 · Insight3 双手相机</p></div>
+    <section class="capture-card" aria-labelledby="state">
+      <div class="state-line"><span id="orb" class="orb"></span><h2 id="state" aria-live="polite">正在连接设备</h2><span id="timer">00:00</span></div>
+      <p id="state-help">读取 Jetson 上的实际采集状态…</p>
+      <div class="stats"><div><small>可用空间</small><strong id="disk">—</strong></div><div><small>录制存储</small><strong id="storage">—</strong></div></div>
+      <button id="start" class="primary" disabled>开始采集</button>
+      <button id="stop" class="stop" hidden disabled>停止并保存</button>
+      <p class="hint">手机断线或锁屏后，Jetson 仍会继续采集。</p>
+    </section>
+    <section class="inputs"><div class="section-title"><h2>设备状态</h2><span>图像 / VIO</span></div><div id="cameras" class="camera-list"><p>等待设备状态…</p></div></section>
+    <section id="issues" class="issues" hidden aria-live="polite"></section>
+    <section class="preview-section"><div class="section-title"><h2>实时预览</h2><button id="preview-toggle" class="text-button">开启预览</button></div>
+      <p id="preview-description">按需开启单路画面，采集优先。</p>
+      <div id="preview-panel" hidden>
+        <label class="sr-only" for="preview-camera">预览相机</label><select id="preview-camera"><option value="insight9_a">头部 · Insight9</option><option value="insight3_a">右手 · Insight3 A</option><option value="insight3_b">左手 · Insight3 B</option></select>
+        <div class="media"><video id="preview-video" autoplay muted playsinline hidden></video><span id="preview-status">正在连接画面…</span></div>
+      </div>
+    </section>
+    <section class="result"><div class="section-title"><h2>当前 / 最近一条</h2><span id="result-state">—</span></div><p id="filename">尚未采集</p><p id="result-error" role="alert" hidden></p></section>
+    <footer>数据保存在 Jetson · 手机仅控制和预览<br><a href="/recording">桌面录制面板</a></footer>
+  </main>
+  <script type="module" src="/static/pages/mobile.js?v=20261027-1"></script>
+</body>
+</html>
