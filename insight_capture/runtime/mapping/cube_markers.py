@@ -283,8 +283,10 @@ class MultiCubeMarkerEstimator:
         if dictionary_id is None:
             raise ValueError(f"unknown ArUco dictionary: {config.dictionary_name}")
         dictionary = cv2.aruco.getPredefinedDictionary(dictionary_id)
+        parameters = cv2.aruco.DetectorParameters()
+        parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
         self._detector = cv2.aruco.ArucoDetector(
-            dictionary, cv2.aruco.DetectorParameters()
+            dictionary, parameters
         )
 
     def detect(
