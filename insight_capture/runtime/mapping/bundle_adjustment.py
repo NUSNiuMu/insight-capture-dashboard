@@ -48,6 +48,7 @@ class BundleAdjustmentConfig:
     association_radius_m: float = 0.12
     descriptor_ratio_test: float = 0.80
     descriptor_min_similarity: float = 0.78
+    min_triangulation_angle_deg: float = 0.5
     odometry_translation_std_m: float = 0.03
     odometry_rotation_std_deg: float = 1.0
     robust_loss_px: float = 2.0
@@ -75,6 +76,7 @@ class BundleAdjustmentConfig:
             self.association_radius_m,
             self.descriptor_ratio_test,
             self.descriptor_min_similarity,
+            self.min_triangulation_angle_deg,
             self.odometry_translation_std_m,
             self.odometry_rotation_std_deg,
             self.robust_loss_px,
@@ -86,6 +88,8 @@ class BundleAdjustmentConfig:
             raise ValueError("bundle adjustment thresholds must be finite and positive")
         if not 0.0 <= self.min_relative_improvement < 1.0:
             raise ValueError("minimum relative improvement must be in [0, 1)")
+        if self.min_triangulation_angle_deg >= 90.0:
+            raise ValueError("minimum triangulation angle must be below 90 degrees")
 
 
 @dataclass(frozen=True)
@@ -276,6 +280,59 @@ def _associate_tracks(
     return repeated[: config.max_landmarks]
 
 
+def _triangulate_tracks(frames, tracks, left_projection, right_projection, min_angle_deg):
+    """Initialize shared landmarks from all pixel observations and reject weak geometry."""
+
+    models = []
+    centers = []
+    for frame in frames:
+        inverse = _inverse_transform(frame.pose)
+        projections = (
+            (left_projection, right_projection)
+            if frame.left_projection is None
+            else (frame.left_projection, frame.right_projection)
+        )
+        pair = [projection @ inverse for projection in projections]
+        models.append(pair)
+        pair_centers = []
+        for projection in pair:
+            center = np.linalg.svd(projection, full_matrices=True)[2][-1]
+            if abs(center[3]) < 1e-12:
+                raise ValueError("triangulation requires finite camera centers")
+            pair_centers.append(center[:3] / center[3])
+        centers.append(pair_centers)
+
+    selected, points = [], []
+    for track in tracks:
+        equations, cameras, origins = [], [], []
+        for frame_index, point_index in track.observations:
+            frame = frames[frame_index]
+            pixels = (frame.left_pixels[point_index], frame.right_pixels[point_index])
+            for eye, (u, v) in enumerate(pixels):
+                projection = models[frame_index][eye]
+                equations.extend((u * projection[2] - projection[0], v * projection[2] - projection[1]))
+                cameras.append(projection)
+                origins.append(centers[frame_index][eye])
+        matrix = np.asarray(equations, dtype=np.float64)
+        matrix /= np.maximum(np.linalg.norm(matrix[:, :3], axis=1, keepdims=True), 1e-12)
+        homogeneous = np.linalg.svd(matrix, full_matrices=False)[2][-1]
+        if abs(homogeneous[3]) < 1e-12:
+            continue
+        point = homogeneous[:3] / homogeneous[3]
+        depths = np.asarray(cameras)[:, 2, :] @ np.r_[point, 1.0]
+        if not np.isfinite(point).all() or np.any(depths <= 1e-5):
+            continue
+        rays = point - np.asarray(origins)
+        rays /= np.maximum(np.linalg.norm(rays, axis=1, keepdims=True), 1e-12)
+        # Parallel and anti-parallel rays are both depth-degenerate.
+        cosine = float(np.clip(np.min(np.abs(rays @ rays.T)), 0.0, 1.0))
+        if math.degrees(math.acos(cosine)) < min_angle_deg:
+            continue
+        selected.append(track)
+        points.append(point)
+    return selected, np.asarray(points, dtype=np.float64).reshape(-1, 3)
+
+
 def optimize_local_bundle(
     frames: list[BundleAdjustmentFrame],
     left_projection: np.ndarray,
@@ -299,6 +356,11 @@ def optimize_local_bundle(
     tracks = _associate_tracks(frames, config)
     if len(tracks) < config.min_landmarks:
         return _empty_result("insufficient_repeated_landmarks", started, len(frames))
+    tracks, initial_landmarks = _triangulate_tracks(
+        frames, tracks, left_projection, right_projection, config.min_triangulation_angle_deg
+    )
+    if len(tracks) < config.min_landmarks:
+        return _empty_result("insufficient_triangulated_landmarks", started, len(frames))
 
     observations: list[tuple[int, int, int]] = []
     for landmark_index, track in enumerate(tracks):
@@ -330,7 +392,7 @@ def optimize_local_bundle(
     ]
     pose_variable_count = (len(frames) - 1) * 6
     landmark_offset = pose_variable_count
-    initial_landmarks = np.asarray(
+    reference_landmarks = np.asarray(
         [track.position for track in tracks], dtype=np.float64
     )
     initial = np.zeros((pose_variable_count + len(tracks) * 3,), dtype=np.float64)
@@ -408,7 +470,9 @@ def optimize_local_bundle(
             pose_offset = (frame_index - 1) * 6
             sparsity[row : row + 6, pose_offset : pose_offset + 6] = 1
 
-    initial_residuals = residuals(initial)
+    reference = initial.copy()
+    reference[landmark_offset:] = reference_landmarks.reshape(-1)
+    initial_residuals = residuals(reference)
     initial_rmse = float(
         np.sqrt(np.mean(initial_residuals[:observation_rows] ** 2))
     )
@@ -438,7 +502,7 @@ def optimize_local_bundle(
         for before, after in zip(base_poses, optimized_poses)
     )
     landmark_correction = float(
-        np.max(np.linalg.norm(optimized_landmarks - initial_landmarks, axis=1))
+        np.max(np.linalg.norm(optimized_landmarks - reference_landmarks, axis=1))
     )
     finite = bool(
         np.isfinite(solution.x).all()

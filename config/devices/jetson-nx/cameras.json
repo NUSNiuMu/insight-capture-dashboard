@@ -27,7 +27,11 @@
         "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]
       },
       "dashboard_row": 0,
-      "dashboard_column": 0
+      "dashboard_column": 0,
+      "record_topics": [
+        "/insight3_a/camera/vio_status",
+        "/insight_global/insight3_a/status"
+      ]
     },
     {
       "name": "insight3_b",
@@ -45,7 +49,11 @@
         "rotation_xyzw": [0.0, 0.0, 0.0, 1.0]
       },
       "dashboard_row": 1,
-      "dashboard_column": 0
+      "dashboard_column": 0,
+      "record_topics": [
+        "/insight3_b/camera/vio_status",
+        "/insight_global/insight3_b/status"
+      ]
     },
     {
       "name": "insight9_a",
@@ -59,7 +67,18 @@
       "teleop_role": "head",
       "avatar_model": "assets/models/iron-man_helmet_mk3_optimized.glb",
       "dashboard_row": 0,
-      "dashboard_column": 1
+      "dashboard_column": 1,
+      "record_topics": [
+        "/insight9_a/camera/vio_status",
+        "/insight9_a/camera/infra1/image_rect_raw",
+        "/insight9_a/camera/infra1/camera_info",
+        "/insight9_a/camera/infra2/image_rect_raw",
+        "/insight9_a/camera/infra2/camera_info",
+        "/insight9_sparse_map/status",
+        "/insight9_sparse_map/features",
+        "/insight9_sparse_map/calibration_keyframe/image",
+        "/insight9_sparse_map/calibration_keyframe/points"
+      ]
     }
   ]
 }

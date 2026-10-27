@@ -27,6 +27,10 @@
 - 手机停止请求在录制器持锁时核验路径和录制模式；受理请求后切换到另一条录制，旧请求会被拒绝执行。
 - 数据写入当前录制根目录下的 `insight9_mobile/insight9_<时间>_<编号>/`，不改现有任务和目录选择。
 - 使用当前配置的默认录制话题，包含图像、原始 VIO、IMU、标定信息和可用的全局 Pose。页面明确显示备用存储；它不会自动切换采集盘。
+- Jetson NX 默认录制为 32 个话题，增加头部左右目校正图和 CameraInfo、三路 VIO 状态、
+  地图特征/状态/关键帧与两腕定位状态。暂停后恢复录制时重发按 child frame 汇总的完整
+  静态 TF，避免只保存最后一个设备的外参。按当前实测 20 Hz，头部双目约增加 14 MB/s 原始图像数据；
+  重建图和复测步骤见 [重建图前优化与数据规范](MAPPING_REBUILD_VALIDATION.md)。
 - 接口为 `GET /api/mobile/status`、`POST /api/mobile/start`、`POST /api/mobile/stop`。命令携带唯一 `command_id`，停止还需携带状态接口返回的 `output_path`，防止旧页面停止新的一条。
 - 不导入或调用 Ego 系统。启用分布式录制或者不是 Insight9 + 双 Insight3 配置时，此入口明确拒绝启动。
 - 手机和桌面共用 `web_dashboard/src/shared/webrtc.js` 中的一份信令处理，显示和连接生命周期留在各自页面；手机不增加图片回退。手机命令编号统一使用 `crypto.getRandomValues`，不再提供另一种生成方式。

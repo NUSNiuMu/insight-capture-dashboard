@@ -199,7 +199,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             use_default_callbacks=False
         )
         self.dashboard_subscriptions = []
-        self._tf_static_message = None
+        self._tf_static_transforms = {}
+        self._tf_static_lock = threading.Lock()
         self._tf_static_publisher = None
         # The native recorder owns writes; these flags enable live header audit.
         self._recording_writer_by_topic: Dict[str, bool] = {}
@@ -306,13 +307,16 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self.dashboard_subscriptions.append(subscription)
 
     def _cache_tf_static(self, message: object) -> None:
-        self._tf_static_message = message
+        with self._tf_static_lock:
+            for transform in message.transforms:
+                self._tf_static_transforms[transform.child_frame_id] = transform
 
     def republish_tf_static(self) -> bool:
-        message = self._tf_static_message
         publisher = self._tf_static_publisher
-        if message is None or publisher is None:
-            return False
+        with self._tf_static_lock:
+            if not self._tf_static_transforms or publisher is None:
+                return False
+            message = TFMessage(transforms=list(self._tf_static_transforms.values()))
         publisher.publish(message)
         return True
 
