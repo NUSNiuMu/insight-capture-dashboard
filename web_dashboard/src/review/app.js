@@ -2,7 +2,7 @@ import {
   startPreparedCameraPlayback,
   startCameraDashboard,
   stopPreparedCameraPlayback,
-} from "../camera/dashboard.js?v=20260920-auto-recovery";
+} from "../camera/dashboard.js?v=20261027-capture-cleanup";
 import { escapeHtml } from "../shared/format.js";
 import { initializeRosbags } from "../shared/rosbags.js?v=20260818-bag-library";
 import {

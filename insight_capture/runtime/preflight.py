@@ -38,6 +38,7 @@ class CapturePreflight:
         now = time.monotonic()
         calibration_mode = mode == "vio_calibration"
         mobile_mode = mode == "mobile_capture"
+        global_capture = not (calibration_mode or mobile_mode)
         failures = []
         warnings = []
         camera_health = {}
@@ -73,7 +74,7 @@ class CapturePreflight:
             failures.append(self._failure(
                 "camera_count", "应配置两台手部设备和一台头部设备"
             ))
-        if not calibration_mode and not mobile_mode:
+        if global_capture:
             camera_health, camera_failures = evaluate_cameras(
                 self.node,
                 self.camera_stale_sec,
@@ -99,18 +100,18 @@ class CapturePreflight:
         # streams. Its route verifies all raw topics and consumes one payload
         # from each stereo image topic before starting the recorder.
 
-        mapping = {} if calibration_mode or mobile_mode else self.node.build_mapping_payload()
+        mapping = self.node.build_mapping_payload() if global_capture else {}
+        global_poses = self.node.poses if global_capture else ()
         statuses = mapping.get("statuses") if isinstance(mapping, dict) else {}
         statuses = statuses if isinstance(statuses, dict) else {}
         insight9 = statuses.get("insight9") if isinstance(statuses.get("insight9"), dict) else {}
         if (
-            not calibration_mode
-            and not mobile_mode
+            global_capture
             and self.require_mapping
             and (not insight9.get("online") or insight9.get("state") == "error")
         ):
             failures.append(self._failure("mapping_not_ready", "头部建图状态未就绪"))
-        if not calibration_mode and not mobile_mode and self.require_localization:
+        if global_capture and self.require_localization:
             for name in ("insight3_a", "insight3_b"):
                 status = statuses.get(name) if isinstance(statuses.get(name), dict) else {}
                 if not status.get("online") or not status.get("localized"):
@@ -118,7 +119,7 @@ class CapturePreflight:
                         "localization_not_ready", f"{name}全局定位未就绪", camera=name
                     ))
 
-        for pose in (() if calibration_mode or mobile_mode else self.node.poses):
+        for pose in global_poses:
             received = float(self.node.last_pose_received_time.get(pose.name, 0.0))
             age = None if received <= 0 else max(0.0, now - received)
             if age is None or age > self.pose_stale_sec:
@@ -170,7 +171,7 @@ class CapturePreflight:
             if calibration_mode
             else {
                 *(camera.topic for camera in self.node.cameras),
-                *(pose.topic for pose in (() if mobile_mode else self.node.poses)),
+                *(pose.topic for pose in global_poses),
                 *(topic for topic in selected if topic.endswith(("/imu", "/vio_100hz"))),
             }
         )
@@ -188,7 +189,7 @@ class CapturePreflight:
             ))
 
         distributed = None
-        if not calibration_mode and not mobile_mode:
+        if global_capture:
             check_distributed = getattr(self.recording_manager, "distributed_preflight", None)
             if callable(check_distributed):
                 try:

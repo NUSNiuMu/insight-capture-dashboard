@@ -756,9 +756,19 @@ class RecordingManager:
             )
         return self.status()
 
-    def stop(self, timeout_sec: float = 30.0) -> Dict[str, object]:
+    def stop(
+        self,
+        timeout_sec: float = 30.0,
+        *,
+        expected_recording: Optional[tuple[str, str]] = None,
+    ) -> Dict[str, object]:
+        """Finalize the writer after checking an optional identity under its lock."""
         stop_started = time.perf_counter()
         with self._lock:
+            if expected_recording is not None and expected_recording != (
+                self.output_path, self.recording_mode
+            ):
+                raise RuntimeError("采集已变化，停止请求未执行，请刷新状态。")
             self._cleanup_if_exited_unlocked()
             processes = dict(self.processes)
             prior_exit_codes = dict(self._process_exit_codes)

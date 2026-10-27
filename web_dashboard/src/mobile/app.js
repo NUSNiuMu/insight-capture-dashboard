@@ -1,4 +1,4 @@
-import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261027-1";
+import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261027-capture-cleanup";
 
 const el = id => document.getElementById(id);
 const labels = { idle: "准备采集", starting: "正在启动", recording: "采集中", saving: "正在保存", saved: "保存完成", error: "采集异常" };
@@ -22,12 +22,9 @@ function render() {
   el("orb").className = `orb ${s.state}`;
   const help = { idle: "设备就绪后即可开始。", starting: "正在启动录制，请稍候。", recording: "数据正在写入 Jetson。", saving: "正在收尾写盘，请等待保存完成后再断电。", saved: "这一条已保存，可以开始下一条。", error: "请查看下方原因，确认后再试。" };
   el("state-help").textContent = online ? help[s.state] : "控制连接已断开，Jetson 上的采集不会因此停止。";
-  el("disk").textContent = s.disk_space?.free_bytes != null ? `${(s.disk_space.free_bytes / 1024 ** 3).toFixed(1)} GB` : "未知";
   el("storage").textContent = s.storage?.using_fallback ? "备用存储" : "采集盘";
   const busy = ["starting", "saving"].includes(s.state);
   const recording = s.state === "recording";
-  el("calibrate").disabled = !online || pending || busy || recording
-    || !Object.keys(names).every(name => s.preflight?.camera_health?.[name]?.ready);
   el("start").hidden = recording;
   el("stop").hidden = !recording;
   el("start").disabled = !online || pending || busy || !s.preflight?.ok;
@@ -35,6 +32,8 @@ function render() {
   const seconds = recording && s.started_at_epoch_s ? Math.max(0, Math.floor(s.server_time - s.started_at_epoch_s)) : 0;
   el("timer").textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
   if (s.preflight) {
+    const free = s.preflight.storage?.free_bytes;
+    el("disk").textContent = free != null ? `${(free / 1024 ** 3).toFixed(1)} GB` : "未知";
     el("cameras").replaceChildren(...Object.entries(names).map(([name, label]) => {
       const h = s.preflight.camera_health?.[name];
       const row = document.createElement("div"); row.className = "camera-row";
@@ -58,6 +57,9 @@ function render() {
   renderCalibration();
 }
 function renderCalibration() {
+  el("calibrate").disabled = !online || !mapping || pending
+    || ["starting", "recording", "saving"].includes(snapshot?.state)
+    || !Object.keys(names).every(name => snapshot?.preflight?.camera_health?.[name]?.ready);
   const statuses = mapping?.statuses || {};
   const head = statuses.insight9 || {};
   const points = Number(mapping?.map_point_count || 0);
@@ -78,23 +80,16 @@ function renderCalibration() {
   el("calibration-summary").textContent = rows.every(([, good]) => good)
     ? "三路全局定位就绪" : "统一坐标尚未就绪；原始数据仍可按设备状态采集。";
 }
-async function poll() {
-  try {
-    [snapshot, mapping] = await Promise.all([
-      api(`/api/mobile/status${previewEnabled && !document.hidden ? "?preview=1" : ""}`),
-      api("/api/mapping"),
-    ]);
-    online = true;
-  }
-  catch { online = false; }
-  render();
-  setTimeout(poll, document.hidden ? 4000 : 1500);
+async function poll(path, receive) {
+  const value = await api(path()).catch(() => null);
+  receive(value);
+  setTimeout(() => poll(path, receive), document.hidden ? 4000 : 1500);
 }
 async function command(action) {
   if (pending || !online) return;
   pending = true; message = ""; render();
   try {
-    const commandId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const commandId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
     await api(`/api/mobile/${action}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ command_id: commandId, output_path: snapshot?.output_path }) });
     snapshot.state = action === "start" ? "starting" : "saving";
   } catch (error) { message = error.message; }
@@ -125,4 +120,9 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) preview.stop(); else if (previewEnabled) preview.start(el("preview-camera").value);
 });
 window.addEventListener("pagehide", () => preview.stop());
-poll();
+poll(() => `/api/mobile/status${previewEnabled && !document.hidden ? "?preview=1" : ""}`, value => {
+  if (value) snapshot = value;
+  online = value !== null;
+  render();
+});
+poll(() => "/api/mapping", value => { mapping = value; renderCalibration(); });

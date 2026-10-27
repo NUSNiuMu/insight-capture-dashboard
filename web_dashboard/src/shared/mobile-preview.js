@@ -1,3 +1,5 @@
+import { openCameraWebRtc } from "./webrtc.js?v=20261027-capture-cleanup";
+
 /* The phone opens one WebRTC stream at a time. */
 export class MobilePreview {
   constructor(video, label) {
@@ -27,13 +29,15 @@ export class MobilePreview {
       const camera = (await response.json()).cameras.find(c => c.name === name);
       if (!current()) return;
       if (!camera?.webrtc_available) throw new Error("该相机实时视频服务未就绪");
-      const pc = this.pc = new RTCPeerConnection();
-      const url = new URL(location.href);
-      url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
-      url.port = camera.webrtc_port;
-      url.pathname = "/ws/webrtc";
-      url.search = new URLSearchParams({ camera: name, fps: "15" });
-      const ws = this.ws = new WebSocket(url);
+      const { pc, ws } = openCameraWebRtc({
+        cameraName: name, port: camera.webrtc_port, fps: 15, isCurrent: current,
+        onTrack: event => {
+          this.video.srcObject = event.streams[0]; this.video.hidden = false;
+          this.video.play().catch(() => fail("浏览器未能播放视频，请重新开启"));
+        },
+        onError: () => fail(),
+      });
+      this.pc = pc; this.ws = ws;
       let progress = 0, lastFrame = performance.now();
       const watch = () => {
         if (!current()) return;
@@ -45,31 +49,6 @@ export class MobilePreview {
         this.timer = setTimeout(watch, 1000);
       };
       watch();
-      pc.onicecandidate = e => {
-        if (e.candidate && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "ice", candidate: e.candidate.candidate, sdpMLineIndex: e.candidate.sdpMLineIndex }));
-      };
-      pc.ontrack = e => {
-        if (!current()) return;
-        this.video.srcObject = e.streams[0]; this.video.hidden = false;
-        this.video.play().catch(() => fail("浏览器未能播放视频，请重新开启"));
-      };
-      ws.onmessage = async e => {
-        if (!current()) return;
-        try {
-          const m = JSON.parse(e.data);
-          if (m.type === "offer") {
-            await pc.setRemoteDescription({ type: "offer", sdp: m.sdp });
-            if (!current()) return;
-            await pc.setLocalDescription(await pc.createAnswer());
-            if (!current()) return;
-            ws.send(JSON.stringify({ type: "answer", sdp: pc.localDescription.sdp }));
-          } else if (m.type === "ice" && m.candidate) {
-            await pc.addIceCandidate({ candidate: m.candidate, sdpMLineIndex: m.sdpMLineIndex });
-          } else if (m.type === "webrtc_unavailable") fail("实时视频服务未就绪");
-        } catch { fail(); }
-      };
-      ws.onerror = ws.onclose = () => fail();
-      pc.onconnectionstatechange = () => { if (pc.connectionState === "failed") fail(); };
     } catch (error) { fail(error.message); }
   }
 }

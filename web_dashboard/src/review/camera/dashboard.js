@@ -1,5 +1,6 @@
 import { escapeHtml } from "../shared/format.js";
 import { PresentedFrameRate } from "./frame-rate.js";
+import { openCameraWebRtc } from "../shared/webrtc.js?v=20261027-capture-cleanup";
 
 const cameraDock = document.getElementById("camera-dock");
 const cameraWallStatus = document.querySelector("[data-camera-wall-status]");
@@ -506,24 +507,22 @@ function startCameraWebRtc(cameraName, panel, webrtcPort) {
     presentedSource: video.requestVideoFrameCallback ? "compositor" : "media quality"
   };
   cameraWebRtc.set(cameraName, state);
-  const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
-  const hostname = location.hostname.includes(":") ? `[${location.hostname}]` : location.hostname;
-  const ws = new WebSocket(
-    `${wsProtocol}://${hostname}:${port}/ws/webrtc?camera=${encodeURIComponent(cameraName)}&fps=${NORMAL_PREVIEW_FPS}`
-  );
-  const pc = new RTCPeerConnection();
-  state.ws = ws;
-  state.pc = pc;
-  state.statsTimer = window.setInterval(() => {
-    void collectWebRtcStats(cameraName, state, pc);
-  }, WEBRTC_STATS_INTERVAL_MS);
-  // Every failure signal funnels here; the state.pc === pc guard makes the
-  // late duplicates (onerror then onclose, a stale watchdog) no-ops.
   const fail = () => {
     if (cameraWebRtc.get(cameraName) === state && state.pc === pc) {
       scheduleWebRtcRetry(cameraName, panel);
     }
   };
+  const { pc, ws } = openCameraWebRtc({
+    cameraName, port, fps: NORMAL_PREVIEW_FPS,
+    isCurrent: () => cameraWebRtc.get(cameraName) === state && state.pc === pc,
+    onTrack: event => { video.srcObject = event.streams[0]; },
+    onError: fail,
+  });
+  state.pc = pc;
+  state.ws = ws;
+  state.statsTimer = window.setInterval(() => {
+    void collectWebRtcStats(cameraName, state, pc);
+  }, WEBRTC_STATS_INTERVAL_MS);
   state.watchdogTimer = window.setInterval(() => {
     if (cameraWebRtc.get(cameraName) !== state || state.pc !== pc) return;
     const now = performance.now();
@@ -544,58 +543,6 @@ function startCameraWebRtc(cameraName, panel, webrtcPort) {
     }
     if (now - state.lastProgressAt >= WEBRTC_FRAME_TIMEOUT_MS) fail();
   }, WEBRTC_STATS_INTERVAL_MS);
-  pc.ontrack = (event) => {
-    if (cameraWebRtc.get(cameraName) !== state || state.pc !== pc) return;
-    video.srcObject = event.streams[0];
-  };
-  pc.onicecandidate = (event) => {
-    if (event.candidate && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: "ice",
-        candidate: event.candidate.candidate,
-        sdpMLineIndex: event.candidate.sdpMLineIndex
-      }));
-    }
-  };
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === "failed" || pc.connectionState === "closed") {
-      fail();
-    }
-  };
-  ws.onmessage = async (event) => {
-    if (cameraWebRtc.get(cameraName) !== state || state.pc !== pc) return;
-    let message;
-    try {
-      message = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-    if (message.type === "offer") {
-      try {
-        await pc.setRemoteDescription({ type: "offer", sdp: message.sdp });
-        if (state.pc !== pc) return;
-        const answer = await pc.createAnswer();
-        if (state.pc !== pc) return;
-        await pc.setLocalDescription(answer);
-        if (state.pc !== pc) return;
-        ws.send(JSON.stringify({ type: "answer", sdp: answer.sdp }));
-      } catch {
-        // Typically: this browser has no H.264 receiver (vendored kiosk
-        // Chromium). Polling keeps the panel alive.
-        fail();
-      }
-    } else if (message.type === "ice" && message.candidate) {
-      try {
-        await pc.addIceCandidate({ candidate: message.candidate, sdpMLineIndex: message.sdpMLineIndex });
-      } catch {
-        // Candidates racing a teardown are harmless.
-      }
-    } else if (message.type === "webrtc_unavailable") {
-      fail();
-    }
-  };
-  ws.onerror = fail;
-  ws.onclose = fail;
   const onVideoFrame = (now, metadata) => {
     if (cameraWebRtc.get(cameraName) !== state || state.pc !== pc) {
       return;

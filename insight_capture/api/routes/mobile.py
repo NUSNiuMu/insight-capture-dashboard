@@ -9,7 +9,7 @@ import uuid
 
 from aiohttp import web
 
-from insight_capture.api.support import read_disk_space, read_json_body
+from insight_capture.api.support import read_json_body
 
 
 class MobileCaptureRoutes:
@@ -64,14 +64,13 @@ class MobileCaptureRoutes:
                     self._next_discovery = now + 10.0
         except RuntimeError as exc:
             report = {"ok": False, "failures": [{"message": str(exc)}], "warnings": [], "camera_health": {}}
-        storage = read_disk_space(manager.rosbag_root)
         return {
             "state": state, "recording": bool(status.get("recording")),
             "recording_mode": status.get("recording_mode"),
             "output_path": status.get("output_path"),
             "started_at_epoch_s": getattr(manager, "started_at", None),
             "server_time": time.time(), "operation": self._operation,
-            "preflight": report, "disk_space": storage,
+            "preflight": report,
             "storage": status.get("storage", {}),
             "error": status.get("merge_error"),
         }
@@ -120,12 +119,12 @@ class MobileCaptureRoutes:
         self._commands[command_id] = (fingerprint, self._operation)
         while len(self._commands) > 100:
             self._commands.popitem(last=False)
-        self._task = asyncio.create_task(self._run(action, self._operation))
+        self._task = asyncio.create_task(self._run(action, self._operation, status.get("output_path")))
         return web.json_response(self._operation, status=202)
 
-    async def _run(self, action, operation):
+    async def _run(self, action, operation, output_path):
         try:
-            manager = self._independent()
+            manager = self.context.recording_manager
             if action == "start":
                 report = await asyncio.to_thread(self.context.capture_preflight.evaluate, refresh_topics=True, mode="mobile_capture")
                 if not report["ok"]:
@@ -133,7 +132,9 @@ class MobileCaptureRoutes:
                 name = "insight9_" + time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
                 await asyncio.to_thread(manager.start, bag_name=name, recording_mode="mobile_capture", output_subdirectory="insight9_mobile")
             else:
-                result = await asyncio.to_thread(manager.stop)
+                result = await asyncio.to_thread(
+                    manager.stop, expected_recording=(output_path, "mobile_capture")
+                )
                 if result.get("merge_state") == "error":
                     raise RuntimeError(result.get("merge_error") or "录制文件保存失败。")
             operation["state"] = "complete"

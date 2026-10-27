@@ -46,7 +46,9 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
             stale_images=("insight9_a",),
             stale_vio=("insight3_b", "insight9_a"),
         )
-        routes = MappingRoutes(SimpleNamespace(node=node))
+        routes = MappingRoutes(SimpleNamespace(
+            node=node, recording_manager=mock.Mock(status=mock.Mock(return_value={}))
+        ))
 
         response = await routes._handle_reset(None)
         body = json.loads(response.text)
@@ -66,7 +68,9 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_reset_starts_when_all_camera_inputs_are_fresh(self):
         node = self._node()
-        routes = MappingRoutes(SimpleNamespace(node=node))
+        routes = MappingRoutes(SimpleNamespace(
+            node=node, recording_manager=mock.Mock(status=mock.Mock(return_value={}))
+        ))
 
         response = await routes._handle_reset(None)
 
@@ -81,7 +85,10 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
             "unavailable": ["localizer", "mapper"],
             "mapping": {},
         }
-        routes = MappingRoutes(SimpleNamespace(node=self._node(reset_payload=payload)))
+        routes = MappingRoutes(SimpleNamespace(
+            node=self._node(reset_payload=payload),
+            recording_manager=mock.Mock(status=mock.Mock(return_value={})),
+        ))
 
         response = await routes._handle_reset(None)
         body = json.loads(response.text)
