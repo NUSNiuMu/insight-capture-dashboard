@@ -1751,7 +1751,7 @@ class Insight9SparseMapper(Node):
     def _rebuild_landmarks_from_keyframes(self):
         """按优化后的关键帧位姿重新融合全部保留的双目观测。
 
-        这里重算的是体素归属、位置和描述子运行均值，不会重新运行 SuperPoint、
+        这里重算的是地标关联、位置和描述子观测和，不会重新运行 SuperPoint、
         SuperGlue 或三角化，因此结果可确定且成本受关键帧上限约束。
         """
 

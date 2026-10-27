@@ -15,6 +15,7 @@ from typing import Optional
 
 import cv2
 import numpy as np
+from scipy.optimize import least_squares
 
 from .geometry import rotation_distance_deg
 
@@ -50,6 +51,35 @@ class LocalizationCandidate:
 
 
 DESCRIPTOR_QUERY_BLOCK_SIZE = 256
+
+
+def _refine_pose(
+    object_points: np.ndarray, image_points: np.ndarray,
+    camera_matrix: np.ndarray, rvec: np.ndarray, tvec: np.ndarray,
+) -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """Refine RANSAC inliers with a one-pixel Huber loss and analytic Jacobian."""
+
+    objects = np.asarray(object_points, dtype=np.float64)
+    pixels = np.asarray(image_points, dtype=np.float64).reshape(-1, 2)
+
+    def residual(parameters):
+        projected, _ = cv2.projectPoints(
+            objects, parameters[:3], parameters[3:], camera_matrix, None
+        )
+        return (projected.reshape(-1, 2) - pixels).ravel()
+
+    def jacobian(parameters):
+        return cv2.projectPoints(
+            objects, parameters[:3], parameters[3:], camera_matrix, None
+        )[1][:, :6]
+
+    result = least_squares(
+        residual, np.r_[rvec.ravel(), tvec.ravel()], jac=jacobian,
+        loss="huber", f_scale=1.0, max_nfev=20,
+    )
+    if not result.success:
+        return None
+    return result.x[:3].reshape(3, 1), result.x[3:].reshape(3, 1)
 
 
 def normalize_descriptors(values: np.ndarray) -> np.ndarray:
@@ -194,7 +224,7 @@ def localize_correspondences(
 ) -> tuple[Optional[LocalizationCandidate], dict[str, object]]:
     """用 PnP-RANSAC 和重投影门限验证给定的 2D-3D 对应。
 
-    EPNP 在 RANSAC 中快速提出位姿，只对内点使用 LM 做最终细化。这里优化的只有
+    EPNP 在 RANSAC 中快速提出位姿，只对内点使用鲁棒重投影损失做最终细化。这里优化的只有
     当前相机六自由度，不修改地图三维点，因此不等同于 Bundle Adjustment。
     """
 
@@ -246,15 +276,18 @@ def localize_correspondences(
         diagnostics["rejection"] = "low_pnp_inlier_ratio"
         return None, diagnostics
 
-    # RANSAC 负责挑选内点；LM 在固定内点集合上降低最终像素重投影误差。
-    rvec, tvec = cv2.solvePnPRefineLM(
+    # Huber downweights inlier matches near the RANSAC error threshold.
+    refined = _refine_pose(
         object_points[inlier_indices],
         image_points[inlier_indices],
         np.asarray(camera_matrix, dtype=np.float64).reshape(3, 3),
-        None,
         rvec,
         tvec,
     )
+    if refined is None:
+        diagnostics["rejection"] = "pose_refinement_failed"
+        return None, diagnostics
+    rvec, tvec = refined
     projected, _ = cv2.projectPoints(
         object_points[inlier_indices],
         rvec,

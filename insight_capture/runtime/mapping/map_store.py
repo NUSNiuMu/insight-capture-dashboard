@@ -1,47 +1,50 @@
-"""当前会话内的稀疏地标确认、体素去重和有界存储。
-
-每帧双目都可能产生动态物体、误匹配或深度抖动点。本模块不做跨帧描述子跟踪，
-而是用世界坐标体素作为轻量关联：同一体素在不同关键帧重复出现达到门限后才成为
-确认地标。该设计适合 Jetson 在线运行，但只是观测融合，不是联合优化三维点的 BA。
-"""
+"""Bounded descriptor landmarks with spatial indexing and multi-frame confirmation."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import product
 from typing import Dict, Optional, Tuple
 
 import numpy as np
 
 
 VoxelKey = Tuple[int, int, int]
+_NEIGHBORS = tuple(product((-1, 0, 1), repeat=3))
 
 
 @dataclass(frozen=True)
 class LandmarkMapConfig:
-    """瞬态点过滤、体素尺寸和地图资源上限。"""
+    """Spatial association, descriptor agreement and storage limits."""
 
     voxel_size_m: float = 0.04
     confirmation_observations: int = 3
     candidate_ttl_keyframes: int = 12
     max_landmarks: int = 100_000
+    association_min_similarity: float = 0.80
+    association_ratio_test: float = 0.80
 
     def __post_init__(self) -> None:
-        if self.voxel_size_m <= 0.0:
-            raise ValueError("voxel_size_m must be positive")
+        if not np.isfinite(self.voxel_size_m) or self.voxel_size_m <= 0.0:
+            raise ValueError("voxel_size_m must be finite and positive")
         if self.confirmation_observations < 2:
             raise ValueError("confirmation_observations must be at least two")
         if self.candidate_ttl_keyframes < self.confirmation_observations:
             raise ValueError("candidate TTL must cover the confirmation window")
         if self.max_landmarks <= 0:
             raise ValueError("max_landmarks must be positive")
+        if not 0.0 < self.association_min_similarity <= 1.0:
+            raise ValueError("association similarity must be in (0, 1]")
+        if not 0.0 < self.association_ratio_test < 1.0:
+            raise ValueError("association ratio must be in (0, 1)")
 
 
 @dataclass
 class _Landmark:
-    """体素内的位置、描述子运行均值及观测生命周期。"""
-
     position: np.ndarray
+    voxel: VoxelKey
     descriptor: Optional[np.ndarray]
+    descriptor_weight: float
     observations: int
     first_keyframe: int
     last_keyframe: int
@@ -50,8 +53,6 @@ class _Landmark:
 
 @dataclass(frozen=True)
 class MapUpdate:
-    """一次关键帧写入后的统计摘要，用于 mapper 状态诊断。"""
-
     input_points: int
     unique_voxels: int
     promoted: int
@@ -60,16 +61,70 @@ class MapUpdate:
 
 
 class LandmarkMap:
-    """只确认在多个关键帧中落入同一世界体素的点。"""
+    """Associate distinct feature tracks inside neighboring spatial buckets."""
 
     def __init__(self, config: Optional[LandmarkMapConfig] = None) -> None:
         self.config = config or LandmarkMapConfig()
-        self._candidates: Dict[VoxelKey, _Landmark] = {}
-        self._confirmed: Dict[VoxelKey, _Landmark] = {}
+        self._landmarks: Dict[int, _Landmark] = {}
+        self._voxels: Dict[VoxelKey, set[int]] = {}
+        self._candidates: set[int] = set()
+        self._confirmed: set[int] = set()
+        self._next_id = 0
 
     def clear(self) -> None:
+        self._landmarks.clear()
+        self._voxels.clear()
         self._candidates.clear()
         self._confirmed.clear()
+        self._next_id = 0
+
+    def _key(self, point: np.ndarray) -> VoxelKey:
+        return tuple(int(value) for value in np.floor(point / self.config.voxel_size_m))
+
+    def _remove_from_voxel(self, key: VoxelKey, landmark_id: int) -> None:
+        bucket = self._voxels[key]
+        bucket.remove(landmark_id)
+        if not bucket:
+            del self._voxels[key]
+
+    def _associate(
+        self, point: np.ndarray, descriptor: Optional[np.ndarray], key: VoxelKey
+    ) -> Optional[int]:
+        best_id = None
+        best_rank = None
+        second_rank = None
+        radius_sq = self.config.voxel_size_m**2
+        x, y, z = key
+        for dx, dy, dz in _NEIGHBORS:
+            neighbor = (x + dx, y + dy, z + dz)
+            for landmark_id in self._voxels.get(neighbor, ()):
+                landmark = self._landmarks[landmark_id]
+                delta = landmark.position - point
+                distance_sq = float(delta @ delta)
+                if distance_sq > radius_sq:
+                    continue
+                if descriptor is None and landmark.descriptor is None:
+                    similarity = 1.0
+                elif descriptor is None or landmark.descriptor is None:
+                    continue
+                else:
+                    similarity = float(landmark.descriptor @ descriptor)
+                rank = (-similarity, distance_sq, landmark_id)
+                if best_rank is None or rank < best_rank:
+                    second_rank = best_rank
+                    best_id, best_rank = landmark_id, rank
+                elif second_rank is None or rank < second_rank:
+                    second_rank = rank
+        if best_rank is not None and descriptor is not None:
+            if -best_rank[0] < self.config.association_min_similarity:
+                return None
+            # Nearby repeated texture must not silently join distinct feature tracks.
+            if second_rank is not None and (
+                max(0.0, 1.0 + best_rank[0])
+                >= self.config.association_ratio_test**2 * max(0.0, 1.0 + second_rank[0])
+            ):
+                return None
+        return best_id
 
     def update(
         self,
@@ -79,90 +134,78 @@ class LandmarkMap:
         descriptors: Optional[np.ndarray] = None,
         scores: Optional[np.ndarray] = None,
     ) -> MapUpdate:
-        """Insert a keyframe, counting at most one observation per voxel."""
+        """Fuse at most one observation per feature track and keyframe."""
 
         points = np.asarray(points_world, dtype=np.float64).reshape(-1, 3)
         if descriptors is not None:
             descriptors = np.asarray(descriptors, dtype=np.float32)
             if descriptors.ndim != 2 or descriptors.shape[0] != len(points):
                 raise ValueError("descriptors must have shape N x D")
-        if scores is None:
-            scores_array = np.ones((len(points),), dtype=np.float32)
-        else:
-            scores_array = np.asarray(scores, dtype=np.float32).reshape(-1)
-            if len(scores_array) != len(points):
-                raise ValueError("scores must have one value per point")
-
-        finite = np.isfinite(points).all(axis=1)
-        points = points[finite]
-        scores_array = scores_array[finite]
+        scores_array = (
+            np.ones(len(points), dtype=np.float32)
+            if scores is None
+            else np.asarray(scores, dtype=np.float32).reshape(-1)
+        )
+        if len(scores_array) != len(points):
+            raise ValueError("scores must have one value per point")
+        finite = np.isfinite(points).all(axis=1) & np.isfinite(scores_array)
+        if descriptors is not None:
+            finite &= np.isfinite(descriptors).all(axis=1)
+        points, scores_array = points[finite], scores_array[finite]
         if descriptors is not None:
             descriptors = descriptors[finite]
 
-        # 单帧同一体素最多计一次观测，防止密集纹理在一帧内伪造“重复确认”。
-        representatives: Dict[VoxelKey, int] = {}
-        if len(points):
-            keys = np.floor(points / self.config.voxel_size_m).astype(np.int64)
-            for index, raw_key in enumerate(keys):
-                key = tuple(int(value) for value in raw_key)
-                previous = representatives.get(key)
-                if previous is None or scores_array[index] > scores_array[previous]:
-                    representatives[key] = index
+        oldest = int(keyframe_id) - self.config.candidate_ttl_keyframes
+        expired = [
+            index for index in self._candidates
+            if self._landmarks[index].last_keyframe < oldest
+        ]
+        for index in expired:
+            self._remove_from_voxel(self._landmarks[index].voxel, index)
+            del self._landmarks[index]
+            self._candidates.remove(index)
 
         promoted = 0
-        for key, index in representatives.items():
-            descriptor = None if descriptors is None else descriptors[index]
-            if key in self._confirmed:
-                # 已确认地标继续更新运行均值，但不会重新计入 promoted。
-                self._merge(
-                    self._confirmed[key],
-                    points[index],
-                    descriptor,
-                    float(scores_array[index]),
-                    int(keyframe_id),
-                )
-                continue
-
-            # 首次出现先进入候选区；只有不同关键帧的重复观测才能晋升。
-            candidate = self._candidates.get(key)
-            if candidate is None:
-                self._candidates[key] = _Landmark(
-                    position=points[index].copy(),
-                    descriptor=self._normalized_descriptor(descriptor),
-                    observations=1,
-                    first_keyframe=int(keyframe_id),
-                    last_keyframe=int(keyframe_id),
-                    score=float(scores_array[index]),
-                )
-                continue
-            if candidate.last_keyframe == int(keyframe_id):
-                continue
-            self._merge(
-                candidate,
-                points[index],
-                descriptor,
-                float(scores_array[index]),
-                int(keyframe_id),
+        input_voxels = set()
+        for index in np.argsort(-scores_array, kind="stable"):
+            point = points[index]
+            key = self._key(point)
+            input_voxels.add(key)
+            descriptor = self._normalized_descriptor(
+                None if descriptors is None else descriptors[index]
             )
-            if candidate.observations >= self.config.confirmation_observations:
-                if len(self._confirmed) < self.config.max_landmarks:
-                    self._confirmed[key] = candidate
-                    promoted += 1
-                del self._candidates[key]
-
-        # 长时间未复现的候选大概率是动态物体或偶发误匹配，主动释放内存。
-        oldest = int(keyframe_id) - self.config.candidate_ttl_keyframes
-        self._candidates = {
-            key: value
-            for key, value in self._candidates.items()
-            if value.last_keyframe >= oldest
-        }
+            landmark_id = self._associate(point, descriptor, key)
+            if landmark_id is None:
+                if len(self._landmarks) >= self.config.max_landmarks:
+                    continue
+                landmark_id = self._next_id
+                self._next_id += 1
+                self._landmarks[landmark_id] = _Landmark(
+                    position=point.copy(), voxel=key, descriptor=descriptor,
+                    descriptor_weight=0.0 if descriptor is None else 1.0,
+                    observations=1, first_keyframe=int(keyframe_id),
+                    last_keyframe=int(keyframe_id), score=float(scores_array[index]),
+                )
+                self._voxels.setdefault(key, set()).add(landmark_id)
+                self._candidates.add(landmark_id)
+                continue
+            landmark = self._landmarks[landmark_id]
+            if landmark.last_keyframe >= int(keyframe_id):
+                continue
+            previous_key = landmark.voxel
+            self._merge(landmark, point, descriptor, float(scores_array[index]), keyframe_id)
+            updated_key = self._key(landmark.position)
+            if previous_key != updated_key:
+                self._remove_from_voxel(previous_key, landmark_id)
+                self._voxels.setdefault(updated_key, set()).add(landmark_id)
+                landmark.voxel = updated_key
+            if landmark_id in self._candidates and landmark.observations >= self.config.confirmation_observations:
+                self._candidates.remove(landmark_id)
+                self._confirmed.add(landmark_id)
+                promoted += 1
         return MapUpdate(
-            input_points=len(points),
-            unique_voxels=len(representatives),
-            promoted=promoted,
-            confirmed_total=len(self._confirmed),
-            candidates_total=len(self._candidates),
+            input_points=len(points), unique_voxels=len(input_voxels), promoted=promoted,
+            confirmed_total=len(self._confirmed), candidates_total=len(self._candidates),
         )
 
     @staticmethod
@@ -171,63 +214,49 @@ class LandmarkMap:
             return None
         value = np.asarray(descriptor, dtype=np.float32).copy()
         norm = float(np.linalg.norm(value))
-        return value / norm if norm > 1e-12 else value
+        return value / norm if norm > 1e-12 else None
 
     def _merge(
-        self,
-        landmark: _Landmark,
-        position: np.ndarray,
-        descriptor: Optional[np.ndarray],
-        score: float,
-        keyframe_id: int,
+        self, landmark: _Landmark, position: np.ndarray,
+        descriptor: Optional[np.ndarray], score: float, keyframe_id: int,
     ) -> None:
-        # 位置采用在线算术平均；描述子逐次归一化，避免观测数增加导致模长漂移。
         next_count = landmark.observations + 1
         landmark.position += (position - landmark.position) / next_count
-        normalized = self._normalized_descriptor(descriptor)
-        if normalized is not None:
-            if landmark.descriptor is None:
-                landmark.descriptor = normalized
-            else:
-                landmark.descriptor = self._normalized_descriptor(
-                    landmark.descriptor + normalized
-                )
+        if descriptor is not None:
+            # Keep the magnitude of the descriptor sum so every frame has equal weight.
+            total = landmark.descriptor * landmark.descriptor_weight + descriptor
+            landmark.descriptor_weight = float(np.linalg.norm(total))
+            landmark.descriptor = total / landmark.descriptor_weight
         landmark.observations = next_count
-        landmark.last_keyframe = keyframe_id
+        landmark.last_keyframe = int(keyframe_id)
         landmark.score = max(landmark.score, score)
 
     def points(self) -> np.ndarray:
-        if not self._confirmed:
-            return np.empty((0, 3), dtype=np.float32)
         return np.asarray(
-            [landmark.position for landmark in self._confirmed.values()],
+            [self._landmarks[index].position for index in sorted(self._confirmed)],
             dtype=np.float32,
-        )
+        ).reshape(-1, 3)
 
     def confirmed_count(self) -> int:
-        """Return the confirmed landmark count without materializing point data."""
-
         return len(self._confirmed)
 
     def descriptors(
         self, *, max_source_keyframe: Optional[int] = None
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Return descriptor landmarks, optionally excluding recently created points."""
-
-        entries = [
-            landmark
-            for landmark in self._confirmed.values()
-            if landmark.descriptor is not None
-            and (
-                max_source_keyframe is None
-                or landmark.first_keyframe <= int(max_source_keyframe)
-            )
+        ranked = [
+            (index, self._landmarks[index]) for index in self._confirmed
+            if self._landmarks[index].descriptor is not None
+            and (max_source_keyframe is None
+                 or self._landmarks[index].first_keyframe <= int(max_source_keyframe))
         ]
+        ranked.sort(key=lambda item: (-item[1].observations, -item[1].score, item[0]))
+        representatives = {}
+        for index, landmark in ranked:
+            representatives.setdefault(landmark.voxel, (index, landmark))
+        # Spatial sampling limits weak/clustered correspondences without averaging identities.
+        entries = [entry for _, entry in sorted(representatives.values())]
         if not entries:
-            return (
-                np.empty((0, 3), dtype=np.float32),
-                np.empty((0, 0), dtype=np.float32),
-            )
+            return np.empty((0, 3), dtype=np.float32), np.empty((0, 0), dtype=np.float32)
         return (
             np.asarray([entry.position for entry in entries], dtype=np.float32),
             np.asarray([entry.descriptor for entry in entries], dtype=np.float32),
