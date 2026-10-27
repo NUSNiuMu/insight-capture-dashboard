@@ -1,0 +1,544 @@
+{
+  "captured_utc": "2026-10-27T09:19:32.639457+00:00",
+  "profile": "jetson-nx",
+  "ros_domain_id": 20,
+  "camera_info": {
+    "/insight3_a/camera/infra1/camera_info": {
+      "width": 544,
+      "height": 640,
+      "frame_id": "insight3_a_camera_left",
+      "K": [
+        307.9021301269531,
+        0.0,
+        272.4889221191406,
+        0.0,
+        307.9021301269531,
+        325.4164733886719,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "R": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "P": [
+        307.9021301269531,
+        0.0,
+        272.4889221191406,
+        0.0,
+        0.0,
+        307.9021301269531,
+        325.4164733886719,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    },
+    "/insight3_a/camera/infra2/camera_info": {
+      "width": 544,
+      "height": 640,
+      "frame_id": "insight3_a_camera_right",
+      "K": [
+        307.9021301269531,
+        0.0,
+        272.4889221191406,
+        0.0,
+        307.9021301269531,
+        325.4164733886719,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "R": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "P": [
+        307.9021301269531,
+        0.0,
+        272.4889221191406,
+        -10.733759880065918,
+        0.0,
+        307.9021301269531,
+        325.4164733886719,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    },
+    "/insight3_b/camera/infra1/camera_info": {
+      "width": 544,
+      "height": 640,
+      "frame_id": "insight3_b_camera_left",
+      "K": [
+        307.40509033203125,
+        0.0,
+        270.86553955078125,
+        0.0,
+        307.40509033203125,
+        319.1493225097656,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "R": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "P": [
+        307.40509033203125,
+        0.0,
+        270.86553955078125,
+        0.0,
+        0.0,
+        307.40509033203125,
+        319.1493225097656,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    },
+    "/insight3_b/camera/infra2/camera_info": {
+      "width": 544,
+      "height": 640,
+      "frame_id": "insight3_b_camera_right",
+      "K": [
+        307.40509033203125,
+        0.0,
+        270.86553955078125,
+        0.0,
+        307.40509033203125,
+        319.1493225097656,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "R": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "P": [
+        307.40509033203125,
+        0.0,
+        270.86553955078125,
+        -10.743824005126953,
+        0.0,
+        307.40509033203125,
+        319.1493225097656,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    },
+    "/insight9_a/camera/infra1/camera_info": {
+      "width": 544,
+      "height": 640,
+      "frame_id": "insight9_a_camera_left",
+      "K": [
+        306.2473449707031,
+        0.0,
+        271.3191223144531,
+        0.0,
+        306.2473449707031,
+        316.05743408203125,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "R": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "P": [
+        306.2473449707031,
+        0.0,
+        271.3191223144531,
+        0.0,
+        0.0,
+        306.2473449707031,
+        316.05743408203125,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    },
+    "/insight9_a/camera/infra2/camera_info": {
+      "width": 544,
+      "height": 640,
+      "frame_id": "insight9_a_camera_right",
+      "K": [
+        306.2473449707031,
+        0.0,
+        271.3191223144531,
+        0.0,
+        306.2473449707031,
+        316.05743408203125,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "R": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "P": [
+        306.2473449707031,
+        0.0,
+        271.3191223144531,
+        -30.67388916015625,
+        0.0,
+        306.2473449707031,
+        316.05743408203125,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    },
+    "/insight9_a/camera/color/camera_info": {
+      "width": 1088,
+      "height": 1920,
+      "frame_id": "insight9_a_camera_rgb",
+      "K": [
+        768.3264582796221,
+        0.0,
+        537.8445052388552,
+        0.0,
+        768.5854099384969,
+        961.672826831939,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "R": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "P": [
+        768.3264582796221,
+        0.0,
+        537.8445052388552,
+        0.0,
+        0.0,
+        768.5854099384969,
+        961.672826831939,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    }
+  },
+  "images": {
+    "/insight3_a/camera/infra1/image_rect_raw": {
+      "width": 544,
+      "height": 640,
+      "encoding": "nv12"
+    },
+    "/insight3_a/camera/infra2/image_rect_raw": {
+      "width": 544,
+      "height": 640,
+      "encoding": "nv12"
+    },
+    "/insight3_b/camera/infra1/image_rect_raw": {
+      "width": 544,
+      "height": 640,
+      "encoding": "nv12"
+    },
+    "/insight3_b/camera/infra2/image_rect_raw": {
+      "width": 544,
+      "height": 640,
+      "encoding": "nv12"
+    },
+    "/insight9_a/camera/infra1/image_rect_raw": {
+      "width": 544,
+      "height": 640,
+      "encoding": "mono8"
+    },
+    "/insight9_a/camera/infra2/image_rect_raw": {
+      "width": 544,
+      "height": 640,
+      "encoding": "mono8"
+    },
+    "/insight9_a/camera/color/image_rect_raw/compressed": {
+      "width": 1088,
+      "height": 1920,
+      "format": "jpeg"
+    }
+  },
+  "transforms": {
+    "insight9_a_camera_depth": {
+      "parent": "insight9_a_camera_left",
+      "child": "insight9_a_camera_depth",
+      "translation_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight9_a_camera_imu_optical": {
+      "parent": "insight9_a_camera_left",
+      "child": "insight9_a_camera_imu_optical",
+      "translation_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight9_a_camera_right": {
+      "parent": "insight9_a_camera_left",
+      "child": "insight9_a_camera_right",
+      "translation_m": [
+        0.10016050934791565,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight9_a_camera_rgb": {
+      "parent": "insight9_a_camera_left",
+      "child": "insight9_a_camera_rgb",
+      "translation_m": [
+        0.05002233012030937,
+        2.0648782642335183e-05,
+        -0.0011710179228284106
+      ],
+      "quaternion_xyzw": [
+        -0.0007895182622658102,
+        -0.000639559742560011,
+        0.0024590227810390095,
+        0.9999964604093414
+      ]
+    },
+    "insight9_a_camera_left": {
+      "parent": "insight9_a_camera_imu",
+      "child": "insight9_a_camera_left",
+      "translation_m": [
+        -0.03854167402608288,
+        -0.012456987159946205,
+        0.024924073286656346
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight3_b_camera_depth": {
+      "parent": "insight3_b_camera_left",
+      "child": "insight3_b_camera_depth",
+      "translation_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight3_b_camera_imu_optical": {
+      "parent": "insight3_b_camera_left",
+      "child": "insight3_b_camera_imu_optical",
+      "translation_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight3_b_camera_right": {
+      "parent": "insight3_b_camera_left",
+      "child": "insight3_b_camera_right",
+      "translation_m": [
+        0.034950051456689835,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight3_b_camera_left": {
+      "parent": "insight3_b_camera_imu",
+      "child": "insight3_b_camera_left",
+      "translation_m": [
+        -0.00908042956667962,
+        -0.012198225628542534,
+        0.0168703217497976
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight3_a_camera_depth": {
+      "parent": "insight3_a_camera_left",
+      "child": "insight3_a_camera_depth",
+      "translation_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight3_a_camera_imu_optical": {
+      "parent": "insight3_a_camera_left",
+      "child": "insight3_a_camera_imu_optical",
+      "translation_m": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight3_a_camera_right": {
+      "parent": "insight3_a_camera_left",
+      "child": "insight3_a_camera_right",
+      "translation_m": [
+        0.034860946238040924,
+        0.0,
+        0.0
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    },
+    "insight3_a_camera_left": {
+      "parent": "insight3_a_camera_imu",
+      "child": "insight3_a_camera_left",
+      "translation_m": [
+        -0.007415506053569895,
+        -0.006266009507195867,
+        0.018057704823170744
+      ],
+      "quaternion_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    }
+  },
+  "scope": "Current connected devices, published stream dimensions and calibrated internal stereo baseline; not sensor maximum resolution or mechanical measurement.",
+  "baseline_method": "TF norm(left->right translation); cross-check abs(P_right[3]/P_right[0] - P_left[3]/P_left[0]). Units: meters.",
+  "stereo_baselines": {
+    "insight3_a": {
+      "tf_baseline_m": 0.034860946238040924,
+      "projection_baseline_m": 0.03486094713161033
+    },
+    "insight3_b": {
+      "tf_baseline_m": 0.034950051456689835,
+      "projection_baseline_m": 0.034950052367455735
+    },
+    "insight9_a": {
+      "tf_baseline_m": 0.10016050934791565,
+      "projection_baseline_m": 0.10016050641382912
+    }
+  }
+}
