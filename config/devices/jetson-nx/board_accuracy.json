@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "board": {
+    "squares_x": 7,
+    "squares_y": 5,
+    "square_length_m": 0.04,
+    "marker_length_m": 0.028,
+    "dictionary": "DICT_4X4_50"
+  },
+  "camera": {
+    "image_topic": "/insight9_a/camera/color/image_rect_raw/compressed",
+    "camera_info_topic": "/insight9_a/camera/color/camera_info",
+    "pose_topic": "/insight9_sparse_map/pose",
+    "image_frame": "insight9_a_camera_rgb",
+    "pose_world_frame": "insight9_map",
+    "pose_body_frame": "insight9_mapping_camera_center",
+    "stereo_left_frame": "insight9_a_camera_left",
+    "stereo_right_frame": "insight9_a_camera_right",
+    "pose_from_rectified_image": null,
+    "extrinsic_source": null
+  },
+  "reference_interval_s": [0, 5],
+  "evaluation_intervals": [
+    {"name": "static", "start_s": 10, "end_s": 40},
+    {"name": "motion", "start_s": 45, "end_s": 85},
+    {"name": "return", "start_s": 90, "end_s": 110}
+  ],
+  "acceptance": null
+}

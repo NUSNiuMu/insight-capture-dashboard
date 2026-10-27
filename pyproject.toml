@@ -29,6 +29,7 @@ dev = [
 insight-capture = "insight_capture.runtime.app:main"
 insight-voice = "insight_capture.voice.service:main"
 insight-check-bag = "insight_capture.postprocess.bags.integrity:main"
+insight-evaluate-board = "insight_capture.postprocess.quality.board_accuracy:main"
 insight-export-lerobot = "insight_capture.postprocess.datasets.lerobot:main"
 insight-export-ego-lerobot = "insight_capture.postprocess.datasets.ego_lerobot.cli:main"
 insight-extract-gripper = "insight_capture.postprocess.gripper.extraction:main"
