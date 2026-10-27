@@ -159,7 +159,7 @@
     "right_image_topic": "/egohalo/rectified/right/image",
     "left_info_topic": "/egohalo/rectified/left/camera_info",
     "right_info_topic": "/egohalo/rectified/right/camera_info",
-    "vio_topic": "/egohalo/camera/vio_100hz",
+    "vio_topic": "/egohalo/mapping/vio_100hz",
     "imu_frame": "egohalo_camera_imu",
     "left_frame": "egohalo_rectified_left",
     "right_frame": "egohalo_rectified_right",
@@ -177,10 +177,18 @@
         "right_frame": "egohalo_rectified_right"
       }
     ],
-    "direct_match_min_confidence": 0.5
+    "direct_match_min_confidence": 0.5,
+    "direct_match_retry_confidence": 0.4,
+    "head_tracking_hz": 2.0,
+    "head_exclude_recent_keyframes": 10,
+    "head_max_innovation_translation_m": 0.15,
+    "head_max_innovation_rotation_deg": 5.0
   },
   "egohalo_rectification": {
     "namespace": "egohalo",
+    "direct_source": true,
+    "pair_tolerance_ms": 2.0,
+    "max_output_age_sec": 0.5,
     "output_width": 544,
     "output_height": 640,
     "output_hz": 5.0,

@@ -21,17 +21,17 @@ from insight_capture.runtime.mapping.rig import calibration_identity, stereo_vie
 from insight_capture.runtime.ros.network import configure_ros_network
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", type=Path, required=True)
-    args = parser.parse_args()
-    config = json.loads(args.config.read_text())
+def run_rectifier(config, stop, sink=None):
+    """Decode source AUs continuously; publish only selected calibrated frames."""
     settings = config["egohalo_rectification"]
     # Four source workers already run concurrently; nested OpenCV parallelism
     # competes with capture, pose handling and inference on the Jetson cores.
     cv2.setNumThreads(max(1, int(settings.get("opencv_threads", 1))))
-    os.environ["ROS_DOMAIN_ID"] = str(config["ros_domain_id"])
-    configure_ros_network(config)
+    os.environ["ROS_DOMAIN_ID"] = str(
+        config["ros_domain_id"] if sink is None else sink.source_domain
+    )
+    if sink is None:
+        configure_ros_network(config)
     import rclpy
     from rclpy.time import Time
     from rclpy.qos import qos_profile_sensor_data
@@ -54,14 +54,18 @@ def main():
     sources = list(dict.fromkeys(v[side + "_source"] for v in views for side in ("left", "right")))
     buffer = Buffer()
     _listener = TransformListener(buffer, node)
-    broadcaster = StaticTransformBroadcaster(node)
+    broadcaster = StaticTransformBroadcaster(node) if sink is None else sink
+    if sink is not None:
+        sink.attach(node, config)
     infos = {name: None for name in sources}
     calibration = [None]
     queues = {name: queue.Queue(maxsize=8) for name in sources}
     reset = {name: threading.Event() for name in sources}
-    stop = threading.Event()
     failed = threading.Event()
     metrics = {name: dict(received=0, queue_resets=0, reference_resets=0,
+                          reference_gaps=0, timestamp_gaps=0, timestamp_rollbacks=0,
+                          waiting_for_idr=0,
+                          expired_frames=0,
                           decoded=0, selected=0, published={},
                           rectify_ms=0.0, message_ms=0.0, publish_ms=0.0) for name in sources}
     source_fps = float(settings.get("source_fps", 30.0))
@@ -74,9 +78,11 @@ def main():
     for view in views:
         for side in ("left", "right"):
             key = (view["name"], side)
-            publishers[key] = node.create_publisher(Image, view[side + "_image_topic"], 2)
-            info_publishers[key] = node.create_publisher(CameraInfo, view[side + "_info_topic"], 2)
-    status_publisher = node.create_publisher(String, f"/{namespace}/rig/status", 2)
+            if sink is None:
+                publishers[key] = node.create_publisher(Image, view[side + "_image_topic"], 2)
+                info_publishers[key] = node.create_publisher(CameraInfo, view[side + "_info_topic"], 2)
+    status_publisher = (node.create_publisher(String, f"/{namespace}/rig/status", 2)
+                        if sink is None else sink)
 
     def configure():
         if any(info is None for info in infos.values()):
@@ -94,7 +100,9 @@ def main():
                 matrices.append(matrix_from_transform(
                     (transform.translation.x, transform.translation.y, transform.translation.z),
                     (transform.rotation.x, transform.rotation.y, transform.rotation.z, transform.rotation.w)))
-            identity = calibration_identity([infos[name] for name in sources], matrices)
+            identity = calibration_identity([infos[name] for name in sources], matrices,
+                rectification={key: settings[key] for key in (
+                    "output_width", "output_height", "horizontal_fov_deg") if key in settings})
             if calibration[0] is not None and calibration[0][0] == identity:
                 return
             routes = {name: [] for name in sources}
@@ -141,28 +149,38 @@ def main():
             bucket = int(round(pts / period))
             return calibration[0] is not None and bucket != last_output and abs(pts - bucket * period) <= sample_tolerance_ns
         try:
-            decoder = H264Decoder(pixel_format="GRAY8", low_latency=True, frame_selector=selected)
+            def make_decoder():
+                return H264Decoder(hardware=settings.get("hardware_decode", True),
+                    pixel_format="GRAY8", low_latency=True, frame_selector=selected)
+            decoder = make_decoder()
             while not stop.is_set():
                 try:
-                    message = queues[index].get(timeout=.1)
+                    message, received = queues[index].get(timeout=.1)
                 except queue.Empty:
                     continue
                 stamp = message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec
                 data = bytes(message.data)
                 contiguous = sequence.observe(data)
+                metrics[index]["reference_gaps"] += int(contiguous is False)
+                metrics[index]["timestamp_gaps"] += int(last_input is not None and stamp - last_input > max_gap_ns)
+                metrics[index]["timestamp_rollbacks"] += int(last_input is not None and stamp <= last_input)
                 capture_gap = contiguous is True and last_input is not None and 0 < stamp - last_input < min(8, sequence.modulus - 1) * 1e9 / source_fps
                 if reset[index].is_set() or contiguous is False or (last_input is not None and not 0 < stamp-last_input <= max_gap_ns and not capture_gap):
                     metrics[index]["reference_resets"] += 1
                     decoder.gate.reset()
                     if last_input is not None and stamp <= last_input:
                         decoder.close()
-                        decoder = H264Decoder(pixel_format="GRAY8", low_latency=True, frame_selector=selected)
+                        decoder = make_decoder()
                         headers.clear()
                         last_output = None
+                        if sink is not None:
+                            sink.reset_frames()
                     reset[index].clear()
                 last_input = stamp
                 if decoder.push(data, stamp):
-                    headers[stamp] = copy.deepcopy(message.header)
+                    headers[stamp] = (copy.deepcopy(message.header), received)
+                else:
+                    metrics[index]["waiting_for_idr"] += 1
                 for _ in range(16):
                     # Most decoded frames are rejected; do not wait for an
                     # appsink sample on every compressed input packet.
@@ -170,9 +188,13 @@ def main():
                     if result is None:
                         break
                     pts, image = result
-                    header = headers.pop(pts, None)
+                    metadata = headers.pop(pts, None)
                     value = calibration[0]
-                    if header is None or value is None or image is None:
+                    if metadata is None or value is None or image is None:
+                        continue
+                    header, frame_received = metadata
+                    if time.monotonic() - frame_received > float(settings.get("max_output_age_sec", .5)):
+                        metrics[index]["expired_frames"] += 1
                         continue
                     bucket = int(round(pts / period))
                     # Both eyes select the same exposure using the shared source clock.
@@ -204,8 +226,11 @@ def main():
                         info.p = rectification.projections[eye].flatten().tolist()
                         metrics[index]["message_ms"] += (time.perf_counter() - started) * 1000
                         started = time.perf_counter()
-                        info_publishers[(name, side)].publish(info)
-                        publishers[(name, side)].publish(output)
+                        if sink is None:
+                            info_publishers[(name, side)].publish(info)
+                            publishers[(name, side)].publish(output)
+                        else:
+                            sink.publish_frame(name, side, output, info)
                         metrics[index]["publish_ms"] += (time.perf_counter() - started) * 1000
                         key = name + "/" + side
                         published = metrics[index]["published"]
@@ -233,7 +258,7 @@ def main():
                 return
             metrics[index]["received"] += 1
             try:
-                queues[index].put_nowait(message)
+                queues[index].put_nowait((message, time.monotonic()))
             except queue.Full:
                 metrics[index]["queue_resets"] += 1
                 reset[index].set()
@@ -254,6 +279,8 @@ def main():
             state="ready" if value is not None else "waiting_calibration",
             calibration_id=value[0] if value is not None else None,
             opencv_threads=cv2.getNumThreads(), sources=metrics,
+            transport="direct_source" if sink is not None else "relayed",
+            **({"bridge": sink.stats()} if sink is not None else {}),
         ))))
     node.create_timer(1.0, publish_metrics)
     try:
@@ -269,6 +296,18 @@ def main():
         rclpy.try_shutdown()
     if failed.is_set():
         raise RuntimeError("Stereo rectifier stopped after a decoder failure")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, required=True)
+    args = parser.parse_args()
+    config = json.loads(args.config.read_text())
+    if config["egohalo_rectification"].get("direct_source", False):
+        from .egohalo_mapping_bridge import run_bridge
+        run_bridge(config)
+    else:
+        run_rectifier(config, threading.Event())
 
 
 if __name__ == "__main__":

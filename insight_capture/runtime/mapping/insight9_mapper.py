@@ -62,6 +62,7 @@ from insight_capture.runtime.mapping.bundle_adjustment import (  # noqa: E402
 )
 from insight_capture.runtime.mapping.rig import stereo_views
 from insight_capture.runtime.mapping.rig_inputs import RigInputs
+from insight_capture.runtime.mapping.head_tracking import HeadMapTracker
 from insight_capture.runtime.mapping.pose_graph import (  # noqa: E402
     KeyframePoseGraph,
     PoseGraphConfig,
@@ -434,10 +435,23 @@ class Insight9SparseMapper(Node):
         )
         self._loop_pose_filter.observe(np.eye(4, dtype=np.float64))
         self._loop_lock = threading.Lock()
+        self._head_tracking_hz = float(getattr(args, "head_tracking_hz", 0.0))
+        if not np.isfinite(self._head_tracking_hz) or not 0 <= self._head_tracking_hz <= args.mapping_hz:
+            raise ValueError("Head tracking frequency must be between zero and mapping frequency")
+        if self._head_tracking_hz > 0 and args.head_exclude_recent_keyframes < 1:
+            raise ValueError("Head tracking must exclude at least the current keyframe")
+        if self._head_tracking_hz > 0 and args.head_max_map_features < args.loop_min_map_features:
+            raise ValueError("Head map feature limit must cover the minimum historical map")
+        self._head_tracker = self._new_head_tracker()
+        self._last_head_attempt_ns = -1
+        self._head_pose_revision = self._pose_revision
+        self._head_reference = None
         self._last_loop_measurement: Optional[np.ndarray] = None
         self._loop_closure_count = 0
         self._last_vio_stamp_ns = 0
         self._last_input_vio_stamp_ns = -1
+        self._last_mapping_stamp_ns = -1
+        self._out_of_order_pairs = 0
         self._next_vio_buffer_stamp_ns = 0
         self._next_vio_publish_stamp_ns = 0
         self._vio_rate_lock = threading.Lock()
@@ -704,6 +718,12 @@ class Insight9SparseMapper(Node):
                 }
             self._keyframe_storage_bytes = 0
             self._session_generation += 1
+            self._last_mapping_stamp_ns = -1
+            self._out_of_order_pairs = 0
+            self._head_tracker = self._new_head_tracker()
+            self._last_head_attempt_ns = -1
+            self._head_pose_revision = self._pose_revision
+            self._head_reference = None
             self._capture_reference_keyframe = None
             self._capture_reference_points = None
             self._capture_reference_descriptors = None
@@ -987,6 +1007,11 @@ class Insight9SparseMapper(Node):
             # 限制所有尝试而非仅成功关键帧；缺位姿或静止时也不能退化成全帧率重试。
             self._last_mapping_attempt_monotonic = now
             view = getattr(pair, "view", "front")
+            # Independent views may reach this worker out of source-time order.
+            # Never insert a duplicate/older observation into the shared graph.
+            if pair.stamp_ns <= self._last_mapping_stamp_ns:
+                self._out_of_order_pairs += 1
+                continue
             if self._rig is not None:
                 geometry = self._rig.snapshot(pair)
                 if geometry is None:
@@ -1021,6 +1046,10 @@ class Insight9SparseMapper(Node):
             # T_odom_left = T_odom_imu * T_imu_left；关键帧判定使用未回环修正的局部运动。
             odom_to_left = compose_transform(matrix_from_pose(pose), imu_to_left)
             if not self._is_keyframe(odom_to_left, view):
+                try:
+                    self._track_head(pair, calibration, odom_to_left)
+                except Exception as exc:
+                    self.get_logger().warning(f"Head map observation failed: {exc}", throttle_duration_sec=5)
                 continue
             with self._graph_lock:
                 session_generation = self._session_generation
@@ -1111,6 +1140,7 @@ class Insight9SparseMapper(Node):
                     # 图节点和观测一旦写入即持久有效；即使后续回环失败也先推进 ID，
                     # 防止下一帧与部分处理的节点编号冲突。
                     self._keyframe_id = next_keyframe_id
+                    self._last_mapping_stamp_ns = pair.stamp_ns
                     loop_diagnostics, graph_optimized = self._detect_loop_closure(
                         next_keyframe_id,
                         pair.stamp_ns,
@@ -1185,10 +1215,15 @@ class Insight9SparseMapper(Node):
                             self._rig.metrics[view] = {
                                 "stereo_matches": len(matches.left_points),
                                 "triangulated": len(triangulated.points_left),
+                                "triangulation": triangulated.diagnostics,
                                 "stereo_delta_ms": abs(pair.left_stamp_ns - pair.right_stamp_ns) / 1e6,
                             }
                     else:
                         self._last_keyframe_transform = odom_to_left
+                try:
+                    self._track_head(pair, calibration, odom_to_left, matches=matches)
+                except Exception as exc:
+                    self.get_logger().warning(f"Head map observation failed: {exc}", throttle_duration_sec=5)
                 self._schedule_bundle_adjustment(calibration)
                 self._latest_stats = {
                     "state": "mapping",
@@ -1198,6 +1233,7 @@ class Insight9SparseMapper(Node):
                     "detected_right": matches.detected_right,
                     "stereo_matches": len(matches.left_points),
                     "triangulated": len(triangulated.points_left),
+                    "triangulation": triangulated.diagnostics,
                     "stereo_delta_ms": round(
                         abs(pair.left_stamp_ns - pair.right_stamp_ns) / 1_000_000.0,
                         3,
@@ -1241,6 +1277,63 @@ class Insight9SparseMapper(Node):
             except Exception as exc:
                 self._latest_stats = {"state": "error", "error": str(exc)}
                 self.get_logger().error(f"mapping frame failed: {exc}")
+
+    def _new_head_tracker(self):
+        return HeadMapTracker(self._loop_config,
+            max_translation_m=getattr(self._args, "head_max_innovation_translation_m", .15),
+            max_rotation_deg=getattr(self._args, "head_max_innovation_rotation_deg", 5.0))
+
+    def _track_head(self, pair, calibration, odom_to_left, *, matches=None):
+        """Observe old map geometry even when VIO has not selected a new keyframe."""
+        if self._head_tracking_hz <= 0 or getattr(pair, "view", "front") != "front":
+            return
+        period = int(1e9 / self._head_tracking_hz)
+        if self._last_head_attempt_ns >= 0 and pair.stamp_ns - self._last_head_attempt_ns < period:
+            return
+        self._last_head_attempt_ns = pair.stamp_ns
+        with self._graph_lock:
+            generation, revision = self._session_generation, self._pose_revision
+            if self._head_pose_revision != revision:
+                self._head_tracker = self._new_head_tracker()
+                self._head_pose_revision = revision
+                self._head_reference = None
+            tracker = self._head_tracker
+            if self._capture_reference_points is not None:
+                points, descriptors = self._capture_reference_points, self._capture_reference_descriptors
+            elif self._head_reference is not None:
+                points, descriptors = self._head_reference
+            else:
+                cutoff = self._keyframe_id - self._args.head_exclude_recent_keyframes
+                with self._map_lock:
+                    points, descriptors = self._landmarks.descriptors(max_source_keyframe=cutoff)
+                if len(points) > self._args.head_max_map_features:
+                    indices = np.linspace(0, len(points)-1, self._args.head_max_map_features, dtype=np.int64)
+                    points, descriptors = points[indices], descriptors[indices]
+                if len(points) >= self._args.loop_min_map_features:
+                    # Keep one geometry snapshot until BA/graph optimization
+                    # changes map coordinates; current frames cannot move it.
+                    self._head_reference = (points, descriptors)
+            if len(points) < self._args.loop_min_map_features:
+                tracker.status = dict(accepted=False, rejection="insufficient_historical_map",
+                                      map_features=len(points))
+                return
+        image = image_to_gray(pair.left)
+        if matches is None:
+            features = self._matcher.extract(image)
+            keypoints, query = features.keypoints, features.descriptors
+        else:
+            keypoints, query = matches.left_points, matches.descriptors
+        with self._loop_lock:
+            correction = self._loop_pose_filter.estimate
+        measurement, _ = tracker.observe(pair.stamp_ns, keypoints, query, points,
+            descriptors, calibration.left_projection[:, :3], odom_to_left, image.shape,
+            np.eye(4) if correction is None else correction)
+        with self._graph_lock:
+            if (generation, revision) != (self._session_generation, self._pose_revision):
+                return
+            if measurement is not None:
+                with self._loop_lock:
+                    self._loop_pose_filter.observe(measurement)
 
     def _schedule_bundle_adjustment(self, calibration: StereoCalibration) -> None:
         """Queue one immutable recent-keyframe snapshot without blocking mapping."""
@@ -1841,12 +1934,17 @@ class Insight9SparseMapper(Node):
         status_payload["map_point_count"] = point_count
         status_payload["center_extrinsic_ready"] = self._imu_to_center is not None
         status_payload["pose_frame"] = self._camera_frame
+        status_payload["out_of_order_pairs"] = self._out_of_order_pairs
         if self._rig is not None:
             status_payload["rig"] = self._rig.status()
         with self._graph_lock:
             status_payload["capture_validation"] = (
                 self._capture_validation_status_unlocked()
             )
+            if self._head_tracking_hz > 0:
+                head = self._head_tracker.snapshot(self._last_input_vio_stamp_ns)
+                status_payload["head_localization"] = head
+                status_payload["tracking_mode"] = head["tracking_mode"]
         status.data = json.dumps(status_payload, separators=(",", ":"))
         self._status_publisher.publish(status)
 
@@ -2050,6 +2148,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--map-frame", default="insight9_map")
     parser.add_argument("--mapping-camera-frame", default="insight9_mapping_camera_center")
     parser.add_argument("--mapping-hz", type=float, default=5.0)
+    parser.add_argument("--head-tracking-hz", type=float, default=0.0)
+    parser.add_argument("--head-exclude-recent-keyframes", type=int, default=10)
+    parser.add_argument("--head-max-map-features", type=int, default=20_000)
+    parser.add_argument("--head-max-innovation-translation-m", type=float, default=.15)
+    parser.add_argument("--head-max-innovation-rotation-deg", type=float, default=5.0)
     parser.add_argument("--pose-wait-ms", type=float, default=30.0)
     parser.add_argument("--stereo-tolerance-ms", type=float, default=20.0)
     parser.add_argument("--max-keypoints", type=int, default=1024)
@@ -2184,13 +2287,16 @@ def main() -> int:
         setup = json.loads(initial.config.read_text())
         allowed = {"left_image_topic", "right_image_topic", "left_info_topic", "right_info_topic",
                    "vio_topic", "imu_frame", "left_frame", "right_frame", "map_frame", "mapping_camera_frame", "stereo_views",
-                   "direct_match_min_confidence"}
+                   "direct_match_min_confidence", "direct_match_retry_confidence",
+                   "head_tracking_hz", "head_exclude_recent_keyframes",
+                   "head_max_map_features",
+                   "head_max_innovation_translation_m", "head_max_innovation_rotation_deg"}
         stereo_views(setup)
         mapping = setup.get("mapping", {})
         if set(mapping) - allowed:
             parser.error(f"Unknown mapping configuration: {sorted(set(mapping) - allowed)}")
         parser.set_defaults(**{key: value for key, value in mapping.items()
-                               if key != "direct_match_min_confidence"})
+                               if key not in {"direct_match_min_confidence", "direct_match_retry_confidence"}})
         os.environ["ROS_DOMAIN_ID"] = str(setup["ros_domain_id"])
         from insight_capture.runtime.ros.network import configure_ros_network
         configure_ros_network(setup)

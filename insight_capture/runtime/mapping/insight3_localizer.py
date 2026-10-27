@@ -44,13 +44,11 @@ from insight_capture.runtime.mapping import (  # noqa: E402
     RelocalizationEkfConfig,
     VioContinuityConfig,
     VioContinuityStitcher,
-    associate_reference_points,
     compose_transform,
     grayscale_marker_image,
     left_to_stereo_center,
     load_tcp_frame_calibrations,
     load_cube_marker_config,
-    localize_correspondences,
     localize_features,
     matrix_from_pose,
     matrix_from_transform,
@@ -60,6 +58,7 @@ from insight_capture.runtime.mapping import (  # noqa: E402
     select_timestamp,
 )
 from insight_capture.runtime.mapping.rig import ReferenceSelector
+from insight_capture.runtime.mapping.reference_localization import localize_reference
 from insight_capture.runtime.mapping.stationary_constraint import StationaryPoseConstraint, VisualRestEvidence
 from insight_capture.core.localization_settings import (  # noqa: E402
     DEFAULT_GRIPPER_MASK_HEIGHT_RATIO,
@@ -346,6 +345,11 @@ class Insight3GlobalLocalizer(Node):
         self._direct_match_min_confidence = float(0.2 if confidence is None else confidence)
         if not 0.0 <= self._direct_match_min_confidence <= 1.0:
             raise ValueError("direct match confidence must be between zero and one")
+        self._direct_match_retry_confidence = getattr(args, "direct_match_retry_confidence", None)
+        if self._direct_match_retry_confidence is not None and not (
+            0 <= self._direct_match_retry_confidence < self._direct_match_min_confidence
+        ):
+            raise ValueError("Retry confidence must be below the primary confidence")
         if args.calibration_keyframe_association_px <= 0.0:
             raise ValueError(
                 "calibration keyframe association distance must be positive"
@@ -1574,62 +1578,13 @@ class Insight3GlobalLocalizer(Node):
                                     self._gripper_mask_height_ratio,
                                 ),
                             )
-                            # 参考端匹配坐标关联到同帧已三角化 XYZ，形成 2D-3D PnP 输入。
-                            direct_image_points, direct_object_points = (
-                                associate_reference_points(
-                                    direct_matches.left_points,
-                                    direct_matches.right_points,
-                                    calibration_reference.pixels,
-                                    calibration_reference.map_points,
-                                    max_distance_px=(
-                                        self._args.calibration_keyframe_association_px
-                                    ),
-                                    match_scores=direct_matches.scores,
-                                    min_confidence=self._direct_match_min_confidence,
-                                )
-                            )
                             inference_ms = direct_matches.backend_inference_ms
-                            diagnostics = {
-                                "query_features": direct_matches.detected_left,
-                                "map_features": len(
-                                    calibration_reference.map_points
-                                ),
-                                "descriptor_matches": len(direct_image_points),
-                                "descriptor_match_ms": (
-                                    direct_matches.backend_inference_ms
-                                ),
-                                "median_similarity": (
-                                    round(float(np.median(direct_matches.scores)), 4)
-                                    if len(direct_matches.scores)
-                                    else None
-                                ),
-                                "inliers": 0,
-                                "inlier_ratio": 0.0,
-                                "median_reprojection_error_px": None,
-                                "grid_cells": 0,
-                                "accepted": False,
-                                "rejection": None,
-                                "localization_method": "superglue_keyframe",
-                                "direct_superglue_matches": len(
-                                    direct_matches.left_points
-                                ),
-                                "direct_3d_matches": len(direct_image_points),
-                                "direct_confident_matches": int(np.count_nonzero(
-                                    direct_matches.scores >= self._direct_match_min_confidence
-                                )),
-                                "calibration_keyframe_stamp_ns": (
-                                    calibration_reference.stamp_ns
-                                ),
-                            }
-                            candidate, diagnostics = localize_correspondences(
-                                direct_image_points,
-                                direct_object_points,
-                                camera_matrix,
-                                odom_to_left,
-                                image.shape,
-                                localization_config,
-                                diagnostics=diagnostics,
-                            )
+                            candidate, diagnostics = localize_reference(
+                                direct_matches, calibration_reference, camera_matrix,
+                                odom_to_left, image.shape, localization_config,
+                                confidence=self._direct_match_min_confidence,
+                                retry_confidence=self._direct_match_retry_confidence,
+                                association_px=self._args.calibration_keyframe_association_px)
                             direct_summary = {
                                 "direct_accepted": diagnostics["accepted"],
                                 "direct_rejection": diagnostics["rejection"],
@@ -1644,6 +1599,8 @@ class Insight3GlobalLocalizer(Node):
                                     "inlier_ratio"
                                 ],
                                 "direct_grid_cells": diagnostics["grid_cells"],
+                                "direct_confidence_used": diagnostics["direct_confidence_used"],
+                                "direct_attempts": diagnostics["direct_attempts"],
                             }
                         else:
                             direct_summary = {
@@ -2056,6 +2013,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--calibration-keyframe-association-px", type=float, default=0.75
     )
     parser.add_argument("--direct-match-min-confidence", type=float, default=None)
+    parser.add_argument("--direct-match-retry-confidence", type=float, default=None)
     parser.add_argument(
         "--image-topic-template",
         default="/insight_mapping/{name}/infra1/image_rect_raw",
@@ -2123,6 +2081,9 @@ def main() -> int:
             args.direct_match_min_confidence = setup.get("mapping", {}).get(
                 "direct_match_min_confidence", 0.2
             )
+        if args.direct_match_retry_confidence is None:
+            args.direct_match_retry_confidence = setup.get("mapping", {}).get(
+                "direct_match_retry_confidence")
         if args.reference_views:
             args.reference_views.append("front_right")
     rclpy.init(args=ros_args)

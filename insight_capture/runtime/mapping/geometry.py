@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 import cv2
@@ -68,6 +68,7 @@ class TriangulationResult:
     source_indices: np.ndarray
     reprojection_error_px: np.ndarray
     disparity_px: np.ndarray
+    diagnostics: dict[str, object] = field(default_factory=dict)
 
 
 def _normalized_quaternion(value: Sequence[float]) -> np.ndarray:
@@ -212,23 +213,32 @@ def triangulate_rectified(
     right = np.asarray(right_points, dtype=np.float64).reshape(-1, 2)
     if left.shape != right.shape:
         raise ValueError("left and right match arrays must have the same shape")
+    diagnostics = dict(input_matches=len(left), finite=0, epipolar=0,
+                       positive_disparity=0, disparity_range=0,
+                       valid_homogeneous=0, depth=0, reprojection=0,
+                       median_epipolar_error_px=None)
     if left.size == 0:
         return TriangulationResult(
             np.empty((0, 3), dtype=np.float64),
             np.empty((0,), dtype=np.int64),
             np.empty((0,), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
+            diagnostics,
         )
 
     # 校正双目中同一空间点应位于近似相同的扫描线，且左目横坐标大于右目。
     disparity = left[:, 0] - right[:, 0]
-    preliminary = (
-        np.isfinite(left).all(axis=1)
-        & np.isfinite(right).all(axis=1)
-        & (np.abs(left[:, 1] - right[:, 1]) <= float(max_epipolar_error_px))
-        & (disparity >= float(min_disparity_px))
-        & (disparity <= float(max_disparity_px))
-    )
+    preliminary = np.isfinite(left).all(axis=1) & np.isfinite(right).all(axis=1)
+    diagnostics["finite"] = int(preliminary.sum())
+    if preliminary.any():
+        diagnostics["median_epipolar_error_px"] = round(float(
+            np.median(np.abs(left[preliminary, 1] - right[preliminary, 1]))), 3)
+    preliminary &= np.abs(left[:, 1] - right[:, 1]) <= float(max_epipolar_error_px)
+    diagnostics["epipolar"] = int(preliminary.sum())
+    preliminary &= disparity > 0
+    diagnostics["positive_disparity"] = int(preliminary.sum())
+    preliminary &= (disparity >= float(min_disparity_px)) & (disparity <= float(max_disparity_px))
+    diagnostics["disparity_range"] = int(preliminary.sum())
     source_indices = np.flatnonzero(preliminary)
     if source_indices.size == 0:
         return TriangulationResult(
@@ -236,6 +246,7 @@ def triangulate_rectified(
             source_indices.astype(np.int64),
             np.empty((0,), dtype=np.float64),
             np.empty((0,), dtype=np.float64),
+            diagnostics,
         )
 
     filtered_left = left[source_indices]
@@ -248,6 +259,7 @@ def triangulate_rectified(
         filtered_right.T,
     ).T
     valid_w = np.abs(homogeneous[:, 3]) > 1e-12
+    diagnostics["valid_homogeneous"] = int(valid_w.sum())
     points = np.full((len(homogeneous), 3), np.nan, dtype=np.float64)
     points[valid_w] = homogeneous[valid_w, :3] / homogeneous[valid_w, 3:4]
 
@@ -274,17 +286,20 @@ def triangulate_rectified(
         np.linalg.norm(right_uv - filtered_right, axis=1),
     )
     depth = points[:, 2]
-    valid = (
+    depth_valid = (
         valid_w
         & projection_valid
         & np.isfinite(points).all(axis=1)
         & (depth >= float(min_depth_m))
         & (depth <= float(max_depth_m))
-        & (reprojection <= float(max_reprojection_error_px))
     )
+    diagnostics["depth"] = int(depth_valid.sum())
+    valid = depth_valid & (reprojection <= float(max_reprojection_error_px))
+    diagnostics["reprojection"] = int(valid.sum())
     return TriangulationResult(
         points_left=points[valid],
         source_indices=source_indices[valid].astype(np.int64),
         reprojection_error_px=reprojection[valid],
         disparity_px=disparity[source_indices[valid]],
+        diagnostics=diagnostics,
     )

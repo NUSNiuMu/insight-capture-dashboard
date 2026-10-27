@@ -19,6 +19,8 @@
 
 `egohalo-stereo-rectifier` 默认只消费前置左右两路 H.264、equidistant CameraInfo 和 TF，输出 544×640、5 Hz、90° 水平视场的虚拟针孔双目及对应内外参，以共享源时钟选择同一曝光。该尺寸匹配当前 SuperPoint/SuperGlue 引擎。Insight3 匹配只使用前置左右目参考；四路原始预览和录制保留。实现仍支持通过 `mapping.stereo_views` 加入左右侧重叠双目；2026-10-12 的四路验证属于此前配置。详细坐标、门限及验证见 [EGOHALO_MAPPING.md](EGOHALO_MAPPING.md)。
 
+2026-10-27 的独立候选分支增加 `direct_source` 模式：源域直接完成前置双目接收/解码/校正，以有界 IPC 传完整图像对和独立 VIO，目标域只发布建图输出。专用 VIO 为 `/egohalo/mapping/vio_100hz`，通用 relay 仍供应原始预览和录制。该候选尚未部署；当前展示仍使用原 `jetson-nx`。隔离验证发现真实录制的校正纵向偏差尚待重新标定核查，不能按吞吐优化推断精度通过。部署前请先阅读 [候选验证与边界](EGOHALO_MAPPING.md#2026-10-27-候选优化未部署到展示环境)。
+
 Mapper 输入话题与坐标系由配置覆盖。内部 `/insight9_sparse_map/*` 是保留的兼容接口名，不代表仍使用 Insight9 数据。Insight3 全局定位消费这张共享地图。EgoHalo 没有原 Insight9 RGB 立方标记输入，所以此配置关闭 cube-marker 校正，保留特征地图定位与采集前置检查。
 
 ### 2026-10-12：四路建图与统一位姿

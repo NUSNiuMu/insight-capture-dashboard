@@ -29,7 +29,8 @@ class H264Decoder:
             if pixel_format == "BGR":
                 decoder += "video/x-raw,format=BGRx ! videoconvert ! "
         else:
-            decoder = "avdec_h264 name=decoder ! videoconvert ! "
+            codec = "avdec_h264" if Gst.ElementFactory.find("avdec_h264") else "openh264dec"
+            decoder = codec + " name=decoder ! videoconvert ! "
         self.pipeline = Gst.parse_launch(
             "appsrc name=source format=time is-live=false block=false "
             "caps=video/x-h264,stream-format=byte-stream,alignment=au ! "

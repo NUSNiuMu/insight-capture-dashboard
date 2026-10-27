@@ -12,7 +12,7 @@ import numpy as np
 from .synchronization import StereoPair
 
 
-def calibration_identity(infos, transforms):
+def calibration_identity(infos, transforms, *, rectification=None):
     """Identify geometry independently of message timestamps or quaternion sign."""
     payload = []
     for info in infos:
@@ -23,6 +23,8 @@ def calibration_identity(infos, transforms):
         if not np.isfinite(matrix).all():
             raise ValueError("Rig transforms must be finite")
         payload.append(np.round(matrix, 10).tolist())
+    if rectification is not None:
+        payload.append(sorted(rectification.items()))
     return hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
