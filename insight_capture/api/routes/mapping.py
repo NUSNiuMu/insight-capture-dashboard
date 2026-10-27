@@ -1,5 +1,7 @@
 """Sparse mapping status and reset routes."""
 
+import asyncio
+
 from aiohttp import web
 
 from ..context import DashboardContext
@@ -38,6 +40,14 @@ class MappingRoutes:
         return web.json_response(self.context.node.build_mapping_payload())
 
     async def _handle_reset(self, _request: web.Request) -> web.Response:
+        manager = getattr(self.context, "recording_manager", None)
+        if manager is not None:
+            recording = await asyncio.to_thread(manager.status)
+            if recording.get("recording") or recording.get("merge_state") in {"finalizing", "merging"}:
+                return web.json_response(
+                    {"error": "recording_busy", "speech": "采集或保存期间不能重新校准，请先停止并等待保存完成。"},
+                    status=409,
+                )
         if not getattr(self.context.node, "fake_pose", False):
             stale_sec = max(
                 0.2,

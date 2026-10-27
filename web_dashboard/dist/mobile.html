@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#122920">
   <title>Insight9 · 手机采集</title>
-  <link rel="stylesheet" href="/static/mobile.css?v=20261027-1">
+  <link rel="stylesheet" href="/static/mobile.css?v=20261027-2">
 </head>
 <body>
   <main>
@@ -21,6 +21,15 @@
     </section>
     <section class="inputs"><div class="section-title"><h2>设备状态</h2><span>图像 / VIO</span></div><div id="cameras" class="camera-list"><p>等待设备状态…</p></div></section>
     <section id="issues" class="issues" hidden aria-live="polite"></section>
+    <section class="calibration">
+      <div class="section-title"><h2>建图与校准</h2><button id="calibrate" class="text-button" disabled>开始校准</button></div>
+      <p id="calibration-summary" aria-live="polite">正在读取校准状态…</p>
+      <div class="camera-row"><span class="camera-name">头部建图</span><span id="mapping-head" class="camera-status">—</span></div>
+      <div class="camera-row"><span class="camera-name">右手定位</span><span id="mapping-right" class="camera-status">—</span></div>
+      <div class="camera-row"><span class="camera-name">左手定位</span><span id="mapping-left" class="camera-status">—</span></div>
+      <p class="hint">统一坐标采集前请先校准。重新校准会清空当前地图和定位，采集及保存期间不可操作。</p>
+      <p id="calibration-message" role="status" hidden></p>
+    </section>
     <section class="preview-section"><div class="section-title"><h2>实时预览</h2><button id="preview-toggle" class="text-button">开启预览</button></div>
       <p id="preview-description">按需开启单路画面，采集优先。</p>
       <div id="preview-panel" hidden>
@@ -31,6 +40,6 @@
     <section class="result"><div class="section-title"><h2>当前 / 最近一条</h2><span id="result-state">—</span></div><p id="filename">尚未采集</p><p id="result-error" role="alert" hidden></p></section>
     <footer>数据保存在 Jetson · 手机仅控制和预览<br><a href="/recording">桌面录制面板</a></footer>
   </main>
-  <script type="module" src="/static/pages/mobile.js?v=20261027-1"></script>
+  <script type="module" src="/static/pages/mobile.js?v=20261027-2"></script>
 </body>
 </html>

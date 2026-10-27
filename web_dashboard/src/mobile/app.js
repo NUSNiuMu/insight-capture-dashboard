@@ -5,6 +5,7 @@ const labels = { idle: "准备采集", starting: "正在启动", recording: "采
 const names = { insight9_a: "头部 · Insight9", insight3_a: "右手 · Insight3 A", insight3_b: "左手 · Insight3 B" };
 const preview = new MobilePreview(el("preview-video"), el("preview-status"));
 let snapshot = null, online = false, pending = false, previewEnabled = false, message = "";
+let mapping = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { cache: "no-store", signal: AbortSignal.timeout(10000), ...options });
@@ -25,6 +26,8 @@ function render() {
   el("storage").textContent = s.storage?.using_fallback ? "备用存储" : "采集盘";
   const busy = ["starting", "saving"].includes(s.state);
   const recording = s.state === "recording";
+  el("calibrate").disabled = !online || pending || busy || recording
+    || !Object.keys(names).every(name => s.preflight?.camera_health?.[name]?.ready);
   el("start").hidden = recording;
   el("stop").hidden = !recording;
   el("start").disabled = !online || pending || busy || !s.preflight?.ok;
@@ -52,9 +55,37 @@ function render() {
   el("result-state").textContent = labels[s.state] || "—";
   const error = message || s.operation?.error || s.error;
   el("result-error").hidden = !error; el("result-error").textContent = error || "";
+  renderCalibration();
+}
+function renderCalibration() {
+  const statuses = mapping?.statuses || {};
+  const head = statuses.insight9 || {};
+  const points = Number(mapping?.map_point_count || 0);
+  const ready = online && head.online && head.state === "mapping" && points > 0;
+  const rows = [
+    ["mapping-head", ready, !online || !head.online ? "服务离线" : head.state === "error" ? "建图异常" : ready ? `已建图 · ${points} 点` : "等待建图"],
+    ...[["mapping-right", "insight3_a"], ["mapping-left", "insight3_b"]].map(([id, name]) => {
+      const s = statuses[name] || {};
+      const located = online && s.online && s.localized && s.state !== "error" && s.tracking_mode !== "vio_only";
+      const text = !online || !s.online ? "服务离线" : s.state === "error" ? "定位异常" : s.tracking_mode === "vio_only" ? "VIO 推算 · 未匹配地图" : located ? "已定位" : "未定位";
+      return [id, located, text];
+    }),
+  ];
+  for (const [id, good, text] of rows) {
+    el(id).textContent = text;
+    el(id).classList.toggle("bad", !good);
+  }
+  el("calibration-summary").textContent = rows.every(([, good]) => good)
+    ? "三路全局定位就绪" : "统一坐标尚未就绪；原始数据仍可按设备状态采集。";
 }
 async function poll() {
-  try { snapshot = await api(`/api/mobile/status${previewEnabled && !document.hidden ? "?preview=1" : ""}`); online = true; }
+  try {
+    [snapshot, mapping] = await Promise.all([
+      api(`/api/mobile/status${previewEnabled && !document.hidden ? "?preview=1" : ""}`),
+      api("/api/mapping"),
+    ]);
+    online = true;
+  }
   catch { online = false; }
   render();
   setTimeout(poll, document.hidden ? 4000 : 1500);
@@ -71,6 +102,18 @@ async function command(action) {
 }
 el("start").onclick = () => command("start");
 el("stop").onclick = () => command("stop");
+el("calibrate").onclick = async () => {
+  if (el("calibrate").disabled) return;
+  pending = true; render();
+  el("calibration-message").hidden = false;
+  el("calibration-message").textContent = "正在请求校准…";
+  try {
+    const result = await api("/api/mapping/reset", { method: "POST" });
+    mapping = result.mapping;
+    el("calibration-message").textContent = "校准已请求。请缓慢移动头部观察环境，并让双手相机看到已建图区域，等待三路定位就绪。";
+  } catch (error) { el("calibration-message").textContent = error.message; }
+  finally { pending = false; render(); }
+};
 el("preview-toggle").onclick = () => {
   previewEnabled = !previewEnabled;
   el("preview-panel").hidden = !previewEnabled;
