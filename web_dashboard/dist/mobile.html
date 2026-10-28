@@ -27,7 +27,7 @@
       <div class="camera-row"><span class="camera-name">头部建图</span><span id="mapping-head" class="camera-status">—</span></div>
       <div class="camera-row"><span class="camera-name">右手定位</span><span id="mapping-right" class="camera-status">—</span></div>
       <div class="camera-row"><span class="camera-name">左手定位</span><span id="mapping-left" class="camera-status">—</span></div>
-      <p class="hint">统一坐标采集前请先校准。重新校准会清空当前地图和定位，采集及保存期间不可操作。</p>
+      <p class="hint">完整测试可先开始采集，再校准。重新校准会清空当前地图和定位；保存期间请等待完成。</p>
       <p id="calibration-message" role="status" hidden></p>
     </section>
     <section class="preview-section"><div class="section-title"><h2>实时预览</h2><button id="preview-toggle" class="text-button">开启预览</button></div>
@@ -40,6 +40,6 @@
     <section class="result"><div class="section-title"><h2>当前 / 最近一条</h2><span id="result-state">—</span></div><p id="filename">尚未采集</p><p id="result-error" role="alert" hidden></p></section>
     <footer>数据保存在 Jetson · 手机仅控制和预览<br><a href="/recording">桌面录制面板</a></footer>
   </main>
-  <script type="module" src="/static/pages/mobile.js?v=20261027-capture-cleanup"></script>
+  <script type="module" src="/static/pages/mobile.js?v=20261028-full-session-capture"></script>
 </body>
 </html>

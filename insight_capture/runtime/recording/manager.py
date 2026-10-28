@@ -724,6 +724,7 @@ class RecordingManager:
                 "recording_mode": self.recording_mode,
                 "selected_topics": list(selected_topics),
                 "started_at_epoch_s": self.started_at,
+                "camera_configuration": json.loads(json.dumps(self.raw_config)),
             }
             self.merge_state = "idle"
             self.merge_error = None

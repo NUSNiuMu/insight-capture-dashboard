@@ -41,9 +41,10 @@ class MappingRoutes:
 
     async def _handle_reset(self, _request: web.Request) -> web.Response:
         recording = await asyncio.to_thread(self.context.recording_manager.status)
-        if recording.get("recording") or recording.get("merge_state") in {"finalizing", "merging"}:
+        if (recording.get("recording") and recording.get("recording_mode") != "mobile_capture"
+                or recording.get("merge_state") in {"finalizing", "merging"}):
             return web.json_response(
-                {"error": "recording_busy", "speech": "采集或保存期间不能重新校准，请先停止并等待保存完成。"},
+                {"error": "recording_busy", "speech": "当前采集或保存期间不能重新校准，请先停止并等待保存完成。"},
                 status=409,
             )
         if not getattr(self.context.node, "fake_pose", False):

@@ -29,6 +29,7 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图；两路 Insight3 �
 左右 mono8 图像
   -> 20 ms 近时同步
   -> 官方 SuperPoint + SuperGlue
+  -> 双目匹配的亚像素 LK 细化与前后向检查
   -> 极线、视差、深度和重投影过滤
   -> 双目三角化
   -> 100 Hz VIO 插值到图像时间戳
@@ -40,8 +41,8 @@ SuperPoint/SuperGlue，在当前会话内建立稀疏地图；两路 Insight3 �
   -> T_map_odom * T_odom_imu * T_imu_left
   -> 描述子地标关联、确认或重建
   -> features PointCloud2 + Pose + TF
-  -> 低频校准关键帧图像 + 已三角化 UV/XYZ
-  -> Insight3 与关键帧直接 SuperGlue 匹配 + PnP
+  -> 仅发布 BA 已优化共享地标的 XYZ / 描述子
+  -> Insight3 特征匹配 + PnP
   -> 可选的调试 points PointCloud2 + Path
 ```
 
@@ -134,11 +135,17 @@ Web API、前端控制和 WebSocket payload 已停用，建图重定位是唯一
 
 Dashboard 复用两路 Insight3 现有图像 reader，以 2 Hz 中继到
 `/insight_mapping/<name>/infra1/image_rect_raw`；localizer 不再增加全速图像 DDS
-reader。Insight9 mapper 最多以 2 Hz 发布最新校准关键帧的左红外图，以及该帧
-经过双目三角化的 UV/XYZ 对应。尚未完成首次定位时，Insight3 优先与该帧做
-SuperGlue 直接匹配，再以匹配到的三维点运行 PnP-RANSAC；关键帧尚未就绪或直接
-匹配未通过时，回退到原有的 3D 描述子地图匹配。这样首个高质量双目关键帧即可
-启动校准，不必等待三个关键帧先形成确认地图。
+reader。Insight9 的双目匹配先细化右目像素，左目坐标与 SuperPoint 描述子保持
+对应；失败、位移过大或前后向不一致的匹配直接丢弃。LK 使用初始匹配位置，
+方法接口见 [OpenCV 光流文档](https://docs.opencv.org/4.x/dc/d6b/group__video__track.html)。
+
+在线地标集合只接收通过 BA 整窗门限的跨帧共享点；未参与优化的单帧点保留用于
+建图观测和诊断，不进入定位地图。Insight3 只匹配这份优化地标集合并执行 PnP，
+不再订阅单参考帧进行另一条定位尝试。地图尚未成熟时状态明确等待；已有定位后
+缺少匹配时由原始 VIO 延续轨迹。原有共识判据和 BA 整窗验收门限保持不变。
+
+参考关键帧图像和 UV/XYZ 话题继续保存为诊断数据，不作为腕部主定位输入。
+mapper 的 OpenBLAS / OpenCV 工作线程限制为 1，避免小矩阵计算争用 CPU。
 
 PnP 候选不再要求连续三次全部成功，而是在最近五次尝试中取得三个相互一致的
 候选；单次图像模糊或遮挡不会清空已有进度。确认后得到 `T_map_odom`，再以

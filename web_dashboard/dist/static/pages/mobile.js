@@ -58,7 +58,8 @@ function render() {
 }
 function renderCalibration() {
   el("calibrate").disabled = !online || !mapping || pending
-    || ["starting", "recording", "saving"].includes(snapshot?.state)
+    || ["starting", "saving"].includes(snapshot?.state)
+    || (snapshot?.recording && snapshot.recording_mode !== "mobile_capture")
     || !Object.keys(names).every(name => snapshot?.preflight?.camera_health?.[name]?.ready);
   const statuses = mapping?.statuses || {};
   const head = statuses.insight9 || {};

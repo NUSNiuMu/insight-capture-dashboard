@@ -149,6 +149,7 @@ class BundleAdjustmentResult:
     max_landmark_correction_m: float
     poses: dict[int, np.ndarray]
     refined_points_left: dict[int, np.ndarray]
+    refined_point_indices: dict[int, np.ndarray]
 
 
 @dataclass
@@ -194,6 +195,7 @@ def _empty_result(
         max_landmark_correction_m=0.0,
         poses={},
         refined_points_left={},
+        refined_point_indices={},
     )
 
 
@@ -526,9 +528,11 @@ def optimize_local_bundle(
         reason, accepted = "landmark_correction_gate", False
 
     refined_points: dict[int, np.ndarray] = {}
+    refined_indices: dict[int, list[int]] = {}
     poses_by_id: dict[int, np.ndarray] = {}
     if accepted:
         for frame, pose in zip(frames, optimized_poses):
+            refined_indices[frame.keyframe_id] = []
             poses_by_id[frame.keyframe_id] = pose.copy()
             refined_points[frame.keyframe_id] = np.asarray(
                 frame.points_left, dtype=np.float32
@@ -539,6 +543,7 @@ def optimize_local_bundle(
                 pose = optimized_poses[frame_index]
                 point_left = pose[:3, :3].T @ (point_world - pose[:3, 3])
                 if point_left[2] > 1e-4 and np.isfinite(point_left).all():
+                    refined_indices[frames[frame_index].keyframe_id].append(point_index)
                     refined_points[frames[frame_index].keyframe_id][
                         point_index
                     ] = point_left
@@ -560,4 +565,6 @@ def optimize_local_bundle(
         max_landmark_correction_m=landmark_correction,
         poses=poses_by_id,
         refined_points_left=refined_points,
+        refined_point_indices={key: np.asarray(sorted(indices), dtype=np.int64)
+                               for key, indices in refined_indices.items()},
     )

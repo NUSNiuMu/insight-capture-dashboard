@@ -125,6 +125,7 @@ services:
     runtime: nvidia
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
+      - OPENBLAS_NUM_THREADS=1
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:

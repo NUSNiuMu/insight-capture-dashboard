@@ -54,6 +54,8 @@ from insight_capture.runtime.mapping import (  # noqa: E402
     transform_points,
     triangulate_rectified,
 )
+from insight_capture.runtime.mapping.map_store import MapUpdate
+from insight_capture.runtime.mapping.stereo_refinement import refine_stereo_matches
 from insight_capture.runtime.mapping.bundle_adjustment import (  # noqa: E402
     BundleAdjustmentConfig,
     BundleAdjustmentFrame,
@@ -280,6 +282,7 @@ class MappingKeyframe:
     view: str = "front"
     left_projection: Optional[np.ndarray] = None
     right_projection: Optional[np.ndarray] = None
+    refined_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -400,6 +403,7 @@ class Insight9SparseMapper(Node):
         self._keyframe_storage_bytes = 0
         self._session_id = uuid.uuid4().hex
         self._session_generation = 0
+        self._last_reset_wall_ns = time.time_ns()
         # 录制批次冻结后，回环只面对这份不可变参考，避免“地图和被测对象一起漂移”。
         self._capture_reference_keyframe: Optional[int] = None
         self._capture_reference_points: Optional[np.ndarray] = None
@@ -704,6 +708,7 @@ class Insight9SparseMapper(Node):
                 }
             self._keyframe_storage_bytes = 0
             self._session_generation += 1
+            self._last_reset_wall_ns = time.time_ns()
             self._capture_reference_keyframe = None
             self._capture_reference_points = None
             self._capture_reference_descriptors = None
@@ -1034,7 +1039,7 @@ class Insight9SparseMapper(Node):
                         f"{(calibration.height, calibration.width)}"
                     )
                 # SuperGlue 先建立左右目 2D-2D 对应；几何模块再决定哪些匹配可形成 3D。
-                matches = self._matcher.match(left, right)
+                matches = refine_stereo_matches(left, right, self._matcher.match(left, right))
                 triangulated = triangulate_rectified(
                     matches.left_points,
                     matches.right_points,
@@ -1130,19 +1135,10 @@ class Insight9SparseMapper(Node):
                             time.perf_counter() - rebuild_started
                         ) * 1000.0
                     else:
-                        # 没有图优化时只把当前帧局部点变换到地图系并增量融合。
-                        map_points = transform_points(
-                            map_to_left, triangulated.points_left
-                        )
+                        # Raw stereo observations enter the map only after shared-track BA.
                         with self._map_lock:
                             update = self._landmarks.update(
-                                next_keyframe_id,
-                                map_points,
-                                descriptors=matches.descriptors[source],
-                                scores=matches.scores[source],
-                            )
-                            self._pointcloud_dirty = True
-                            self._feature_map_dirty = True
+                                next_keyframe_id, np.empty((0, 3), dtype=np.float32))
                     anchor_map_to_left = (
                         self._pose_graph.pose(next_keyframe_id)
                         if graph_target_id is not None and graph_optimized
@@ -1151,8 +1147,8 @@ class Insight9SparseMapper(Node):
                     anchor_map_points = transform_points(
                         anchor_map_to_left, triangulated.points_left
                     )
-                    # 校准关键帧保留当前图像及精确 UV/XYZ，不必等待地标三帧确认即可
-                    # 让 Insight3 尝试直接 SuperGlue + PnP 初始化。
+                    # Preserve raw reference UV/XYZ for recorded geometry diagnostics;
+                    # wrist localization consumes the optimized landmark cloud.
                     if (
                         len(anchor_map_points)
                         >= self._args.calibration_keyframe_min_points
@@ -1427,6 +1423,8 @@ class Insight9SparseMapper(Node):
                     points_left=np.asarray(
                         refined[keyframe.keyframe_id], dtype=np.float32
                     ).copy(),
+                    refined_indices=tuple(sorted(set(keyframe.refined_indices).union(
+                        result.refined_point_indices[keyframe.keyframe_id]))),
                 )
                 if keyframe.keyframe_id in refined
                 else keyframe
@@ -1757,20 +1755,19 @@ class Insight9SparseMapper(Node):
 
         poses = self._pose_graph.pose_snapshot()
         rebuilt = LandmarkMap(self._landmark_config)
-        update = None
+        update = MapUpdate(0, 0, 0, 0, 0)
         for keyframe in self._mapping_keyframes:
             pose = poses.get(keyframe.keyframe_id)
-            if pose is None:
+            indices = np.asarray(keyframe.refined_indices, dtype=np.int64)
+            if pose is None or not len(indices):
                 continue
-            map_points = transform_points(pose, keyframe.points_left)
+            map_points = transform_points(pose, keyframe.points_left[indices])
             update = rebuilt.update(
                 keyframe.keyframe_id,
                 map_points,
-                descriptors=np.asarray(keyframe.descriptors, dtype=np.float32),
-                scores=np.asarray(keyframe.scores, dtype=np.float32),
+                descriptors=np.asarray(keyframe.descriptors[indices], dtype=np.float32),
+                scores=np.asarray(keyframe.scores[indices], dtype=np.float32),
             )
-        if update is None:
-            raise RuntimeError("cannot rebuild an empty keyframe map")
         with self._map_lock:
             self._landmarks = rebuilt
             self._pointcloud_dirty = True
@@ -1864,6 +1861,7 @@ class Insight9SparseMapper(Node):
         return {
             "session_id": self._session_id,
             "session_generation": self._session_generation,
+            "last_reset_wall_ns": self._last_reset_wall_ns,
             "reference_active": self._capture_reference_keyframe is not None,
             "reference_id": self._capture_reference_id,
             "reference_keyframe": self._capture_reference_keyframe,
@@ -2177,6 +2175,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    cv2.setNumThreads(1)
     parser = build_parser()
     parser.set_defaults(stereo_views=[])
     initial, _ = parser.parse_known_args()

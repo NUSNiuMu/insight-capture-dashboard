@@ -175,6 +175,10 @@ class CapturePreflight:
                 *(topic for topic in selected if topic.endswith(("/imu", "/vio_100hz"))),
             }
         )
+        if mobile_mode:
+            required_topics.update(topic for topic in selected if (
+                topic.endswith("/camera_info")
+                or topic.startswith("/insight9_a/camera/infra")))
         missing = sorted(
             topic for topic in required_topics
             if topic != "/tf_static" and topic not in available
