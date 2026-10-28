@@ -1,9 +1,4 @@
-"""低频全局重定位修正使用的六自由度误差状态 EKF。
-
-滤波状态不是相机自身位姿，而是连接全局地图与设备局部 VIO 的 ``T_map_odom``。
-高频 VIO 负责相机相对运动，本滤波器只随时间增加该坐标关系的不确定度；低频 PnP
-则提供绝对观测。内部目标估计与对外输出分离，使可靠修正也能按时间常数平滑注入。
-"""
+"""Camera-anchored, full-covariance fusion of visual map-to-odom corrections."""
 
 from __future__ import annotations
 
@@ -66,40 +61,46 @@ def _valid_transform(transform: np.ndarray) -> np.ndarray:
     return value
 
 
+def _pose_error_jacobian(correction: np.ndarray, odom_to_camera: np.ndarray) -> np.ndarray:
+    """Map correction errors to world position and local camera rotation errors."""
+    jacobian = np.eye(6, dtype=np.float64)
+    jacobian[:3, 3:] = -correction[:3, :3] @ _skew(odom_to_camera[:3, 3])
+    jacobian[3:, 3:] = odom_to_camera[:3, :3].T
+    return jacobian
+
+
+def correction_covariance(
+    correction: np.ndarray, odom_to_camera: np.ndarray,
+    translation_std_m: float, rotation_std_deg: float,
+) -> np.ndarray:
+    """Express independent camera-pose noise in map-to-odom correction coordinates."""
+    inverse = np.linalg.inv(_pose_error_jacobian(correction, odom_to_camera))
+    noise = np.diag([float(translation_std_m)**2] * 3
+        + [math.radians(float(rotation_std_deg))**2] * 3)
+    return inverse @ noise @ inverse.T
+
+
 @dataclass(frozen=True)
 class RelocalizationEkfConfig:
-    """地图到 odom 修正的过程噪声、测量噪声和输出平滑参数。"""
-
+    """Physical camera-pose process noise per square-root second."""
     process_translation_std_m_sqrt_s: float = 0.02
     process_rotation_std_deg_sqrt_s: float = 0.5
-    measurement_translation_std_m: float = 0.10
-    measurement_rotation_std_deg: float = 3.0
-    correction_time_constant_sec: float = 1.0
 
     def __post_init__(self) -> None:
-        values = (
-            self.process_translation_std_m_sqrt_s,
-            self.process_rotation_std_deg_sqrt_s,
-            self.measurement_translation_std_m,
-            self.measurement_rotation_std_deg,
-            self.correction_time_constant_sec,
-        )
+        values = (self.process_translation_std_m_sqrt_s, self.process_rotation_std_deg_sqrt_s)
         if any(not np.isfinite(value) or value <= 0.0 for value in values):
-            raise ValueError("EKF noise and time-constant values must be positive")
+            raise ValueError("EKF process noise must be positive")
 
 
 class RelocalizationEkf:
-    """融合绝对重定位与连续 VIO 运动。
+    """Fuse visual correction observations with full position/rotation covariance.
 
-    状态是 ``T_map_odom``。VIO 通过 ``T_map_odom @ T_odom_camera`` 提供高频运动，
-    所以这里只累计过程不确定度；重定位提供 ``T_map_odom`` 的绝对观测。第一次观测
-    精确初始化状态，后续更新按时间常数注入发布值，避免低频观测产生单帧跳变。
+    The state is T_map_odom. Updates are linearized at the observed camera pose,
+    preserving rotation/translation correlations independently of the odom origin.
     """
-
     def __init__(self, config: RelocalizationEkfConfig) -> None:
         self.config = config
         self._estimate: Optional[np.ndarray] = None
-        self._output: Optional[np.ndarray] = None
         self._covariance = np.zeros((6, 6), dtype=np.float64)
         self.last_innovation_translation_m = 0.0
         self.last_innovation_rotation_deg = 0.0
@@ -110,12 +111,6 @@ class RelocalizationEkf:
 
     @property
     def correction(self) -> Optional[np.ndarray]:
-        return None if self._output is None else self._output.copy()
-
-    @property
-    def estimate(self) -> Optional[np.ndarray]:
-        """Return the latest filtered target before display smoothing."""
-
         return None if self._estimate is None else self._estimate.copy()
 
     @property
@@ -124,122 +119,66 @@ class RelocalizationEkf:
 
     def reset(self) -> None:
         self._estimate = None
-        self._output = None
         self._covariance.fill(0.0)
         self.last_innovation_translation_m = 0.0
         self.last_innovation_rotation_deg = 0.0
 
     def reinitialize(self, map_to_odom: np.ndarray) -> None:
-        """立即替换内部估计和发布修正，用于首次定位或确认的大幅跳变。"""
-
-        measurement = _valid_transform(map_to_odom)
-        self._estimate = measurement
-        self._output = measurement.copy()
+        self._estimate = _valid_transform(map_to_odom)
         self._covariance.fill(0.0)
         self.last_innovation_translation_m = 0.0
         self.last_innovation_rotation_deg = 0.0
 
-    def predict(self, dt_sec: float) -> None:
+    def predict(self, dt_sec: float, odom_to_camera: np.ndarray) -> None:
         if not self.initialized or not np.isfinite(dt_sec) or dt_sec <= 0.0:
             return
-        # 长时间停顿不应一次性把协方差膨胀到无界，最多累计一秒过程噪声。
-        process_dt = min(float(dt_sec), 1.0)
-        translation_variance = (
-            self.config.process_translation_std_m_sqrt_s**2 * process_dt
-        )
-        rotation_std = math.radians(
-            self.config.process_rotation_std_deg_sqrt_s
-        )
-        rotation_variance = rotation_std**2 * process_dt
-        self._covariance += np.diag(
-            [translation_variance] * 3 + [rotation_variance] * 3
-        )
-
-        # 输出平滑步长限制为 0.1 秒，恢复的数据流不能把停顿当成一次巨大修正。
-        smoothing_dt = min(float(dt_sec), 0.1)
-        alpha = 1.0 - math.exp(
-            -smoothing_dt / self.config.correction_time_constant_sec
-        )
-        self._output[:3, 3] += alpha * (
-            self._estimate[:3, 3] - self._output[:3, 3]
-        )
-        rotation_error = _so3_log(
-            self._output[:3, :3].T @ self._estimate[:3, :3]
-        )
-        self._output[:3, :3] = (
-            self._output[:3, :3] @ _so3_exp(alpha * rotation_error)
-        )
+        scale = math.sqrt(min(float(dt_sec), 1.0))
+        self._covariance += correction_covariance(
+            self._estimate, odom_to_camera,
+            self.config.process_translation_std_m_sqrt_s * scale,
+            self.config.process_rotation_std_deg_sqrt_s * scale)
 
     def observe(
-        self,
-        map_to_odom: np.ndarray,
-        *,
-        translation_std_m: Optional[float] = None,
-        rotation_std_deg: Optional[float] = None,
+        self, map_to_odom: np.ndarray, odom_to_camera: np.ndarray,
+        measurement_covariance: np.ndarray,
     ) -> bool:
-        """Apply a relocalization observation.
-
-        Returns ``True`` only for the first observation, which intentionally
-        initializes (and therefore jumps) to the real global pose.  Callers
-        with independently characterized sensors may override the default
-        measurement noise without changing the filter's process model.
-        """
-
+        """Update from one validated visual measurement and its full 6x6 covariance."""
         measurement = _valid_transform(map_to_odom)
+        odom = _valid_transform(odom_to_camera)
+        covariance = np.asarray(measurement_covariance, dtype=np.float64).reshape(6, 6)
+        covariance = .5 * (covariance + covariance.T)
+        if not np.isfinite(covariance).all():
+            raise ValueError("measurement covariance contains non-finite values")
+        np.linalg.cholesky(covariance)
         if not self.initialized:
             self.reinitialize(measurement)
             return True
 
-        # 平移直接相减；旋转创新在当前估计的局部切空间中表示为旋转向量。
-        innovation = np.empty(6, dtype=np.float64)
-        innovation[:3] = measurement[:3, 3] - self._estimate[:3, 3]
-        innovation[3:] = _so3_log(
-            self._estimate[:3, :3].T @ measurement[:3, :3]
-        )
-        self.last_innovation_translation_m = float(
-            np.linalg.norm(innovation[:3])
-        )
-        self.last_innovation_rotation_deg = math.degrees(
-            float(np.linalg.norm(innovation[3:]))
-        )
-
-        translation_std = (
-            self.config.measurement_translation_std_m
-            if translation_std_m is None
-            else float(translation_std_m)
-        )
-        rotation_std = (
-            self.config.measurement_rotation_std_deg
-            if rotation_std_deg is None
-            else float(rotation_std_deg)
-        )
-        if (
-            not np.isfinite(translation_std)
-            or translation_std <= 0.0
-            or not np.isfinite(rotation_std)
-            or rotation_std <= 0.0
-        ):
-            raise ValueError("measurement standard deviations must be positive")
-        translation_variance = translation_std**2
-        rotation_variance = math.radians(rotation_std) ** 2
-        measurement_covariance = np.diag(
-            [translation_variance] * 3 + [rotation_variance] * 3
-        )
-        innovation_covariance = self._covariance + measurement_covariance
-        gain = np.linalg.solve(
-            innovation_covariance.T, self._covariance.T
-        ).T
+        predicted_pose = self._estimate @ odom
+        measured_pose = measurement @ odom
+        prior_jacobian = _pose_error_jacobian(self._estimate, odom)
+        measurement_jacobian = _pose_error_jacobian(measurement, odom)
+        prior = prior_jacobian @ self._covariance @ prior_jacobian.T
+        observed = measurement_jacobian @ covariance @ measurement_jacobian.T
+        innovation = np.r_[measured_pose[:3, 3] - predicted_pose[:3, 3],
+            _so3_log(predicted_pose[:3, :3].T @ measured_pose[:3, :3])]
+        rotation_cross = _skew(innovation[3:])
+        tangent = np.eye(6)
+        tangent[3:, 3:] += .5 * rotation_cross + rotation_cross @ rotation_cross / 12.
+        observed = tangent @ observed @ tangent.T
+        gain = np.linalg.solve((prior + observed).T, prior.T).T
         delta = gain @ innovation
-        self._estimate[:3, 3] += delta[:3]
-        self._estimate[:3, :3] = (
-            self._estimate[:3, :3] @ _so3_exp(delta[3:])
-        )
-        # Joseph 形式比简化的 (I-K)P 更能在浮点误差下保持协方差半正定。
+        predicted_pose[:3, 3] += delta[:3]
+        predicted_pose[:3, :3] = predicted_pose[:3, :3] @ _so3_exp(delta[3:])
+        self._estimate = predicted_pose @ np.linalg.inv(odom)
         identity_minus_gain = np.eye(6) - gain
-        self._covariance = (
-            identity_minus_gain
-            @ self._covariance
-            @ identity_minus_gain.T
-            + gain @ measurement_covariance @ gain.T
-        )
+        posterior = identity_minus_gain @ prior @ identity_minus_gain.T + gain @ observed @ gain.T
+        reset = np.eye(6)
+        reset[3:, 3:] -= .5 * _skew(delta[3:])
+        inverse = np.linalg.inv(_pose_error_jacobian(self._estimate, odom))
+        transport = inverse @ reset
+        self._covariance = transport @ posterior @ transport.T
+        self._covariance = .5 * (self._covariance + self._covariance.T)
+        self.last_innovation_translation_m = float(np.linalg.norm(innovation[:3]))
+        self.last_innovation_rotation_deg = math.degrees(float(np.linalg.norm(innovation[3:])))
         return False

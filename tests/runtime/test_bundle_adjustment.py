@@ -39,6 +39,40 @@ def _project(points_left: np.ndarray, projection: np.ndarray) -> np.ndarray:
 
 
 class BundleAdjustmentTests(unittest.TestCase):
+    def _static_frames(self):
+        random = np.random.default_rng(31)
+        left, right = _projection_matrices()
+        points = random.uniform((-0.3, -0.2, 1.5), (0.3, 0.2, 2.5), (24, 3))
+        descriptors = np.eye(24, dtype=np.float32)
+        frames = [
+            BundleAdjustmentFrame(
+                keyframe_id=index + 1, pose=np.eye(4), points_left=points.copy(),
+                left_pixels=_project(points, left), right_pixels=_project(points, right),
+                descriptors=descriptors, scores=np.ones(24),
+            )
+            for index in range(4)
+        ]
+        return frames, left, right
+
+    def test_stationary_stereo_bundle_can_initialize_an_already_fitted_map(self):
+        frames, left, right = self._static_frames()
+        result = optimize_local_bundle(frames, left, right)
+        self.assertTrue(result.optimized, result.reason)
+        self.assertLess(result.final_reprojection_rmse_px, 1e-6)
+        self.assertEqual(result.landmarks, 24)
+        self.assertEqual(len(result.refined_point_indices[1]), 24)
+
+    def test_bad_track_is_excluded_without_discarding_the_static_bundle(self):
+        frames, left, right = self._static_frames()
+        for index, frame in enumerate(frames):
+            frame.left_pixels[0, 1] += index * 20.0
+            frame.right_pixels[0, 1] += index * 20.0
+        result = optimize_local_bundle(frames, left, right)
+        self.assertTrue(result.optimized, result.reason)
+        self.assertEqual(result.landmarks, 23)
+        for indices in result.refined_point_indices.values():
+            self.assertNotIn(0, indices)
+
     def test_jointly_reduces_pose_drift_and_reprojection_error(self) -> None:
         random = np.random.default_rng(9)
         left_projection, right_projection = _projection_matrices()

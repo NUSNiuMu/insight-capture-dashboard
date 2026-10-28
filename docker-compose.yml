@@ -201,8 +201,6 @@ services:
       - "2"
       - --pose-publish-hz
       - "30"
-      - --ekf-correction-time-constant-sec
-      - "1.0"
     depends_on:
       superglue-inference:
         condition: service_healthy

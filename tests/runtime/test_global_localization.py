@@ -77,6 +77,35 @@ class GlobalLocalizationTest(unittest.TestCase):
         self.assertTrue(result["localized"])
         self.assertEqual(consensus.correction[0, 3], 0.01)
 
+    def test_consensus_confirms_current_measurement_without_reusing_old_correction(self):
+        consensus = LocalizationConsensus(GlobalLocalizationConfig())
+        confirmed = []
+        for x in (0.0, 0.001, 0.002, 0.003, 0.004, 0.005):
+            current = _candidate(x)
+            result = consensus.observe(current)
+            if result["observation_confirmed"]:
+                confirmed.append(x)
+                np.testing.assert_array_equal(consensus.correction, current.map_to_odom)
+        self.assertEqual(confirmed, [0.002, 0.003, 0.004, 0.005])
+
+    def test_consensus_never_updates_on_missing_or_inconsistent_current_measurement(self):
+        consensus = LocalizationConsensus(GlobalLocalizationConfig())
+        for x in (0.0, 0.001, 0.002):
+            consensus.observe(_candidate(x))
+        confirmed = consensus.correction.copy()
+        self.assertFalse(consensus.observe(None)["observation_confirmed"])
+        self.assertFalse(consensus.observe(_candidate(1.0))["observation_confirmed"])
+        np.testing.assert_array_equal(consensus.correction, confirmed)
+
+    def test_current_three_frame_solution_is_not_vetoed_by_two_old_corrections(self):
+        consensus = LocalizationConsensus(GlobalLocalizationConfig())
+        for x in (0.0, 0.001, 0.15, 0.151):
+            self.assertFalse(consensus.observe(_candidate(x))["observation_confirmed"])
+        result = consensus.observe(_candidate(0.152))
+        self.assertTrue(result["observation_confirmed"])
+        self.assertFalse(result["pose_ambiguous"])
+        self.assertEqual(consensus.correction[0, 3], 0.152)
+
     def test_associate_reference_points_rejects_unmapped_and_duplicate_matches(self):
         reference_pixels = np.array(
             [[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]], dtype=np.float32

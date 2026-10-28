@@ -404,7 +404,7 @@ class Insight9SparseMapper(Node):
         self._session_id = uuid.uuid4().hex
         self._session_generation = 0
         self._last_reset_wall_ns = time.time_ns()
-        # 录制批次冻结后，回环只面对这份不可变参考，避免“地图和被测对象一起漂移”。
+        # Recording reference metadata is independent of the shared live landmark map.
         self._capture_reference_keyframe: Optional[int] = None
         self._capture_reference_points: Optional[np.ndarray] = None
         self._capture_reference_descriptors: Optional[np.ndarray] = None
@@ -431,12 +431,9 @@ class Insight9SparseMapper(Node):
             RelocalizationEkfConfig(
                 process_translation_std_m_sqrt_s=args.loop_process_translation_std,
                 process_rotation_std_deg_sqrt_s=args.loop_process_rotation_std_deg,
-                measurement_translation_std_m=args.loop_measurement_translation_std,
-                measurement_rotation_std_deg=args.loop_measurement_rotation_std_deg,
-                correction_time_constant_sec=args.loop_correction_time_constant_sec,
             )
         )
-        self._loop_pose_filter.observe(np.eye(4, dtype=np.float64))
+        self._loop_pose_filter.reinitialize(np.eye(4, dtype=np.float64))
         self._loop_lock = threading.Lock()
         self._last_loop_measurement: Optional[np.ndarray] = None
         self._loop_closure_count = 0
@@ -489,7 +486,6 @@ class Insight9SparseMapper(Node):
         self._last_feature_publish_monotonic = 0.0
         self._pointcloud_dirty = True
         self._feature_map_dirty = True
-        self._last_keyframe_transform: Optional[np.ndarray] = None
         self._keyframe_id = 0
         self._path = deque(maxlen=args.path_points)
         self._path_lock = threading.Lock()
@@ -611,10 +607,9 @@ class Insight9SparseMapper(Node):
                 self._feature_map_dirty = True
                 self._last_pointcloud_publish_monotonic = float("-inf")
                 self._last_feature_publish_monotonic = 0.0
-            self._last_keyframe_transform = None
             self._keyframe_id = 0
             self._last_mapping_attempt_monotonic = 0.0
-        self._latest_stats = {"state": "waiting_for_motion", "reset": True}
+        self._latest_stats = {"state": "waiting_for_inputs", "reset": True}
         self._publish_map()
         self.get_logger().info("Started a new web-requested sparse mapping session")
         return response
@@ -720,7 +715,7 @@ class Insight9SparseMapper(Node):
             with self._loop_lock:
                 self._loop_consensus = LocalizationConsensus(self._loop_config)
                 self._loop_pose_filter.reset()
-                self._loop_pose_filter.observe(np.eye(4, dtype=np.float64))
+                self._loop_pose_filter.reinitialize(np.eye(4, dtype=np.float64))
                 self._last_loop_measurement = None
                 self._loop_closure_count = 0
                 self._last_vio_stamp_ns = 0
@@ -730,15 +725,10 @@ class Insight9SparseMapper(Node):
                 self._calibration_keyframe_clear_dirty = True
                 self._last_calibration_keyframe_publish_monotonic = float("-inf")
 
-    def _map_to_odom(self, *, smoothed: bool = True) -> np.ndarray:
-        """读取当前地图到 VIO odom 的修正；发布路径默认取平滑输出。"""
-
+    def _map_to_odom(self) -> np.ndarray:
+        """Read the single current map-to-odom correction."""
         with self._loop_lock:
-            correction = (
-                self._loop_pose_filter.correction
-                if smoothed
-                else self._loop_pose_filter.estimate
-            )
+            correction = self._loop_pose_filter.correction
         return np.eye(4, dtype=np.float64) if correction is None else correction
 
     def destroy_node(self) -> bool:
@@ -877,7 +867,6 @@ class Insight9SparseMapper(Node):
                     self._landmarks.clear()
                     self._pointcloud_dirty = True
                     self._feature_map_dirty = True
-                self._last_keyframe_transform = None
                 self._keyframe_id = 0
                 self._last_pose_publish_ns = 0
             self.get_logger().warning("VIO timestamp reset; cleared session map")
@@ -891,7 +880,7 @@ class Insight9SparseMapper(Node):
                 if self._last_vio_stamp_ns > 0:
                     self._loop_pose_filter.predict(
                         (sample.stamp_ns - self._last_vio_stamp_ns)
-                        / 1_000_000_000.0
+                        / 1_000_000_000.0, odom_to_center
                     )
                 self._last_vio_stamp_ns = sample.stamp_ns
                 correction = self._loop_pose_filter.correction
@@ -1023,10 +1012,8 @@ class Insight9SparseMapper(Node):
                     "pose_ready": pose is not None,
                 }
                 continue
-            # T_odom_left = T_odom_imu * T_imu_left；关键帧判定使用未回环修正的局部运动。
+            # 每个限频后的有效双目对形成关键帧，位姿来自同步 VIO。
             odom_to_left = compose_transform(matrix_from_pose(pose), imu_to_left)
-            if not self._is_keyframe(odom_to_left, view):
-                continue
             with self._graph_lock:
                 session_generation = self._session_generation
             started = time.perf_counter()
@@ -1088,7 +1075,7 @@ class Insight9SparseMapper(Node):
                         )
                     if self._pose_graph_active:
                         initial_map_pose = compose_transform(
-                            self._map_to_odom(smoothed=False), odom_to_left
+                            self._map_to_odom(), odom_to_left
                         )
                         map_to_left = self._pose_graph.add_keyframe(
                             next_keyframe_id,
@@ -1111,7 +1098,7 @@ class Insight9SparseMapper(Node):
                         graph_target_id = next_keyframe_id
                     else:
                         map_to_left = compose_transform(
-                            self._map_to_odom(smoothed=False), odom_to_left
+                            self._map_to_odom(), odom_to_left
                         )
                     # 图节点和观测一旦写入即持久有效；即使后续回环失败也先推进 ID，
                     # 防止下一帧与部分处理的节点编号冲突。
@@ -1126,6 +1113,14 @@ class Insight9SparseMapper(Node):
                         left.shape,
                         graph_target_id=graph_target_id,
                     )
+                    if (
+                        self._pose_graph_pending
+                        and time.monotonic() - self._last_pose_graph_optimization_monotonic
+                        >= self._args.pose_graph_min_interval_sec
+                    ):
+                        result = self._optimize_pose_graph(
+                            loop_diagnostics, trigger="deferred_loop_edge")
+                        graph_optimized = result.optimized
                     map_rebuild_ms = 0.0
                     if graph_optimized:
                         # 位姿图改变了历史关键帧，必须用全部局部观测重建世界地标。
@@ -1176,15 +1171,12 @@ class Insight9SparseMapper(Node):
                                     self._rig.reference_dirty.add(reference_name)
                     if self._rig is not None:
                         with self._rig.lock:
-                            self._rig.last_keyframes[view] = odom_to_left
                             self._rig.keyframes[view] += 1
                             self._rig.metrics[view] = {
                                 "stereo_matches": len(matches.left_points),
                                 "triangulated": len(triangulated.points_left),
                                 "stereo_delta_ms": abs(pair.left_stamp_ns - pair.right_stamp_ns) / 1e6,
                             }
-                    else:
-                        self._last_keyframe_transform = odom_to_left
                 self._schedule_bundle_adjustment(calibration)
                 self._latest_stats = {
                     "state": "mapping",
@@ -1248,9 +1240,14 @@ class Insight9SparseMapper(Node):
             return
         with self._graph_lock:
             current_keyframe = int(self._keyframe_id)
+            interval = (
+                self._bundle_adjustment_config.min_keyframes
+                if self._bundle_adjustment_count == 0
+                else self._args.bundle_adjustment_interval_keyframes
+            )
             if (
                 current_keyframe - self._last_bundle_scheduled_keyframe
-                < self._args.bundle_adjustment_interval_keyframes
+                < interval
                 or len(self._mapping_keyframes)
                 < self._bundle_adjustment_config.min_keyframes
             ):
@@ -1435,10 +1432,6 @@ class Insight9SparseMapper(Node):
             self._rebuild_landmarks_from_keyframes()
             rebuild_ms = (time.perf_counter() - rebuild_started) * 1000.0
 
-            latest_id = graph_ids[-1]
-            correction = self._pose_graph.correction_for_keyframe(latest_id)
-            with self._loop_lock:
-                self._loop_pose_filter.observe(correction)
             with self._calibration_keyframe_lock:
                 calibration_keyframe = self._calibration_keyframe
                 if calibration_keyframe is not None:
@@ -1477,11 +1470,10 @@ class Insight9SparseMapper(Node):
         *,
         graph_target_id: Optional[int],
     ) -> tuple[dict[str, object], bool]:
-        """用当前左目特征对历史三维地图做 PnP，并按需触发位姿图优化。
+        """Validate current visual localization and update historical graph constraints.
 
-        最近关键帧被排除，防止把正常连续跟踪误作回环；PnP 候选还需经过多帧共识。
-        接受后的全局位姿先写成回环边，再根据限流间隔或修正幅度决定立即优化还是
-        标记 pending，返回值说明本次是否真的改变了历史图位姿。
+        Confirmed measurements update the live correction before graph optimization.
+        The returned flag reports changes to historical map geometry.
         """
 
         diagnostics: dict[str, object] = {
@@ -1489,61 +1481,19 @@ class Insight9SparseMapper(Node):
             "loop_closures": self._loop_closure_count,
             "pose_graph_optimized": False,
         }
-        # 限流期间积累的边必须在后续关键帧补做，不能永久停留在 pending。
-        if (
-            graph_target_id is not None
-            and self._pose_graph_pending
-            and time.monotonic() - self._last_pose_graph_optimization_monotonic
-            >= self._args.pose_graph_min_interval_sec
-        ):
-            result = self._optimize_pose_graph(
-                diagnostics, trigger="deferred_loop_edge"
-            )
-            if result.optimized:
-                correction = self._pose_graph.correction_for_keyframe(
-                    graph_target_id
-                )
-                with self._loop_lock:
-                    self._loop_pose_filter.observe(correction)
-                self.get_logger().info(
-                    "optimized deferred Insight9 pose graph: %.1f ms, "
-                    "maximum correction %.3f m / %.2f deg"
-                    % (
-                        result.elapsed_ms,
-                        result.max_translation_correction_m,
-                        result.max_rotation_correction_deg,
-                    )
-                )
-                return diagnostics, True
         if (
             not self._args.loop_closure_enabled
             or keyframe_id % max(1, self._args.loop_check_interval_keyframes) != 0
         ):
             return diagnostics, False
 
-        # 只允许匹配足够久以前建立的地标，避免把相邻视角当作“闭环”。
-        historical_cutoff = keyframe_id - self._args.loop_exclude_recent_keyframes
         capture_reference_keyframe = self._capture_reference_keyframe
-        if capture_reference_keyframe is not None:
-            historical_cutoff = min(historical_cutoff, capture_reference_keyframe)
-        if (
-            capture_reference_keyframe is not None
-            and self._capture_reference_points is not None
-            and self._capture_reference_descriptors is not None
-        ):
-            # 批次冻结后始终对固定参考求误差，后续新增地图点不能改变验收基准。
-            map_points = self._capture_reference_points
-            map_descriptors = self._capture_reference_descriptors
-        else:
-            with self._map_lock:
-                map_points, map_descriptors = self._landmarks.descriptors(
-                    max_source_keyframe=historical_cutoff
-                )
+        with self._map_lock:
+            map_points, map_descriptors = self._landmarks.descriptors()
         diagnostics.update(
             {
                 "loop_checked": True,
-                "loop_historical_features": int(len(map_points)),
-                "loop_excluded_after_keyframe": int(historical_cutoff),
+                "loop_map_features": int(len(map_points)),
             }
         )
         if len(map_points) < self._args.loop_min_map_features:
@@ -1585,7 +1535,7 @@ class Insight9SparseMapper(Node):
         validation_rotation = 0.0
         if measurement is not None:
             with self._loop_lock:
-                previous_measurement = self._loop_pose_filter.estimate
+                previous_measurement = self._loop_pose_filter.correction
             if previous_measurement is None:
                 previous_measurement = np.eye(4, dtype=np.float64)
             validation_translation = float(
@@ -1596,17 +1546,15 @@ class Insight9SparseMapper(Node):
             validation_rotation = rotation_distance_deg(
                 previous_measurement, measurement
             )
+            with self._loop_lock:
+                self._loop_pose_filter.observe(
+                    measurement, odom_to_left, np.asarray(localization["pose_covariance"]))
+
 
         graph_optimized = False
-        applied_measurement = measurement
         if measurement is not None and graph_target_id is not None:
             accepted_map_pose = compose_transform(measurement, odom_to_left)
             current_graph_pose = self._pose_graph.pose(graph_target_id)
-            # 新边等待限流优化期间，发布位姿和地标仍沿用同一份旧图几何；PnP 测量
-            # 已保存在图中，后续优化不会丢失。
-            applied_measurement = self._pose_graph.correction_for_keyframe(
-                graph_target_id
-            )
             graph_disagreement_translation = float(
                 np.linalg.norm(
                     accepted_map_pose[:3, 3] - current_graph_pose[:3, 3]
@@ -1648,26 +1596,18 @@ class Insight9SparseMapper(Node):
                     diagnostics, trigger="accepted_loop"
                 )
                 graph_optimized = result.optimized
-                if graph_optimized:
-                    applied_measurement = self._pose_graph.correction_for_keyframe(
-                        graph_target_id
-                    )
-
-        if applied_measurement is not None:
-            with self._loop_lock:
-                self._loop_pose_filter.observe(applied_measurement)
 
         with self._loop_lock:
             innovation_translation = (
                 self._loop_pose_filter.last_innovation_translation_m
             )
             innovation_rotation = self._loop_pose_filter.last_innovation_rotation_deg
-        if applied_measurement is not None:
+        if measurement is not None:
             correction_translation = float(
-                np.linalg.norm(applied_measurement[:3, 3])
+                np.linalg.norm(measurement[:3, 3])
             )
             correction_rotation = rotation_distance_deg(
-                np.eye(4, dtype=np.float64), applied_measurement
+                np.eye(4, dtype=np.float64), measurement
             )
             self.get_logger().info(
                 "accepted Insight9 loop closure %d: correction=%.3f m / %.2f deg; "
@@ -1774,19 +1714,6 @@ class Insight9SparseMapper(Node):
             self._feature_map_dirty = True
         self._refresh_rig_reference_geometry(poses)
         return update
-
-    def _is_keyframe(self, transform: np.ndarray, view="front") -> bool:
-        """平移或旋转任一变化达到门限时选择新关键帧。"""
-
-        previous = self._last_keyframe_transform if self._rig is None else self._rig.last_keyframes.get(view)
-        if previous is None:
-            return True
-        translation = float(np.linalg.norm(transform[:3, 3] - previous[:3, 3]))
-        rotation = rotation_distance_deg(previous, transform)
-        return (
-            translation >= self._args.keyframe_translation_m
-            or rotation >= self._args.keyframe_rotation_deg
-        )
 
     def _publish_map(self) -> None:
         now = time.monotonic()
@@ -2047,7 +1974,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--right-frame", default="insight9_a_camera_right")
     parser.add_argument("--map-frame", default="insight9_map")
     parser.add_argument("--mapping-camera-frame", default="insight9_mapping_camera_center")
-    parser.add_argument("--mapping-hz", type=float, default=5.0)
+    parser.add_argument("--mapping-hz", type=float, default=2.0)
     parser.add_argument("--pose-wait-ms", type=float, default=30.0)
     parser.add_argument("--stereo-tolerance-ms", type=float, default=20.0)
     parser.add_argument("--max-keypoints", type=int, default=1024)
@@ -2059,8 +1986,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-depth-m", type=float, default=8.0)
     parser.add_argument("--max-reprojection-error-px", type=float, default=1.5)
     parser.add_argument("--calibration-keyframe-min-points", type=int, default=40)
-    parser.add_argument("--keyframe-translation-m", type=float, default=0.05)
-    parser.add_argument("--keyframe-rotation-deg", type=float, default=3.0)
     parser.add_argument("--voxel-size-m", type=float, default=0.04)
     parser.add_argument("--confirmation-observations", type=int, default=3)
     parser.add_argument("--candidate-ttl-keyframes", type=int, default=12)
@@ -2081,7 +2006,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
     )
     parser.add_argument("--loop-check-interval-keyframes", type=int, default=2)
-    parser.add_argument("--loop-exclude-recent-keyframes", type=int, default=30)
     parser.add_argument("--loop-min-map-features", type=int, default=80)
     parser.add_argument("--capture-reference-max-features", type=int, default=20_000)
     parser.add_argument("--loop-ratio-test", type=float, default=0.78)
@@ -2097,9 +2021,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loop-confirmation-rotation-deg", type=float, default=10.0)
     parser.add_argument("--loop-process-translation-std", type=float, default=0.02)
     parser.add_argument("--loop-process-rotation-std-deg", type=float, default=0.5)
-    parser.add_argument("--loop-measurement-translation-std", type=float, default=0.08)
-    parser.add_argument("--loop-measurement-rotation-std-deg", type=float, default=2.5)
-    parser.add_argument("--loop-correction-time-constant-sec", type=float, default=0.75)
     parser.add_argument(
         "--pose-graph-enabled",
         action=argparse.BooleanOptionalAction,

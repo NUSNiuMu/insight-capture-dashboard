@@ -70,7 +70,6 @@ from .synchronization import (
 )
 from .relocalization_ekf import RelocalizationEkf, RelocalizationEkfConfig
 from .tcp_frames import TcpFrameCalibration, load_tcp_frame_calibrations
-from .vio_continuity import VioContinuityConfig, VioContinuityStitcher
 
 __all__ = [
     "AdaptiveRelocalizationConfig",
@@ -105,8 +104,6 @@ __all__ = [
     "StereoCalibration",
     "StereoPairSynchronizer",
     "TcpFrameCalibration",
-    "VioContinuityConfig",
-    "VioContinuityStitcher",
     "compose_transform",
     "grayscale_marker_image",
     "associate_reference_points",

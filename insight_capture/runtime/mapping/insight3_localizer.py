@@ -40,8 +40,6 @@ from insight_capture.runtime.mapping import (  # noqa: E402
     PoseSample,
     RelocalizationEkf,
     RelocalizationEkfConfig,
-    VioContinuityConfig,
-    VioContinuityStitcher,
     compose_transform,
     grayscale_marker_image,
     left_to_stereo_center,
@@ -56,7 +54,7 @@ from insight_capture.runtime.mapping import (  # noqa: E402
     rotation_distance_deg,
     select_timestamp,
 )
-from insight_capture.runtime.mapping.stationary_constraint import StationaryPoseConstraint, VisualRestEvidence
+from insight_capture.runtime.mapping.relocalization_ekf import correction_covariance
 from insight_capture.core.localization_settings import (  # noqa: E402
     DEFAULT_GRIPPER_MASK_HEIGHT_RATIO,
     load_gripper_mask_height_ratio,
@@ -273,7 +271,6 @@ class CameraState:
         history_points: int,
         ekf_config: RelocalizationEkfConfig,
         adaptive_config: AdaptiveRelocalizationConfig,
-        vio_continuity_config: VioContinuityConfig,
     ) -> None:
         self.name = name
         self.lock = threading.Lock()
@@ -287,11 +284,6 @@ class CameraState:
         self.marker_consensus: Optional[LocalizationConsensus] = None
         self.pose_filter = RelocalizationEkf(ekf_config)
         self.relocalization_policy = AdaptiveRelocalizationPolicy(adaptive_config)
-        self.vio_stitcher = VioContinuityStitcher(vio_continuity_config)
-        self.stationary = StationaryPoseConstraint()
-        self.visual_rest = VisualRestEvidence()
-        self.stationary_enabled = True
-        self.last_confirmed_map_monotonic = float("-inf")
         self.vio_tracking_status = "UNKNOWN"
         self.vio_tracking_status_monotonic = 0.0
         self.last_relocalization_measurement: Optional[np.ndarray] = None
@@ -356,18 +348,10 @@ class Insight3GlobalLocalizer(Node):
         ekf_config = RelocalizationEkfConfig(
             process_translation_std_m_sqrt_s=args.ekf_process_translation_std,
             process_rotation_std_deg_sqrt_s=args.ekf_process_rotation_std_deg,
-            measurement_translation_std_m=args.ekf_measurement_translation_std,
-            measurement_rotation_std_deg=args.ekf_measurement_rotation_std_deg,
-            correction_time_constant_sec=args.ekf_correction_time_constant_sec,
         )
         adaptive_config = AdaptiveRelocalizationConfig(
             jump_translation_m=args.jump_translation_m,
             jump_rotation_deg=args.jump_rotation_deg,
-        )
-        vio_continuity_config = VioContinuityConfig(
-            translation_threshold_m=args.vio_stitch_translation_m,
-            rotation_threshold_deg=args.vio_stitch_rotation_deg,
-            max_gap_ms=args.vio_stitch_max_gap_ms,
         )
         # 与 Insight9 mapper 共享同一个串行 TensorRT worker，避免重复加载 GPU 引擎。
         self._matcher = IpcSuperGlueBackend(Path(args.inference_socket))
@@ -383,14 +367,9 @@ class Insight3GlobalLocalizer(Node):
                 history_points=args.path_points,
                 ekf_config=ekf_config,
                 adaptive_config=adaptive_config,
-                vio_continuity_config=vio_continuity_config,
             )
             for name in CAMERAS
         }
-        for name, state in self._cameras.items():
-            state.stationary_enabled = not getattr(args, "disable_stationary_constraint", False) and not (
-                self._cube_marker_config.enabled and self._cube_marker_config.apply_corrections
-                and name in self._cube_marker_config.targets)
         marker_consensus_config = GlobalLocalizationConfig(
             min_matches=4,
             min_inliers=4,
@@ -599,12 +578,8 @@ class Insight3GlobalLocalizer(Node):
             with state.lock:
                 state.history.clear()
                 state.pose_buffer.clear()
-                state.vio_stitcher.reset()
                 state.consensus = LocalizationConsensus(state.consensus.config)
                 state.pose_filter.reset()
-                state.stationary.reset()
-                state.visual_rest = VisualRestEvidence()
-                state.last_confirmed_map_monotonic = float("-inf")
                 state.last_relocalization_measurement = None
                 state.last_marker_measurement = None
                 state.marker_observations = 0
@@ -939,12 +914,10 @@ class Insight3GlobalLocalizer(Node):
                             correction_update = state.relocalization_policy.apply(
                                 state.pose_filter,
                                 measurement,
-                                translation_std_m=(
-                                    self._cube_marker_config.measurement_translation_std_m
-                                ),
-                                rotation_std_deg=(
-                                    self._cube_marker_config.measurement_rotation_std_deg
-                                ),
+                                odom_from_camera_center,
+                                correction_covariance(measurement, odom_from_camera_center,
+                                    self._cube_marker_config.measurement_translation_std_m,
+                                    self._cube_marker_config.measurement_rotation_std_deg),
                             )
                             state.marker_updates += 1
                             state.path_dirty = True
@@ -1027,7 +1000,7 @@ class Insight3GlobalLocalizer(Node):
         return callback
 
     def _vio_callback(self, name: str):
-        """生成单路 VIO 回调：先做连续性拼接，再外推并发布全局位姿。"""
+        """Publish raw VIO transformed by the current visual map correction."""
 
         def callback(message: PoseStamped) -> None:
             stamp_ns = stamp_to_ns(message.header.stamp)
@@ -1049,7 +1022,7 @@ class Insight3GlobalLocalizer(Node):
                 if not buffer_due:
                     return
             pose = message.pose
-            raw_sample = PoseSample(
+            sample = PoseSample(
                 stamp_ns=stamp_ns,
                 translation=np.array(
                     [pose.position.x, pose.position.y, pose.position.z],
@@ -1066,129 +1039,76 @@ class Insight3GlobalLocalizer(Node):
                 ),
             )
             try:
-                matrix_from_pose(raw_sample)
+                matrix_from_pose(sample)
             except ValueError:
                 return
-            global_poses = []
-            stitch_event = None
             with state.lock:
-                previous_stitch_events = state.vio_stitcher.stitch_events
-                status_age_sec = (
-                    time.monotonic() - state.vio_tracking_status_monotonic
-                )
-                stitch_allowed = (
-                    state.vio_tracking_status == "TRACKING_STATIC"
-                    and status_age_sec <= 1.0
-                )
-                corrected_samples = state.vio_stitcher.push(
-                    raw_sample, allow_stitch=stitch_allowed
-                )
-                if state.vio_stitcher.stitch_events > previous_stitch_events:
-                    stitch_event = state.vio_stitcher.status()
-                for sample in corrected_samples:
-                    reset = state.pose_buffer.append(sample)
-                    if reset:
-                        state.history.clear()
-                        state.consensus = LocalizationConsensus(
-                            state.consensus.config
+                reset = state.pose_buffer.append(sample)
+                if reset:
+                    state.history.clear()
+                    state.consensus = LocalizationConsensus(
+                        state.consensus.config
+                    )
+                    state.pose_filter.reset()
+                    state.last_relocalization_measurement = None
+                    state.last_marker_measurement = None
+                    if state.marker_consensus is not None:
+                        state.marker_consensus = LocalizationConsensus(
+                            state.marker_consensus.config
                         )
-                        state.pose_filter.reset()
-                        state.stationary.reset()
-                        state.visual_rest = VisualRestEvidence()
-                        state.last_confirmed_map_monotonic = float("-inf")
-                        state.last_relocalization_measurement = None
-                        state.last_marker_measurement = None
-                        if state.marker_consensus is not None:
-                            state.marker_consensus = LocalizationConsensus(
-                                state.marker_consensus.config
-                            )
-                            state.marker_status = {
-                                "state": "waiting_for_vio_relocalization"
-                            }
-                        state.hard_relocalizations = 0
-                        state.last_vio_stamp_ns = -1
-                        state.last_input_vio_stamp_ns = sample.stamp_ns
-                        state.last_image_stamp_ns = -1
-                        state.last_history_stamp_ns = -1
-                        state.transformed_history.clear()
-                        state.transformed_output_extrinsic = None
-                        state.last_transformed_stamp_ns = -1
-                        state.last_global_pose_publish_ns = -1
-                        state.path = PathMsg()
-                        state.path.header.frame_id = self._map_frame
-                        state.path_dirty = True
-                        state.status = {
-                            "state": "waiting_for_relocalization",
-                            "localized": False,
-                            "tracking_mode": "unlocalized",
+                        state.marker_status = {
+                            "state": "waiting_for_vio_relocalization"
                         }
-                    history_due = (
-                        reset
-                        or state.last_history_stamp_ns < 0
-                        or sample.stamp_ns - state.last_history_stamp_ns
-                        >= self._args.path_interval_ms * 1_000_000
-                    )
-                    if history_due:
-                        state.history.append(sample)
-                        state.last_history_stamp_ns = sample.stamp_ns
-                        state.path_dirty = True
-                    publish_due, state.next_vio_publish_stamp_ns = select_timestamp(
-                        sample.stamp_ns,
-                        state.next_vio_publish_stamp_ns,
-                        self._args.pose_publish_hz,
-                    )
-                    if not publish_due:
-                        continue
-                    if state.last_vio_stamp_ns >= 0:
-                        state.pose_filter.predict(
-                            (sample.stamp_ns - state.last_vio_stamp_ns) / 1e9
-                        )
-                    state.last_vio_stamp_ns = sample.stamp_ns
-                    correction = state.pose_filter.correction
-                    extrinsic = (
-                        None
-                        if state.imu_to_center is None
-                        else state.imu_to_center.copy()
-                    )
-                    state.last_global_pose_publish_ns = sample.stamp_ns
-                    if correction is None or extrinsic is None:
-                        continue
-                    odom_pose = matrix_from_pose(sample)
-                    now = time.monotonic()
-                    estimate = state.pose_filter.estimate
-                    entry_allowed = state.stationary.active or (
-                        now - state.last_confirmed_map_monotonic <= 3.0
-                        and np.linalg.norm(estimate[:3, 3] - correction[:3, 3]) <= .003
-                        and rotation_distance_deg(estimate, correction) <= .3)
-                    constrained, changed = state.stationary.observe_pose(
-                        odom_pose, correction, now,
-                        state.vio_tracking_status == "TRACKING_STATIC" and status_age_sec <= 1.5
-                        and state.stationary_enabled, sample.stamp_ns / 1e9, entry_allowed)
-                    if changed:
-                        state.consensus = LocalizationConsensus(state.consensus.config)
-                        state.last_relocalization_measurement = None
-                        if not state.stationary.active:
-                            state.last_confirmed_map_monotonic = float("-inf")
-                    if constrained is not None:
-                        state.pose_filter.reinitialize(constrained)
-                        correction = constrained
-                    transform = correction @ odom_pose @ extrinsic
-                    sample_stamp = Time(nanoseconds=sample.stamp_ns).to_msg()
-                    global_poses.append(
-                        pose_message(transform, sample_stamp, self._map_frame)
-                    )
-            if stitch_event is not None:
-                self.get_logger().warning(
-                    "%s stitched VIO reset %d: %.3f m / %.2f deg"
-                    % (
-                        name,
-                        stitch_event["events"],
-                        stitch_event["last_event_translation_m"],
-                        stitch_event["last_event_rotation_deg"],
-                    )
+                    state.hard_relocalizations = 0
+                    state.last_vio_stamp_ns = -1
+                    state.last_input_vio_stamp_ns = sample.stamp_ns
+                    state.last_image_stamp_ns = -1
+                    state.last_history_stamp_ns = -1
+                    state.transformed_history.clear()
+                    state.transformed_output_extrinsic = None
+                    state.last_transformed_stamp_ns = -1
+                    state.last_global_pose_publish_ns = -1
+                    state.path = PathMsg()
+                    state.path.header.frame_id = self._map_frame
+                    state.path_dirty = True
+                    state.status = {
+                        "state": "waiting_for_relocalization",
+                        "localized": False,
+                        "tracking_mode": "unlocalized",
+                    }
+                history_due = (
+                    reset
+                    or state.last_history_stamp_ns < 0
+                    or sample.stamp_ns - state.last_history_stamp_ns
+                    >= self._args.path_interval_ms * 1_000_000
                 )
-            for global_pose in global_poses:
-                self._pose_publishers[name].publish(global_pose)
+                if history_due:
+                    state.history.append(sample)
+                    state.last_history_stamp_ns = sample.stamp_ns
+                    state.path_dirty = True
+                publish_due, state.next_vio_publish_stamp_ns = select_timestamp(
+                    sample.stamp_ns,
+                    state.next_vio_publish_stamp_ns,
+                    self._args.pose_publish_hz,
+                )
+                if not publish_due:
+                    return
+                extrinsic = state.imu_to_center
+                if extrinsic is None:
+                    return
+                odom_to_center = matrix_from_pose(sample) @ extrinsic
+                if state.last_vio_stamp_ns >= 0:
+                    state.pose_filter.predict(
+                        (sample.stamp_ns - state.last_vio_stamp_ns) / 1e9, odom_to_center)
+                state.last_vio_stamp_ns = sample.stamp_ns
+                correction = state.pose_filter.correction
+                state.last_global_pose_publish_ns = sample.stamp_ns
+                if correction is None:
+                    return
+                transform = correction @ odom_to_center
+                sample_stamp = Time(nanoseconds=sample.stamp_ns).to_msg()
+                global_pose = pose_message(transform, sample_stamp, self._map_frame)
+            self._pose_publishers[name].publish(global_pose)
 
         return callback
 
@@ -1375,32 +1295,9 @@ class Insight3GlobalLocalizer(Node):
                     state.last_image_stamp_ns = stamp_ns
                     state.next_process_monotonic = now + period
                     localization_config = state.consensus.config
-                    motion_epoch = state.stationary.epoch
-                    visual_rest = state.visual_rest
                 started = time.perf_counter()
                 try:
                     image = grayscale_image(message)
-                    rest_evidence = visual_rest.observe(
-                        image, time.monotonic(), self._gripper_mask_height_ratio)
-                    with state.lock:
-                        if map_generation != self._map_generation or motion_epoch != state.stationary.epoch:
-                            continue
-                        was_active = state.stationary.active
-                        state.stationary.observe_image(rest_evidence, time.monotonic())
-                        if was_active and not state.stationary.active:
-                            state.consensus = LocalizationConsensus(state.consensus.config)
-                            state.last_relocalization_measurement = None
-                            state.last_confirmed_map_monotonic = float("-inf")
-                        if state.stationary.active:
-                            # Verified rest is a world-pose constraint, not a
-                            # new map observation. Avoid repeated noisy PnP/GPU work.
-                            state.status = dict(state.status, state="stationary",
-                                tracking_mode="stationary", accepted=False,
-                                geometric_accepted=False, rejection=None,
-                                correction_mode="stationary_constraint",
-                                image_stamp_ns=stamp_ns, total_ms=round(
-                                    (time.perf_counter() - started) * 1000, 1))
-                            continue
                     # PnP 使用左目成像模型；最终发布时再转换到双目中心设备坐标。
                     odom_to_left = compose_transform(
                         matrix_from_pose(pose), imu_to_left
@@ -1441,9 +1338,7 @@ class Insight3GlobalLocalizer(Node):
                         self._gripper_mask_height_ratio
                     )
                     with state.lock:
-                        if map_generation != self._map_generation or motion_epoch != state.stationary.epoch:
-                            continue
-                        if state.stationary.active:
+                        if map_generation != self._map_generation:
                             continue
                         # 单帧 PnP 只进入候选窗口；达到多帧一致性后才更新全局修正。
                         transition = state.consensus.observe(candidate)
@@ -1466,13 +1361,11 @@ class Insight3GlobalLocalizer(Node):
                                 )
                             )
                         )
-                        if diagnostics["accepted"] and measurement is not None:
-                            state.last_confirmed_map_monotonic = time.monotonic()
                         if measurement_changed:
                             # 小漂移由 EKF 平滑吸收，大漂移立即跳转并切分显示轨迹。
                             correction_update = state.relocalization_policy.apply(
-                                state.pose_filter, measurement
-                            )
+                                state.pose_filter, measurement, odom_to_left,
+                                np.asarray(diagnostics["pose_covariance"]))
                             state.last_relocalization_measurement = measurement.copy()
                             state.path_dirty = True
                             transition["correction_mode"] = correction_update.mode
@@ -1540,15 +1433,8 @@ class Insight3GlobalLocalizer(Node):
                         }
                 except Exception as exc:
                     with state.lock:
-                        if map_generation != self._map_generation or motion_epoch != state.stationary.epoch:
+                        if map_generation != self._map_generation:
                             continue
-                        was_active = state.stationary.active
-                        state.stationary.observe_image({"quiet": False}, time.monotonic())
-                        if was_active:
-                            state.consensus = LocalizationConsensus(state.consensus.config)
-                            state.last_relocalization_measurement = None
-                        state.visual_rest.reset()
-                        state.last_confirmed_map_monotonic = float("-inf")
                         state.consensus.observe(None)
                         localized = state.pose_filter.initialized
                         state.status = {
@@ -1708,24 +1594,7 @@ class Insight3GlobalLocalizer(Node):
                 status["jump_rotation_deg"] = (
                     state.relocalization_policy.config.jump_rotation_deg
                 )
-                vio_continuity = state.vio_stitcher.status()
-                vio_status_age_sec = (
-                    time.monotonic() - state.vio_tracking_status_monotonic
-                )
-                vio_continuity["device_tracking_status"] = (
-                    state.vio_tracking_status
-                )
-                vio_continuity["auto_stitch_allowed"] = (
-                    state.vio_tracking_status == "TRACKING_STATIC"
-                    and vio_status_age_sec <= 1.0
-                )
-                status["vio_continuity"] = vio_continuity
-                status["stationary_constraint"] = state.stationary.status()
-                if state.stationary.active:
-                    status.update(state="stationary", tracking_mode="stationary",
-                                  accepted=False, correction_mode="stationary_constraint")
-                elif status.get("tracking_mode") == "stationary":
-                    status.update(state="vio_only", tracking_mode="vio_only", accepted=False)
+                status["device_tracking_status"] = state.vio_tracking_status
                 status["cube_marker"] = dict(state.marker_status)
             status["gripper_mask_height_ratio"] = self._gripper_mask_height_ratio
             status["cube_marker_enabled"] = (
@@ -1771,7 +1640,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="/insight_mapping/{name}/infra1/image_rect_raw",
     )
     parser.add_argument("--map-frame", default="insight9_map")
-    parser.add_argument("--localization-hz", type=float, default=1.0)
+    parser.add_argument("--localization-hz", type=float, default=2.0)
     parser.add_argument(
         "--gripper-mask-height-ratio",
         type=float,
@@ -1803,17 +1672,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument("--ekf-process-translation-std", type=float, default=0.02)
     parser.add_argument("--ekf-process-rotation-std-deg", type=float, default=0.5)
-    parser.add_argument("--ekf-measurement-translation-std", type=float, default=0.10)
-    parser.add_argument("--ekf-measurement-rotation-std-deg", type=float, default=3.0)
-    parser.add_argument(
-        "--ekf-correction-time-constant-sec", type=float, default=1.0
-    )
     parser.add_argument("--jump-translation-m", type=float, default=0.15)
     parser.add_argument("--jump-rotation-deg", type=float, default=10.0)
-    parser.add_argument("--vio-stitch-translation-m", type=float, default=0.03)
-    parser.add_argument("--vio-stitch-rotation-deg", type=float, default=5.0)
-    parser.add_argument("--vio-stitch-max-gap-ms", type=float, default=50.0)
-    parser.add_argument("--disable-stationary-constraint", action="store_true")
     return parser
 
 

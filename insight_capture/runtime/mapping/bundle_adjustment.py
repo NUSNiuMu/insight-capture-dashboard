@@ -358,7 +358,7 @@ def optimize_local_bundle(
     tracks = _associate_tracks(frames, config)
     if len(tracks) < config.min_landmarks:
         return _empty_result("insufficient_repeated_landmarks", started, len(frames))
-    tracks, initial_landmarks = _triangulate_tracks(
+    tracks, _ = _triangulate_tracks(
         frames, tracks, left_projection, right_projection, config.min_triangulation_angle_deg
     )
     if len(tracks) < config.min_landmarks:
@@ -398,7 +398,9 @@ def optimize_local_bundle(
         [track.position for track in tracks], dtype=np.float64
     )
     initial = np.zeros((pose_variable_count + len(tracks) * 3,), dtype=np.float64)
-    initial[landmark_offset:] = initial_landmarks.reshape(-1)
+    # Metric stereo depths provide the initialization. Multi-view DLT under
+    # drifting VIO poses can stretch depth before the joint solve corrects poses.
+    initial[landmark_offset:] = reference_landmarks.reshape(-1)
     base_poses = [np.asarray(frame.pose, dtype=np.float64).copy() for frame in frames]
     odometry = [
         _inverse_transform(base_poses[index]) @ base_poses[index + 1]
@@ -472,28 +474,54 @@ def optimize_local_bundle(
             pose_offset = (frame_index - 1) * 6
             sparsity[row : row + 6, pose_offset : pose_offset + 6] = 1
 
-    reference = initial.copy()
-    reference[landmark_offset:] = reference_landmarks.reshape(-1)
-    initial_residuals = residuals(reference)
-    initial_rmse = float(
-        np.sqrt(np.mean(initial_residuals[:observation_rows] ** 2))
-    )
-    solution = least_squares(
-        residuals,
-        initial,
-        jac_sparsity=sparsity.tocsr(),
-        method="trf",
-        loss="huber",
-        f_scale=config.robust_loss_px,
-        x_scale="jac",
-        max_nfev=config.max_iterations,
-        ftol=1e-5,
-        xtol=1e-5,
-        gtol=1e-5,
-    )
-    optimized_poses, optimized_landmarks = unpack(solution.x)
-    final_residuals = residuals(solution.x)
-    final_rmse = float(np.sqrt(np.mean(final_residuals[:observation_rows] ** 2)))
+    initial_residuals = residuals(initial)
+    sparsity = sparsity.tocsr()
+    retained = np.ones(len(tracks), dtype=bool)
+    values = initial
+    # One robust solve, then one refinement with geometrically invalid tracks
+    # removed. Refit the poses too, so discarded tracks leave no pose bias.
+    for _ in range(2):
+        selected_observations = retained[observation_landmarks]
+        rows = np.r_[np.repeat(selected_observations, 4), np.ones(total_rows - observation_rows, dtype=bool)]
+        solution = least_squares(
+            lambda parameters: residuals(parameters)[rows], values,
+            jac_sparsity=sparsity[rows], method="trf", loss="soft_l1",
+            f_scale=config.robust_loss_px,
+            # Avoid the near-zero Huber curvature/Jacobian-scale combination.
+            x_scale=1.0, max_nfev=config.max_iterations,
+            ftol=1e-5, xtol=1e-5, gtol=1e-5,
+        )
+        values = solution.x
+        optimized_poses, optimized_landmarks = unpack(values)
+        final_residuals = residuals(values)
+        track_squared_error = np.bincount(
+            observation_landmarks,
+            weights=np.sum(final_residuals[:observation_rows].reshape(-1, 4) ** 2, axis=1),
+            minlength=len(tracks),
+        )
+        track_rmse = np.sqrt(track_squared_error / (
+            4 * np.bincount(observation_landmarks, minlength=len(tracks))
+        ))
+        corrections = np.linalg.norm(optimized_landmarks - reference_landmarks, axis=1)
+        valid = (
+            np.isfinite(track_rmse)
+            & (track_rmse <= config.robust_loss_px)
+            & (corrections <= config.max_landmark_correction_m)
+        )
+        previous = retained.copy()
+        retained &= valid
+        if np.count_nonzero(retained) < config.min_landmarks:
+            return _empty_result("insufficient_refined_landmarks", started, len(frames))
+        if np.array_equal(previous, retained):
+            break
+    selected_observations = retained[observation_landmarks]
+    # Compare identical observations on both sides of the acceptance check.
+    initial_rmse = float(np.sqrt(np.mean(
+        initial_residuals[:observation_rows].reshape(-1, 4)[selected_observations] ** 2
+    )))
+    final_rmse = float(np.sqrt(np.mean(
+        final_residuals[:observation_rows].reshape(-1, 4)[selected_observations] ** 2
+    )))
     relative_improvement = (initial_rmse - final_rmse) / max(initial_rmse, 1e-9)
     pose_translation = max(
         float(np.linalg.norm(after[:3, 3] - before[:3, 3]))
@@ -504,7 +532,7 @@ def optimize_local_bundle(
         for before, after in zip(base_poses, optimized_poses)
     )
     landmark_correction = float(
-        np.max(np.linalg.norm(optimized_landmarks - reference_landmarks, axis=1))
+        np.max(corrections[retained])
     )
     finite = bool(
         np.isfinite(solution.x).all()
@@ -516,16 +544,17 @@ def optimize_local_bundle(
     if not finite:
         reason, accepted = "non_finite_solution", False
     elif (
-        final_rmse >= initial_rmse
-        or relative_improvement < config.min_relative_improvement
+        final_rmse > initial_rmse + 1e-6
+        or (
+            initial_rmse > config.robust_loss_px
+            and relative_improvement < config.min_relative_improvement
+        )
     ):
         reason, accepted = "insufficient_improvement", False
     elif pose_translation > config.max_pose_translation_correction_m:
         reason, accepted = "pose_translation_gate", False
     elif pose_rotation > config.max_pose_rotation_correction_deg:
         reason, accepted = "pose_rotation_gate", False
-    elif landmark_correction > config.max_landmark_correction_m:
-        reason, accepted = "landmark_correction_gate", False
 
     refined_points: dict[int, np.ndarray] = {}
     refined_indices: dict[int, list[int]] = {}
@@ -538,6 +567,8 @@ def optimize_local_bundle(
                 frame.points_left, dtype=np.float32
             ).copy()
         for landmark_index, track in enumerate(tracks):
+            if not retained[landmark_index]:
+                continue
             point_world = optimized_landmarks[landmark_index]
             for frame_index, point_index in track.observations:
                 pose = optimized_poses[frame_index]
@@ -555,8 +586,8 @@ def optimize_local_bundle(
         success=bool(accepted and finite),
         reason=reason,
         keyframes=len(frames),
-        landmarks=len(tracks),
-        observations=len(observations),
+        landmarks=int(np.count_nonzero(retained)),
+        observations=int(np.count_nonzero(selected_observations)),
         initial_reprojection_rmse_px=initial_rmse,
         final_reprojection_rmse_px=final_rmse,
         elapsed_ms=(time.perf_counter() - started) * 1000.0,

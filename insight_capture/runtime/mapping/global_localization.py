@@ -90,6 +90,32 @@ def normalize_descriptors(values: np.ndarray) -> np.ndarray:
     return rows / np.maximum(norms, 1e-12)
 
 
+def _map_odom_pose_covariance(
+    rvec: np.ndarray, tvec: np.ndarray, projection_jacobian: np.ndarray,
+    residuals: np.ndarray, odom_to_camera: np.ndarray,
+) -> np.ndarray:
+    """Propagate robust image residual uncertainty to the actual correction state."""
+
+    residuals = np.asarray(residuals, dtype=np.float64).ravel()
+    weights = 1.0 / np.maximum(1.0, np.abs(residuals))
+    jacobian = np.asarray(projection_jacobian, dtype=np.float64)[:, :6]
+    variance = max(0.25, float(np.sum(weights * residuals**2)) / max(1, len(residuals) - 6))
+    parameter_covariance = np.linalg.inv(jacobian.T @ (weights[:, None] * jacobian)) * variance
+    rotation, derivatives = cv2.Rodrigues(np.asarray(rvec, dtype=np.float64).reshape(3, 1))
+    camera_to_odom = np.linalg.inv(np.asarray(odom_to_camera, dtype=np.float64))
+    correction_rotation = rotation.T @ camera_to_odom[:3, :3]
+    lever = camera_to_odom[:3, 3] - np.asarray(tvec).ravel()
+    propagation = np.zeros((6, 6), dtype=np.float64)
+    for axis in range(3):
+        derivative = derivatives[axis].reshape(3, 3).T
+        propagation[:3, axis] = derivative @ lever
+        delta = correction_rotation.T @ derivative @ camera_to_odom[:3, :3]
+        propagation[3:, axis] = .5 * np.array([
+            delta[2, 1] - delta[1, 2], delta[0, 2] - delta[2, 0], delta[1, 0] - delta[0, 1]])
+    propagation[:3, 3:] = -rotation.T
+    return propagation @ parameter_covariance @ propagation.T
+
+
 def match_descriptors(
     query_descriptors: np.ndarray,
     map_descriptors: np.ndarray,
@@ -288,7 +314,7 @@ def localize_correspondences(
         diagnostics["rejection"] = "pose_refinement_failed"
         return None, diagnostics
     rvec, tvec = refined
-    projected, _ = cv2.projectPoints(
+    projected, projection_jacobian = cv2.projectPoints(
         object_points[inlier_indices],
         rvec,
         tvec,
@@ -324,6 +350,15 @@ def localize_correspondences(
     map_to_odom = map_to_camera @ np.linalg.inv(
         np.asarray(odom_to_camera, dtype=np.float64).reshape(4, 4)
     )
+    try:
+        covariance = _map_odom_pose_covariance(
+            rvec, tvec, projection_jacobian,
+            projected.reshape(-1, 2) - image_points[inlier_indices], odom_to_camera)
+        np.linalg.cholesky(covariance)
+        diagnostics["pose_covariance"] = covariance.tolist()
+    except np.linalg.LinAlgError:
+        diagnostics["rejection"] = "degenerate_pose_geometry"
+        return None, diagnostics
     diagnostics["accepted"] = True
     diagnostics["rejection"] = None
     return LocalizationCandidate(
@@ -456,22 +491,12 @@ class LocalizationConsensus:
             if best_cluster:
                 break
         progress = len(best_cluster)
-        # Repeated support for a different solution is evidence of ambiguity,
-        # even when one branch holds a 3-of-5 majority.
-        ambiguous = len(available) - progress >= 2
-        confirmed = candidate is not None and progress >= self.config.confirmation_frames and not ambiguous
+        confirmed = candidate is not None and progress >= self.config.confirmation_frames
+        ambiguous = not confirmed and len(available) - progress >= 2
         if confirmed:
-            # Keep translation and orientation from the same geometric solve.
-            def distance(item):
-                return sum(
-                    np.linalg.norm(item.map_to_odom[:3, 3] - other.map_to_odom[:3, 3])
-                    / self.config.confirmation_translation_m
-                    + rotation_distance_deg(item.map_to_odom, other.map_to_odom)
-                    / self.config.confirmation_rotation_deg
-                    for other in best_cluster
-                )
-            self.correction = min(best_cluster, key=distance).map_to_odom.copy()
-            self._window.clear()
+            # The cluster validates the current solve; an older map-to-odom
+            # correction would reintroduce VIO drift since that observation.
+            self.correction = candidate.map_to_odom.copy()
             progress = 0
         return {
             "localized": self.correction is not None,

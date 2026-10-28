@@ -32,7 +32,6 @@ class RigInputs:
         self.geometry = {}
         self.revision = 0
         self.fingerprint = None
-        self.last_keyframes = {}
         self.processed = {v["name"]: 0 for v in views}
         self.keyframes = {v["name"]: 0 for v in views}
         self.metrics = {}
@@ -146,7 +145,6 @@ class RigInputs:
     def reset(self):
         self.queue.clear()
         with self.lock:
-            self.last_keyframes.clear()
             self.references.clear()
             self.keyframes = {name: 0 for name in self.keyframes}
             self.metrics.clear()

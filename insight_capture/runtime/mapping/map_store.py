@@ -243,18 +243,14 @@ class LandmarkMap:
     def descriptors(
         self, *, max_source_keyframe: Optional[int] = None
     ) -> Tuple[np.ndarray, np.ndarray]:
-        ranked = [
-            (index, self._landmarks[index]) for index in self._confirmed
+        entries = [
+            self._landmarks[index] for index in sorted(self._confirmed)
             if self._landmarks[index].descriptor is not None
             and (max_source_keyframe is None
                  or self._landmarks[index].first_keyframe <= int(max_source_keyframe))
         ]
-        ranked.sort(key=lambda item: (-item[1].observations, -item[1].score, item[0]))
-        representatives = {}
-        for index, landmark in ranked:
-            representatives.setdefault(landmark.voxel, (index, landmark))
-        # Spatial sampling limits weak/clustered correspondences without averaging identities.
-        entries = [entry for _, entry in sorted(representatives.values())]
+        # Voxels accelerate association; distinct confirmed feature identities
+        # in the same bucket must remain available for 2D-3D localization.
         if not entries:
             return np.empty((0, 3), dtype=np.float32), np.empty((0, 0), dtype=np.float32)
         return (
