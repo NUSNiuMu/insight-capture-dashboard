@@ -64,6 +64,7 @@ class LocalMapping : public VioThread {
   }
 
   Map* map() const { return map_; }
+  size_t pose_inliers() const { return pose_inliers_; }
 
   MapPointSet local_map_points() { return local_map_points_; }
 
@@ -181,6 +182,7 @@ class LocalMapping : public VioThread {
 
  private:
   Map* map_ = nullptr;
+  size_t pose_inliers_ = 0;
 
   std::mutex frame_buffer_mutex_;
   std::deque<FrameMeta::Ptr> frame_buffer_;

@@ -2,6 +2,7 @@
 #include "vio/map/loop_closure.h"
 #include <memory>
 #include <vector>
+#include <Eigen/Eigenvalues>
 #include "math/pnp.h"
 #include "ransac/loransac.h"
 #include "vio/cost_functions/projection_factor.h"
@@ -166,11 +167,25 @@ bool LoopClosure::Process(KeyFrame* cur_kf) {
 std::optional<dm::math::Rigid3d> LoopClosure::Localize(KeyFrame* query) {
   evidence_={};
   auto candidates = map_->RetrieveSimilarFrames(query->bow_vecs(query->master_cam_id()), 5);
+  std::vector<std::pair<dm::math::Rigid3d,Evidence>> hypotheses;
   for (const auto& candidate : candidates) {
     auto initial = SolveLoopPose(query, candidate.kf, 10);
     if (!initial) continue;
     auto refined = OptimizeLoopPose(query, candidate.kf, *initial);
-    if (refined) { evidence_.reference=candidate.kf; return refined; }
+    if (!refined) continue;
+    evidence_.reference=candidate.kf;
+    const auto camera_pose=*refined*KeyFrame::Extrinsic(query->master_cam_id());
+    for(const auto& previous:hypotheses) {
+      const auto other=previous.first*KeyFrame::Extrinsic(query->master_cam_id());
+      if((camera_pose.translation()-other.translation()).norm()>.01 ||
+         camera_pose.rotation().angularDistance(other.rotation())>M_PI/180.) continue;
+      if(previous.second.rms_px<evidence_.rms_px) {
+        evidence_=previous.second; refined=previous.first;
+      }
+      evidence_.verified_references=2;
+      return refined;
+    }
+    hypotheses.emplace_back(*refined,evidence_);
   }
   return std::nullopt;
 }
@@ -292,20 +307,20 @@ std::optional<dm::math::Rigid3d> LoopClosure::OptimizeLoopPose(KeyFrame* query_k
   }
   map_->ReleaseMptMutex();
 
-  size_t visible_pt_num = 0;
-  for (auto& mpt : local_mpts) {
-    if (mpt->observations().count(query_kf)) visible_pt_num++;
-  }
-
   ORBMatcher matcher(100, 150, 0.85);
   std::vector<MapPoint*> matched_mpts;
-  size_t matched_cnt =
-      matcher.SearchByProjectionForLoop(query_kf, query_Twi, local_mpts, &matched_mpts, 20);
+  matcher.SearchByProjectionForLoop(query_kf, query_Twi, local_mpts, &matched_mpts, 20);
+  return RefinePose(query_kf,matched_mpts,query_Twi,40,.5);
+}
 
-  VLOG(2) << "OptimizeLoopPose local kf and mpt size: " << loop_kfs.size() << " "
-            << local_mpts.size() << " " << matched_cnt;
-
-  if (matched_cnt < 40) return std::nullopt;
+std::optional<dm::math::Rigid3d> LoopClosure::RefinePose(KeyFrame* query_kf,
+    const std::vector<MapPoint*>& matched_mpts, const math::Rigid3d& query_Twi,
+    size_t minimum_inliers, double minimum_ratio) {
+  evidence_={};
+  size_t matched_cnt=0;
+  for(auto point:matched_mpts)
+    matched_cnt+=point && !point->IsBad() && point->NumOfObs()>=3 && point->state().refined;
+  if(matched_cnt<minimum_inliers) return std::nullopt;
 
   ceres::Problem problem;
   auto query_cam = query_kf->master_cam_id();
@@ -322,7 +337,8 @@ std::optional<dm::math::Rigid3d> LoopClosure::OptimizeLoopPose(KeyFrame* query_k
   std::vector<ceres::ResidualBlockId> residuals(matched_mpts.size(), nullptr);
 
   for (size_t i = 0; i < matched_mpts.size(); i++) {
-    if (!matched_mpts[i] || matched_mpts[i]->IsBad()) continue;
+    if (!matched_mpts[i] || matched_mpts[i]->IsBad() ||
+        matched_mpts[i]->NumOfObs()<3 || !matched_mpts[i]->state().refined) continue;
     pt3ds[i] = matched_mpts[i]->WorldPoint3d();
     ceres::CostFunction* projection_cost_function = new dm::vio::CameraProjectionFactor(
         extrinsic, xys[i], Eigen::Vector2d(1.0, 1.0));
@@ -338,6 +354,8 @@ std::optional<dm::math::Rigid3d> LoopClosure::OptimizeLoopPose(KeyFrame* query_k
 
   ceres::Solver::Summary summary;
   ceres::Solve(options_pnp, &problem, &summary);
+  evidence_.reason="unusable_pose_solution";
+  if(!summary.IsSolutionUsable()) return std::nullopt;
 
   // Refit only geometrically supported correspondences after the robust solve.
   auto first_camera_from_map = (RigidFromVector(opt_pose) * extrinsic).Inverse();
@@ -350,32 +368,54 @@ std::optional<dm::math::Rigid3d> LoopClosure::OptimizeLoopPose(KeyFrame* query_k
       problem.RemoveResidualBlock(residuals[i]); residuals[i]=nullptr;
     } else ++retained;
   }
-  if(retained<40) return std::nullopt;
+  evidence_.reason="insufficient_retained_landmarks";
+  if(retained<minimum_inliers) return std::nullopt;
   ceres::Solve(options_pnp, &problem, &summary);
+  evidence_.reason="unusable_pose_solution";
+  if(!summary.IsSolutionUsable()) return std::nullopt;
 
   math::Rigid3d opt_cam_pose = RigidFromVector(opt_pose) * extrinsic;
   math::Rigid3d opt_Tcw = opt_cam_pose.Inverse();
   size_t good_cnt = 0;
   double squared_error=0; std::set<int> cells;
-  std::vector<std::pair<FeatureId, Eigen::Vector3d>> points;
+  std::vector<std::pair<size_t, FeatureId>> observations;
+  std::vector<Eigen::Vector3d> camera_points;
   for (size_t i = 0; i < matched_mpts.size(); i++) {
-    if (!matched_mpts[i] || matched_mpts[i]->IsBad()) continue;
+    if (!residuals[i]) continue;
     Eigen::Vector3d cpt = opt_Tcw * matched_mpts[i]->WorldPoint3d();
-    cpt.head(2) /= cpt[2];
-    float err = (cpt.head(2) - xys[i]).norm() * focus_len;
-    auto scale = query_kf->LevelFactor(query_cam, i);
+    float err = (cpt.head(2)/cpt[2] - xys[i]).norm() * focus_len;
     if (cpt[2] <= 0 || !std::isfinite(err) || err > 3.0) continue;
     good_cnt++;
-    points.emplace_back(matched_mpts[i]->point_id(), matched_mpts[i]->WorldPoint3d());
+    observations.emplace_back(i,matched_mpts[i]->point_id());
+    camera_points.push_back(cpt);
     squared_error+=err*err;
     const auto pixel=query_kf->key_points(query_cam)[i].pt;
     const auto& intrinsic=KeyFrame::Intrinsic(query_cam);
     cells.insert(int(pixel.y*4/intrinsic.height())*4+int(pixel.x*4/intrinsic.width()));
   }
-  VLOG(2) << "OptimizeLoopPose good cnt is: " << good_cnt << " " << matched_cnt << " "
-            << visible_pt_num;
-  if (good_cnt < 40 || good_cnt < matched_cnt*.5 || cells.size()<4) return std::nullopt;
-  evidence_={matched_cnt,good_cnt,cells.size(),std::sqrt(squared_error/good_cnt),nullptr,std::move(points)};
+  evidence_={matched_cnt,good_cnt,cells.size(),good_cnt?std::sqrt(squared_error/good_cnt):0.,nullptr,std::move(observations)};
+  evidence_.reason="insufficient_image_support";
+  if(good_cnt<minimum_inliers || good_cnt<matched_cnt*minimum_ratio || cells.size()<4) return std::nullopt;
+  double depth=0.;
+  for(const auto& p:camera_points) depth+=p[2]/good_cnt;
+  Eigen::Matrix6d information=Eigen::Matrix6d::Zero();
+  for(const auto& p:camera_points) {
+    Eigen::Matrix<double,2,3> projection;
+    projection<<1./p[2],0.,-p[0]/(p[2]*p[2]),0.,1./p[2],-p[1]/(p[2]*p[2]);
+    Eigen::Matrix3d cross;
+    cross<<0.,-p[2],p[1],p[2],0.,-p[0],-p[1],p[0],0.;
+    Eigen::Matrix<double,2,6> jacobian;
+    jacobian.leftCols<3>()=projection*depth;
+    jacobian.rightCols<3>()=projection*cross;
+    information+=jacobian.transpose()*jacobian;
+  }
+  // Balance translation by scene depth and evaluate at the camera, not the world origin.
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix6d> spectrum(information);
+  evidence_.reason="degenerate_pose_geometry";
+  if(spectrum.info()!=Eigen::Success) return std::nullopt;
+  evidence_.condition_ratio=spectrum.eigenvalues()[0]/spectrum.eigenvalues()[5];
+  if(!std::isfinite(evidence_.condition_ratio) || evidence_.condition_ratio<1e-6) return std::nullopt;
+  evidence_.reason="accepted";
   return RigidFromVector(opt_pose);
 }
 

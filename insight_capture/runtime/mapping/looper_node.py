@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,7 @@ from tf2_ros import Buffer, TransformBroadcaster, TransformListener, StaticTrans
 from .geometry import PoseSample, matrix_from_pose, matrix_from_transform
 from .looper_backend import LooperBackend
 from .looper_features import stereo_arrays, query_arrays
+from .pose_correction_filter import PoseCorrectionFilter
 from .superglue_backend import IpcSuperGlueBackend
 from .rig import LatestViewQueue
 from .synchronization import PoseBuffer, SourceClock, StereoPairSynchronizer, select_timestamp
@@ -52,6 +54,7 @@ def gray(message):
 @dataclass
 class CameraState:
     buffer: PoseBuffer = field(default_factory=PoseBuffer)
+    fusion: PoseCorrectionFilter = field(default_factory=PoseCorrectionFilter)
     correction: object = None
     info: object = None
     center: object = None
@@ -90,7 +93,8 @@ class LooperNode(Node):
         self.features = IpcSuperGlueBackend(args.feature_socket)
         self.lock = threading.RLock()
         self.processing = threading.Lock()
-        self.work = LatestViewQueue(self.names)
+        self.work = LatestViewQueue((*self.names[1:], self.head))
+        self.prepared = LatestViewQueue((*self.names[1:], self.head))
         self.stop = threading.Event()
         self.sync = StereoPairSynchronizer(tolerance_ns=2_000_000)
         self.tf_buffer = Buffer()
@@ -105,6 +109,7 @@ class LooperNode(Node):
         self.session_id = uuid.uuid4().hex
         self.last_reset_wall_ns = 0
         self.last_map_source_ns = 0
+        self.head_raw_correction = None
         self.stats = {"state": "waiting_for_inputs", "map_point_count": 0}
         self.right_info = None
         self.pose_publishers = {}
@@ -149,7 +154,11 @@ class LooperNode(Node):
         self.create_service(Empty, "/insight_global/reset", self.reset_map)
         self.create_timer(.5, self.publish_status)
         self.create_timer(1. / 30., self.publish_poses)
-        self.worker = threading.Thread(target=self.run, name="looper-owner", daemon=True)
+        self.extractor = threading.Thread(target=self.run, args=(self.work, self.prepare),
+                                          name="looper-features", daemon=True)
+        self.worker = threading.Thread(target=self.run, args=(self.prepared, self.process),
+                                       name="looper-owner", daemon=True)
+        self.extractor.start()
         self.worker.start()
 
     def lookup(self, target, source):
@@ -227,12 +236,15 @@ class LooperNode(Node):
         self.generation += 1
         self.last_reset_wall_ns = time.time_ns()
         self.last_map_source_ns = 0
+        self.head_raw_correction = None
         self.work.clear()
+        self.prepared.clear()
         self.sync.clear()
         self.last_geometry = 0.
         self.last_pose_tick = None
         for state in self.cameras.values():
             state.correction = None
+            state.fusion = PoseCorrectionFilter()
             state.next_image = 0
             state.diagnostics = {}
             state.last_match = 0.
@@ -258,9 +270,11 @@ class LooperNode(Node):
                 return
             stamp = pair.stamp_ns
             item = SimpleNamespace(view=name, stamp_ns=stamp, images=(pair.left, pair.right))
+            target_hz = 2.
         else:
             item = SimpleNamespace(view=name, stamp_ns=stamp, images=(message,))
-        due, state.next_image = select_timestamp(stamp, state.next_image, 2.)
+            target_hz = 4.
+        due, state.next_image = select_timestamp(stamp, state.next_image, target_hz)
         if due:
             item.generation = self.generation
             item.tracking_epoch = state.tracking_epoch
@@ -279,6 +293,7 @@ class LooperNode(Node):
         with self.lock:
             state = self.cameras[name]
             state.correction = None
+            state.fusion = PoseCorrectionFilter()
             state.tracking_epoch += 1
             state.buffer.clear()
             state.clock = SourceClock()
@@ -327,8 +342,19 @@ class LooperNode(Node):
                     return
                 self.last_pose_tick = tick
                 transforms = []
-                for name, state, pose in zip(self.names, states, poses):
-                    transform = state.correction @ matrix_from_pose(pose) @ state.center
+                native = [matrix_from_pose(pose) @ state.center for pose, state in zip(poses, states)]
+                relative_step = 0.
+                for state, O in zip(states[1:], native[1:]):
+                    previous = state.fusion.emitted @ O
+                    state.correction = state.fusion.output(O, stamp)
+                    relative_step = max(relative_step, np.linalg.norm((state.correction @ O)[:3, 3] - previous[:3, 3]))
+                lever = max(np.linalg.norm((state.correction @ O)[:3, 3] - native[0][:3, 3])
+                            for state, O in zip(states[1:], native[1:]))
+                shared_speed = max(0., .15 - relative_step * 30.)
+                states[0].correction = states[0].fusion.output(native[0], stamp, speed=shared_speed, lever_arm=lever)
+                world = [np.eye(4), states[0].correction, states[0].correction]
+                for name, state, O, frame in zip(self.names, states, native, world):
+                    transform = frame @ state.correction @ O
                     output = PoseStamped()
                     output.header.stamp = Time(nanoseconds=stamp).to_msg()
                     output.header.frame_id = "insight9_map"
@@ -373,6 +399,19 @@ class LooperNode(Node):
                               encoding="mono8", step=data.shape[1], data=data.tobytes())
             self.reference_image.publish(reference)
 
+    def update_correction(self, state, correction, source_ns, method):
+        pose = state.buffer.lookup(state.latest_source_ns)
+        if pose is None:
+            state.fusion.suspend("waiting_for_vio")
+            state.correction = None
+            return False
+        native = matrix_from_pose(pose) @ state.center
+        if state is not self.cameras[self.head]:
+            correction = np.linalg.solve(self.head_raw_correction, correction)
+        accepted = method(correction, native, state.latest_source_ns + state.clock.offset_ns, source_ns)
+        state.correction = state.fusion.emitted if state.fusion.valid else None
+        return accepted
+
     def commit_result(self, item, result, O):
         state = self.cameras[item.view]
         with self.lock:
@@ -380,78 +419,103 @@ class LooperNode(Node):
                     or item.tracking_epoch != state.tracking_epoch):
                 return False
             if item.view == self.head:
-                state.correction = (np.asarray(result["map_from_imu"]) @ np.linalg.inv(O)
-                                    if result["mapped"] else None)
+                if result["mapped"]:
+                    self.head_raw_correction = np.asarray(result["map_from_imu"]) @ np.linalg.inv(O)
+                    if result["verified_relocalization"] or state.fusion.posterior is None:
+                        self.update_correction(state, self.head_raw_correction, item.stamp_ns,
+                                               partial(state.fusion.observe, verified=result["verified_relocalization"]))
+                elif not result["landmarks"]:
+                    state.correction = None
+                    state.fusion.suspend("map_not_ready")
                 state.map_revision = result["map_revision"]
                 self.last_map_source_ns = item.stamp_ns
                 for update in result["wrist_updates"]:
                     wrist = self.cameras[self.names[int(update["camera_id"]) - 1]]
                     if update["tracking_epoch"] != wrist.tracking_epoch:
                         continue
-                    wrist.correction = (np.asarray(update["map_from_imu"]) @ np.linalg.inv(update["odom_from_imu"])) if update["localized"] else None
-                    if not update["localized"]:
+                    if update["localized"]:
+                        self.update_correction(wrist, np.asarray(update["map_from_imu"]) @ np.linalg.inv(update["odom_from_imu"]),
+                                               update["source_ns"], wrist.fusion.revise)
+                    else:
+                        wrist.correction = None
+                        wrist.fusion.suspend(update["reason"])
                         wrist.diagnostics = {"state": "searching", "geometric_match": False,
                                              "reason": update["reason"]}
                     wrist.diagnostics["map_update_alignment"] = update["alignment"]
                     wrist.map_revision = update["map_revision"]
-                self.stats = {"state": "mapping" if result["mapped"] else "building", "map_point_count": result["landmarks"],
+                self.stats = {"state": "mapping" if result["landmarks"]>=40 else "building", "map_point_count": result["landmarks"],
+                              "geometric_match": result["verified_relocalization"],
                               "keyframes": result["keyframes"], "raw_landmarks": result["raw_landmarks"]}
             else:
                 M = np.asarray(result["map_from_imu"]) if result["localized"] else None
-                if M is not None:
-                    state.correction = M @ np.linalg.inv(O)
+                confirmed = (M is not None and self.update_correction(
+                    state, M @ np.linalg.inv(O), item.stamp_ns,
+                    partial(state.fusion.observe, verified=result["verified_relocalization"])))
+                if confirmed:
                     state.last_match = time.monotonic()
                 state.map_revision = result["map_revision"]
                 state.diagnostics = {"state": "tracking" if state.correction is not None else "searching",
-                                     "geometric_match": result["localized"], "confirmed": result["localized"],
+                                     "geometric_match": result["localized"], "confirmed": bool(confirmed),
                                      "reason": result.get("reason"), **{key: result[key] for key in
                                       ("matches", "inliers", "grid_cells", "reprojection_rms_px", "gripper_mask_height_ratio") if key in result}}
             return True
 
-    def run(self):
+    def prepare(self, item):
+        if not self.configure() or item.generation != self.generation:
+            return
+        state = self.cameras[item.view]
+        infos = (state.info, self.right_info)
+        if any(image.header.frame_id != info.header.frame_id
+               for image, info in zip(item.images, infos)):
+            return
+        deadline = time.monotonic() + .1
+        pose = state.buffer.lookup(item.stamp_ns)
+        while pose is None and time.monotonic() < deadline and not self.stop.wait(.005):
+            pose = state.buffer.lookup(item.stamp_ns)
+        if pose is None:
+            state.diagnostics = {"state": "waiting_for_vio"}
+            return
+        item.gray = [gray(m) for m in item.images]
+        item.odom = matrix_from_pose(pose)
+        if item.view == self.head:
+            item.arrays = stereo_arrays(*item.gray, self.features.match(*item.gray))
+        else:
+            features = self.features.extract(item.gray[0])
+            item.mask_ratio = load_gripper_mask_height_ratio(self.runtime_config)
+            item.arrays = query_arrays(features.keypoints, features.descriptors,
+                                       item.gray[0].shape[0], item.mask_ratio)
+        self.prepared.put_nowait(item)
+
+    def process(self, item):
+        state = self.cameras[item.view]
+        metadata = {"stamp_ns": item.stamp_ns, "odom_from_imu": item.odom.tolist(),
+                    "tracking_epoch": item.tracking_epoch}
+        if item.view == self.head:
+            result = self.request(item, "map", images=item.gray, arrays=item.arrays, **metadata)
+        else:
+            result = self.request(item, "localize", images=item.gray, arrays=item.arrays,
+                                  camera_id=self.names.index(item.view) + 1, **metadata)
+            if result is not None:
+                result["gripper_mask_height_ratio"] = item.mask_ratio
+        if not self.commit_result(item, result, item.odom):
+            return
+        if item.view == self.head and result["mapped"] and state.clock.ready and time.monotonic() - self.last_geometry >= 1.:
+            geometry = self.request(item, "geometry")
+            with self.lock:
+                if (geometry is not None and item.generation == self.generation
+                        and item.tracking_epoch == state.tracking_epoch and state.clock.ready):
+                    self.publish_geometry(item.images[0], geometry["arrays"])
+                    self.last_geometry = time.monotonic()
+
+    def run(self, pending, callback):
         while not self.stop.is_set():
             try:
-                item = self.work.get(timeout=.25)
+                item = pending.get(timeout=.25)
                 if item is None:
                     break
-                if self.failed or not self.configure() or item.generation != self.generation:
+                if self.failed or item.generation != self.generation:
                     continue
-                state = self.cameras[item.view]
-                infos = (state.info, self.right_info)
-                if any(image.header.frame_id != info.header.frame_id
-                       for image, info in zip(item.images, infos)):
-                    continue
-                deadline = time.monotonic() + .1
-                pose = state.buffer.lookup(item.stamp_ns)
-                while pose is None and time.monotonic() < deadline and not self.stop.wait(.005):
-                    pose = state.buffer.lookup(item.stamp_ns)
-                if pose is None:
-                    state.diagnostics = {"state": "waiting_for_vio"}
-                    continue
-                images = [gray(m) for m in item.images]
-                O = matrix_from_pose(pose)
-                metadata = {"stamp_ns": item.stamp_ns, "odom_from_imu": O.tolist()}
-                metadata["tracking_epoch"] = item.tracking_epoch
-                if item.view == self.head:
-                    arrays = stereo_arrays(*images, self.features.match(*images))
-                    result = self.request(item, "map", images=images, arrays=arrays, **metadata)
-                else:
-                    features = self.features.extract(images[0])
-                    mask_ratio = load_gripper_mask_height_ratio(self.runtime_config)
-                    arrays = query_arrays(features.keypoints, features.descriptors, images[0].shape[0], mask_ratio)
-                    result = self.request(item, "localize", images=images, arrays=arrays,
-                                                  camera_id=self.names.index(item.view) + 1, **metadata)
-                    if result is not None:
-                        result["gripper_mask_height_ratio"] = mask_ratio
-                if not self.commit_result(item, result, O):
-                    continue
-                if item.view == self.head and state.clock.ready and time.monotonic() - self.last_geometry >= 1.:
-                    geometry = self.request(item, "geometry")
-                    with self.lock:
-                        if (geometry is not None and item.generation == self.generation
-                                and item.tracking_epoch == state.tracking_epoch and state.clock.ready):
-                            self.publish_geometry(item.images[0], geometry["arrays"])
-                            self.last_geometry = time.monotonic()
+                callback(item)
             except queue.Empty:
                 continue
             except OSError as exc:
@@ -475,6 +539,7 @@ class LooperNode(Node):
                              and state.tracking in {"TRACKING", "TRACKING_STATIC"}
                              and 0 <= now - state.last_vio_received_ns <= 2_000_000_000)
                 payload = {**payload, "algorithm": "LooperVIO", "localized": localized,
+                           "fusion": state.fusion.diagnostics,
                            "camera": name, "tracking_status": state.tracking, "generation": self.generation,
                            "session_id": self.session_id, "last_reset_wall_ns": self.last_reset_wall_ns,
                            "last_map_source_ns": self.last_map_source_ns}
@@ -486,12 +551,14 @@ class LooperNode(Node):
                     age = time.monotonic() - state.last_match if state.last_match else None
                     payload["match_age_sec"] = age
                     payload["tracking_mode"] = ("unlocalized" if not localized else
-                        "map_match" if payload.get("geometric_match") and age is not None and age < 1. else "vio_only")
+                        "map_match" if payload.get("confirmed") and age is not None and age < 1. else "vio_only")
                 self.status_publishers[name].publish(String(data=json.dumps(payload)))
 
     def destroy_node(self):
         self.stop.set()
         self.work.put_nowait(None)
+        self.prepared.put_nowait(None)
+        self.extractor.join(timeout=30)
         self.worker.join(timeout=30)
         self.backend.close()
         return super().destroy_node()

@@ -343,7 +343,7 @@ void LocalMapping::AddKeyFrameToMap() {
   SearchLocalPoints();
 
   CameraId master_cam_id = current_key_frame_->master_cam_id();
-  PnpOptimize();
+  pose_inliers_=PnpOptimize();
   int pt3d_in_current_kf = 0, total_obs_num = 0;
   // Associate MapPoints to the new keyframe and update descriptor
   std::vector<MapPoint*> map_points = current_key_frame_->map_points(master_cam_id);
@@ -1136,6 +1136,7 @@ size_t LocalMapping::KeyFrameCulling() {
 
 
 void LocalMapping::ResetLocalMapping() {
+  pose_inliers_=0;
   map_->Reset();
   current_key_frame_ = nullptr;
   recent_add_map_points_.clear();
@@ -1179,6 +1180,7 @@ void LocalMapping::Run() {
 }
 
 void LocalMapping::Runt(const FrameMeta::Ptr& candidate_frame) {
+  pose_inliers_=0;
   // Both entry points execute the same map transaction.
   SyncCameraIntrinsics();
   map_->TryClearKeyFrames();

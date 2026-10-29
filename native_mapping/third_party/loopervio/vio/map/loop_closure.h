@@ -25,7 +25,10 @@ class LoopClosure : public vio::VioThread {
     size_t matches=0, inliers=0, cells=0;
     double rms_px=0;
     KeyFrame* reference=nullptr;
-    std::vector<std::pair<FeatureId, Eigen::Vector3d>> points;
+    std::vector<std::pair<size_t, FeatureId>> observations;
+    size_t verified_references=0;
+    double condition_ratio=0;
+    const char* reason="insufficient_retained_landmarks";
   };
   Evidence evidence() const { return evidence_; }
   LoopClosure() {}
@@ -41,6 +44,9 @@ class LoopClosure : public vio::VioThread {
   std::optional<dm::math::Rigid3d> OptimizeLoopPose(KeyFrame* query_kf,
                                                     KeyFrame* loop_kf,
                                                     const math::Rigid3d& query_Twi);
+  std::optional<dm::math::Rigid3d> RefinePose(KeyFrame* query_kf,
+      const std::vector<MapPoint*>& matched, const math::Rigid3d& initial,
+      size_t minimum_inliers, double minimum_ratio);
 
   void AddLoopBuffer(FrameId frm_id) {
     std::lock_guard<std::mutex> lg(loop_buffer_mutex_);

@@ -1,5 +1,4 @@
 #include "engine.h"
-#include "rigid_alignment.h"
 #include <chrono>
 #include <stdexcept>
 #include <limits>
@@ -50,32 +49,40 @@ Json Engine::Map(const Json& request, const std::vector<cv::Mat>& images) {
   mapping_->Runt(frame); last_map_stamp_=stamp;
   ++map_revision_;
   auto result=Stats(); auto last=mapping_->map()->LastKeyFrame();
-  result["mapped"]=last!=nullptr;
-  if(last) {
-    loops_->Process(last);
+  result["mapped"]=last && last->timestamp()==stamp;
+  result["verified_relocalization"]=false;
+  if(result["mapped"].get<bool>()) {
+    const bool loop=loops_->Process(last);
+    result["verified_relocalization"]=loop || mapping_->pose_inliers()>=40;
     result["map_from_imu"]=Matrix(last->pose());
   }
-  // Use the rigid component of the accepted landmarks' deformation, without rematching.
+  // Refit the accepted image correspondences against the optimized map, without rematching.
   result["wrist_updates"]=Json::array();
-  for(const auto& entry:queries_) {
-    const auto& query=entry.second;
-    std::vector<Eigen::Vector3d> source, target;
+  for(auto& entry:queries_) {
+    auto& query=entry.second;
+    std::vector<MapPoint*> matched(query.frame->FeatureSize(entry.first),nullptr);
+    size_t retained=0;
     const auto& points=mapping_->map()->map_points();
-    for(const auto& observation:query.imu_points) {
-      auto found=points.find(observation.first);
+    for(const auto& observation:query.observations) {
+      auto found=points.find(observation.second);
       if(found==points.end() || found->second->IsBad() ||
          found->second->NumOfObs()<3 || !found->second->state().refined) continue;
-      source.push_back(observation.second);
-      target.push_back(found->second->WorldPoint3d());
+      matched[observation.first]=found->second;
+      ++retained;
     }
-    auto alignment=AlignRetainedLandmarks(source,target);
-    Json updated={{"localized",alignment.pose.has_value()},{"map_revision",map_revision_},
-      {"reason",alignment.reason},{"alignment",{{"retained",source.size()},
-        {"original",query.imu_points.size()},{"inliers",alignment.inliers},
-        {"rms_mm",alignment.rms_m*1000},
-        {"max_mm",alignment.max_m*1000},{"spread_ratio",alignment.spread_ratio}}}};
-    if(alignment.pose)
-      updated["map_from_imu"]=Matrix(dm::math::Rigid3d::FromMatrix(*alignment.pose));
+    auto seed=query.anchor->pose()*query.anchor_pose.Inverse()*query.frame->pose();
+    auto pose=loops_->RefinePose(query.frame.get(),matched,seed,10,.8);
+    auto evidence=loops_->evidence();
+    Json updated={{"localized",pose.has_value()},{"map_revision",map_revision_},
+      {"reason",evidence.reason},{"alignment",{{"retained",retained},
+        {"original",query.observations.size()},{"inliers",evidence.inliers},
+        {"reprojection_rms_px",evidence.rms_px},{"grid_cells",evidence.cells},
+        {"condition_ratio",evidence.condition_ratio}}}};
+    if(pose) {
+      updated["map_from_imu"]=Matrix(*pose);
+      query.frame->set_pose(*pose);
+      query.anchor_pose=query.anchor->pose();
+    }
     updated["camera_id"]=entry.first;
     updated["source_ns"]=query.request.at("stamp_ns");
     updated["odom_from_imu"]=query.request.at("odom_from_imu");
@@ -98,16 +105,18 @@ Json Engine::Localize(const Json& request, const std::vector<cv::Mat>& arrays) {
   frame->feature_pixels={{camera_id,arrays[1]}};
   frame->feature_descriptors={{camera_id,arrays[2]}};
   frame->owner_cam_id={{camera_id,camera_id}};
-  KeyFrame query(frame, std::numeric_limits<FrameId>::max(), cv::Mat());
-  auto pose=loops_->Localize(&query);
+  auto query=std::make_unique<KeyFrame>(frame, std::numeric_limits<FrameId>::max(), cv::Mat());
+  auto pose=loops_->Localize(query.get());
   if(!pose) return {{"localized",false},{"reason","no_geometric_match"},{"map_revision",map_revision_}};
   auto evidence=loops_->evidence();
   auto previous=queries_.find(camera_id);
   if(previous!=queries_.end()) previous->second.anchor->localization_anchor_=false;
-  for(auto& observation:evidence.points) observation.second=pose->Inverse()*observation.second;
-  queries_[camera_id]={request,evidence.reference,std::move(evidence.points)};
+  query->set_pose(*pose);
+  queries_[camera_id]={request,evidence.reference,evidence.reference->pose(),std::move(query),
+                      std::move(evidence.observations)};
   for(const auto& entry:queries_) entry.second.anchor->localization_anchor_=true;
   return {{"localized",true},{"map_from_imu",Matrix(*pose)},{"map_revision",map_revision_},
+    {"verified_relocalization",evidence.verified_references>=2},
     {"matches",evidence.matches},{"inliers",evidence.inliers},
     {"grid_cells",evidence.cells},{"reprojection_rms_px",evidence.rms_px}};
 }

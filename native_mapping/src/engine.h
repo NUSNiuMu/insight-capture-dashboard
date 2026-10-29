@@ -24,7 +24,9 @@ class Engine {
   struct Query {
     Json request;
     dm::vio::lm::KeyFrame* anchor;
-    std::vector<std::pair<dm::vio::FeatureId, Eigen::Vector3d>> imu_points;
+    dm::math::Rigid3d anchor_pose;
+    std::unique_ptr<dm::vio::lm::KeyFrame> frame;
+    std::vector<std::pair<size_t, dm::vio::FeatureId>> observations;
   };
   std::map<int, Query> queries_;
 };
