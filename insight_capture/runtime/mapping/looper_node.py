@@ -248,7 +248,8 @@ class LooperNode(Node):
         return response
 
     def on_image(self, name, eye, message):
-        if self.cameras[name].tracking not in {"TRACKING", "TRACKING_STATIC"}:
+        state = self.cameras[name]
+        if state.tracking not in {"TRACKING", "TRACKING_STATIC"} or not state.clock.ready:
             return
         stamp = stamp_ns(message.header.stamp)
         if name == self.head:
@@ -259,7 +260,6 @@ class LooperNode(Node):
             item = SimpleNamespace(view=name, stamp_ns=stamp, images=(pair.left, pair.right))
         else:
             item = SimpleNamespace(view=name, stamp_ns=stamp, images=(message,))
-        state = self.cameras[name]
         due, state.next_image = select_timestamp(stamp, state.next_image, 2.)
         if due:
             item.generation = self.generation
@@ -295,12 +295,15 @@ class LooperNode(Node):
                             np.array([p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w]))
         state = self.cameras[name]
         received = self.get_clock().now().nanoseconds
-        if state.last_vio_received_ns and not 0 <= received - state.last_vio_received_ns <= 2_000_000_000:
+        if state.last_vio_received_ns and (
+                not 0 < received - state.last_vio_received_ns <= 2_000_000_000
+                or sample.stamp_ns < state.latest_source_ns
+                or abs((sample.stamp_ns - state.latest_source_ns)
+                       - (received - state.last_vio_received_ns)) > 2_000_000_000):
+            self.get_logger().warning(f"{name}: VIO time discontinuity; invalidating localization")
             self.invalidate_camera(name)
-        if state.buffer.append(sample):
-            self.reset_map(None, Empty.Response())
-            state.clock = SourceClock()
         with self.lock:
+            state.buffer.append(sample)
             state.clock.observe(sample.stamp_ns, received)
             state.latest_source_ns = sample.stamp_ns
             state.last_vio_received_ns = received
