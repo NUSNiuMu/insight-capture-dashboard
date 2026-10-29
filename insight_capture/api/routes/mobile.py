@@ -1,35 +1,29 @@
-"""Phone controls for local Insight capture, independent of Ego participants."""
+"""Phone controls using the shared capture and distributed recording lifecycle."""
 
 from __future__ import annotations
 
 import asyncio
 from collections import OrderedDict
 import time
-import uuid
+import json
 
 from aiohttp import web
 
 from insight_capture.api.support import read_json_body
+from insight_capture.runtime.camera_health import evaluate_calibration_cameras
 
 
 class MobileCaptureRoutes:
-    def __init__(self, context):
+    def __init__(self, context, recording):
         self.context = context
+        self.recording = recording
+        self._last_preflight = {}
         self._task = None
         self._operation = None
         self._commands = OrderedDict()
         self._last_status = {}
         self._next_discovery = 0.0
         self._command_lock = asyncio.Lock()
-
-    def _independent(self):
-        manager = self.context.recording_manager
-        if hasattr(manager, "distributed_preflight"):
-            raise RuntimeError("手机采集仅支持本机 Insight 录制，请使用独立的 Insight 配置。")
-        cameras = {getattr(c, "device_name", "") or c.name for c in self.context.node.cameras}
-        if cameras != {"insight9_a", "insight3_a", "insight3_b"}:
-            raise RuntimeError("手机入口需要 Insight9 和两台 Insight3 的独立三相机配置。")
-        return manager
 
     def _snapshot(self):
         manager = self.context.recording_manager
@@ -51,26 +45,39 @@ class MobileCaptureRoutes:
             state = "saved"
         else:
             state = "idle"
-        try:
-            self._independent()
-            report = None
-            if not busy:
-                now = time.monotonic()
-                refresh = now >= self._next_discovery
-                report = self.context.capture_preflight.evaluate(
-                    refresh_topics=refresh, mode="mobile_capture"
-                )
-                if refresh:
-                    self._next_discovery = now + 10.0
-        except RuntimeError as exc:
-            report = {"ok": False, "failures": [{"message": str(exc)}], "warnings": [], "camera_health": {}}
+        task_status = self.context.take_store.task_status()
+        if not busy and not status.get("recording") and state != "saving":
+            now = time.monotonic()
+            refresh = now >= self._next_discovery
+            self._last_preflight = self.context.capture_preflight.evaluate(
+                refresh_topics=refresh, require_global_pose=False
+            )
+            if not task_status.get("active"):
+                self._last_preflight["failures"].append({
+                    "code": "task_inactive", "message": "请先在任务管理中选择数采任务。"
+                })
+                self._last_preflight["ok"] = False
+            if refresh:
+                self._next_discovery = now + 10.0
+            report = self._last_preflight
+        else:
+            health, _ = evaluate_calibration_cameras(
+                self.context.node, self.context.capture_preflight.camera_stale_sec
+            )
+            report = {**self._last_preflight, "camera_health": health}
+        role_names = {"head": "头部", "right_hand": "腕部 A", "left_hand": "腕部 B"}
+        devices = [{"name": pose.name, "role": pose.teleop_role,
+                    "label": role_names[pose.teleop_role] + " · " + pose.name.split("_")[0].upper()}
+                   for pose in self.context.node.poses]
         return {
             "state": state, "recording": bool(status.get("recording")),
             "recording_mode": status.get("recording_mode"),
             "output_path": status.get("output_path"),
             "started_at_epoch_s": getattr(manager, "started_at", None),
             "server_time": time.time(), "operation": self._operation,
-            "preflight": report,
+            "preflight": report, "devices": devices, "task_status": task_status,
+            "preview_cameras": [{"name": c.name, "label": c.label} for c in self.context.node.cameras],
+            "distributed": status.get("distributed"),
             "storage": status.get("storage", {}),
             "error": status.get("merge_error"),
         }
@@ -103,15 +110,15 @@ class MobileCaptureRoutes:
             return web.json_response(previous[1], status=202)
         if self._task is not None and not self._task.done():
             raise RuntimeError("上一项操作仍在处理，请等待状态更新。")
-        manager = self._independent()
+        manager = self.context.recording_manager
         status = await asyncio.to_thread(manager.status)
         if status.get("merge_state") in {"finalizing", "merging"}:
             raise RuntimeError("正在保存上一条采集。")
         if action == "start" and status.get("recording"):
             raise RuntimeError("已有采集正在进行。")
         if action == "stop":
-            if not status.get("recording") or status.get("recording_mode") != "mobile_capture":
-                raise RuntimeError("当前没有由手机入口启动的采集。")
+            if not status.get("recording") or status.get("recording_mode") != "capture":
+                raise RuntimeError("当前没有正在进行的采集。")
             if not body.get("output_path") or body["output_path"] != status.get("output_path"):
                 raise RuntimeError("采集已变化，请刷新状态后再停止。")
         self._last_status = status
@@ -124,19 +131,21 @@ class MobileCaptureRoutes:
 
     async def _run(self, action, operation, output_path):
         try:
-            manager = self.context.recording_manager
             if action == "start":
-                report = await asyncio.to_thread(self.context.capture_preflight.evaluate, refresh_topics=True, mode="mobile_capture")
-                if not report["ok"]:
-                    raise RuntimeError("；".join(item["message"] for item in report["failures"]))
-                name = "insight9_" + time.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6]
-                await asyncio.to_thread(manager.start, bag_name=name, recording_mode="mobile_capture", output_subdirectory="insight9_mobile")
-            else:
-                result = await asyncio.to_thread(
-                    manager.stop, expected_recording=(output_path, "mobile_capture")
+                response = await self.recording._start_with_preflight(
+                    topics=None, bag_name=None, automation=False, relaxed_preflight=True
                 )
-                if result.get("merge_state") == "error":
-                    raise RuntimeError(result.get("merge_error") or "录制文件保存失败。")
+            else:
+                response = await self.recording.stop_recording(
+                    expected_recording=(output_path, "capture")
+                )
+            result = json.loads(response.body)
+            if response.status >= 400:
+                raise RuntimeError(result.get("speech") or result["error"])
+            if result.get("merge_state") == "error":
+                raise RuntimeError(result.get("merge_error") or "录制文件保存失败。")
+            if action == "start":
+                self._last_preflight = result["preflight"]
             operation["state"] = "complete"
         except Exception as exc:
             operation.update(state="error", error=str(exc))

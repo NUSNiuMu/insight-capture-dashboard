@@ -185,14 +185,16 @@ class DistributedRecordingManager:
         finally:
             self._lifecycle.release()
 
-    def stop(self, timeout_sec=30.0):
+    def stop(self, timeout_sec=30.0, *, expected_recording=None):
         if self._bypass:
-            return self.local.stop(timeout_sec)
-        if not self._session or self._session.get("phase") in TERMINAL:
-            return self.local.stop(timeout_sec) if self.local.is_recording() else self.status()
-        if not self._lifecycle.acquire(blocking=False):
-            raise RuntimeError("双端录制正在启停，请稍候")
-        try:
+            return self.local.stop(timeout_sec, expected_recording=expected_recording)
+        with self._lifecycle:
+            if expected_recording is not None and expected_recording != (
+                self._session.get("output_path"), "capture"
+            ):
+                raise RuntimeError("采集已变化，停止请求未执行，请刷新状态。")
+            if not self._session or self._session.get("phase") in TERMINAL:
+                return self.local.stop(timeout_sec, expected_recording=expected_recording) if self.local.is_recording() else self.status()
             self._update(stop_requested=True, phase="stop_pending", stopped_at_epoch_s=time.time())
             # Request both stops concurrently; local finalization never waits for network recovery.
             def stop_ego():
@@ -210,8 +212,6 @@ class DistributedRecordingManager:
             self._record_clock(clocks)
             self._save()
             return self.status()
-        finally:
-            self._lifecycle.release()
 
     def _record_clock(self, clocks):
         with self._lock:

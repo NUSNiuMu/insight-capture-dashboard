@@ -2,7 +2,8 @@ import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261027-captu
 
 const el = id => document.getElementById(id);
 const labels = { idle: "准备采集", starting: "正在启动", recording: "采集中", saving: "正在保存", saved: "保存完成", error: "采集异常" };
-const names = { insight9_a: "头部 · Insight9", insight3_a: "右手 · Insight3 A", insight3_b: "左手 · Insight3 B" };
+let devices = [];
+let previewOptions = "";
 const preview = new MobilePreview(el("preview-video"), el("preview-status"));
 let snapshot = null, online = false, pending = false, previewEnabled = false, message = "";
 let mapping = null;
@@ -18,9 +19,25 @@ function render() {
   el("connection").textContent = online ? "Jetson 已连接" : "连接中断 · 正在重连";
   el("connection").classList.toggle("offline", !online);
   if (!s) return;
+  devices = s.devices;
+  const head = devices.find(device => device.role === "head");
+  el("brand").textContent = head.name.split("_")[0].toUpperCase();
+  document.title = `${head.label} · 手机采集`;
+  el("device-summary").textContent = devices.map(device => device.label).join(" · ");
+  el("task-name").textContent = s.task_status.active ? `当前任务：${s.task_status.task.name}` : "请先选择数采任务";
+  el("storage-help").textContent = s.distributed?.enabled
+    ? "头部数据写入 EgoHalo，双端保存后回传、合并到 Jetson。请等待保存完成。"
+    : "数据保存在 Jetson，手机仅控制和预览。";
+  const options = JSON.stringify(s.preview_cameras);
+  if (options !== previewOptions) {
+    const selected = el("preview-camera").value;
+    el("preview-camera").replaceChildren(...s.preview_cameras.map(camera => new Option(camera.label, camera.name)));
+    if (s.preview_cameras.some(camera => camera.name === selected)) el("preview-camera").value = selected;
+    previewOptions = options;
+  }
   el("state").textContent = labels[s.state] || s.state;
   el("orb").className = `orb ${s.state}`;
-  const help = { idle: "设备就绪后即可开始。", starting: "正在启动录制，请稍候。", recording: "数据正在写入 Jetson。", saving: "正在收尾写盘，请等待保存完成后再断电。", saved: "这一条已保存，可以开始下一条。", error: "请查看下方原因，确认后再试。" };
+  const help = { idle: "设备就绪后即可开始。", starting: "正在启动录制，请稍候。", recording: "正在采集；可以点击下方“开始校准”，记录完整过程。", saving: "正在收尾写盘，请等待保存完成后再断电。", saved: "这一条已保存，可以开始下一条。", error: "请查看下方原因，确认后再试。" };
   el("state-help").textContent = online ? help[s.state] : "控制连接已断开，Jetson 上的采集不会因此停止。";
   el("storage").textContent = s.storage?.using_fallback ? "备用存储" : "采集盘";
   const busy = ["starting", "saving"].includes(s.state);
@@ -28,13 +45,13 @@ function render() {
   el("start").hidden = recording;
   el("stop").hidden = !recording;
   el("start").disabled = !online || pending || busy || !s.preflight?.ok;
-  el("stop").disabled = !online || pending || s.recording_mode !== "mobile_capture";
+  el("stop").disabled = !online || pending || s.recording_mode !== "capture";
   const seconds = recording && s.started_at_epoch_s ? Math.max(0, Math.floor(s.server_time - s.started_at_epoch_s)) : 0;
   el("timer").textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
   if (s.preflight) {
     const free = s.preflight.storage?.free_bytes;
     el("disk").textContent = free != null ? `${(free / 1024 ** 3).toFixed(1)} GB` : "未知";
-    el("cameras").replaceChildren(...Object.entries(names).map(([name, label]) => {
+    el("cameras").replaceChildren(...devices.map(({name, label}) => {
       const h = s.preflight.camera_health?.[name];
       const row = document.createElement("div"); row.className = "camera-row";
       const title = document.createElement("div");
@@ -46,7 +63,8 @@ function render() {
       badge.textContent = h?.ready ? `${Number(h.image_fps || 0).toFixed(0)} fps` : "未就绪";
       row.append(title, badge); return row;
     }));
-    const issues = [...(s.preflight.failures || []), ...(s.preflight.warnings || [])];
+    const issues = [...(s.preflight.failures || []), ...(s.preflight.warnings || []),
+      ...(s.distributed?.quality_issues || []).map(message => ({ message: `录制质量提示：${message}` }))];
     el("issues").hidden = !issues.length;
     el("issues").replaceChildren(...issues.map(issue => { const p = document.createElement("p"); p.textContent = issue.message; return p; }));
   }
@@ -59,14 +77,14 @@ function render() {
 function renderCalibration() {
   el("calibrate").disabled = !online || !mapping || pending
     || ["starting", "saving"].includes(snapshot?.state)
-    || (snapshot?.recording && snapshot.recording_mode !== "mobile_capture")
-    || !Object.keys(names).every(name => snapshot?.preflight?.camera_health?.[name]?.ready);
+    || (snapshot?.recording && snapshot.recording_mode !== "capture")
+    || !devices.length || !devices.every(({name}) => snapshot?.preflight?.camera_health?.[name]?.ready);
   const statuses = mapping?.statuses || {};
   const head = statuses.insight9 || {};
   const points = Number(mapping?.map_point_count || 0);
-  const ready = online && head.online && head.clock_ready && head.state === "mapping" && points > 0;
+  const ready = online && head.online && head.localized && head.clock_ready && head.state === "mapping" && points > 0;
   const rows = [
-    ["mapping-head", ready, !online || !head.online ? "服务离线" : head.state === "error" ? "建图异常" : ready ? `已建图 · ${points} 点` : "等待建图"],
+    ["mapping-head", ready, !online || !head.online ? "服务离线" : head.state === "error" ? "建图异常" : ready ? `已建图 · ${points} 点` : "等待建图 / 定位"],
     ...[["mapping-right", "insight3_a"], ["mapping-left", "insight3_b"]].map(([id, name]) => {
       const s = statuses[name] || {};
       const located = online && s.online && s.localized && s.clock_ready

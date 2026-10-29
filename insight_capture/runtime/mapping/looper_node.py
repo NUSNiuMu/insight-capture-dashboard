@@ -342,13 +342,14 @@ class LooperNode(Node):
     def request(self, item, command, **metadata):
         with self.processing:
             if (item.generation != self.generation
-                    or item.tracking_epoch != self.cameras[item.view].tracking_epoch):
+                    or item.tracking_epoch != self.cameras[item.view].tracking_epoch
+                    or item.stamp_ns + self.cameras[item.view].clock.offset_ns < self.last_reset_wall_ns):
                 return None
             return self.backend.request(command, **metadata)
 
     def publish_geometry(self, image, arrays):
         header = Header(frame_id="insight9_map")
-        header.stamp = (self.get_clock().now().to_msg() if image is None else
+        header.stamp = (Time(nanoseconds=self.last_reset_wall_ns).to_msg() if image is None else
                         Time(nanoseconds=stamp_ns(image.header.stamp) + self.cameras[self.head].clock.offset_ns).to_msg())
         for publisher, values, fields in (
             (self.feature_publisher, arrays[0], [("x", 1), ("y", 1), ("z", 1), ("descriptor", 256)]),

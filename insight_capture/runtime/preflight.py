@@ -34,11 +34,12 @@ class CapturePreflight:
         *,
         refresh_topics: bool = True,
         mode: str = "capture",
+        require_global_pose: bool = True,
     ) -> Dict:
         now = time.monotonic()
         calibration_mode = mode == "vio_calibration"
-        mobile_mode = mode == "mobile_capture"
-        global_capture = not (calibration_mode or mobile_mode)
+        raw_capture = not calibration_mode and not require_global_pose
+        global_capture = not (calibration_mode or raw_capture)
         failures = []
         warnings = []
         camera_health = {}
@@ -81,7 +82,7 @@ class CapturePreflight:
                 now=now,
             )
             failures.extend(camera_failures)
-        if mobile_mode:
+        if raw_capture:
             camera_health, unavailable = evaluate_calibration_cameras(
                 self.node, self.camera_stale_sec, now=now
             )
@@ -175,10 +176,8 @@ class CapturePreflight:
                 *(topic for topic in selected if topic.endswith(("/imu", "/vio_100hz"))),
             }
         )
-        if mobile_mode:
-            required_topics.update(topic for topic in selected if (
-                topic.endswith("/camera_info")
-                or topic.startswith("/insight9_a/camera/infra")))
+        if raw_capture:
+            required_topics.update(topic for topic in selected if "/camera/" in topic)
         missing = sorted(
             topic for topic in required_topics
             if topic != "/tf_static" and topic not in available
@@ -193,7 +192,7 @@ class CapturePreflight:
             ))
 
         distributed = None
-        if global_capture:
+        if not calibration_mode:
             check_distributed = getattr(self.recording_manager, "distributed_preflight", None)
             if callable(check_distributed):
                 try:

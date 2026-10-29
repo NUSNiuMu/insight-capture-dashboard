@@ -100,8 +100,11 @@ class RecordingRoutes:
         )
 
     async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
+        return await self.stop_recording()
+
+    async def stop_recording(self, **stop_arguments) -> web.Response:
         current = self.context.recording_manager.status()
-        status = await asyncio.to_thread(self.context.recording_manager.stop)
+        status = await asyncio.to_thread(self.context.recording_manager.stop, **stop_arguments)
         take_store = getattr(self.context, "take_store", None)
         take = (
             take_store.complete_current(status)
@@ -147,30 +150,8 @@ class RecordingRoutes:
                 topics,
                 refresh_topics=True,
                 mode=preflight_mode,
+                require_global_pose=not relaxed_preflight,
             )
-            if relaxed_preflight and preflight_mode == "capture":
-                relaxed_codes = {
-                    "mapping_not_ready",
-                    "localization_not_ready",
-                    "pose_stale",
-                    "recorder_topics_missing",
-                }
-                relaxed_failures = [
-                    item
-                    for item in report.get("failures", [])
-                    if item.get("code") in relaxed_codes
-                ]
-                report["failures"] = [
-                    item
-                    for item in report.get("failures", [])
-                    if item.get("code") not in relaxed_codes
-                ]
-                report["warnings"] = [
-                    *report.get("warnings", []),
-                    *relaxed_failures,
-                ]
-                report["relaxed_preflight"] = True
-                report["ok"] = not report["failures"]
             if not report.get("ok"):
                 speech = preflight_service.speech(report)
                 return web.json_response(
