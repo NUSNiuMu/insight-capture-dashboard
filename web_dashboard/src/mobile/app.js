@@ -26,7 +26,7 @@ function render() {
   el("device-summary").textContent = devices.map(device => device.label).join(" · ");
   el("task-name").textContent = s.task_status.active ? `当前任务：${s.task_status.task.name}` : "请先选择数采任务";
   el("storage-help").textContent = s.distributed?.enabled
-    ? "头部数据写入 EgoHalo，双端保存后回传、合并到 Jetson。请等待保存完成。"
+    ? "头部原始数据保存在 EgoHalo，腕部数据保存在 Jetson。两端保存完成即可录下一条；回传合包在录制库手动执行。"
     : "数据保存在 Jetson，手机仅控制和预览。";
   const options = JSON.stringify(s.preview_cameras);
   if (options !== previewOptions) {

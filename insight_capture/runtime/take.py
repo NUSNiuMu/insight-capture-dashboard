@@ -348,46 +348,61 @@ class SessionTakeStore:
             payload = self.current()
             if payload is None:
                 return None
-            reasons = []
-            if recording_status.get("merge_state") == "error":
-                reasons.append(str(recording_status.get("merge_error") or "recording finalization failed"))
-            network = recording_status.get("network_audit") or {}
-            if isinstance(network, dict) and network.get("ok") is False:
-                reasons.append("recording network audit failed")
-            image_audit = recording_status.get("image_header_audit") or {}
-            distributed = recording_status.get("distributed") or {}
-            if distributed.get("clock_violations"):
-                reasons.append("distributed clock synchronization audit failed")
-            reasons.extend(distributed.get("quality_issues") or [])
-            if (
-                isinstance(image_audit, dict)
-                and image_audit.get("recording_quality_authoritative") is True
-                and image_audit.get("ok") is False
-            ):
-                reasons.append("image continuity audit failed")
-            anomalies = payload.get("anomaly_timeline") or []
-            quality_anomalies = [
-                item for item in anomalies if item.get("affects_quality", True)
-            ]
-            if any(item.get("severity") == "critical" for item in quality_anomalies):
-                reasons.append("critical live QC anomaly")
-            qc_state = "fail" if recording_status.get("merge_state") == "error" else (
-                "suspect" if reasons or quality_anomalies else "pass"
-            )
-            payload.update({
-                "state": "finalizing" if recording_status.get("merge_state") in {"merging", "finalizing"} else "complete" if qc_state != "fail" else "finalization_failed",
-                "end_epoch_s": time.time(),
-                "bag_path": str(recording_status.get("output_path") or payload.get("bag_path") or "") or None,
-                "quick_qc": {
-                    "state": qc_state,
-                    "reasons": reasons,
-                    "image_header_audit": image_audit or None,
-                    "network_audit": network or None,
-                },
-                "distributed": distributed or None,
-            })
-            self._write_json(self._path(payload["take_id"]), payload)
-            return deepcopy(payload)
+            return self._complete(payload, recording_status, self._path(payload["take_id"]))
+
+    def complete_distributed(self, recording_status: Dict) -> Optional[Dict]:
+        distributed = recording_status["distributed"]
+        with self._lock:
+            path = (self.sessions_root / self._task_set_id(distributed["task_id"]) / "takes"
+                    / f"take_{int(distributed['take_id']):04d}.json")
+            if not path.is_file():
+                return None
+            payload = json.loads(path.read_text())
+            if (payload.get("distributed") or {}).get("session_id") != distributed["session_id"]:
+                raise RuntimeError("双端录制编号与任务条目不匹配")
+            return self._complete(payload, recording_status, path)
+
+    def _complete(self, payload: Dict, recording_status: Dict, path: Path) -> Dict:
+        reasons = []
+        if recording_status.get("merge_state") == "error":
+            reasons.append(str(recording_status.get("merge_error") or "recording finalization failed"))
+        network = recording_status.get("network_audit") or {}
+        if isinstance(network, dict) and network.get("ok") is False:
+            reasons.append("recording network audit failed")
+        image_audit = recording_status.get("image_header_audit") or {}
+        distributed = recording_status.get("distributed") or {}
+        if distributed.get("clock_violations"):
+            reasons.append("distributed clock synchronization audit failed")
+        reasons.extend(distributed.get("quality_issues") or [])
+        if (
+            isinstance(image_audit, dict)
+            and image_audit.get("recording_quality_authoritative") is True
+            and image_audit.get("ok") is False
+        ):
+            reasons.append("image continuity audit failed")
+        anomalies = payload.get("anomaly_timeline") or []
+        quality_anomalies = [
+            item for item in anomalies if item.get("affects_quality", True)
+        ]
+        if any(item.get("severity") == "critical" for item in quality_anomalies):
+            reasons.append("critical live QC anomaly")
+        qc_state = "pending" if recording_status.get("merge_state") == "saved" else "fail" if recording_status.get("merge_state") == "error" else (
+            "suspect" if reasons or quality_anomalies else "pass"
+        )
+        payload.update({
+            "state": "saved" if recording_status.get("merge_state") == "saved" else "finalizing" if recording_status.get("merge_state") in {"merging", "finalizing"} else "complete" if qc_state != "fail" else "finalization_failed",
+            "end_epoch_s": payload.get("end_epoch_s") or time.time(),
+            "bag_path": str(recording_status.get("output_path") or payload.get("bag_path") or "") or None,
+            "quick_qc": {
+                "state": qc_state,
+                "reasons": reasons,
+                "image_header_audit": image_audit or None,
+                "network_audit": network or None,
+            },
+            "distributed": distributed or None,
+        })
+        self._write_json(path, payload)
+        return deepcopy(payload)
 
     def add_anomaly(self, anomaly: Dict) -> Optional[Dict]:
         with self._lock:

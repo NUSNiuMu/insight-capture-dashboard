@@ -350,7 +350,7 @@ ApplicationWindow {
                     Label { text: dashboard.playback ? root.playTime.toFixed(1)+" / "+dashboard.duration.toFixed(1)+" s" : (dashboard.state.playbackState || "idle"); color: "#84775f" }
                     Ui.Button { id: liveButton; text: "返回实时"; enabled: dashboard.playback; onClicked: { root.playPaused=false;dashboard.command("live") } }
                 }
-                Label { text: root.captureAction === "starting" ? "正在检查设备、校时并启动录制，请稍候…" : root.captureAction === "stopping" ? "正在停止两端录制，请稍候…" : dashboard.state.recording ? "● 录制中  " + ((dashboard.state.distributed || {}).enabled ? "Ego TF 卡 + Jetson · " : "") + (dashboard.state.output || "") : dashboard.state.recordingBusy ? "正在确认两端保存并合并，请稍候…" : dashboard.message; Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
+                Label { text: root.captureAction === "starting" ? "正在检查设备、校时并启动录制，请稍候…" : root.captureAction === "stopping" ? "正在停止两端录制，请稍候…" : dashboard.state.recording ? "● 录制中  " + ((dashboard.state.distributed || {}).enabled ? "Ego TF 卡 + Jetson · " : "") + (dashboard.state.output || "") : dashboard.state.recordingBusy ? "正在保存或手动合包，请稍候…" : dashboard.message; Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
             }
         }
     }

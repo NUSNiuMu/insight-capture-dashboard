@@ -114,11 +114,24 @@ class RecordingRoutes:
         )
         return web.json_response({**status, "take": take})
 
-    async def _handle_recording_merge_retry(self, _request: web.Request) -> web.Response:
-        retry = getattr(self.context.recording_manager, "retry_merge", None)
-        if retry is None:
+    async def _handle_saved_recordings(self, _request: web.Request) -> web.Response:
+        manager = self.context.recording_manager
+        if not hasattr(manager, "saved_sessions"):
+            return web.json_response({"enabled": False, "recordings": []})
+        sessions = await asyncio.to_thread(manager.saved_sessions)
+        status = manager.status()
+        keys = ("session_id", "task_name", "take_id", "phase", "created_at_epoch_s", "output_path", "error")
+        return web.json_response({
+            "enabled": True, "busy": status["recording"] or status["merge_state"] in {"finalizing", "merging"},
+            "recordings": [{key: session.get(key) for key in keys} for session in sessions],
+        })
+
+    async def _handle_saved_recording_merge(self, request: web.Request) -> web.Response:
+        manager = self.context.recording_manager
+        if not hasattr(manager, "start_merge"):
             raise ValueError("Distributed recording is not configured.")
-        return web.json_response(await asyncio.to_thread(retry))
+        payload = await read_json_body(request)
+        return web.json_response(await asyncio.to_thread(manager.start_merge, payload.get("session_id")), status=202)
 
     async def _start_with_preflight(
         self,

@@ -16,6 +16,12 @@
         <header class="app-topbar"><span>Capture / <strong>Rosbags</strong></span><span class="topbar-clock">INSIGHT WORKSTATION</span></header>
         <main class="page-content">
           <header class="content-heading"><div><p class="section-kicker">Capture library</p><h1>Rosbags</h1><p>Review recording health, storage footprint and processing state.</p></div><button type="button" id="refresh-bags-button" class="quiet-button">Refresh index</button></header>
+          <section id="deferred-recordings" class="data-surface" hidden>
+            <div class="section-heading"><div><p class="section-kicker">后处理</p><h2>双端原始录制</h2></div><button id="refresh-deferred" type="button" class="quiet-button">刷新状态</button></div>
+            <p>两端原始数据已分别保存。采集结束后手动回传、校验并合包；合包期间请等待完成。</p>
+            <p id="deferred-message" role="status"></p>
+            <div id="deferred-list" class="bag-list"></div>
+          </section>
           <section class="data-surface">
             <div class="section-heading"><div><p class="section-kicker">Local rosbag index</p><h2 id="bag-list-status">Loading bags...</h2></div><div class="bag-scope-actions" aria-label="Rosbag directory scope"><button type="button" class="quiet-button is-active" data-bag-scope="all">All directories</button><button type="button" class="quiet-button" data-bag-scope="current">Current recording directory</button></div></div>
             <div id="bag-list" class="bag-list"></div>
@@ -23,6 +29,6 @@
         </main>
       </section>
     </div>
-    <script type="module" src="/static/pages/bags.js?v=20260818-bag-library"></script>
+    <script type="module" src="/static/pages/bags.js?v=20261029-deferred-merge"></script>
   </body>
 </html>

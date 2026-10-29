@@ -15,7 +15,7 @@ from .distributed_merge import file_hash, merge_session, write_json
 from .ego_participant import EgoParticipant
 
 
-TERMINAL = {"done", "error"}
+TERMINAL = {"saved", "done", "error"}
 
 
 class DistributedRecordingManager:
@@ -84,7 +84,7 @@ class DistributedRecordingManager:
 
     def distributed_preflight(self):
         if self._session and self._session.get("phase") not in TERMINAL:
-            raise RuntimeError("上一条双端录制尚未保存或合并，请先等待或重试")
+            raise RuntimeError("上一条双端录制尚未保存，或正在手动合包，请先等待")
         remote = self.ego.preflight()
         clocks = self._clocks()
         if not clocks["ok"]:
@@ -272,11 +272,30 @@ class DistributedRecordingManager:
         finally:
             self._lifecycle.release()
 
-    def retry_merge(self):
+    def saved_sessions(self):
+        sessions = {}
+        for root in self.local.storage_browse_roots():
+            for path in Path(root, "_distributed").glob("*.json"):
+                session = json.loads(path.read_text())
+                if session.get("local_saved") and session.get("remote_saved"):
+                    sessions[session["session_id"]] = session
+        return sorted(sessions.values(), key=lambda s: s["created_at_epoch_s"], reverse=True)
+
+    def start_merge(self, session_id):
         with self._lifecycle:
-            if not self._session or self._session.get("phase") != "error" or not self._session.get("remote_saved") or not self._session.get("local_saved"):
-                raise RuntimeError("没有可重试合并的已保存双端录制")
-            self._update(phase="saved", error=None)
+            if self.local.is_recording() or self._session.get("phase") not in TERMINAL | {None}:
+                raise RuntimeError("请先结束录制或等待当前后处理完成")
+            session = next((s for s in self.saved_sessions() if s["session_id"] == session_id), None)
+            if session is None or session["phase"] not in {"saved", "error"}:
+                raise ValueError("请选择尚未合包的已保存录制")
+            if session["ego_url"] != self.ego.base:
+                raise RuntimeError("请连接保存该条数据的原 EgoHalo 设备")
+            self._session = session
+            self._bypass = False
+            self._last_error = None
+            self._update(phase="copying", error=None, merge_started_at_epoch_s=time.time())
+            self._worker = threading.Thread(target=self._merge, daemon=True, name="distributed-merge")
+            self._worker.start()
         return self.status()
 
     def _monitor(self):
@@ -323,11 +342,9 @@ class DistributedRecordingManager:
                         self._update(phase="error", error=self._session.get("local_error") or self._session.get("start_error") or "Jetson 原始文件尚未保存，请检查中断恢复")
                         self._finish()
                         continue
-                    self._update(phase="saved")
-                if self._session.get("phase") == "saved":
-                    self._worker = threading.Thread(target=self._merge, daemon=True, name="distributed-merge")
-                    self._update(phase="copying")
-                    self._worker.start()
+                    self._last_error = None
+                    self._update(phase="saved", saved_at_epoch_s=time.time(), local_status=self.local.status())
+                    self._finish()
             except Exception as exc:
                 self._last_error = str(exc)
             finally:
@@ -347,21 +364,23 @@ class DistributedRecordingManager:
             phase = session.get("phase", "idle")
             active = phase in {"starting", "recording", "stop_pending"}
             if session:
+                if not active:
+                    result.update(session.get("local_status", {}))
                 result.update(recording=active, output_path=session["output_path"],
-                              merge_state="done" if phase == "done" else "error" if phase == "error" else "merging" if phase in {"saved", "copying", "merging"} else "finalizing" if phase == "stop_pending" else "idle",
+                              merge_state="saved" if phase == "saved" else "done" if phase == "done" else "error" if phase == "error" else "merging" if phase in {"copying", "merging"} else "finalizing" if phase == "stop_pending" else "idle",
                               merge_error=session.get("error"))
                 if phase == "done":
                     result["merge_timings"] = {
                         "method": "distributed_copy_merge",
-                        "total_sec": round(session["finished_at_epoch_s"] - session["stopped_at_epoch_s"], 3),
+                        "total_sec": round(session["finished_at_epoch_s"] - session.get("merge_started_at_epoch_s", session["stopped_at_epoch_s"]), 3),
                     }
             result["distributed"] = {
                 "enabled": True, "phase": phase, "session_id": session.get("session_id"),
+                "task_id": session.get("task_id"), "take_id": session.get("take_id"),
                 "ego_path": session.get("remote_path"), "jetson_path": session.get("jetson_path"),
                 "local_saved": session.get("local_saved", False), "remote_saved": session.get("remote_saved", False),
                 "clock": deepcopy(self._clock), "clock_violations": session.get("clock_violations", []),
                 "quality_issues": session.get("alignment", {}).get("video_header_quality", {}).get("issues", []),
                 "error": self._last_error or session.get("error"),
-                "retry_merge": phase == "error" and session.get("local_saved", False) and session.get("remote_saved", False),
             }
         return result

@@ -17,7 +17,7 @@ PageFrame {
     property bool taskActive: !!(status.task_status || {}).active
     property bool starting: false
     heading: "Recorder · 录制"
-    description: distributed.enabled ? "Ego 四路视频录到头环 TF 卡；Jetson 保存腕部数据。停止后校验取回并按原始采集时间戳合并。" : "选择 ROS 话题和存储目录，查看录制与保存状态。完整性检查请前往评分或录制库。"
+    description: distributed.enabled ? "Ego 四路视频录到头环 TF 卡；Jetson 保存腕部数据。两端保存后即可录下一条，在网页录制库手动回传合包。" : "选择 ROS 话题和存储目录，查看录制与保存状态。完整性检查请前往评分或录制库。"
     function browse(path) {
         workspace.request("directories", "/api/recording/storage/directories" + (path ? "?path=" + encodeURIComponent(path) : ""));
     }
@@ -159,12 +159,6 @@ PageFrame {
             wrapMode: Text.Wrap
             color: Ui.Theme.red
         }
-        Ui.Button {
-            visible: !!page.distributed.retry_merge
-            text: "重试取回与合并"
-            enabled: !workspace.busy.action
-            onClicked: shell.mutate("/api/recording/merge/retry")
-        }
     }
     Ui.Section {
         heading: "录制状态"
@@ -175,7 +169,7 @@ PageFrame {
                 tone: page.status.recording ? "success" : page.status.merge_state === "error" ? "danger" : page.finalizing ? "accent" : "neutral"
             }
             Label {
-                text: page.status.recording ? (page.distributed.enabled ? "Ego TF 卡与 Jetson 正在独立保存" : "正在采集所选话题") : page.finalizing ? "正在保存和合并录制，请等待完成…" : page.status.merge_state === "done" ? "录制已保存" + ((page.status.merge_timings || {}).total_sec !== undefined ? " · 耗时 " + Number(page.status.merge_timings.total_sec).toFixed(1) + " 秒" : "") : "准备开始录制"
+                text: page.status.recording ? (page.distributed.enabled ? "Ego TF 卡与 Jetson 正在独立保存" : "正在采集所选话题") : page.finalizing ? "正在保存或手动合包，请等待完成…" : page.status.merge_state === "saved" ? "两端原始数据已保存，可以开始下一条；合包请前往网页录制库。" : page.status.merge_state === "done" ? "录制已保存" + ((page.status.merge_timings || {}).total_sec !== undefined ? " · 耗时 " + Number(page.status.merge_timings.total_sec).toFixed(1) + " 秒" : "") : "准备开始录制"
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: Ui.Theme.secondary

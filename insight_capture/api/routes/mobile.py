@@ -41,7 +41,7 @@ class MobileCaptureRoutes:
             state = "error"
         elif self._operation and self._operation.get("error"):
             state = "error"
-        elif status.get("merge_state") == "done":
+        elif status.get("merge_state") in {"saved", "done"}:
             state = "saved"
         else:
             state = "idle"

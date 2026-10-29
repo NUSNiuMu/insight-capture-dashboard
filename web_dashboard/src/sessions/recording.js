@@ -462,6 +462,8 @@ function renderRecordingStatus(status) {
       recordingStatus.textContent = "Finalizing recording · merging rosbag";
     } else if (mergeState === "error") {
       recordingStatus.textContent = "Recording finalization failed";
+    } else if (mergeState === "saved") {
+      recordingStatus.textContent = "两端原始数据已保存 · 可开始下一条 · 在录制库手动合包";
     } else if (mergeState === "done" && Number.isFinite(Number(mergeTimings.total_sec))) {
       const method = mergeTimings.method === "sqlite_bulk" ? "fast merge" : "safe fallback";
       recordingStatus.textContent = `Recording idle · ${method} ${Number(mergeTimings.total_sec).toFixed(1)}s`;

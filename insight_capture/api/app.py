@@ -94,7 +94,8 @@ def create_app(context: DashboardContext) -> web.Application:
     )
     app.router.add_post("/api/recording/start", recording._handle_recording_start)
     app.router.add_post("/api/recording/stop", recording._handle_recording_stop)
-    app.router.add_post("/api/recording/merge/retry", recording._handle_recording_merge_retry)
+    app.router.add_get("/api/postprocessing/recordings", recording._handle_saved_recordings)
+    app.router.add_post("/api/postprocessing/merge", recording._handle_saved_recording_merge)
     app.router.add_post(
         "/api/automation/recording/start",
         recording._handle_automation_recording_start,

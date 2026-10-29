@@ -222,7 +222,7 @@ function render(payload) {
     const started = take.start_epoch_s ? new Date(take.start_epoch_s * 1000).toLocaleString() : "--";
     const openAction = take.bag_id
       ? `<a class="take-open-link" href="/3d?bag=${encodeURIComponent(take.bag_id)}">Open rosbag</a>`
-      : '<small>Rosbag is not available in the library.</small>';
+      : take.state === "saved" ? '<a class="take-open-link" href="/bags#deferred-recordings">原始数据已保存 · 后处理合包</a>' : '<small>Rosbag is not available in the library.</small>';
     return `<article class="take-row take-${escapeHtml(outcome)}"><div><span>TAKE ${String(take.take_id || 0).padStart(4, "0")}</span><strong>${escapeHtml(take.bag_name || "pending bag")}</strong><small>${escapeHtml(started)}</small></div><div><span>Quick QC</span><strong>${escapeHtml(outcome)}</strong><small>${anomalyCount} anomaly event${anomalyCount === 1 ? "" : "s"}</small></div><div><span>Decision</span><strong>${escapeHtml(take.operator_decision || "pending")}</strong><small>${escapeHtml(take.reject_reason || take.state || "")}</small>${openAction}</div></article>`;
   }).join("");
 }
