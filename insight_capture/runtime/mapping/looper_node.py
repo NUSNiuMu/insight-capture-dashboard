@@ -111,7 +111,8 @@ class LooperNode(Node):
         self.status_publishers = {}
         geometry_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                                  reliability=ReliabilityPolicy.RELIABLE)
-        self.create_subscription(TFMessage, "/tf_static", self.on_static_tf, geometry_qos)
+        self.create_subscription(TFMessage, "/tf_static", self.on_static_tf,
+                                 QoSProfile(depth=100, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.feature_publisher = self.create_publisher(PointCloud2, "/insight9_sparse_map/features", geometry_qos)
         base = "/insight9_sparse_map/calibration_keyframe"
         self.reference_image = self.create_publisher(Image, base + "/image", geometry_qos)

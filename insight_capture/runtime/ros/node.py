@@ -294,6 +294,8 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
         self._tf_static_publisher = self.create_publisher(TFMessage, "/tf_static", qos)
+        # Preserve the independent latched samples delivered by all rig writers.
+        qos.depth = 100
         subscription = self.create_subscription(
             TFMessage,
             "/tf_static",
