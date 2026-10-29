@@ -43,7 +43,7 @@ __all__ = [
 
 
 def default_runtime_config_path() -> Path:
-    """Return the canonical runtime config with legacy fallback support."""
+    """Return the runtime configuration path."""
 
     return runtime_config_path()
 
@@ -63,8 +63,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument(
         "--runtime-config",
-        "--post-processing-config",
-        dest="post_processing_config",
         default=str(default_runtime_config_path()),
     )
     parser.add_argument("--rosbag-dir", "-rosbag-dir", default=None)
@@ -107,7 +105,7 @@ def main() -> None:
     crash_log = configure_crash_diagnostics()
     settings = load_runtime_settings(
         config_path=Path(args.config),
-        runtime_config_path=Path(args.post_processing_config),
+        runtime_config_path=Path(args.runtime_config),
         rosbag_dir=args.rosbag_dir,
     )
     if rclpy is None or MultiThreadedExecutor is None:

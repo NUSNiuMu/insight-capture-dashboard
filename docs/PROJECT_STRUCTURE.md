@@ -3,7 +3,7 @@
 仓库采用模块化单体：`runtime` 负责现场采集，`services` 负责任务编排，
 `api` 只负责 HTTP/WebSocket 适配，`perception` 和 `quality` 是在线与离线流程
 都可复用的领域能力。`postprocess` 只处理已有数据，`scripts` 只保留部署命令、
-运维命令和兼容薄入口，不能再承载业务实现。
+运维命令，不能再承载业务实现。
 
 ```text
 insight_capture/
@@ -14,7 +14,7 @@ insight_capture/
     bootstrap.py           路径解析、崩溃诊断和 recorder factory
     ros/                   PoseBridgeNode、ROS QoS、订阅与 adapter 协调
     recording/             MCAP recorder、存储、header audit、恢复
-    mapping/               Insight9、Insight3、SuperGlue、位姿图和重定位
+    mapping/               LooperVIO ROS 适配、时间同步、几何与特征处理
   voice/                   离线固定命令、ALSA、SenseVoice/VAD、Piper、可选 OpenClaw
   perception/
     gripper/               在线/离线共用的 marker tracking、hand overlay、calibration
@@ -26,14 +26,15 @@ insight_capture/
     bags/                  catalog、完整性、回放、同步
     quality/               采后轨迹评分
     handpose/              WiLoR、滤波和 schema
-    gripper/               离线 extraction；旧 tracking/calibration 路径为兼容 wrapper
-    datasets/              routing、LeRobot、Ego LeRobot、UMI 兼容 facade
+    gripper/               离线 extraction
+    datasets/              routing、LeRobot、Ego LeRobot、UMI 导出
     optimization/          COLMAP
   legacy/                  SQLite/composite bag 与 UMI Zarr 兼容实现
-  common/ web/             旧 import 路径的薄兼容 namespace
+
+native_mapping/            唯一的 C++ 地图、BA、回环和定位核心
 
 web_dashboard/src/
-  sessions/ review/ datasets/ storage/
+  mobile/ sessions/ review/ datasets/ storage/
   advanced/{handpose,trajectory,optimization,system}/
   shared/
 
@@ -41,6 +42,8 @@ scripts/
   run_dashboard.sh run_voice.sh select_device.sh
   reboot_cameras.sh sync_camera_restart.py
   check_bag.py export_lerobot.py
+  system_doctor.py system_doctor.sh
+  merge_distributed_recording.py set_ros_domain_id.py
 
 tools/
   device_cli/ mapping_validation/ diagnostics/
@@ -63,23 +66,24 @@ worker。结构测试会拒绝生产代码重新导入旧 `common/web` 路径或
 pytest/ruff/mypy/pyright 配置。当前阶段保留根目录 package 布局，待入口和部署全部通过
 安装后的 console scripts 验证后，再单独迁移到 `src/insight_capture/`。
 
-## 稳定入口与兼容面
+## 入口与历史数据
 
-- `scripts/` 固定只保留上面列出的七个薄入口；业务实现不得放回该目录。
+- `scripts/` 只保留上面列出的现场入口；业务实现不得放回该目录。
 - Dashboard、语音、后处理和工程工具可通过 `pyproject.toml` 声明的
   `insight-*` console scripts、`python3 -m insight_capture...` 或 `tools/...`
-  调用；旧 package 路径只保留无业务逻辑的兼容 wrapper。
+  调用；已移除旧 `common/web` namespace 和无调用的 wrapper，调用方使用实际模块路径。
 - 旧 SQLite/composite bag 和 UMI Zarr 仍需读取历史数据，因此集中在 `legacy/`，
   不能在没有数据迁移策略时删除。
-- `config/runtime.json` 是新 live 配置；启动代码临时接受旧
-  `config/post_processing.json`，用于不切换 profile 的现场机器平滑升级。
+- `config/runtime.json` 是唯一现场配置；文件缺失直接报错，不再读取旧配置文件。
+- 新录制只有单 MCAP 写入与发布流程。中断恢复先复制原始数据，再重建索引、完整转换和逐话题核对数量及类型；全部通过后发布恢复包，并将原始目录原样保留为 `_staging/.<录制名>.original`。恢复清单记录原始数据的位置。不剔除坏子包，不切换转换方式。
 
 ## 运行边界
 
 - Capture Mode 无 viewer 时不做 JPEG preview、WebRTC 传输或手部显示叠加；录制、
-  header audit、2 Hz localization relay、VIO/mapping/QC 持续运行。
+  header audit、VIO/mapping/QC 持续运行。定位适配器直接订阅图像，不经 Dashboard 中继。
 - viewer lease 到来后按需启动媒体 worker，最后一个 viewer 离开并超过 idle grace
   后停止。
+- 图像能力接口区分硬件可用性和实际输出路径，逐相机报告最近成功的 JPEG 编码方式及其时效；查询能力不会激活预览。
 - 固定语音命令完全离线执行；OpenClaw adapter 只处理非固定自然语言。
 - Dense Mapping、RViz、COLMAP 位于 Engineering/Advanced 路径，不进入日常采集主流程。
 - 3D review 保留真实相机模型、三路 camera frame、pose、trajectory、TCP 和 hand pose。

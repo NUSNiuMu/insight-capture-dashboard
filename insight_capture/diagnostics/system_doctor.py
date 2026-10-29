@@ -309,7 +309,10 @@ def _existing_staging_entries(roots: Iterable[Path]) -> list[Path]:
             if normalized in seen or not normalized.is_dir():
                 continue
             seen.add(normalized)
-            entries.extend(sorted(normalized.iterdir()))
+            entries.extend(sorted(
+                path for path in normalized.iterdir()
+                if path.is_dir() and not path.name.startswith(".")
+            ))
         except OSError:
             continue
     return entries
@@ -1166,7 +1169,7 @@ class SystemDoctor:
             )
 
         runtime = cameras.get("runtime") if isinstance(cameras.get("runtime"), dict) else (system.get("runtime") or {})
-        if runtime and not runtime.get("webrtc_worker_running"):
+        if runtime.get("preview_active") and not runtime.get("webrtc_worker_running"):
             self.add(
                 "media.webrtc_worker",
                 "图像管线",
@@ -1175,29 +1178,41 @@ class SystemDoctor:
                 impact="浏览器实时视频会不可用或退回 JPEG。",
                 fixes=["查看 outputs/webrtc_worker.log 和主容器日志；确认原因后在未录制时重启 Dashboard。"],
             )
-        elif runtime:
+        elif runtime.get("webrtc_worker_running"):
             self.add("media.webrtc_worker", "图像管线", "PASS", "WebRTC worker 正在运行")
+        elif runtime:
+            self.add("media.webrtc_worker", "图像管线", "INFO", "无预览请求，WebRTC worker 按需暂停")
 
         images = payloads.get("images") if isinstance(payloads.get("images"), dict) else {}
         active_path = images.get("active_path")
-        disabled = ((images.get("hw_jpeg") or {}).get("disabled")) or []
-        if active_path != "jpeg-hardware-nvjpeg" or disabled:
+        software_cameras = [
+            camera["name"] for camera in images.get("cameras", [])
+            if (camera.get("jpeg_encoding") or {}).get("recent")
+            and camera["jpeg_encoding"]["last_output_path"] == "jpeg-software"
+        ]
+        if software_cameras:
             self.add(
                 "media.hardware",
                 "图像管线",
                 "WARN",
-                f"图像编码未完全使用 NVJPEG 硬件路径：{active_path}",
-                evidence=[f"hw_jpeg_disabled={disabled}", f"elements={json.dumps((images.get('gstreamer') or {}).get('elements') or {}, sort_keys=True)}"],
+                "最近实际使用软件 JPEG 编码：" + ", ".join(software_cameras),
+                evidence=[f"active_path={active_path}", f"hw_jpeg={images.get('hw_jpeg')}"],
                 impact="软件编码会显著提高 CPU 占用并可能挤压录制。",
                 fixes=["docker logs insight-dashboard | grep hw_jpeg；确认 nvidia runtime 和 nvjpegenc 后，在空闲时重启。"],
             )
-        elif images:
+        elif active_path == "jpeg-hardware-nvjpeg":
             self.add(
                 "media.hardware",
                 "图像管线",
                 "PASS",
-                "NVJPEG 与硬件 H.264 图像管线可用",
+                "最近 JPEG 输出使用 NVJPEG 硬件编码",
                 evidence=[f"active_path={active_path}", f"hardware_encoder={images.get('hardware_encoder')}", f"webrtc_ready={images.get('webrtc_ready')}"],
+            )
+        elif images:
+            self.add(
+                "media.hardware", "图像管线", "INFO",
+                "当前没有软件 JPEG 编码输出；硬件可用性与实际输出分别记录",
+                evidence=[f"active_path={active_path}", f"hw_jpeg={images.get('hw_jpeg')}"],
             )
 
         mapping = payloads.get("mapping") if isinstance(payloads.get("mapping"), dict) else {}

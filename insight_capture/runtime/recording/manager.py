@@ -1,4 +1,4 @@
-"""Recording lifecycle, crash recovery, and composite-session publishing."""
+"""Single MCAP recording lifecycle, publishing and crash recovery."""
 
 import contextlib
 import concurrent.futures
@@ -8,7 +8,6 @@ import pty
 import re
 import shutil
 import signal
-import sqlite3
 import subprocess
 import threading
 import time
@@ -16,10 +15,8 @@ from collections import deque
 from pathlib import Path
 from typing import Callable, Deque, Dict, List, Optional, Sequence, Set
 
-from insight_capture.core.performance import track
-from insight_capture.quality.topic_rates import nominal_for
 
-from insight_capture.legacy.composite_bag import COMPOSITE_FORMAT, MANIFEST_NAME, read_metadata
+from insight_capture.legacy.composite_bag import MANIFEST_NAME, read_metadata
 from .storage import probe_recording_root
 from .recorder import (
     _normalize_topics,
@@ -32,90 +29,7 @@ from .network_audit import (
     compare_network_snapshots,
     format_network_audit,
 )
-try:
-    import yaml
-except Exception:  # pragma: no cover - recovery degrades gracefully
-    yaml = None
-
-def _trim_startup_skew(bag_dir: Path) -> Dict[str, object]:
-    """Align frame-topic starts, preserve latched topics, and cap trimming at 2s."""
-    MAX_TRIM_NS = 2_000_000_000
-    metadata_path = bag_dir / "metadata.yaml"
-    info = yaml.safe_load(metadata_path.read_text())["rosbag2_bagfile_information"]
-    db_path = bag_dir / info["relative_file_paths"][0]
-
-    conn = sqlite3.connect(str(db_path))
-    try:
-        topic_ids = {name: tid for tid, name in conn.execute("SELECT id, name FROM topics")}
-        frame_topic_ids = [tid for name, tid in topic_ids.items() if nominal_for(name) is not None]
-        if not frame_topic_ids:
-            return {"trimmed_ns": 0}
-
-        placeholders = ",".join("?" * len(frame_topic_ids))
-        first_by_topic = dict(conn.execute(
-            f"SELECT topic_id, MIN(timestamp) FROM messages WHERE topic_id IN ({placeholders}) "
-            "GROUP BY topic_id",
-            frame_topic_ids,
-        ))
-        if not first_by_topic:
-            return {"trimmed_ns": 0}
-        # Only topics that actually captured something count toward the
-        # sync point -- a camera stream with zero messages is a dead-camera
-        # failure, a different problem trimming can't and shouldn't mask.
-        sync_point_ns = max(first_by_topic.values())
-        old_min_ns = min(first_by_topic.values())
-        if sync_point_ns <= old_min_ns:
-            return {"trimmed_ns": 0}  # every frame topic already started together
-
-        trim_point_ns = min(sync_point_ns, old_min_ns + MAX_TRIM_NS)
-        capped = trim_point_ns < sync_point_ns
-
-        conn.execute(
-            f"DELETE FROM messages WHERE timestamp < ? AND topic_id IN ({placeholders})",
-            [trim_point_ns, *frame_topic_ids],
-        )
-        conn.commit()
-
-        counts = dict(conn.execute(
-            "SELECT t.name, COUNT(*) FROM messages m JOIN topics t ON t.id = m.topic_id GROUP BY t.name"
-        ))
-        new_min_ns = conn.execute(
-            f"SELECT MIN(timestamp) FROM messages WHERE topic_id IN ({placeholders})", frame_topic_ids
-        ).fetchone()[0]
-        new_max_ns = conn.execute("SELECT MAX(timestamp) FROM messages").fetchone()[0]
-    finally:
-        conn.close()
-
-    for entry in info["topics_with_message_count"]:
-        entry["message_count"] = counts.get(entry["topic_metadata"]["name"], 0)
-    info["message_count"] = sum(counts.values())
-    info["starting_time"]["nanoseconds_since_epoch"] = int(new_min_ns)
-    info["duration"]["nanoseconds"] = int(new_max_ns - new_min_ns)
-    for file_entry in info.get("files") or []:
-        file_entry["starting_time"]["nanoseconds_since_epoch"] = int(new_min_ns)
-        file_entry["duration"]["nanoseconds"] = int(new_max_ns - new_min_ns)
-        file_entry["message_count"] = info["message_count"]
-
-    metadata_path.write_text(yaml.dump(
-        {"rosbag2_bagfile_information": info}, sort_keys=False, default_flow_style=False, width=1_000_000
-    ))
-    return {
-        "trimmed_ns": int(trim_point_ns - old_min_ns),
-        "sync_point_ns": int(sync_point_ns),
-        "capped": capped,
-        "residual_skew_ns": int(sync_point_ns - trim_point_ns) if capped else 0,
-    }
-
-
-# Shared crash-tolerant SQLite settings for subprocess and in-process writers.
-
-STORAGE_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "rosbag_storage_sqlite3.yaml"
 QOS_OVERRIDE_PATH = Path(__file__).resolve().parents[3] / "config" / "rosbag_qos_overrides.yaml"
-
-def _storage_config_args(storage_id: str) -> List[str]:
-    if storage_id == "sqlite3" and STORAGE_CONFIG_PATH.is_file():
-        return ["--storage-config-file", str(STORAGE_CONFIG_PATH)]
-    return []
 
 
 def _qos_override_args() -> List[str]:
@@ -136,7 +50,6 @@ class RecordingManager:
         image_topics: Optional[Sequence[str]] = None,
         start_image_recording: Optional[Callable[[Dict[str, str]], None]] = None,
         stop_image_recording: Optional[Callable[[], Dict[str, object]]] = None,
-        storage_id: str = "mcap",
         recording_rmw_implementation: str = "rmw_cyclonedds_cpp",
         storage_status: Optional[Dict[str, object]] = None,
         storage_resolver: Optional[Callable[[], tuple[Path, Dict[str, object]]]] = None,
@@ -147,7 +60,6 @@ class RecordingManager:
         self.rosbag_root = rosbag_root.resolve()
         self.rosbag_root.mkdir(parents=True, exist_ok=True)
         self.max_cache_size = int(max_cache_size)
-        self.storage_id = str(storage_id or "mcap")
         self.recording_rmw_implementation = str(recording_rmw_implementation or "")
         self.storage_status = dict(storage_status or {
             "active_path": str(self.rosbag_root), "using_fallback": False
@@ -165,7 +77,7 @@ class RecordingManager:
         self._storage_changed_callbacks: List[Callable[[Path], None]] = []
         self.default_topics = _normalize_topics(default_topics)
         self.publisher_checker = publisher_checker
-        # Reuse dashboard image subscriptions; tests may fall back to subprocesses.
+        # Reuse dashboard image subscriptions for a continuity audit.
         self._image_topics: Set[str] = set(_normalize_topics(image_topics or []))
         self._start_image_recording = start_image_recording
         self._stop_image_recording = stop_image_recording
@@ -552,18 +464,8 @@ class RecordingManager:
             staging_dir.parent.mkdir(parents=True, exist_ok=True)
             if staging_dir.exists():
                 raise RuntimeError(f"Recording staging path already exists: {staging_dir}")
-            single_writer = self.storage_id == "mcap"
-            groups: Dict[str, List[str]]
             image_writer_active = False
             audit_topics = set(selected_topics).intersection(self._image_topics)
-
-            if single_writer:
-                # rosbag2 requires that its output path does not exist yet.
-                # One native C++ recorder owns all subscriptions and MCAP writes.
-                groups = {"single": list(selected_topics)}
-            else:
-                staging_dir.mkdir(parents=True)
-                groups = {"auxiliary": list(selected_topics)}
 
             env = os.environ.copy()
             env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
@@ -592,58 +494,40 @@ class RecordingManager:
                         os.close(control_fd)
 
             spawn_started = time.perf_counter()
-            for group, group_topics in groups.items():
-                recorder_output = staging_dir if single_writer else staging_dir / group
-                cmd = [
-                    "ros2",
-                    "bag",
-                    "record",
-                    "--storage",
-                    self.storage_id,
-                    "--output",
-                    str(recorder_output),
-                    "--max-cache-size",
-                    str(self.max_cache_size),
-                    *_storage_config_args(self.storage_id),
-                    *_qos_override_args(),
-                    *(["--start-paused"] if single_writer else []),
-                    *group_topics,
-                ]
-                master_fd: Optional[int] = None
-                slave_fd: Optional[int] = None
-                try:
-                    if single_writer:
-                        master_fd, slave_fd = pty.openpty()
-                    process = subprocess.Popen(
-                        cmd,
-                        stdin=slave_fd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True,
-                        start_new_session=True,
-                        env=env,
-                    )
-                except Exception:
-                    if master_fd is not None:
-                        os.close(master_fd)
-                    raise
-                finally:
-                    if slave_fd is not None:
-                        os.close(slave_fd)
-                if master_fd is not None:
-                    control_fds[group] = master_fd
-                processes[group] = process
-                thread = threading.Thread(
-                    target=self._drain_stdout,
-                    args=(group, process),
-                    daemon=True,
-                    name=f"rosbag_record_stdout_{group}",
+            master_fd, slave_fd = pty.openpty()
+            try:
+                process = subprocess.Popen(
+                    [
+                        "ros2", "bag", "record", "--storage", "mcap",
+                        "--output", str(staging_dir),
+                        "--max-cache-size", str(self.max_cache_size),
+                        *_qos_override_args(), "--start-paused", *selected_topics,
+                    ],
+                    stdin=slave_fd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    start_new_session=True,
+                    env=env,
                 )
-                thread.start()
-                stdout_threads.append(thread)
+            except Exception:
+                os.close(master_fd)
+                raise
+            finally:
+                os.close(slave_fd)
+            control_fds["single"] = master_fd
+            processes["single"] = process
+            thread = threading.Thread(
+                target=self._drain_stdout,
+                args=("single", process),
+                daemon=True,
+                name="rosbag_record_stdout_single",
+            )
+            thread.start()
+            stdout_threads.append(thread)
             spawn_finished = time.perf_counter()
 
-            if single_writer and not self._recorder_ready.wait(timeout=10.0):
+            if not self._recorder_ready.wait(timeout=10.0):
                 abort_started_processes()
                 raise RuntimeError("Native MCAP recorder did not become ready within 10 seconds.")
             if safe_subdirectory:
@@ -653,42 +537,40 @@ class RecordingManager:
                     encoding="utf-8",
                 )
             ready_finished = time.perf_counter()
-            if single_writer:
-                # CycloneDDS discovers each camera participant in a burst. Wait
-                # until every selected dashboard stream has a subscription;
-                # those streams prove that each active camera participant and
-                # its accompanying IMU/VIO topics were discovered. A short
-                # quiet tail lets the remainder of the same burst finish.
-                settle_deadline = time.monotonic() + 20.0
-                while time.monotonic() < settle_deadline:
-                    if self._all_recorder_topics_subscribed.is_set():
-                        break
-                    last_subscription = self._last_recorder_subscription_monotonic
-                    required_topics_ready = audit_topics.issubset(
-                        self._recorder_subscribed_topics
-                    )
-                    quiet_sec = 1.0 if audit_topics else 8.0
-                    if (
-                        required_topics_ready
-                        and last_subscription
-                        and time.monotonic() - last_subscription >= quiet_sec
-                    ):
-                        break
-                    time.sleep(0.1)
-                else:
-                    abort_started_processes()
-                    raise RuntimeError("Native MCAP topic subscriptions did not settle.")
+            # CycloneDDS discovers each camera participant in a burst. Wait
+            # until every selected dashboard stream has a subscription;
+            # those streams prove that each active camera participant and
+            # its accompanying IMU/VIO topics were discovered. A short
+            # quiet tail lets the remainder of the same burst finish.
+            settle_deadline = time.monotonic() + 20.0
+            while time.monotonic() < settle_deadline:
+                if self._all_recorder_topics_subscribed.is_set():
+                    break
+                last_subscription = self._last_recorder_subscription_monotonic
+                required_topics_ready = audit_topics.issubset(
+                    self._recorder_subscribed_topics
+                )
+                quiet_sec = 1.0 if audit_topics else 8.0
+                if (
+                    required_topics_ready
+                    and last_subscription
+                    and time.monotonic() - last_subscription >= quiet_sec
+                ):
+                    break
+                time.sleep(0.1)
+            else:
+                abort_started_processes()
+                raise RuntimeError("Native MCAP topic subscriptions did not settle.")
             discovery_finished = time.perf_counter()
 
             network_snapshot_start = capture_network_snapshot()
             network_snapshot_finished = time.perf_counter()
             resume_requested = network_snapshot_finished
-            if single_writer:
-                for control_fd in control_fds.values():
-                    os.write(control_fd, b" ")
-                if not self._recorder_resumed.wait(timeout=5.0):
-                    abort_started_processes()
-                    raise RuntimeError("Native MCAP recorder did not resume from pause.")
+            for control_fd in control_fds.values():
+                os.write(control_fd, b" ")
+            if not self._recorder_resumed.wait(timeout=5.0):
+                abort_started_processes()
+                raise RuntimeError("Native MCAP recorder did not resume from pause.")
             resume_confirmed = time.perf_counter()
             if self._start_image_recording is not None and audit_topics:
                 try:
@@ -715,9 +597,9 @@ class RecordingManager:
             self.recording_mode = str(recording_mode or "capture")
             self.current_topics = list(selected_topics)
             self._recording_manifest = {
-                "version": 3 if single_writer else 2,
-                "format": "rosbag2" if single_writer else COMPOSITE_FORMAT,
-                "storage_id": self.storage_id,
+                "version": 3,
+                "format": "rosbag2",
+                "storage_id": "mcap",
                 "rmw_implementation": self.recording_rmw_implementation,
                 "bag_name": name,
                 "task_set_id": safe_subdirectory or None,
@@ -894,7 +776,7 @@ class RecordingManager:
                 )
             if image_writer_error:
                 raise RuntimeError(f"image writer failure: {image_writer_error}")
-            self._publish_recording_session(
+            self._publish_single_mcap_session(
                 staging_dir, Path(output_path) if output_path else None
             )
         except Exception as exc:  # noqa: BLE001 - preserve staging for forensics
@@ -905,14 +787,6 @@ class RecordingManager:
                 f"[finalize] ERROR: {exc} (raw staging data kept at {staging_dir})"
             )
         return self.status()
-
-    def _publish_recording_session(
-        self, staging_dir: Optional[Path], output_path: Optional[Path]
-    ) -> None:
-        if staging_dir is not None and (staging_dir / "metadata.yaml").is_file():
-            self._publish_single_mcap_session(staging_dir, output_path)
-            return
-        self._publish_composite_session(staging_dir, output_path)
 
     def _publish_single_mcap_session(
         self, staging_dir: Path, output_path: Optional[Path]
@@ -965,185 +839,13 @@ class RecordingManager:
         )
         self._notify_recording_completed(output_path)
 
-    def _publish_composite_session(
-        self, staging_dir: Optional[Path], output_path: Optional[Path]
-    ) -> None:
-        """Atomically expose complete recorder parts without rewriting payloads."""
-        if staging_dir is None or output_path is None:
-            raise RuntimeError("Missing staging directory or output path.")
-        started = time.perf_counter()
-        part_bags = sorted(
-            p for p in staging_dir.iterdir() if p.is_dir() and (p / "metadata.yaml").is_file()
-        )
-        missing = sorted(
-            p.name for p in staging_dir.iterdir()
-            if p.is_dir() and not (p / "metadata.yaml").is_file()
-        )
-        if missing:
-            raise RuntimeError(f"recorder part(s) did not finalize: {', '.join(missing)}")
-        if not part_bags:
-            raise RuntimeError("No recorder part contains metadata.yaml")
-
-        parts = []
-        for part in part_bags:
-            info = read_metadata(part)
-            if not info:
-                raise RuntimeError(f"cannot read recorder metadata: {part.name}")
-            parts.append({
-                "name": part.name,
-                "path": part.name,
-                "storage_id": str(info.get("storage_identifier") or self.storage_id),
-                "message_count": int(info.get("message_count", 0) or 0),
-                "topic_count": len(info.get("topics_with_message_count") or []),
-                "starting_time_ns": int(
-                    (info.get("starting_time") or {}).get("nanoseconds_since_epoch", 0) or 0
-                ),
-                "duration_ns": int((info.get("duration") or {}).get("nanoseconds", 0) or 0),
-            })
-        if self._image_header_audit is not None:
-            (staging_dir / "image_header_audit.json").write_text(
-                json.dumps(self._image_header_audit, indent=2, sort_keys=True)
-            )
-        if self._network_audit is not None:
-            (staging_dir / "recording_network_audit.json").write_text(
-                json.dumps(self._network_audit, indent=2, sort_keys=True)
-            )
-        manifest = dict(self._recording_manifest or {})
-        manifest["parts"] = parts
-        manifest["published_at_epoch_s"] = time.time()
-        (staging_dir / MANIFEST_NAME).write_text(
-            json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
-        )
-        if output_path.exists():
-            raise RuntimeError(f"recording output already exists: {output_path}")
-        (staging_dir / RECORDING_TARGET_NAME).unlink(missing_ok=True)
-        os.replace(staging_dir, output_path)
-        finalize_sec = round(time.perf_counter() - started, 3)
-        with self._lock:
-            self._staging_dir = None
-            self.merge_state = "done"
-            self.merge_timings.update({
-                "method": "composite_publish",
-                "part_count": len(parts),
-                "total_sec": finalize_sec,
-            })
-        self._output_lines.append(
-            f"[finalize] Published {len(parts)} MCAP part(s) in {finalize_sec:.2f}s: {output_path}"
-        )
-        self._notify_recording_completed(output_path)
-
-    def _merge_worker(self, staging_dir: Optional[Path], output_path: Optional[Path]) -> None:
-        try:
-            if staging_dir is None or output_path is None:
-                raise RuntimeError("Missing staging directory or output path.")
-            part_bags = sorted(
-                p for p in staging_dir.iterdir() if p.is_dir() and (p / "metadata.yaml").is_file()
-            )
-            missing = sorted(
-                p.name for p in staging_dir.iterdir() if p.is_dir() and not (p / "metadata.yaml").is_file()
-            )
-            if missing:
-                self._output_lines.append(
-                    f"[merge] WARNING: no data recorded for group(s) {', '.join(missing)} -- skipping"
-                )
-            if not part_bags:
-                raise RuntimeError("No per-camera bags contained any data; nothing to merge.")
-
-            with track("rosbag_merge"):
-                merge_result = self._convert_merge(part_bags, output_path)
-
-            if merge_result.get("trim_applied"):
-                trim = dict(merge_result.get("trim") or {"trimmed_ns": 0})
-            else:
-                trim_started = time.perf_counter()
-                trim = _trim_startup_skew(output_path)
-                merge_result.setdefault("timings", {})["trim_sec"] = round(
-                    time.perf_counter() - trim_started, 3
-                )
-            with self._lock:
-                self.merge_timings.update(
-                    {
-                        "method": merge_result.get("method", "unknown"),
-                        **dict(merge_result.get("timings") or {}),
-                    }
-                )
-            self._output_lines.append(
-                f"[merge] {self.merge_timings['method']} completed in "
-                f"{float(self.merge_timings.get('total_sec', 0.0)):.2f}s"
-            )
-            if self._image_header_audit is not None:
-                (output_path / "image_header_audit.json").write_text(
-                    json.dumps(self._image_header_audit, indent=2, sort_keys=True)
-                )
-            if self._network_audit is not None:
-                (output_path / "recording_network_audit.json").write_text(
-                    json.dumps(self._network_audit, indent=2, sort_keys=True)
-                )
-            if self._recording_manifest is not None:
-                (output_path / "recording_manifest.json").write_text(
-                    json.dumps(self._recording_manifest, indent=2, sort_keys=True)
-                )
-            if trim["trimmed_ns"] > 0:
-                self._output_lines.append(
-                    f"[merge] Trimmed {trim['trimmed_ns'] / 1e9:.2f}s of unsynced camera-startup "
-                    "skew from the front of the bag (recorders began at slightly different instants)"
-                )
-            if trim.get("capped"):
-                total_skew_s = (trim["trimmed_ns"] + trim["residual_skew_ns"]) / 1e9
-                self._output_lines.append(
-                    f"[merge] WARNING: startup skew was {total_skew_s:.2f}s, beyond the 2s trim cap -- "
-                    "a camera took unusually long to start; the remaining "
-                    f"{trim['residual_skew_ns'] / 1e9:.2f}s gap is real and will show as loss, not silently cut"
-                )
-
-            shutil.rmtree(staging_dir, ignore_errors=True)
-            self._output_lines.append(f"[merge] Combined {len(part_bags)} recorder(s) into {output_path}")
-            with self._lock:
-                self.merge_state = "done"
-            self._notify_recording_completed(output_path)
-        except Exception as exc:  # noqa: BLE001 - surfaced via merge_error, not crashing the thread
-            with self._lock:
-                self.merge_state = "error"
-                self.merge_error = str(exc)
-            self._output_lines.append(f"[merge] ERROR: {exc} (raw per-camera bags kept at {staging_dir})")
-
     # ── power-loss recovery ──────────────────────────────────────────────────
 
     def start_orphan_recovery(self) -> None:
         """Recover interrupted staging bags in the background."""
         threading.Thread(
-            target=self._recover_orphaned_stagings, daemon=True, name="staging_recovery"
+            target=self._recovery_service._recover_orphaned_stagings, daemon=True, name="staging_recovery"
         ).start()
-
-    def _recover_orphaned_stagings(self) -> None:
-        self._recovery_service._recover_orphaned_stagings()
-
-
-    def _recover_one_staging(self, staging_dir: Path) -> None:
-        self._recovery_service._recover_one_staging(staging_dir)
-
-
-    def _part_converts_cleanly(self, part: Path) -> bool:
-        return self._recovery_service._part_converts_cleanly(part)
-
-
-    def _reindex_part(self, part: Path) -> bool:
-        return self._recovery_service._reindex_part(part)
-
-
-    def _salvage_part(self, part: Path) -> bool:
-        return self._recovery_service._salvage_part(part)
-
-
-    def _recovery_log(self, message: str) -> None:
-        self._recovery_service._recovery_log(message)
-
-
-    def _convert_merge(
-        self, part_bags: Sequence[Path], output_path: Path
-    ) -> Dict[str, object]:
-        return self._recovery_service.merge_recording_parts(part_bags, output_path)
-
 
     def status(self) -> Dict[str, object]:
         with self._lock:

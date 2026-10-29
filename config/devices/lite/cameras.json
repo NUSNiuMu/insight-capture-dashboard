@@ -52,5 +52,16 @@
       "dashboard_row": 0,
       "dashboard_column": 1
     }
-  ]
+  ],
+  "mapping": {
+    "left_image_topic": "/insight9_a/camera/infra1/image_rect_raw",
+    "right_image_topic": "/insight9_a/camera/infra2/image_rect_raw",
+    "left_info_topic": "/insight9_a/camera/infra1/camera_info",
+    "right_info_topic": "/insight9_a/camera/infra2/camera_info",
+    "vio_topic": "/insight9_a/camera/vio_100hz",
+    "imu_frame": "insight9_a_camera_imu",
+    "center_left_frame": "insight9_a_camera_left",
+    "center_right_frame": "insight9_a_camera_right",
+    "mapping_camera_frame": "insight9_mapping_camera_center"
+  }
 }

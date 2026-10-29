@@ -64,12 +64,13 @@ function renderCalibration() {
   const statuses = mapping?.statuses || {};
   const head = statuses.insight9 || {};
   const points = Number(mapping?.map_point_count || 0);
-  const ready = online && head.online && head.state === "mapping" && points > 0;
+  const ready = online && head.online && head.clock_ready && head.state === "mapping" && points > 0;
   const rows = [
     ["mapping-head", ready, !online || !head.online ? "服务离线" : head.state === "error" ? "建图异常" : ready ? `已建图 · ${points} 点` : "等待建图"],
     ...[["mapping-right", "insight3_a"], ["mapping-left", "insight3_b"]].map(([id, name]) => {
       const s = statuses[name] || {};
-      const located = online && s.online && s.localized && s.state !== "error" && s.tracking_mode !== "vio_only";
+      const located = online && s.online && s.localized && s.clock_ready
+        && s.map_revision === head.map_revision && s.state !== "error" && s.tracking_mode !== "vio_only";
       const text = !online || !s.online ? "服务离线" : s.state === "error" ? "定位异常" : s.tracking_mode === "vio_only" ? "VIO 推算 · 未匹配地图" : located ? "已定位" : "未定位";
       return [id, located, text];
     }),
@@ -106,7 +107,7 @@ el("calibrate").onclick = async () => {
   try {
     const result = await api("/api/mapping/reset", { method: "POST" });
     mapping = result.mapping;
-    el("calibration-message").textContent = "校准已请求。请缓慢移动头部观察环境，并让双手相机看到已建图区域，等待三路定位就绪。";
+    el("calibration-message").textContent = "校准已请求，正在按时间采样建图。请让双手相机看到与头部相同的区域，等待三路定位就绪。";
   } catch (error) { el("calibration-message").textContent = error.message; }
   finally { pending = false; render(); }
 };

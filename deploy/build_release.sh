@@ -31,10 +31,15 @@ docker build --network host --target runtime -t "${IMAGE_NAME}:${version}" .
 log "Building ${SUPERGLUE_IMAGE} (mapping/relocalization dependency) ..."
 docker build --network host -f Dockerfile.superglue-validation -t "${SUPERGLUE_IMAGE}" .
 
+log "Building insight-loopervio:${version} ..."
+docker build --network host -f native_mapping/Dockerfile.dependencies \
+    --build-arg "DASHBOARD_IMAGE=${IMAGE_NAME}:${version}" -t insight-loopervio-deps:2.1 native_mapping
+docker build --network host -t "insight-loopervio:${version}" native_mapping
+
 image_tarball="release/${IMAGE_NAME}-${version}.tar.gz"
 superglue_tarball="release/insight-superglue-validation-25.04.tar.gz"
 log "Saving dashboard image to ${image_tarball} (several GB; takes a while)..."
-docker save "${IMAGE_NAME}:${version}" | gzip > "${image_tarball}"
+docker save "${IMAGE_NAME}:${version}" "insight-loopervio:${version}" | gzip > "${image_tarball}"
 log "Saving first-install dependency to ${superglue_tarball} ..."
 docker save "${SUPERGLUE_IMAGE}" | gzip > "${superglue_tarball}"
 

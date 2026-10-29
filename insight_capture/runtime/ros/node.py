@@ -211,9 +211,7 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._pending_frame_events: Dict[str, threading.Event] = {
             camera.name: threading.Event() for camera in self.cameras
         }
-        self._localization_image_publishers: Dict[str, object] = {}
         self.native_preview = NativePreviewHub(self.cameras)
-        self._last_localization_image_relay_ns: Dict[str, int] = {}
         self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
         self._configure_hand_overlay()
         self._capture_check_manager: Optional[CaptureCheckManager] = None
@@ -401,20 +399,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 event_callbacks=self.subscription_event_callbacks,
             )
             self.dashboard_subscriptions.append(playback_sub)
-            if camera.name in ("insight3_a", "insight3_b") and msg_type is RosImage:
-                relay_topic = (
-                    f"/insight_mapping/{camera.name}/infra1/image_rect_raw"
-                )
-                self._localization_image_publishers[camera.name] = (
-                    self.create_publisher(
-                        RosImage,
-                        relay_topic,
-                        make_image_qos(depth=1, reliability="best_effort"),
-                    )
-                )
-                self.get_logger().info(
-                    f"Localization relay: {camera.name} -> {relay_topic} at 2 Hz"
-                )
             if camera.topic_type == "h264":
                 continue
             threading.Thread(

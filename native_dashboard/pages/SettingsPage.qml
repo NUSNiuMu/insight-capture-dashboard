@@ -86,7 +86,7 @@ PageFrame {
                     id: mask
                     objectName: "mask-ratio"
                     Layout.fillWidth: true
-                    text: String(page.settings.insight3_gripper_mask_height_ratio === undefined ? .2 : page.settings.insight3_gripper_mask_height_ratio)
+                    text: String(page.settings.insight3_gripper_mask_height_ratio === undefined ? "" : page.settings.insight3_gripper_mask_height_ratio)
                     validator: DoubleValidator {
                         bottom: 0
                         top: .9999

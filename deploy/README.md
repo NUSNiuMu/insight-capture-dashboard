@@ -7,6 +7,10 @@
 自 v2.0.0 起，客户部署同时包含 SuperGlue 推理、Insight9 稀疏建图和
 Insight3 全局重定位服务；稠密建图和 RViz 验证服务不进入客户发布包。
 
+当前建图与定位统一使用 LooperVIO 原生核心和 ROS 适配器，与源码部署保持一致。
+主镜像压缩包同时包含同版本的 `insight-dashboard` 和 `insight-loopervio` 镜像；
+`update.sh` 检查两者齐全后启动，缺少原生核心时直接报错。
+
 ## 环境要求
 
 - NVIDIA Jetson（JetPack 6.x，已装 Docker 与 nvidia-container-runtime）

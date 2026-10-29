@@ -11,7 +11,6 @@ DEFAULT_POST_PROCESSING_CONFIG = {
     "rosbag_dir": "rosbags",
     "results_dir": "outputs/results",
     "max_cache_size": 1073741824,
-    "recording_storage_id": "mcap",
     "recording_rmw_implementation": "rmw_cyclonedds_cpp",
     "record_topics": [],
     "capture_check": {
@@ -41,8 +40,6 @@ DEFAULT_POST_PROCESSING_CONFIG = {
 
 
 def load_post_processing_config(config_path: Path) -> Dict:
-    if not config_path.exists():
-        return dict(DEFAULT_POST_PROCESSING_CONFIG)
     with config_path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
     merged = dict(DEFAULT_POST_PROCESSING_CONFIG)

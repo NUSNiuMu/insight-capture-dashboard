@@ -337,36 +337,6 @@ class CompositeBagTest(unittest.TestCase):
             self.assertIn("/camera", first)
             self.assertIn("/pose", second)
 
-    def test_publish_is_atomic_and_keeps_parts(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            staging = root / "_staging" / "capture"
-            staging.mkdir(parents=True)
-            _write_part(staging, "camera", "/camera", start_ns=1_000, duration_ns=500, messages=5)
-            output = root / "capture"
-            manager = object.__new__(RecordingManager)
-            manager.storage_id = "mcap"
-            manager._recording_manifest = {
-                "version": 2, "format": COMPOSITE_FORMAT, "selected_topics": ["/camera"]
-            }
-            manager._image_header_audit = None
-            manager._network_audit = None
-            manager._lock = threading.Lock()
-            manager._staging_dir = staging
-            manager.merge_state = "finalizing"
-            manager.merge_timings = {}
-            manager._output_lines = deque(maxlen=20)
-            manager._recording_completed_callbacks = []
-
-            manager._publish_composite_session(staging, output)
-
-            self.assertFalse(staging.exists())
-            self.assertTrue((output / "camera/camera_0.mcap").is_file())
-            manifest = json.loads((output / "recording_manifest.json").read_text())
-            self.assertEqual(manifest["parts"][0]["path"], "camera")
-            self.assertEqual(manager.merge_state, "done")
-            self.assertEqual(manager.merge_timings["method"], "composite_publish")
-
     def test_publish_single_mcap_is_a_standard_rosbag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -382,7 +352,6 @@ class CompositeBagTest(unittest.TestCase):
             )
             output = root / "capture"
             manager = object.__new__(RecordingManager)
-            manager.storage_id = "mcap"
             manager._recording_manifest = {
                 "version": 3, "format": "rosbag2", "selected_topics": ["/camera"]
             }
@@ -395,7 +364,7 @@ class CompositeBagTest(unittest.TestCase):
             manager._output_lines = deque(maxlen=20)
             manager._recording_completed_callbacks = []
 
-            manager._publish_recording_session(staging, output)
+            manager._publish_single_mcap_session(staging, output)
 
             self.assertFalse(staging.exists())
             self.assertTrue((output / "capture_0.mcap").is_file())

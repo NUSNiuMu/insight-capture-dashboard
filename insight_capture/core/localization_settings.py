@@ -9,8 +9,7 @@ import tempfile
 from pathlib import Path
 
 
-DEFAULT_GRIPPER_MASK_HEIGHT_RATIO = 0.2
-SETTINGS_SECTION = "insight3_global_localizer"
+SETTINGS_SECTION = "localization"
 GRIPPER_MASK_HEIGHT_RATIO_KEY = "gripper_mask_height_ratio"
 
 
@@ -30,26 +29,18 @@ def validate_gripper_mask_height_ratio(value: object) -> float:
     return ratio
 
 
-def load_gripper_mask_height_ratio(
-    config_path: Path,
-    *,
-    default: float = DEFAULT_GRIPPER_MASK_HEIGHT_RATIO,
-) -> float:
-    """Load the Insight3 mask ratio from the runtime config."""
-
-    fallback = validate_gripper_mask_height_ratio(default)
-    path = Path(config_path)
-    if not path.is_file():
-        return fallback
-    payload = json.loads(path.read_text(encoding="utf-8"))
+def _load_config(config_path: Path) -> dict:
+    payload = json.loads(Path(config_path).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("post-processing config must be a JSON object")
-    section = payload.get(SETTINGS_SECTION, {})
-    if not isinstance(section, dict):
+        raise ValueError("runtime config must be a JSON object")
+    if not isinstance(payload[SETTINGS_SECTION], dict):
         raise ValueError(f"'{SETTINGS_SECTION}' must be a JSON object")
-    return validate_gripper_mask_height_ratio(
-        section.get(GRIPPER_MASK_HEIGHT_RATIO_KEY, fallback)
-    )
+    return payload
+
+
+def load_gripper_mask_height_ratio(config_path: Path) -> float:
+    """Read the required localization mask setting."""
+    return validate_gripper_mask_height_ratio(_load_config(config_path)[SETTINGS_SECTION][GRIPPER_MASK_HEIGHT_RATIO_KEY])
 
 
 def save_gripper_mask_height_ratio(config_path: Path, value: object) -> float:
@@ -57,22 +48,10 @@ def save_gripper_mask_height_ratio(config_path: Path, value: object) -> float:
 
     ratio = validate_gripper_mask_height_ratio(value)
     path = Path(config_path)
-    payload = {}
-    existing_stat = None
-    if path.is_file():
-        existing_stat = path.stat()
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
-            raise ValueError("post-processing config must be a JSON object")
-    section = payload.get(SETTINGS_SECTION, {})
-    if not isinstance(section, dict):
-        raise ValueError(f"'{SETTINGS_SECTION}' must be a JSON object")
-    payload[SETTINGS_SECTION] = {
-        **section,
-        GRIPPER_MASK_HEIGHT_RATIO_KEY: ratio,
-    }
+    existing_stat = path.stat()
+    payload = _load_config(path)
+    payload[SETTINGS_SECTION][GRIPPER_MASK_HEIGHT_RATIO_KEY] = ratio
 
-    path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -87,14 +66,9 @@ def save_gripper_mask_height_ratio(config_path: Path, value: object) -> float:
             json.dump(payload, temporary, indent=2)
             temporary.write("\n")
             temporary.flush()
-            if existing_stat is not None:
-                os.fchmod(temporary.fileno(), existing_stat.st_mode & 0o777)
-                try:
-                    os.fchown(
-                        temporary.fileno(), existing_stat.st_uid, existing_stat.st_gid
-                    )
-                except PermissionError:
-                    pass
+            os.fchmod(temporary.fileno(), existing_stat.st_mode & 0o777)
+            if (existing_stat.st_uid, existing_stat.st_gid) != (os.geteuid(), os.getegid()):
+                os.fchown(temporary.fileno(), existing_stat.st_uid, existing_stat.st_gid)
             os.fsync(temporary.fileno())
         os.replace(temporary_path, path)
     finally:

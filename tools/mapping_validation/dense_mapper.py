@@ -19,20 +19,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from insight_capture.runtime.mapping import (  # noqa: E402
-    DenseStereoConfig,
-    DenseStereoEstimator,
-    DenseVoxelMap,
-    PoseBuffer,
-    PoseSample,
-    StereoCalibration,
-    StereoPair,
-    StereoPairSynchronizer,
-    compose_transform,
-    matrix_from_pose,
-    matrix_from_transform,
-    rotation_distance_deg,
-    transform_points,
+from insight_capture.runtime.mapping.dense_stereo import DenseStereoConfig, DenseStereoEstimator, DenseVoxelMap
+from insight_capture.runtime.mapping.synchronization import PoseBuffer, StereoPair, StereoPairSynchronizer
+from insight_capture.runtime.mapping.geometry import (
+    PoseSample, StereoCalibration, compose_transform, matrix_from_pose,
+    matrix_from_transform, rotation_distance_deg, transform_points,
 )
 
 try:

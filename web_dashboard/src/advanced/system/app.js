@@ -93,7 +93,7 @@ function renderSettings(payload) {
   }
   if (insight3MaskForm && insight3MaskRatio) {
     insight3MaskForm.hidden = false;
-    insight3MaskRatio.value = String(payload.insight3_gripper_mask_height_ratio ?? 0.2);
+    insight3MaskRatio.value = String(payload.insight3_gripper_mask_height_ratio);
   }
   const poses = Array.isArray(payload && payload.poses) ? payload.poses : [];
   settingsCameraList.innerHTML = poses.map((pose) => {
@@ -247,7 +247,7 @@ async function setInsight3GripperMaskRatio(rawValue) {
       throw new Error(payload.error || "Failed to update Insight3 gripper mask.");
     }
     renderSettings(payload);
-    setSettingsStatus(`Insight3 gripper mask ratio updated to ${payload.insight3_gripper_mask_height_ratio}.`);
+    setSettingsStatus(`Insight3 mask ratio saved as ${payload.insight3_gripper_mask_height_ratio}; applies to the next localization frame.`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     setSettingsStatus(`Failed to update Insight3 gripper mask: ${message}`);

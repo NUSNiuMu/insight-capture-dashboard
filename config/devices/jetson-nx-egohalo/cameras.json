@@ -141,9 +141,18 @@
     "keyframe_lead_in_sec": 1.1,
     "max_video_header_gap_pct": 0.1,
     "clock_devices": [
-      {"name": "EgoHalo", "host": "169.254.10.1"},
-      {"name": "Insight3 A", "host": "169.254.20.1"},
-      {"name": "Insight3 B", "host": "169.254.30.1"}
+      {
+        "name": "EgoHalo",
+        "host": "169.254.10.1"
+      },
+      {
+        "name": "Insight3 A",
+        "host": "169.254.20.1"
+      },
+      {
+        "name": "Insight3 B",
+        "host": "169.254.30.1"
+      }
     ],
     "image_topics": [
       "/egohalo/camera/stereo/left/image_raw/h264",
@@ -177,7 +186,8 @@
         "right_frame": "egohalo_rectified_right"
       }
     ],
-    "direct_match_min_confidence": 0.5
+    "center_left_frame": "egohalo_camera_stereo_left",
+    "center_right_frame": "egohalo_camera_stereo_right"
   },
   "egohalo_rectification": {
     "namespace": "egohalo",

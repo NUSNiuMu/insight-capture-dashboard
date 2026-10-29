@@ -1,0 +1,16 @@
+ARG DASHBOARD_IMAGE=insight-dashboard:latest
+FROM ${DASHBOARD_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ninja-build libopencv-dev libgoogle-glog-dev libgflags-dev libeigen3-dev \
+    nlohmann-json3-dev && rm -rf /var/lib/apt/lists/*
+COPY third_party/ceres_solver /tmp/ceres-src
+RUN cmake -S /tmp/ceres-src -B /tmp/ceres-build -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/looper-deps \
+    -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARKS=OFF \
+    -DBUILD_SHARED_LIBS=ON -DSUITESPARSE=OFF -DCXSPARSE=OFF -DLAPACK=OFF \
+    -DCUDA=OFF -DEIGENSPARSE=ON -DMINIGLOG=OFF -DSCHUR_SPECIALIZATIONS=OFF \
+    && cmake --build /tmp/ceres-build -j2 \
+    && cmake --install /tmp/ceres-build \
+    && rm -rf /tmp/ceres-src /tmp/ceres-build
+ENV CMAKE_PREFIX_PATH=/opt/looper-deps
+ENV LD_LIBRARY_PATH=/opt/looper-deps/lib

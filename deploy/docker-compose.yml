@@ -119,66 +119,40 @@ services:
     restart: unless-stopped
 
   insight9-sparse-mapper:
-    image: insight-dashboard:${INSIGHT_VERSION:?Run ./update.sh <image-tarball> first to load an image and set the version}
-    network_mode: host
-    ipc: host
-    runtime: nvidia
+    image: insight-loopervio:${INSIGHT_VERSION:?Set INSIGHT_VERSION}
+    network_mode: none
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
       - OPENBLAS_NUM_THREADS=1
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
-      - ./config:/workspaces/insight_capture/config
-      - superglue-ipc:/run/superglue
-    command:
-      - python3
-      - -u
-      - -m
-      - insight_capture.runtime.mapping.insight9_mapper
-      - --backend
-      - ipc
-      - --path-publish-hz
-      - "2"
-      - --pose-publish-hz
-      - "30"
-    depends_on:
-      superglue-inference:
-        condition: service_healthy
+      - looper-ipc:/run/looper
+    command: ["/usr/local/bin/insight_mapping", "/run/looper/mapping.sock"]
+    healthcheck:
+      test: ["CMD", "test", "-S", "/run/looper/mapping.sock"]
+      interval: 1s
+      timeout: 1s
+      retries: 10
     stop_signal: SIGINT
     restart: unless-stopped
 
   insight3-global-localizer:
-    image: insight-dashboard:${INSIGHT_VERSION:?Run ./update.sh <image-tarball> first to load an image and set the version}
+    image: insight-dashboard:${INSIGHT_VERSION:?Set INSIGHT_VERSION}
     network_mode: host
     ipc: host
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
-      # Small descriptor matrices are faster and use far less CPU without
-      # OpenBLAS oversubscribing all six Jetson cores.
       - OPENBLAS_NUM_THREADS=1
     volumes:
       - ./config:/workspaces/insight_capture/config
       - superglue-ipc:/run/superglue
-    command:
-      - python3
-      - -u
-      - -m
-      - insight_capture.runtime.mapping.insight3_localizer
-      - --image-topic-template
-      - /insight_mapping/{name}/infra1/image_rect_raw
-      - --path-points
-      - "200"
-      - --path-publish-hz
-      - "2"
-      - --pose-publish-hz
-      - "30"
+      - looper-ipc:/run/looper
+    command: ["python3", "-u", "-m", "insight_capture.runtime.mapping.looper_node"]
     depends_on:
       superglue-inference:
         condition: service_healthy
       insight9-sparse-mapper:
-        condition: service_started
+        condition: service_healthy
     stop_signal: SIGINT
+    stop_grace_period: 35s
     restart: unless-stopped
 
   device-domain-relay:
@@ -208,5 +182,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  looper-ipc:
   superglue-ipc:
   superglue-engines:

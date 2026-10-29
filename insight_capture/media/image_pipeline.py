@@ -22,12 +22,19 @@ from insight_capture.media.cdr import compressed_image_view
 
 WEBRTC_JPEG_FALLBACK_INTERVAL_SEC = 0.5
 RECORDING_WEBRTC_PREVIEW_FPS = 10.0
-LOCALIZATION_IMAGE_RELAY_INTERVAL_NS = 500_000_000
 
 
 class ImagePipeline:
     def __init__(self, owner) -> None:
         self.owner = owner
+        self._encoding_paths = {}
+
+    def encoding_status(self):
+        """Report the last successful encoder, not hardware availability."""
+        now = time.monotonic()
+        return {name: {"last_output_path": path, "age_sec": now - stamp,
+                       "recent": now - stamp <= 2.0}
+                for name, (path, stamp) in self._encoding_paths.copy().items()}
 
     def _make_dashboard_image_callback(
         self, camera_name: str, topic_type: str, is_live: bool = True
@@ -50,9 +57,7 @@ class ImagePipeline:
                 self.owner.camera_input_times[camera_name].append(time.monotonic())
             if not self.owner._playback_mode:
                 self.owner._feed_recording_writer(camera_topic, msg)
-                self._maybe_relay_localization_image(camera_name, msg)
-            # Capture mode keeps the DDS reader, header audit and localization
-            # relay alive, but does no display decode/encode until a viewer asks.
+            # Capture keeps the DDS reader and header audit without display work.
             if not self.owner.preview_requested():
                 return
             native = getattr(self.owner, "native_preview", None)
@@ -65,20 +70,6 @@ class ImagePipeline:
             event.set()
 
         return callback
-
-    def _maybe_relay_localization_image(self, camera_name: str, msg: object) -> None:
-        """Reuse the display reader instead of adding another full-rate DDS reader."""
-
-        publisher = self.owner._localization_image_publishers.get(camera_name)
-        if publisher is None:
-            return
-        stamp_ns = self.owner._stamp_to_ns(msg.header.stamp)
-        previous = self.owner._last_localization_image_relay_ns.get(camera_name, -1)
-        if previous >= 0 and stamp_ns > previous:
-            if stamp_ns - previous < LOCALIZATION_IMAGE_RELAY_INTERVAL_NS:
-                return
-        self.owner._last_localization_image_relay_ns[camera_name] = stamp_ns
-        publisher.publish(msg)
 
     def _frame_worker_loop(self, camera_name: str, topic_type: str) -> None:
         event = self.owner._pending_frame_events[camera_name]
@@ -156,6 +147,7 @@ class ImagePipeline:
             self.owner.camera_frame_versions[camera_name] = version
         if topic_type == "compressed":
             data = bytes(msg.data)
+            self._encoding_paths[camera_name] = ("source-jpeg", time.monotonic())
             hand_overlay_pending = False
             if camera_name in self.owner.hand_overlay_enabled:
                 # Dispatch overlay work asynchronously and serve the source meanwhile.
@@ -176,6 +168,7 @@ class ImagePipeline:
                 hw_result = self.owner._hw_jpeg.encode_ros_image(camera_name, msg, quality=82)
             if hw_result is not None:
                 data, width, height = hw_result
+                self._encoding_paths[camera_name] = ("jpeg-hardware-nvjpeg", time.monotonic())
                 return CameraFrame(
                     data=data,
                     stamp_ns=stamp_ns,
@@ -192,6 +185,7 @@ class ImagePipeline:
             ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
         if not ok:
             return None
+        self._encoding_paths[camera_name] = ("jpeg-software", time.monotonic())
         height, width = image.shape[:2]
         return CameraFrame(
             data=encoded.tobytes(),

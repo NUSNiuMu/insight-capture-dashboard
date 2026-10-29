@@ -137,6 +137,9 @@ if ! docker image inspect "${SUPERGLUE_IMAGE}" >/dev/null 2>&1; then
     fi
 fi
 
+docker image inspect "insight-loopervio:${version}" >/dev/null 2>&1 \
+    || die "missing insight-loopervio:${version}; load the matching release archive"
+
 # ── Data directories (persist across upgrades) ───────────────────────────────
 mkdir -p rosbags outputs runs
 

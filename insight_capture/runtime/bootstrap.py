@@ -146,7 +146,6 @@ def build_recording_manager(
         image_topics=[camera.topic for camera in node.cameras],
         start_image_recording=node.start_image_recording,
         stop_image_recording=node.stop_image_recording,
-        storage_id=str(runtime_config.get("recording_storage_id", "mcap")),
         recording_rmw_implementation=str(
             runtime_config.get(
                 "recording_rmw_implementation",

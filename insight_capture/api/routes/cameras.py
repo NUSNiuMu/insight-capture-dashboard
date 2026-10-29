@@ -73,29 +73,27 @@ class CameraRoutes:
         return web.Response(status=204)
 
     async def _handle_image_capabilities(self, _request: web.Request) -> web.Response:
-        self.context.node.note_viewer_activity()
-        # GStreamer capabilities are stable for the process lifetime.
-        if self.context._image_capabilities_cache is None:
-            self.context._image_capabilities_cache = self._build_image_capabilities()
-        return web.json_response(self.context._image_capabilities_cache)
+        return web.json_response(self._build_image_capabilities())
 
     def _build_image_capabilities(self) -> Dict[str, object]:
-        elements = self._detect_gstreamer_elements(
-            [
-                "webrtcbin",
-                "nice",
-                "nvv4l2h264enc",
-                "nvv4l2h265enc",
-                "nvv4l2decoder",
-                "nvjpegenc",
-                "nvjpegdec",
-                "nvvidconv",
-                "openh264enc",
-                "x264enc",
-                "vp8enc",
-            ]
-        )
-        has_webrtc = bool(elements.get("webrtcbin") and elements.get("nice"))
+        if self.context._image_capabilities_cache is None:
+            self.context._image_capabilities_cache = self._detect_gstreamer_elements(
+                [
+                    "webrtcbin",
+                    "nice",
+                    "nvv4l2h264enc",
+                    "nvv4l2h265enc",
+                    "nvv4l2decoder",
+                    "nvjpegenc",
+                    "nvjpegdec",
+                    "nvvidconv",
+                    "openh264enc",
+                    "x264enc",
+                    "vp8enc",
+                ]
+            )
+        elements = self.context._image_capabilities_cache
+        has_webrtc = self.context.node._webrtc_available_cached
         hardware_encoder = None
         if elements.get("nvv4l2h264enc"):
             hardware_encoder = "nvv4l2h264enc"
@@ -106,22 +104,20 @@ class CameraRoutes:
             if elements.get(candidate):
                 software_encoder = candidate
                 break
-        # Live H.264 status comes from the worker; this reports JPEG fallback.
+        # Live H.264 readiness comes from the worker; encoding paths describe JPEG output.
         hw_jpeg = getattr(self.context.node, "_hw_jpeg", None)
-        active_path = "jpeg-hardware-nvjpeg" if hw_jpeg is not None else "jpeg-software"
-        notes = []
-        if hw_jpeg is not None:
-            notes.append("Display frames are encoded on the NVJPEG hardware engine (nvjpegenc).")
-        else:
-            notes.append("Display frames are encoded in software (cv2); NVJPEG path unavailable.")
+        encoders = self.context.node._image_pipeline.encoding_status()
+        paths = {item["last_output_path"] for item in encoders.values() if item["recent"]}
+        active_path = next(iter(paths)) if len(paths) == 1 else "mixed" if paths else "idle"
+        notes = ["Per-camera encoding reports the last successful JPEG output; hardware availability is separate."]
         if hardware_encoder:
             notes.append(f"Hardware video encoder available to the WebRTC worker: {hardware_encoder}.")
         else:
             notes.append("No Jetson hardware H.264/H.265 encoder detected on this device.")
         if has_webrtc:
-            notes.append("WebRTC transport dependencies are present; signaling runs in the worker process.")
+            notes.append("The WebRTC worker is ready.")
         else:
-            notes.append("WebRTC transport is incomplete; install gstreamer1.0-nice if nice is missing.")
+            notes.append("The WebRTC worker is currently not ready.")
         return {
             "type": "image_capabilities",
             "gstreamer": {
@@ -136,7 +132,7 @@ class CameraRoutes:
                 "nvv4l2decoder": bool(elements.get("nvv4l2decoder")),
                 "nvvidconv": bool(elements.get("nvvidconv")),
             },
-            "hw_jpeg": {"active": hw_jpeg is not None, **(hw_jpeg.status() if hw_jpeg is not None else {})},
+            "hw_jpeg": {"available": hw_jpeg is not None, **(hw_jpeg.status() if hw_jpeg is not None else {})},
             "active_path": active_path,
             "cameras": [
                 {
@@ -144,6 +140,7 @@ class CameraRoutes:
                     "label": camera.label,
                     "topic": camera.topic,
                     "type": camera.topic_type,
+                    "jpeg_encoding": encoders.get(camera.name),
                 }
                 for camera in self.context.node.cameras
             ],

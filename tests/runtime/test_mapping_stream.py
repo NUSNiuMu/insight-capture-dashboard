@@ -1,82 +1,56 @@
 import sys
+import threading
 import unittest
+from concurrent.futures import Future
 from pathlib import Path
-
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-import insight_capture.runtime.mapping.stream as mapping_stream_module  # noqa: E402
-from insight_capture.runtime.mapping.stream import MappingStream  # noqa: E402
+from insight_capture.runtime.mapping.stream import MappingStream
 
 
-class _Trigger:
-    class Request:
-        pass
-
-
-class _Future:
-    def __init__(self, response):
-        self.response = response
-
-    def done(self):
-        return True
-
-    def result(self):
-        return self.response
-
-
-class _Client:
-    def __init__(self, response, ready=True):
-        self.response = response
-        self.ready = ready
-
-    def service_is_ready(self):
-        return self.ready
-
-    def call_async(self, _request):
-        return _Future(self.response)
-
-
-class _Response:
-    def __init__(self, success, message):
-        self.success = success
-        self.message = message
-
-
-class MappingStreamCaptureReferenceTest(unittest.TestCase):
+class MappingStreamResetTest(unittest.TestCase):
     def setUp(self):
-        self.original_trigger = mapping_stream_module.Trigger
-        mapping_stream_module.Trigger = _Trigger
+        self.request_patch = patch('insight_capture.runtime.mapping.stream.Empty',
+                                   SimpleNamespace(Request=object))
+        self.request_patch.start()
+        self.addCleanup(self.request_patch.stop)
         self.stream = MappingStream(object())
 
-    def tearDown(self):
-        mapping_stream_module.Trigger = self.original_trigger
+    def test_waits_for_one_reset_response(self):
+        future = Future()
+        calls = []
 
-    def test_returns_frozen_reference_payload(self):
-        response = _Response(
-            True,
-            '{"session_id":"abc","session_generation":2,'
-            '"reference_active":true,"reference_id":3,'
-            '"reference_keyframe":90,"validation_count":0}',
-        )
-        self.stream._capture_reference_client = _Client(response)
-        result = self.stream.freeze_capture_reference()
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["reference"]["reference_keyframe"], 90)
+        def call(request):
+            calls.append(request)
+            threading.Timer(.01, lambda: future.set_result(object())).start()
+            return future
 
-    def test_preserves_mapper_rejection_details(self):
-        response = _Response(
-            False,
-            '{"reason":"insufficient_reference_features",'
-            '"reference_features":42,"minimum_features":80}',
-        )
-        self.stream._capture_reference_client = _Client(response)
-        result = self.stream.freeze_capture_reference()
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["reason"], "insufficient_reference_features")
-        self.assertEqual(result["details"]["reference_features"], 42)
+        self.stream._reset_client = SimpleNamespace(service_is_ready=lambda: True, call_async=call)
+        self.assertTrue(self.stream.request_reset()['ok'])
+        self.assertTrue(future.done())
+        self.assertEqual(len(calls), 1)
+
+    def test_timeout_does_not_claim_success(self):
+        self.stream._reset_client = SimpleNamespace(service_is_ready=lambda: True,
+                                                   call_async=lambda _: Future())
+        result = self.stream.request_reset(.001)
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['error'], 'mapping_reset_timeout')
+
+    def test_unavailable_service(self):
+        self.assertFalse(self.stream.request_reset()['ok'])
+
+    def test_service_error_is_preserved(self):
+        future = Future()
+        future.set_exception(RuntimeError('engine unavailable'))
+        self.stream._reset_client = SimpleNamespace(service_is_ready=lambda: True,
+                                                   call_async=lambda _: future)
+        self.assertEqual(self.stream.request_reset()['error'], 'engine unavailable')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

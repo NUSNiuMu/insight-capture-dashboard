@@ -49,32 +49,7 @@ class ProjectStructureTest(unittest.TestCase):
             "insight_capture.media.hand_overlay_worker",
         )
 
-    def test_compatibility_imports_resolve_to_canonical_objects(self) -> None:
-        from insight_capture.api import WebDashboardServer
-        from insight_capture.core.models import PoseSample
-        from insight_capture.perception.gripper import GripperMarkerDetector
-        from insight_capture.services import UmiExportManager
-        from insight_capture.common.models import PoseSample as LegacyPoseSample
-        from insight_capture.postprocess.gripper import (
-            GripperMarkerDetector as LegacyGripperMarkerDetector,
-        )
-        from insight_capture.web import WebDashboardServer as LegacyWebDashboardServer
-        from insight_capture.web.umi_export import (
-            UmiExportManager as LegacyUmiExportManager,
-        )
-
-        self.assertIs(LegacyPoseSample, PoseSample)
-        self.assertIs(LegacyGripperMarkerDetector, GripperMarkerDetector)
-        self.assertIs(LegacyWebDashboardServer, WebDashboardServer)
-        self.assertIs(LegacyUmiExportManager, UmiExportManager)
-
     def test_production_code_uses_canonical_package_boundaries(self) -> None:
-        compatibility_files = {
-            ROOT / "insight_capture" / "postprocess" / "gripper" / "calibration.py",
-            ROOT / "insight_capture" / "postprocess" / "gripper" / "overlay.py",
-            ROOT / "insight_capture" / "postprocess" / "gripper" / "tracking.py",
-            ROOT / "insight_capture" / "postprocess" / "quality" / "station_check.py",
-        }
         forbidden_imports = (
             "insight_capture.common",
             "insight_capture.web",
@@ -86,17 +61,15 @@ class ProjectStructureTest(unittest.TestCase):
         violations = []
         package_root = ROOT / "insight_capture"
         for path in package_root.rglob("*.py"):
-            if (
-                path in compatibility_files
-                or package_root / "common" in path.parents
-                or package_root / "web" in path.parents
-            ):
-                continue
             source = path.read_text(encoding="utf-8")
             for forbidden in forbidden_imports:
                 if forbidden in source:
                     violations.append(f"{path.relative_to(ROOT)}: {forbidden}")
         self.assertEqual(violations, [])
+
+    def test_retired_namespaces_are_absent(self) -> None:
+        for name in ("common", "web"):
+            self.assertFalse((ROOT / "insight_capture" / name).exists())
 
     def test_runtime_modules_respect_delivery_and_postprocess_boundaries(self) -> None:
         violations = []
