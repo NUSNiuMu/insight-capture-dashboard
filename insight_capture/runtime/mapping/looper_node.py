@@ -391,7 +391,8 @@ class LooperNode(Node):
                     wrist.correction = (np.asarray(update["map_from_imu"]) @ np.linalg.inv(update["odom_from_imu"])) if update["localized"] else None
                     if not update["localized"]:
                         wrist.diagnostics = {"state": "searching", "geometric_match": False,
-                                             "reason": "insufficient_retained_landmarks"}
+                                             "reason": update["reason"]}
+                    wrist.diagnostics["map_update_alignment"] = update["alignment"]
                     wrist.map_revision = update["map_revision"]
                 self.stats = {"state": "mapping" if result["mapped"] else "building", "map_point_count": result["landmarks"],
                               "keyframes": result["keyframes"], "raw_landmarks": result["raw_landmarks"]}

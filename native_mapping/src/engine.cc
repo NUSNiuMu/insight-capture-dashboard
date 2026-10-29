@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "rigid_alignment.h"
 #include <chrono>
 #include <stdexcept>
 #include <limits>
@@ -62,16 +63,19 @@ Json Engine::Map(const Json& request, const std::vector<cv::Mat>& images) {
     const auto& points=mapping_->map()->map_points();
     for(const auto& observation:query.imu_points) {
       auto found=points.find(observation.first);
-      if(found==points.end() || found->second->IsBad()) continue;
+      if(found==points.end() || found->second->IsBad() ||
+         found->second->NumOfObs()<3 || !found->second->state().refined) continue;
       source.push_back(observation.second);
       target.push_back(found->second->WorldPoint3d());
     }
-    Json updated={{"localized",source.size()>=3},{"map_revision",map_revision_}};
-    if(source.size()>=3) {
-      Eigen::Matrix3Xd from(3,source.size()), to(3,target.size());
-      for(size_t i=0;i<source.size();++i) { from.col(i)=source[i]; to.col(i)=target[i]; }
-      updated["map_from_imu"]=Matrix(dm::math::Rigid3d::FromMatrix(Eigen::umeyama(from,to,false)));
-    }
+    auto alignment=AlignRetainedLandmarks(source,target);
+    Json updated={{"localized",alignment.pose.has_value()},{"map_revision",map_revision_},
+      {"reason",alignment.reason},{"alignment",{{"retained",source.size()},
+        {"original",query.imu_points.size()},{"inliers",alignment.inliers},
+        {"rms_mm",alignment.rms_m*1000},
+        {"max_mm",alignment.max_m*1000},{"spread_ratio",alignment.spread_ratio}}}};
+    if(alignment.pose)
+      updated["map_from_imu"]=Matrix(dm::math::Rigid3d::FromMatrix(*alignment.pose));
     updated["camera_id"]=entry.first;
     updated["source_ns"]=query.request.at("stamp_ns");
     updated["odom_from_imu"]=query.request.at("odom_from_imu");
