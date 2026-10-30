@@ -471,9 +471,14 @@ def _select_recorded_streams(
                 selected["coordinate_frame"] = "native_vio"
                 selected_poses.append(selected)
         return selected_cameras, selected_poses
-    selected_cameras = [
-        dict(camera) for camera in cameras if str(camera.get("topic", "")) in topics
-    ]
+    selected_cameras = []
+    for camera in cameras:
+        selected = dict(camera)
+        encoded_topic = str(camera.get("topic", "")) + "/h264"
+        if encoded_topic in topics:
+            selected.update(topic=encoded_topic, type="h264")
+        if selected.get("topic") in topics:
+            selected_cameras.append(selected)
     if not selected_cameras:
         raise ValueError("bag contains no configured camera image topic for playback")
     selected_poses = [

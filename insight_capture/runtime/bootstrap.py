@@ -143,9 +143,12 @@ def build_recording_manager(
         max_cache_size=int(runtime_config.get("max_cache_size", 2147483648)),
         default_topics=settings.default_record_topics,
         publisher_checker=None,
-        image_topics=[camera.topic for camera in node.cameras],
+        image_topics=[camera.topic for camera in node.cameras] + [
+            topic + "/h264" for topic in settings.raw_config.get("recording_h264", {}).get("input_topics", [])
+        ],
         start_image_recording=node.start_image_recording,
         stop_image_recording=node.stop_image_recording,
+        drain_image_recording=node.drain_image_recording,
         recording_rmw_implementation=str(
             runtime_config.get(
                 "recording_rmw_implementation",

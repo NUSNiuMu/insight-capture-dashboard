@@ -223,6 +223,22 @@ services:
     stop_signal: SIGINT
     restart: unless-stopped
 
+  recording-h264-encoder:
+    profiles: ["egohalo"]
+    image: insight-dashboard:latest
+    network_mode: host
+    ipc: host
+    runtime: nvidia
+    environment:
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    volumes:
+      - .:/workspaces/insight_capture
+    command: ["python3", "-u", "-m", "insight_capture.runtime.recording.h264_node"]
+    stop_signal: SIGINT
+    restart: unless-stopped
+
   egohalo-stereo-rectifier:
     profiles: ["egohalo"]
     image: insight-dashboard:latest

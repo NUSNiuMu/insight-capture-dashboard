@@ -92,7 +92,8 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         topics.extend(camera.get("record_topics", []))
         # HandEngine streams remain available for explicit selection in the
         # Recording page, but are optional analysis data and not default.
-    return _normalize_topics(topics)
+    encoded = set(raw_config.get("recording_h264", {}).get("input_topics", []))
+    return _normalize_topics([topic + "/h264" if topic in encoded else topic for topic in topics])
 
 
 def filter_recordable_live_topics(raw_config: Dict, live_topics: Sequence[str]) -> List[str]:
@@ -101,6 +102,7 @@ def filter_recordable_live_topics(raw_config: Dict, live_topics: Sequence[str]) 
         for camera in enabled_cameras(raw_config)
     }
     excluded = set(_normalize_topics(raw_config.get("recording_excluded_topics") or []))
+    configured = {topic for camera in enabled.values() for topic in camera.get("record_topics", [])}
     filtered: List[str] = []
     for topic in live_topics:
         normalized = _normalize_topic_name(topic)
@@ -112,7 +114,7 @@ def filter_recordable_live_topics(raw_config: Dict, live_topics: Sequence[str]) 
         if normalized == "/tf_static":
             filtered.append(normalized)
             continue
-        if normalized.startswith(("/insight9_sparse_map/", "/insight_global/")):
+        if normalized in configured or normalized.startswith(("/insight9_sparse_map/", "/insight_global/")):
             filtered.append(normalized)
             continue
         for namespace in enabled:

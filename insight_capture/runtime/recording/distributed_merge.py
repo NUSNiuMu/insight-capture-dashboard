@@ -125,7 +125,7 @@ def merge_session(session: dict, config: dict, ego: Path, wrists: Path, output: 
             raise RuntimeError("H.264 缺少同时包含 SPS/PPS 的 IDR：" + topic)
     start, end = max(starts.values()), min(stats[t]["last_ns"] for t in image_topics)
     if end - start < 1_000_000_000:
-        raise RuntimeError("六路共同可解码区间不足一秒")
+        raise RuntimeError("图像流共同可解码区间不足一秒")
     reference = np.asarray(stats[image_topics[0]]["stamps"], dtype=np.int64)
     reference = reference[(reference >= start) & (reference <= end)]
     offsets = {}

@@ -50,6 +50,7 @@ class RecordingManager:
         image_topics: Optional[Sequence[str]] = None,
         start_image_recording: Optional[Callable[[Dict[str, str]], None]] = None,
         stop_image_recording: Optional[Callable[[], Dict[str, object]]] = None,
+        drain_image_recording: Optional[Callable[[], None]] = None,
         recording_rmw_implementation: str = "rmw_cyclonedds_cpp",
         storage_status: Optional[Dict[str, object]] = None,
         storage_resolver: Optional[Callable[[], tuple[Path, Dict[str, object]]]] = None,
@@ -81,6 +82,7 @@ class RecordingManager:
         self._image_topics: Set[str] = set(_normalize_topics(image_topics or []))
         self._start_image_recording = start_image_recording
         self._stop_image_recording = stop_image_recording
+        self._drain_image_recording = drain_image_recording
         self._image_writer_active = False
         self._image_header_audit: Optional[Dict[str, object]] = None
         self._network_snapshot_start: Optional[Dict[str, object]] = None
@@ -682,14 +684,20 @@ class RecordingManager:
                 "network_audit": "recording_network_audit.json" if self._network_audit else None,
             })
 
-        # Stop the native writer and Dashboard-side live audit at one boundary.
+        # Drain queued source frames while the native writer can still accept access units.
+        image_writer_error: Optional[str] = None
+        if image_writer_active and self._drain_image_recording is not None:
+            try:
+                self._drain_image_recording()
+            except Exception as exc:
+                image_writer_error = str(exc)
+                self._output_lines.append(f"[images] ERROR draining encoders: {exc}")
         for process in processes.values():
             try:
                 os.killpg(os.getpgid(process.pid), signal.SIGINT)
             except ProcessLookupError:
                 pass
 
-        image_writer_error: Optional[str] = None
         if image_writer_active and self._stop_image_recording is not None:
             try:
                 result = self._stop_image_recording()
