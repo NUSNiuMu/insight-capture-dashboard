@@ -22,6 +22,7 @@ Json Matrix(const dm::math::Rigid3d& pose) {
 }
 Json Engine::Initialize(const Json& config) {
   queries_.clear();
+  pending_queries_.clear();
   last_map_stamp_=0;
   map_revision_=0;
   std::vector<dm::common::ImageUndistortion> intrinsics;
@@ -38,6 +39,7 @@ Json Engine::Initialize(const Json& config) {
 }
 Json Engine::Map(const Json& request, const std::vector<cv::Mat>& images) {
   if (!mapping_ || images.size()!=5) throw std::runtime_error("mapping expects stereo images and matched features");
+  pending_queries_.clear();
   uint64_t stamp=request.at("stamp_ns");
   if (stamp<=last_map_stamp_) throw std::runtime_error("unordered mapping frame");
   auto frame=std::make_shared<FrameMeta>(stamp,stamp);
@@ -62,12 +64,13 @@ Json Engine::Map(const Json& request, const std::vector<cv::Mat>& images) {
     auto& query=entry.second;
     std::vector<MapPoint*> matched(query.frame->FeatureSize(entry.first),nullptr);
     size_t retained=0;
-    const auto& points=mapping_->map()->map_points();
-    for(const auto& observation:query.observations) {
-      auto found=points.find(observation.second);
-      if(found==points.end() || found->second->IsBad() ||
-         found->second->NumOfObs()<3 || !found->second->state().refined) continue;
-      matched[observation.first]=found->second;
+    std::set<FeatureId> identities;
+    for(auto& observation:query.observations) {
+      auto point=mapping_->map()->ResolveMapPoint(observation.second);
+      if(point) observation.second=point->point_id();
+      if(!point || point->IsBad() || point->NumOfObs()<3 || !point->state().refined ||
+         !identities.insert(point->point_id()).second) continue;
+      matched[observation.first]=point;
       ++retained;
     }
     auto seed=query.anchor->pose()*query.anchor_pose.Inverse()*query.frame->pose();
@@ -89,6 +92,7 @@ Json Engine::Map(const Json& request, const std::vector<cv::Mat>& images) {
     updated["tracking_epoch"]=query.request.at("tracking_epoch");
     result["wrist_updates"].push_back(updated);
   }
+  mapping_->map()->ClearPointReplacements();
   return result;
 }
 Json Engine::Localize(const Json& request, const std::vector<cv::Mat>& arrays) {
@@ -109,16 +113,27 @@ Json Engine::Localize(const Json& request, const std::vector<cv::Mat>& arrays) {
   auto pose=loops_->Localize(query.get());
   if(!pose) return {{"localized",false},{"reason","no_geometric_match"},{"map_revision",map_revision_}};
   auto evidence=loops_->evidence();
-  auto previous=queries_.find(camera_id);
-  if(previous!=queries_.end()) previous->second.anchor->localization_anchor_=false;
   query->set_pose(*pose);
-  queries_[camera_id]={request,evidence.reference,evidence.reference->pose(),std::move(query),
-                      std::move(evidence.observations)};
-  for(const auto& entry:queries_) entry.second.anchor->localization_anchor_=true;
+  pending_queries_[camera_id]={request,evidence.reference,evidence.reference->pose(),std::move(query),
+                              std::move(evidence.observations)};
   return {{"localized",true},{"map_from_imu",Matrix(*pose)},{"map_revision",map_revision_},
     {"verified_relocalization",evidence.verified_references>=2},
     {"matches",evidence.matches},{"inliers",evidence.inliers},
     {"grid_cells",evidence.cells},{"reprojection_rms_px",evidence.rms_px}};
+}
+Json Engine::Accept(const Json& request) {
+  const int camera_id=request.at("camera_id");
+  auto pending=pending_queries_.find(camera_id);
+  if(pending==pending_queries_.end() ||
+     pending->second.request.at("stamp_ns")!=request.at("stamp_ns") ||
+     pending->second.request.at("tracking_epoch")!=request.at("tracking_epoch"))
+    throw std::runtime_error("accepted localization does not match the pending observation");
+  auto previous=queries_.find(camera_id);
+  if(previous!=queries_.end()) previous->second.anchor->localization_anchor_=false;
+  queries_.insert_or_assign(camera_id,std::move(pending->second));
+  pending_queries_.erase(pending);
+  for(const auto& entry:queries_) entry.second.anchor->localization_anchor_=true;
+  return {{"accepted",true}};
 }
 Json Engine::Stats() const {
   if (!mapping_) return {{"keyframes",0},{"landmarks",0},{"map_revision",map_revision_}};
@@ -158,6 +173,7 @@ std::vector<cv::Mat> Engine::Geometry() const {
 }
 void Engine::Reset() {
   queries_.clear();
+  pending_queries_.clear();
   if(mapping_) {
     mapping_->ResetLocalMapping();
     loops_=std::make_unique<LoopClosure>(mapping_->map(),mapping_.get());

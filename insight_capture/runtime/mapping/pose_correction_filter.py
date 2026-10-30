@@ -30,6 +30,10 @@ class PoseCorrectionFilter:
         self.valid = False
         self.diagnostics = {"mode": "invalid", "reason": reason}
 
+    def reject(self, reason):
+        self.diagnostics = {"mode": "predicting" if self.valid else "uninitialized",
+                            "accepted": False, "reason": reason}
+
     def _predict(self, native, stamp):
         if self.posterior is None or stamp <= self.cov_stamp:
             return
@@ -71,24 +75,24 @@ class PoseCorrectionFilter:
                 mode, accepted = "ekf", True
             else:
                 if verified:
-                    self.posterior = self.emitted = correction.copy()
+                    self.posterior = correction.copy()
                     self.covariance = self.measurement_noise.copy()
                     self.influence = np.eye(6)
                     self.valid = True
-                    mode, accepted = "relocalized", True
+                    mode, accepted = "relocalizing", True
                 else:
-                    self.influence = np.zeros((6, 6))
                     mode, accepted = "awaiting_relocalization", False
-        self.raw = correction.copy()
-        self.anchor = native.copy()
-        self.source_ns = source_ns
+        if accepted:
+            self.raw = correction.copy()
+            self.anchor = native.copy()
+            self.source_ns = source_ns
         self.diagnostics = {"mode": mode, "accepted": accepted, "innovation_mm": distance * 1000}
         return accepted
 
     def revise(self, correction, native, stamp, source_ns):
         # Replace this image's contribution, without counting its revised pose twice.
         if self.raw is None or source_ns != self.source_ns:
-            self.suspend("unmatched_map_observation")
+            self.reject("unmatched_map_observation")
             return False
         self._predict(native, stamp)
         distance = float(np.linalg.norm(_innovation(self.raw @ native, correction @ native)[:3]))
@@ -104,9 +108,9 @@ class PoseCorrectionFilter:
             self.influence = reset @ self.influence
             mode = "map_revision"
         else:
-            self.influence = np.zeros((6, 6))
             mode = "awaiting_relocalization"
-        self.raw = correction.copy()
+        if distance <= .05:
+            self.raw = correction.copy()
         self.diagnostics = {"mode": mode, "accepted": distance <= .05,
                             "innovation_mm": distance * 1000}
         return distance <= .05

@@ -13,6 +13,7 @@ class Engine {
   Json Initialize(const Json& config);
   Json Map(const Json& request, const std::vector<cv::Mat>& images);
   Json Localize(const Json& request, const std::vector<cv::Mat>& arrays);
+  Json Accept(const Json& request);
   Json Stats() const;
   std::vector<cv::Mat> Geometry() const;
   void Reset();
@@ -29,5 +30,6 @@ class Engine {
     std::vector<std::pair<size_t, dm::vio::FeatureId>> observations;
   };
   std::map<int, Query> queries_;
+  std::map<int, Query> pending_queries_;
 };
 }

@@ -21,20 +21,14 @@ T = TypeVar("T")
 
 
 class SourceClock:
-    """Map a device clock to ROS time using its initial receive-delay lower envelope.
-
-    The offset is frozen after warmup; transport jitter must not move output time.
-    This estimates clock offset, not hardware exposure synchronization.
-    """
+    """Warm up a source whose UTC clock is checked by recording preflight."""
 
     def __init__(self):
-        self.offset_ns = None
+        self.offset_ns = 0
         self.samples = 0
 
     def observe(self, source_ns: int, received_ns: int):
         if self.samples < 100:
-            offset = received_ns - source_ns
-            self.offset_ns = offset if self.offset_ns is None else min(self.offset_ns, offset)
             self.samples += 1
 
     @property

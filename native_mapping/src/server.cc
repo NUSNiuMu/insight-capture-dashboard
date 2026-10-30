@@ -72,6 +72,7 @@ int main(int argc, char** argv) {
           if (command == "initialize") result = engine.Initialize(request);
           else if (command == "map") result = engine.Map(request, images);
           else if (command == "localize") result = engine.Localize(request, images);
+          else if (command == "accept") result = engine.Accept(request);
           else if (command == "reset") { engine.Reset(); result = engine.Stats(); }
           else if (command == "stats") result = engine.Stats();
           else if (command == "geometry") {

@@ -97,6 +97,7 @@ class MapPoint {
   KeyFrame2Observations& observations() { return observations_; }
 
   bool IsBad() { return is_bad_; }
+  std::optional<FeatureId> replacement() const { return replacement_; }
   void SetBad() { is_bad_ = true; }
 
   void ReplacedByMapPoint(MapPoint* map_point, const std::string& tag = "");
@@ -204,6 +205,7 @@ class MapPoint {
   std::unordered_map<KeyFrame*, FrustumInfo> frustum_infos_;
 
   std::atomic_bool forced_retention_ = false;
+  std::optional<FeatureId> replacement_;
 };
 }  // namespace dm::vio::lm
 #endif  // VIO_MAP_MAP_POINT_H_

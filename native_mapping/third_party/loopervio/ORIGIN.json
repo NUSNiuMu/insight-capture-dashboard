@@ -20,7 +20,8 @@
     "Protect the two active wrist reference keyframes from culling until their references are released; commit map revisions across all three camera corrections before geometry transport.",
     "Refit head pose after robust outlier rejection; preserve active wrist anchors even when deletion was queued before acceptance.",
     "Verify wrist localization with two agreeing map references before accepting a pose; expose mature-landmark head pose support for reliable relocalization.",
-    "Share robust reprojection refinement between fresh localization and retained-image map updates; verify image coverage and camera-centred, depth-normalized pose observability, requiring ten retained inliers for map updates."
+    "Share robust reprojection refinement between fresh localization and retained-image map updates; verify image coverage and camera-centred, depth-normalized pose observability, requiring ten retained inliers for map updates.",
+    "Commit wrist query caches only after ROS fusion acceptance and preserve landmark identities across point fusion."
   ],
   "pruned_uncompiled_sources": [
     "config/vio_config.cc",
@@ -144,10 +145,10 @@
     "vio/map/local_mapping.h": "22b1168ff7d1c995494a3d805041ca83d71bf6b838d2d6833654fb2129610e98",
     "vio/map/loop_closure.cc": "6b35bcbb2e7fc473238c0fd46be7e9e3ab49043fb9950a19b2f08cc8dfe51222",
     "vio/map/loop_closure.h": "e7e8cf7917a774df6cc86ce4eb2716c78b432a70977d1212accddd0b23566176",
-    "vio/map/map.cc": "c68ccf60a8bdf8245c4ac682dd7062d4ef730da11f8926a8a05f95b7fff0dd72",
-    "vio/map/map.h": "441fb57c4ef8f2164c8547a926ed072ea77442ec4e358c44012f467eb7688606",
-    "vio/map/map_point.cc": "5980135eeab7df4a9e1b19e5a22719598e05879146bc9370036f30c45360836f",
-    "vio/map/map_point.h": "c44e51a52eb09da997e12beec6d570f7b14b21034137e497bbbdf7ecc43c8d0b",
+    "vio/map/map.cc": "0530a4fd96b62ba23606bfd2d99b95b57a8ffb43de83086114c0d8056e38667d",
+    "vio/map/map.h": "373024e487def6cd2391026b10f423c3b8f1cce3282eb04604edad29753c2d6d",
+    "vio/map/map_point.cc": "de8c87c667ce384226cee419c293459b8b74e79c21b4b5aa0950df7cbd3be52b",
+    "vio/map/map_point.h": "99e055efb144227b2236a00ac4ded3a68bb112a736e70555f4d236bad81cfb4f",
     "vio/map/orb_matcher.cc": "709d3bbc1fcb495a8b990f7f02e4bfbe560b07d7f9b119742747560ab4b7805a",
     "vio/map/orb_matcher.h": "6880e2cc9f1baa470a16282355d5c8197d9981d62f7675f65459731658335e4d",
     "vio/map/pose_sever.cc": "bdbec338498682d1cf023799375b8e655d25cbfa728df118f11de086387f190f",

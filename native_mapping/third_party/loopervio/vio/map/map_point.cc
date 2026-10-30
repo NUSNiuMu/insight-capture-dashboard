@@ -244,6 +244,7 @@ void MapPoint::ReplacedByMapPoint(MapPoint* map_point, const std::string& tag) {
   map_point->ComputeDescriptorsAndNormal();
 
   observations_.clear();
+  replacement_ = map_point->point_id();
   is_bad_ = true;
 }
 

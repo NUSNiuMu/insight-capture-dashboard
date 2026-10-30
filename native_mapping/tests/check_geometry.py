@@ -71,6 +71,13 @@ def main():
                 angle = Rotation.from_matrix(truth[:3, :3].T @ actual[:3, :3]).magnitude()
                 assert position < .0001 and angle < .0001, (position, angle)
                 errors[camera] = dict(position_mm=position * 1000, angle_deg=np.degrees(angle))
+                accepted = client.request("accept", camera_id=camera,
+                                          stamp_ns=8_000_000_000, tracking_epoch=0)
+                assert accepted["accepted"]
+            pending = client.request("localize", stamp_ns=8_500_000_000, tracking_epoch=0,
+                                     camera_id=2, odom_from_imu=odom.tolist(), images=[image],
+                                     arrays=[pixels(truth, 2), descriptors])
+            assert pending["localized"], pending
             pose = np.eye(4)
             pose[0, 3] = .024
             updated = client.request("map", stamp_ns=7_000_000_000,
@@ -80,6 +87,7 @@ def main():
             assert {r["camera_id"] for r in updated["wrist_updates"]} == {2, 3}
             assert all(r["localized"] and r["map_revision"] == 13
                        for r in updated["wrist_updates"]), updated
+            assert all(r["source_ns"] == 8_000_000_000 for r in updated["wrist_updates"])
             bad_pixels = rng.uniform([0, 0], [544, 512], (len(points), 2)).astype(np.float32)
             rejected = client.request("localize", stamp_ns=8_500_000_000, camera_id=2,
                                       odom_from_imu=odom.tolist(), images=[image],

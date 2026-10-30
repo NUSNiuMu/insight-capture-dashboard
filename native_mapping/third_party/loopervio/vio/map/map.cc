@@ -27,6 +27,7 @@ void Map::AddKeyFrame(KeyFrame* kf) {
 }
 
 void Map::EraseMapPoint(MapPoint* map_point) {
+  if(map_point->replacement()) replacements_[map_point->point_id()]=*map_point->replacement();
   // map_point->SetBad();
   // return;
   // Remove observations of this map point in all keyframes
@@ -293,6 +294,7 @@ void Map::ObservationCountAnalyze(const std::string& tag) {
 }
 
 void Map::Reset() {
+  replacements_.clear();
 
   entry_id_to_kfs_.clear();
   kf_to_entry_ids_.clear();

@@ -67,6 +67,17 @@ class Map {
     return nullptr;
   }
 
+  MapPoint* ResolveMapPoint(FeatureId id) {
+    for (;;) {
+      auto point=GetMapPoint(id);
+      if(point && point->replacement()) { id=*point->replacement(); continue; }
+      auto alias=replacements_.find(id);
+      if(alias!=replacements_.end()) { id=alias->second; continue; }
+      return point;
+    }
+  }
+  void ClearPointReplacements() { replacements_.clear(); }
+
   bool EraseKeyFrameTS(KeyFrame *kf);
 
   void EraseKeyFrame(KeyFrame *kf);
@@ -127,6 +138,7 @@ class Map {
   std::mutex* mpt_mutex_ptr_ = nullptr;
   std::map<FrameId, KeyFrame*> key_frames_;
   std::map<FeatureId, MapPoint*> map_points_;
+  std::map<FeatureId, FeatureId> replacements_;
 
   //
   std::mutex enable_erase_mutex_;
