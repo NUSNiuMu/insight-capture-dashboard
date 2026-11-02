@@ -1,136 +1,46 @@
-# Insight Dashboard 部署与升级说明
+# Insight 客户部署
 
-本目录（部署包）安装一次即可；之后每次软件升级只需要一个镜像压缩包
-`insight-dashboard-vX.Y.Z.tar.gz`，用 `update.sh` 加载并重启即可，
-数据（录制的 rosbag、标定、配置）全部保留。
-
-自 v2.0.0 起，客户部署同时包含 SuperGlue 推理、Insight9 稀疏建图和
-Insight3 全局重定位服务；稠密建图和 RViz 验证服务不进入客户发布包。
-
-当前建图与定位统一使用 LooperVIO 原生核心和 ROS 适配器，与源码部署保持一致。
-主镜像压缩包同时包含同版本的 `insight-dashboard` 和 `insight-loopervio` 镜像；
-`update.sh` 检查两者齐全后启动，缺少原生核心时直接报错。
-
-设备切换统一使用 `./scripts/select_device.sh jetson-nx` 或
-`./scripts/select_device.sh jetson-nx-egohalo`，自动同步配置和服务；无需手动指定 Compose
-profile。普通启动、开机服务和升级共用同一套配置解析。升级会刷新 Compose、设备模板与宿主机工具，保留现场 `cameras.json`、`runtime.json` 及其他标定设置。
-切换前请结束录制与保存；切换会重载建图定位，需要重新校准。
-
-## 环境要求
-
-- NVIDIA Jetson（JetPack 6.x，已装 Docker 与 nvidia-container-runtime）
-- 当前用户能执行 `docker`（在 `docker` 用户组里）
+系统使用本地 Qt 桌面和手机采集页面，后端由 Docker 运行。没有桌面网页版或浏览器 kiosk。
 
 ## 首次安装
 
-把部署包、Dashboard 镜像和首次安装依赖包拷到设备上（U 盘 / scp 均可）。
-两个镜像压缩包放在同一目录；稳定的 SuperGlue 依赖只在首次安装时传一次：
+收到三个压缩包：同版本主镜像、SuperGlue 依赖镜像、部署包。解压部署包进入目录，把两个镜像压缩包放在旁边：
 
 ```bash
-tar xzf insight-dashboard-deploy-vX.Y.Z.tar.gz
-cd insight-dashboard-deploy        # 解压出的目录不带版本号——它是常驻安装目录，名字跨版本不变
-./update.sh /path/to/insight-dashboard-vX.Y.Z.tar.gz
-sudo ./deploy/host_setup.sh       # 一次性调优：CycloneDDS/UDP 分片、RPS + 开机相机恢复
+./update.sh insight-dashboard-v2.1.0.tar.gz
+./native_dashboard/run.sh
 ```
 
-`update.sh` 会加载 Dashboard 镜像；如果本机还没有
-`insight-superglue-validation:25.04`，会自动从 Dashboard 镜像旁边的
-`insight-superglue-validation-25.04.tar.gz` 加载。随后生成 `config/` 等数据目录并启动服务，
-最后等待后端健康检查通过。`host_setup.sh` 只在首次安装（或重刷系统后）需要跑一次；
-jetson-nx profile 会在下一次开机相机恢复流程中把相机 DDS 模式校正为 CycloneDDS。
-安装的 `insight-camera-network.service` 负责网卡参数，
-`insight-camera-reboot.service` 在冷启动后恢复相机并校验 DDS 配置。
+版本号以收到的文件为准。更新命令加载 Dashboard 和同版本 LooperVIO 镜像，首次安装自动加载旁边的 SuperGlue 镜像，种入配置并启动服务。Qt 程序与运行库已打包，客户机不需要 Qt 编译器或外网下载。
 
-`update.sh` 会从当前 Dashboard 镜像同步宿主机语音代码，并在离线模型已经准备好时自动安装、
-启用或升级 `insight-voice-control.service`；若发现旧的
-`looper-openclaw-voice.service`，会自动停止并迁移。语音模型尚未准备好的设备会明确提示并
-跳过，不影响 Dashboard 启动；补齐模型后可手动执行
-`./deploy/install_voice_control_service.sh`。
+## 日常操作
 
-语音服务作为发布包默认组件运行在宿主机，直接使用宿主机声卡；Dashboard 容器不再
-挂载 `/dev/snd`。安装脚本默认自动发现稳定的 ALSA `CARD` 名称，不依赖 card index。
-SenseVoice、Silero VAD 和 Piper 固定命令完全离线；没有安装 OpenClaw 或 Gateway
-不可用时，只会禁用非固定自然语言问答，不影响开始/停止录制、校准、相机检查、
-系统状态和本条作废。
+- Qt：任务、预览、录制、回放、录制库、合包、评分、优化、导出和设置。
+- 手机：与 Jetson 同网，访问 `http://<Jetson-IP>:8765/mobile`；页面底部可管理任务及手动合包。
+- 启动后端：`./scripts/run_dashboard.sh`；查看日志：`docker compose logs -f`。
+- 退出 Qt 或关闭手机，不停止后端录制。
 
-手动整机重启三台相机后，如需统一校时、共同重启采集服务并直接测量三路图像
-header timestamp 差，可在部署目录执行：
+EgoHalo 可先录制再校准；停止后两端分别保存，保存完成即可录下一条。采集结束后在 Qt 录制库或手机管理区执行回传合包，不会在每次停止时自动合包。
+
+## 设备切换
 
 ```bash
-./scripts/reboot_cameras.sh --sync-phase
+./scripts/select_device.sh jetson-nx-egohalo
+./scripts/select_device.sh jetson-nx
 ```
 
-该模式交互式读取一次相机 SSH 密码，也支持 `INSIGHT_CAMERA_SSH_PASSWORD` 或
-`INSIGHT_CAMERA_SSH_IDENTITY`。开机自动流程的无人值守配置见部署包内
-`tools/device_cli/README_cn.md`；宿主机缺少 Paramiko 时先执行
-`sudo apt-get install python3-paramiko`。
+前者是 EgoHalo + 双 Insight3，后者是 Insight9 + 双 Insight3。命令替换相机和运行配置，自动启停对应服务。结束录制/保存后再切换，切换后重新校准。自定义地址或外参应保留到对应 `config/devices/<profile>/` 模板中，避免再次切换时被默认值覆盖。
 
-首次安装或大版本升级后，建图/重定位用的 TensorRT 推理服务需要现场编译一次
-设备专属引擎，最长约 15 分钟；这段时间看板本身已经能正常打开，只是 3D 页面的
-全局轨迹要等引擎编译完才出现，是正常现象，不是卡住。之后的引擎缓存会保留在
-本机，重启和常规升级不会重新触发这次编译。
+## 录制盘
 
-## 日常使用
+在 `.env` 设置 `INSIGHT_ROSBAG_HOST_DIR` 为录制目录，`INSIGHT_ROSBAG_REQUIRED_SOURCE` 为实际挂载的稳定设备标识。盘不可用时会明确提示备用存储，不要通过清空标识隐藏异常。
 
-```bash
-./scripts/run_dashboard.sh            # 启动/确认后端在跑，Ctrl-C 停止
-./scripts/run_dashboard.sh --jetson   # 同时在本机屏幕打开看板窗口
-docker compose logs -f                # 查看后端日志
-docker compose down                   # 停止
-```
-
-浏览器访问：`http://<设备IP>:8765/`。可用页面包括 3D、录制、Bags、
-LeRobot/UMI 数据集、轨迹评分、Hand pose、轨迹优化和设置。
-
-如果同一局域网内有多套采集设备，应为每套设备分配不同的 ROS Domain。以下命令会
-统一修改三台相机、`config/cameras.json` 和 `.env`，并重启相机、重建 ROS 服务：
-
-```bash
-./scripts/set_ros_domain_id.py 21 --dry-run
-./scripts/set_ros_domain_id.py 21
-```
-
-脚本检测到相机数量不是三台或正在录制时会拒绝修改；无人值守执行可加 `-y`。
+`config/`、`rosbags/`、`outputs/`、`runs/` 是现场数据，升级保留。请在删除录制或处理结果前单独确认其用途。
 
 ## 升级
 
-拿到新的镜像压缩包后，在本目录执行：
+结束录制和保存后，执行新版本主镜像的 `update.sh` 命令。普通升级只需主镜像压缩包；配置和数据保留，宿主机工具、Compose 与 Qt 产物同步刷新。更新后关闭并重新打开 Qt。
 
-```bash
-./update.sh insight-dashboard-vX.Y.Z.tar.gz
-```
+已加载且满足当前配置/接口要求的旧镜像可用 `./update.sh --rollback <版本>` 切换。回退不会降级宿主机启动工具。
 
-- 正在录制时会拒绝升级（避免打断录制）；确认要打断就加 `--force`。
-- `config/`、`rosbags/`、`outputs/`、`runs/` 都在宿主机上，升级不受影响。
-- 要直接写 ext4 U 盘，在 `.env` 增加
-  `INSIGHT_ROSBAG_HOST_DIR=/media/nvidia/INSIGHT_USB/rosbags` 并重新执行
-  `docker compose up -d insight-dashboard`；建议同时设置
-  `INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/sda1`。服务启动及每次开始录制前会验证挂载源和
-  `_staging` 写入，U 盘未挂载、只读或 I/O 异常时自动回退到本机 NVMe 的 `rosbags/`；
-  录制状态会显示实际路径与回退原因。一次回退后需重启 Dashboard 才会重新选择 U 盘；
-  `run_dashboard.sh` 会在 Compose 创建容器前避开不可用的 U 盘绑定，确保 Dashboard 仍能以
-  NVMe fallback 启动；`update.sh` 升级时会保留这些设置。
-
-## 回滚
-
-旧版本镜像加载过就还在本机，一条命令切回去：
-
-```bash
-./update.sh --rollback v2.0.3
-```
-
-查看本机已有的版本：`docker image ls insight-dashboard`。
-磁盘紧张时用 `docker rmi insight-dashboard:<旧版本>` 清理不再需要的版本。
-建图/重定位用的 `insight-superglue-validation` 镜像不跟着应用版本号走，回滚
-不会影响它，也不需要单独处理。
-
-## 目录说明
-
-| 路径                 | 内容                                   |
-| -------------------- | -------------------------------------- |
-| `.env`               | 当前版本号及本机录制目录覆盖（升级保留） |
-| `config/`            | 相机/标定/后处理配置（升级保留）       |
-| `rosbags/`           | 录制数据（升级保留）                   |
-| `outputs/`, `runs/`  | 处理结果（升级保留）                   |
-
-更完整的首次部署、发版与故障恢复流程见 [部署手册](../docs/DEPLOYMENT.md)。
+`/healthz` 只证明服务可响应；相机输入查看 `/api/cameras`，定位状态查看 `/api/mapping`，录制状态查看 `/api/mobile/status`。服务健康不等于图像连续或定位精度通过。

@@ -64,6 +64,8 @@ Item {
             get("bags", "/api/rosbags?scope=" + scope, force);
         if (page === "datasets")
             get("export", "/api/umi-export/status", force);
+        if (page === "bags")
+            get("savedRecordings", "/api/postprocessing/recordings", force);
         if (page === "scoring")
             get("scoring", "/api/scoring/status", force);
         if (page === "handpose") {
@@ -85,6 +87,7 @@ Item {
     }
     function poll() {
         var key = {
+            "bags": "savedRecordings",
             "datasets": "export",
             "scoring": "scoring",
             "handpose": "handpose",
@@ -92,6 +95,7 @@ Item {
             "recording": "recording"
         }[page];
         var path = {
+            "bags": "/api/postprocessing/recordings",
             "datasets": "/api/umi-export/status",
             "scoring": "/api/scoring/status",
             "handpose": "/api/handpose/status",

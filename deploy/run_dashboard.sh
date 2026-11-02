@@ -1,190 +1,32 @@
 #!/usr/bin/env bash
-# Start the dashboard, optionally follow logs or launch the Jetson kiosk.
-#
-# Usage:
-#   ./scripts/run_dashboard.sh [--jetson] [--logs]
-
+# Start capture services; the native Qt desktop is a separate host process.
 set -euo pipefail
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PORT="${DASHBOARD_PORT:-8765}"
-
-log() { echo "[$(date '+%H:%M:%S')] $*"; }
-
+log() { echo "$*"; }
 source "${SCRIPT_DIR}/device_services.sh"
-
-# Standard Docker marker file -- present in every container, regardless of
-# how it was started (compose, devcontainer, plain `docker run`).
-in_container=false
-[[ -f /.dockerenv ]] && in_container=true
-
-jetson_mode=false
 logs_mode=false
-for arg in "$@"; do
-    case "${arg}" in
-        --jetson) jetson_mode=true ;;
-        --logs) logs_mode=true ;;
-        *)
-            echo "Usage: $0 [--jetson] [--logs]" >&2
-            exit 1
-            ;;
-    esac
-done
-
-if [[ "${in_container}" == "true" && "${logs_mode}" == "true" ]]; then
-    echo "--logs reads the container's own stdout via 'docker compose logs'," >&2
-    echo "which only works from the host (no docker CLI in this image). Run" >&2
-    echo "'docker compose logs -f' from the host instead." >&2
+if [[ "${1:-}" == --logs && $# == 1 ]]; then
+    logs_mode=true
+elif (( $# != 0 )); then
+    echo "Usage: $0 [--logs]" >&2
     exit 1
 fi
-
 cd "${ROOT_DIR}"
-
-if [[ "${in_container}" == "true" ]]; then
-    log "Already inside the container -- skipping docker compose."
-elif [[ -n "$(docker compose ps --status running --services 2>/dev/null)" ]]; then
-    # Already running: restart for a guaranteed-clean launch (picks up any
-    # git-pulled code, clears whatever state accumulated) -- unless a
-    # recording is in flight, in which case restarting would kill it.
-    read_capture_state
-    if [[ "${capture_busy}" == true ]]; then
-        log "Backend is already running with a recording in progress -- not restarting (would kill it). Using the running backend as-is."
-    else
-        # Reconcile changed commands, mounts, and environment before reloading
-        # the bind-mounted dashboard code. A plain restart preserves stale
-        # container definitions after a Compose refactor.
-        log "Backend is already running -- reconciling Compose and restarting the dashboard..."
-        start_device_services
+read_capture_state
+if [[ "${capture_busy}" == true ]]; then
+    log "Capture is active; keeping the running services."
+else
+    running="$(docker compose ps --status running --services insight-dashboard)"
+    start_device_services
+    if [[ -n "${running}" ]]; then
         docker compose restart insight-dashboard
     fi
-else
-    log "Starting dashboard backend via docker compose..."
-    start_device_services
 fi
-
-all_cameras_live() {
-    curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
-        | python3 -c '
-import json, sys
-cameras = json.load(sys.stdin).get("cameras", [])
-by_name = {str(item.get("name")): item for item in cameras}
-raw_only = all(
-    by_name.get(name, {}).get("stale", True)
-    and by_name.get(name, {}).get("native_vio_fresh", False)
-    for name in ("insight3_a", "insight3_b")
-)
-healthy = cameras and all(
-    not item.get("stale", True)
-    or (raw_only and item.get("name") in {"insight3_a", "insight3_b"})
-    for item in cameras
-)
-sys.exit(0 if healthy else 1)
-' \
-        2>/dev/null
-}
-
-stale_camera_names() {
-    curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
-        | python3 -c 'import json,sys; print(", ".join(x["name"] for x in json.load(sys.stdin).get("cameras", []) if x.get("stale", True)) or "(none)")' \
-        2>/dev/null || echo "(api unreachable)"
-}
-
-log "Waiting for backend to become healthy on :${PORT}..."
 wait_for_backend_health
-log "Backend is up."
-
-# The backend repairs discovery on recreated USB links without a restart.
-ALL_LIVE_WAIT_SEC="${INSIGHT_ALL_LIVE_WAIT_SEC:-30}"
-log "Waiting for all cameras to report live data..."
-data_deadline=$(( $(date +%s) + ALL_LIVE_WAIT_SEC ))
-all_live=false
-next_progress=$(( $(date +%s) + 5 ))
-while (( $(date +%s) <= data_deadline )); do
-    if all_cameras_live; then
-        all_live=true
-        break
-    fi
-    if (( $(date +%s) >= next_progress )); then
-        log "  still waiting, stale: $(stale_camera_names)"
-        next_progress=$(( $(date +%s) + 5 ))
-    fi
-    sleep 1
-done
-if [[ "${all_live}" == "true" ]]; then
-    log "All cameras are live."
-else
-    log "WARNING: cameras still waiting (stale: $(stale_camera_names)); keeping backend running and opening the frontend. Recovery continues in the background."
+host_ip="${DASHBOARD_ADVERTISE_HOST:-<Jetson-IP>}"
+printf 'Phone: http://%s:%s/mobile\nDesktop: ./native_dashboard/run.sh\n' "${host_ip}" "${PORT}"
+if [[ "${logs_mode}" == true ]]; then
+    exec docker compose logs -f
 fi
-
-if [[ "${jetson_mode}" == "true" ]]; then
-    log "Launching on-device kiosk window..."
-    export DISPLAY="${DISPLAY:-:0}"
-    if [[ "${in_container}" == "true" ]]; then
-        # Run the bundled kiosk directly when already inside the container.
-        exec "${SCRIPT_DIR}/kiosk/open_web_3d_right.sh"
-    fi
-    # Grant the container access to the host X server.
-    xhost +SI:localuser:root >/dev/null 2>&1 || true
-    # Firefox runs as the unprivileged kiosk user.
-    xhost +SI:localuser:"$(id -un)" >/dev/null 2>&1 || true
-    # Run the bundled browser with the current desktop's DISPLAY.
-    if [[ "${logs_mode}" == "true" ]]; then
-        # Detach the GUI so this shell can continue following logs.
-        docker exec -d -e DISPLAY="${DISPLAY}" insight-dashboard \
-            /workspaces/insight_capture/deploy/kiosk/open_web_3d_right.sh
-        log "Kiosk launched in the background; following backend logs below."
-    else
-        exec docker exec -it -e DISPLAY="${DISPLAY}" insight-dashboard \
-            /workspaces/insight_capture/deploy/kiosk/open_web_3d_right.sh
-    fi
-fi
-
-# Prefer the routed LAN interface over Docker bridges and camera USB links.
-host_ip="${DASHBOARD_ADVERTISE_HOST:-}"
-if [[ -z "${host_ip}" ]]; then
-    host_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<NF;i++) if ($i=="src") {print $(i+1); exit}}' || true)"
-fi
-if [[ -z "${host_ip}" ]]; then
-    host_ip="<this-jetson-ip>"
-fi
-cat <<EOF
-
-Dashboard backend is running on this machine's port ${PORT}.
-
-From your laptop on the same LAN, open directly (H.264 WebRTC preview):
-  http://${host_ip}:${PORT}/3d
-
-On this Jetson's own browser:
-  http://localhost:${PORT}/3d
-
-WebRTC uses a separate signaling port (default 8766) and ICE media connections.
-A webpage-only SSH tunnel falls back to slow JPEG polling. Do not run an SSH
-tunnel to this Jetson on the Jetson itself: it can occupy the WebRTC port.
-For remote networks, use a routed VPN or configure TURN for WebRTC media.
-Set DASHBOARD_ADVERTISE_HOST to override the displayed LAN address.
-
-(Pass --jetson to launch the on-device kiosk window here, --logs to follow
-backend logs -- including the perf_tracker CPU breakdown -- instead of
-running quietly, or both together.)
-
-EOF
-if [[ "${in_container}" == "true" ]]; then
-    echo "Press Ctrl-C to stop watching (backend keeps running)."
-else
-    echo "Press Ctrl-C to stop the backend."
-fi
-
-# Background the waiter so Bash handles Ctrl-C traps promptly.
-if [[ "${in_container}" == "true" ]]; then
-    trap 'echo; log "Ctrl-C received, exiting (backend keeps running)."; exit 0' INT TERM
-else
-    trap 'echo; log "Ctrl-C received, stopping capture services..."; stop_device_services; exit 0' INT TERM
-fi
-
-if [[ "${logs_mode}" == "true" ]]; then
-    docker compose logs -f &
-else
-    sleep infinity &
-fi
-wait $!

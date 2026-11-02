@@ -24,8 +24,9 @@ selected_device="$(cat config/.device 2>/dev/null || echo "<none>")"
     || { echo "ERROR: select jetson-nx or jetson-nx-egohalo before building a Jetson release" >&2; exit 1; }
 
 log "Building ${IMAGE_NAME}:${version} ..."
+./native_dashboard/build.sh
 # --network host: same Jetson iptables raw-table workaround as docker-compose.yml
-# --target runtime: skips the dev-only headless Chromium stage (see Dockerfile)
+# Backend images contain no desktop browser or Qt build tools.
 docker build --network host --target runtime -t "${IMAGE_NAME}:${version}" .
 
 log "Building ${SUPERGLUE_IMAGE} (mapping/relocalization dependency) ..."
@@ -33,7 +34,7 @@ docker build --network host -f Dockerfile.superglue-validation -t "${SUPERGLUE_I
 
 log "Building insight-loopervio:${version} ..."
 docker build --network host -f native_mapping/Dockerfile.dependencies \
-    --build-arg "DASHBOARD_IMAGE=${IMAGE_NAME}:${version}" -t insight-loopervio-deps:2.1 native_mapping
+    -t insight-loopervio-deps:2.2 native_mapping
 docker build --network host -t "insight-loopervio:${version}" native_mapping
 
 image_tarball="release/${IMAGE_NAME}-${version}.tar.gz"
@@ -53,6 +54,10 @@ mkdir -p \
     "${bundle_dir}/deploy/udev" \
     "${bundle_dir}/insight_capture" \
     "${bundle_dir}/tools/diagnostics"
+mkdir -p "${bundle_dir}/native_dashboard" "${bundle_dir}/.native-build"
+cp native_dashboard/run.sh "${bundle_dir}/native_dashboard/"
+cp .native-build/insight-native "${bundle_dir}/.native-build/"
+cp -a .native-build/runtime "${bundle_dir}/.native-build/"
 cp deploy/docker-compose.yml deploy/update.sh deploy/README.md "${bundle_dir}/"
 cp deploy/run_dashboard.sh \
     deploy/device_services.sh \

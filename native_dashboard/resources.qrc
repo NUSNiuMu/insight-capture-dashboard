@@ -5,6 +5,7 @@
     <file>trail.frag</file>
     <file>pages/BagPicker.qml</file>
     <file>pages/BagsPage.qml</file>
+    <file>pages/SavedRecordings.qml</file>
     <file>pages/DatasetsPage.qml</file>
     <file>pages/HandPosePage.qml</file>
     <file>pages/HandTracking.js</file>

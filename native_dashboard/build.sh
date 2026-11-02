@@ -33,6 +33,7 @@ else
         bash -c 'cmake -S /src/native_dashboard -B /src/.native-build -DCMAKE_BUILD_TYPE=Release && cmake --build /src/.native-build -j2 && python3 /src/native_dashboard/export_runtime.py /src/.native-build/qt-runtime.tar'
     docker run --rm --network none --pull=never -v "$build_dir:/out" "$builder_image" chown -R "$(id -u):$(id -g)" /out
 fi
+rm -rf "$build_dir/runtime"
 mkdir -p "$build_dir/runtime"
 tar -xf "$build_dir/qt-runtime.tar" -C "$build_dir/runtime"
 echo "Built $build_dir/insight-native"

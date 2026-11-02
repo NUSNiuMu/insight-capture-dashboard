@@ -13,38 +13,8 @@ class StaticRoutes:
     def __init__(self, context: DashboardContext) -> None:
         self.context = context
 
-    async def _handle_index(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.context.web_root / "sessions.html")
-
-    async def _handle_spatial_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.context.web_root / "3d.html")
-
-    async def _handle_recording_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.context.web_root / "recording.html")
-
     async def _handle_mobile_page(self, _request: web.Request) -> web.FileResponse:
         return web.FileResponse(self.context.web_root / "mobile.html", headers={"Cache-Control": "no-store"})
-
-    async def _handle_images_page(self, _request: web.Request) -> web.FileResponse:
-        raise web.HTTPFound("/3d")
-
-    async def _handle_bags_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.context.web_root / "bags.html")
-
-    async def _handle_umi_dataset_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.context.web_root / "umi-dataset.html")
-
-    async def _handle_scoring_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.context.web_root / "scoring.html")
-
-    async def _handle_optimization_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.context.web_root / "optimization.html")
-
-    async def _handle_handpose_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.context.web_root / "handpose.html")
-
-    async def _handle_settings_page(self, _request: web.Request) -> web.FileResponse:
-        return web.FileResponse(self.context.web_root / "settings.html")
 
     async def _handle_asset(self, request: web.Request) -> web.StreamResponse:
         raw_path = request.query.get("path", "").strip()

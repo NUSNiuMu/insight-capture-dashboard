@@ -9,6 +9,10 @@ PageFrame {
     property string deleting: ""
     heading: "Rosbags · 录制库"
     description: "查看录制完整性、评分和回放准备状态。"
+    SavedRecordings {
+        Layout.fillWidth: true
+        shell: page.shell
+    }
     RowLayout {
         Ui.Button {
             objectName: "bags-all"

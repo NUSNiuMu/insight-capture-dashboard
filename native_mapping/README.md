@@ -23,7 +23,7 @@ ROS 层发布原有三路位姿、状态、地标描述子云与标定参考图�
 ## 构建与验证
 
 ```bash
-docker build --network host -f native_mapping/Dockerfile.dependencies -t insight-loopervio-deps:2.1 native_mapping
+docker build --network host -f native_mapping/Dockerfile.dependencies -t insight-loopervio-deps:2.2 native_mapping
 docker compose build insight9-sparse-mapper
 docker compose up -d --no-deps insight9-sparse-mapper insight3-global-localizer
 ```

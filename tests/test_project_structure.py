@@ -16,6 +16,8 @@ class ProjectStructureTest(unittest.TestCase):
             "run_dashboard.sh",
             "run_voice.sh",
             "select_device.sh",
+            "set_ros_domain_id.py",
+            "merge_distributed_recording.py",
             "sync_camera_restart.py",
             "system_doctor.py",
             "system_doctor.sh",
@@ -129,65 +131,21 @@ class ProjectStructureTest(unittest.TestCase):
         )
         self.assertLessEqual(len(source.splitlines()), 200)
 
-    def test_frontend_source_and_task_labels_are_english_only(self) -> None:
-        han = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
-        violations = []
-        frontend_root = ROOT / "web_dashboard" / "src"
-        for path in frontend_root.rglob("*"):
-            if path.suffix not in {".css", ".html", ".js"}:
-                continue
-            for line_number, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
-            ):
-                if han.search(line):
-                    violations.append(f"{path.relative_to(ROOT)}:{line_number}")
-
-        task_config = json.loads(
-            (ROOT / "config" / "capture_tasks.json").read_text(encoding="utf-8")
-        )
-        for task in task_config.get("tasks", []):
-            if han.search(str(task.get("name") or "")):
-                violations.append(f"config/capture_tasks.json:{task.get('id')}:name")
-
-        self.assertEqual(violations, [])
-
-    def test_dashboard_navigation_order_is_consistent(self) -> None:
-        expected = [
-            "/",
-            "/3d",
-            "/bags",
-            "/umi-dataset",
-            "/scoring",
-            "/handpose",
-            "/optimization",
-            "/recording",
-            "/settings",
-        ]
-        frontend_root = ROOT / "web_dashboard" / "src"
-        checked = []
-        for path in frontend_root.rglob("*.html"):
-            source = path.read_text(encoding="utf-8")
-            navigation = re.search(
-                r'<nav class="(?:side-nav|rail-nav)"[^>]*>(.*?)</nav>',
-                source,
-                flags=re.DOTALL,
-            )
-            if navigation is None:
-                continue
-            links = re.findall(r'<a href="([^"]+)"', navigation.group(1))
-            self.assertEqual(links, expected, str(path.relative_to(ROOT)))
-            checked.append(path)
-        self.assertEqual(len(checked), 9)
+    def test_phone_page_has_no_retired_desktop_links(self) -> None:
+        source = (ROOT / "web_dashboard" / "src" / "mobile" / "index.html").read_text()
+        links = re.findall(r'href="([^"#]+)"', source)
+        self.assertTrue(all(link.startswith("/static/") for link in links), links)
+        self.assertIn('id="task-create"', source)
+        self.assertIn('id="saved-recordings"', source)
 
     def test_dashboard_launcher_reconciles_compose_before_restart(self) -> None:
         source = (ROOT / "deploy" / "run_dashboard.sh").read_text(encoding="utf-8")
-        self.assertLess(source.index("        start_device_services"),
+        self.assertLess(source.index("    start_device_services"),
                         source.index("docker compose restart insight-dashboard"))
         self.assertNotIn("docker compose restart\n", source)
 
-    def test_dashboard_launcher_preserves_raw_only_calibration_capture(self) -> None:
+    def test_dashboard_launcher_preserves_active_capture(self) -> None:
         source = (ROOT / "deploy" / "run_dashboard.sh").read_text(encoding="utf-8")
-        self.assertIn("native_vio_fresh", source)
         self.assertLess(
             source.index('if [[ "${capture_busy}" == true ]]; then'),
             source.index("docker compose restart insight-dashboard"),

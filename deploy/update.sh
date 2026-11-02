@@ -31,7 +31,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 sync_host_runtime() {
     local image="$1"
     local container temporary
-    temporary="$(mktemp -d)"
+    temporary="$(mktemp -d "${SCRIPT_DIR}/.update.XXXXXX")"
     container="$(docker create "${image}")"
     cleanup_voice_sync() {
         docker rm "${container}" >/dev/null 2>&1 || true
@@ -50,6 +50,8 @@ sync_host_runtime() {
     docker cp "${container}:/workspaces/insight_capture/scripts/select_device.sh" "${temporary}/select_device.sh"
     docker cp "${container}:/workspaces/insight_capture/deploy/docker-compose.yml" "${temporary}/docker-compose.yml"
     docker cp "${container}:/workspaces/insight_capture/config/devices" "${temporary}/devices"
+    docker cp "${container}:/opt/insight/native" "${temporary}/native"
+    docker cp "${container}:/workspaces/insight_capture/native_dashboard/run.sh" "${temporary}/run-native.sh"
 
     mkdir -p \
         "${HOST_RUNTIME_ROOT}/insight_capture" \
@@ -69,6 +71,16 @@ sync_host_runtime() {
     install -m 0755 "${temporary}/select_device.sh" "${SCRIPT_DIR}/scripts/select_device.sh"
     install -m 0644 "${temporary}/docker-compose.yml" "${SCRIPT_DIR}/docker-compose.yml"
     cp -r "${temporary}/devices" "${SCRIPT_DIR}/config/"
+    mkdir -p "${temporary}/qt-runtime" "${SCRIPT_DIR}/native_dashboard" "${SCRIPT_DIR}/.native-build"
+    tar -xf "${temporary}/native/qt-runtime.tar" -C "${temporary}/qt-runtime"
+    install -m 0755 "${temporary}/run-native.sh" "${SCRIPT_DIR}/native_dashboard/run.sh"
+    # Replace files without truncating libraries mapped by an existing Qt process.
+    if [[ -d "${SCRIPT_DIR}/.native-build/runtime" ]]; then
+        mv "${SCRIPT_DIR}/.native-build/runtime" "${temporary}/old-qt-runtime"
+    fi
+    mv "${temporary}/qt-runtime" "${SCRIPT_DIR}/.native-build/runtime"
+    install -m 0755 "${temporary}/native/insight-native" "${SCRIPT_DIR}/.native-build/.insight-native.next"
+    mv "${SCRIPT_DIR}/.native-build/.insight-native.next" "${SCRIPT_DIR}/.native-build/insight-native"
 
     trap - EXIT
     cleanup_voice_sync
@@ -198,6 +210,7 @@ done
 "${VOICE_INSTALLER}" --if-ready
 
 log "Done. Dashboard is running ${IMAGE_NAME}:${version} on port ${PORT}."
+log "On the Jetson desktop, launch ./native_dashboard/run.sh."
 if [[ -n "${prev_version}" && "${prev_version}" != "${version}" ]]; then
     log "Previous version ${prev_version} is still loaded; roll back anytime with: ./update.sh --rollback ${prev_version}"
 fi

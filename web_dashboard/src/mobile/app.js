@@ -1,7 +1,9 @@
 import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261027-capture-cleanup";
+import { CaptureManagement } from "./management.js?v=20261102-qt-mobile";
 
 const el = id => document.getElementById(id);
 const labels = { idle: "准备采集", starting: "正在启动", recording: "采集中", saving: "正在保存", saved: "保存完成", error: "采集异常" };
+const management = new CaptureManagement(api);
 let devices = [];
 let previewOptions = "";
 const preview = new MobilePreview(el("preview-video"), el("preview-status"));
@@ -26,7 +28,7 @@ function render() {
   el("device-summary").textContent = devices.map(device => device.label).join(" · ");
   el("task-name").textContent = s.task_status.active ? `当前任务：${s.task_status.task.name}` : "请先选择数采任务";
   el("storage-help").textContent = s.distributed?.enabled
-    ? "头部原始数据保存在 EgoHalo，腕部数据保存在 Jetson。两端保存完成即可录下一条；回传合包在录制库手动执行。"
+    ? "头部原始数据保存在 EgoHalo，腕部数据保存在 Jetson。两端保存完成即可录下一条；在下方管理区或本地 Qt 手动合包。"
     : "数据保存在 Jetson，手机仅控制和预览。";
   const options = JSON.stringify(s.preview_cameras);
   if (options !== previewOptions) {
@@ -73,6 +75,7 @@ function render() {
   const error = message || s.operation?.error || s.error;
   el("result-error").hidden = !error; el("result-error").textContent = error || "";
   renderCalibration();
+  management.update(s, pending || !online);
 }
 function renderCalibration() {
   el("calibrate").disabled = !online || !mapping || pending

@@ -19,7 +19,7 @@
 # invalidates when this stage's own instructions change. Expect this stage
 # alone to take on the order of an hour on-device the first time; cached
 # afterward like any other Docker layer.
-FROM ros:humble-ros-base-jammy AS colmap-builder
+FROM ros:humble-ros-base-jammy@sha256:7bea3d9aa2483d3ca34c8e30d921b79273b0913bd7dc64bebf51d082b5d107e4 AS colmap-builder
 ARG DEBIAN_FRONTEND=noninteractive
 
 RUN sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/|g' /etc/apt/sources.list
@@ -86,7 +86,7 @@ RUN git clone --branch 3.9.1 --depth 1 https://github.com/colmap/colmap.git /col
     && ninja -j2 \
     && ninja install
 
-FROM ros:humble-ros-base-jammy AS runtime
+FROM ros:humble-ros-base-jammy@sha256:7bea3d9aa2483d3ca34c8e30d921b79273b0913bd7dc64bebf51d082b5d107e4 AS runtime
 
 ARG DEBIAN_FRONTEND=noninteractive
 
@@ -106,9 +106,7 @@ RUN sed -i 's|http://ports.ubuntu.com/ubuntu-ports/|https://mirrors.tuna.tsinghu
     && sed -i 's|http://packages.ros.org/ros2/ubuntu|https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu|g; s|^Types: deb deb-src|Types: deb|' /etc/apt/sources.list.d/ros2.sources
 
 # ── System & ROS2 packages ──────────────────────────────────────────────────
-# The legacy Qt dashboard has been removed. The on-device kiosk uses the
-# Firefox runtime installed below; Playwright Chromium is added only by the
-# final dev stage for headless page checks.
+# The desktop Qt client runs on the host; this image serves APIs and the phone page.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Python build tools
     python3-pip \
@@ -326,59 +324,6 @@ RUN pip3 install --no-cache-dir \
     && pip3 install --no-cache-dir --no-deps \
         "git+https://github.com/mattloper/chumpy.git@580566eafc9ac68b2614b64d6f7aaa84eebb70da"
 
-# ── Kiosk browser (deploy/kiosk/open_web_3d_right.sh): official Firefox ─────
-# The on-device kiosk previously used PyQt5's QWebEngineView, which bundles
-# Chromium 87 (Nov 2020, frozen since). That old build's GPU compositor has
-# a bug on this Tegra GPU/driver combo: under high-frequency, large texture
-# uploads (the live camera feed panels) it presents a blank/white compositor
-# frame -- visible as a flicker, worse the busier the page. Confirmed absent
-# on a current Chromium build on the same hardware, but no vendor ships an
-# arm64 desktop Linux build with H.264 baked in (checked and ruled out
-# Microsoft Edge, Brave, Vivaldi, and the xtradeb PPA -- none publish arm64
-# packages/binaries at all, confirmed via each vendor's own apt/PPA repo
-# metadata), so a Chromium-based kiosk can never show the WebRTC camera
-# streams and would be permanently stuck on the JPEG-polling fallback path.
-# Mozilla is the one still-maintained vendor that ships an official arm64
-# Linux build, and Firefox bundles Cisco's
-# OpenH264 plugin specifically for WebRTC's H.264 (Cisco pays the patent
-# license for exactly this use case) -- verified via getCapabilities and a
-# real screenshot of the /3d page rendering all three camera panels
-# through actual WebRTC decode, no black frames, no flicker.
-#
-# Pinned to a specific release tarball (not the "latest" redirect) so the
-# image is reproducible across builds; bump deliberately, re-verify H.264
-# capability after bumping (Mozilla could in principle drop OpenH264).
-ARG FIREFOX_VERSION=152.0.5
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libgtk-3-0 \
-    libx11-xcb1 \
-    libasound2 \
-    && rm -rf /var/lib/apt/lists/* \
-    && wget -q "https://download-installer.cdn.mozilla.net/pub/firefox/releases/${FIREFOX_VERSION}/linux-aarch64/en-US/firefox-${FIREFOX_VERSION}.tar.xz" -O /tmp/firefox.tar.xz \
-    && tar xf /tmp/firefox.tar.xz -C /opt \
-    && rm /tmp/firefox.tar.xz
-
-# Kiosk profile (see deploy/kiosk/firefox-kiosk-user.js for what/why). Root's
-# real profile dir is used (not /tmp) so it survives container restarts.
-COPY deploy/kiosk/firefox-kiosk-user.js /opt/firefox-kiosk-profile/user.js
-
-# Non-root account to actually run the kiosk Firefox process (see the `su`
-# in deploy/kiosk/open_web_3d_right.sh). Firefox refuses to enable its content
-# sandbox for uid 0 and instead shows a permanent "security sandbox is
-# disabled, unsupported and less secure" bar -- Mozilla hardcodes this
-# warning with no pref/policy to suppress it (sandboxing root is
-# meaningless, so they deliberately don't make it hideable). uid 1000
-# mirrors this host's desktop user (nvidia) on purpose: the X server
-# authorizes by the *kernel* uid of the connecting process (this Docker
-# setup has no userns-remap, so container uid 1000 IS host uid 1000), and
-# run_dashboard.sh's `xhost +SI:localuser:$(id -un)` grant is keyed
-# off that same uid -- the container-local username below doesn't need to
-# match anything. GID 104 is "render" on the host (/dev/dri/renderD128)
-# but collides with systemd-resolve's GID inside this image; joining it by
-# number still grants the device access that group membership is for.
-RUN useradd -m -u 1000 -G video,104 -s /bin/bash kiosk \
-    && chown -R kiosk:kiosk /opt/firefox-kiosk-profile
-
 # ── GStreamer core + PyGObject for the NVJPEG hardware JPEG path ────────────
 # insight_capture/media/jpeg.py drives nvjpegenc/nvjpegdec through GStreamer. The NVIDIA
 # plugin .so files themselves (libgstnvjpeg.so, libgstnvvidconv.so, ...) are
@@ -387,7 +332,7 @@ RUN useradd -m -u 1000 -G video,104 -s /bin/bash kiosk \
 # they need the GStreamer framework and Python bindings present to load into.
 # gstreamer1.0-tools also provides gst-inspect-1.0, which the Settings page's
 # /api/images/capabilities probe shells out to. Kept as its own layer (not in
-# the apt layer at the top) so the cached playwright/pip layers don't rebuild.
+# the apt layer at the top) so the cached model and Python layers do not rebuild.
 # plugins-bad (webrtcbin/dtls/srtp/h264parse) + nice (ICE) serve the WebRTC
 # camera streams in insight_capture/media/webrtc.py; the H.264 encoder itself is the
 # host-injected nvv4l2h264enc. sqlite3 (the CLI) is the .recover salvage tool
@@ -425,6 +370,7 @@ RUN chmod +x /entrypoint.sh
 # layer: code-only changes rebuild in seconds, everything above stays cached.
 # .dockerignore keeps runtime data, .git, and release/ tarballs out.
 COPY . /workspaces/insight_capture
+COPY .native-build/insight-native .native-build/qt-runtime.tar /opt/insight/native/
 
 # ── Working directory matches docker-compose source mount path
 WORKDIR /workspaces/insight_capture
@@ -433,20 +379,3 @@ EXPOSE 8765
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python3", "-u", "-m", "insight_capture.runtime.app"]
-
-# ── Dev-only: headless Chromium for page verification ──────────────────────
-# Vendored via Playwright rather than the host's snap/apt chromium-browser:
-# both route through snap-confine, which was found broken (missing file
-# capabilities) on at least one deployed Jetson -- vendoring sidesteps the
-# host package manager and keeps the browser version pinned and reproducible.
-# Not part of the customer release: deploy/build_release.sh builds the
-# "runtime" stage above with --target; only the dev compose (docker-compose.yml)
-# targets this stage, for the headless console-error/screenshot checks
-# described in CLAUDE.md. This is never the on-device kiosk -- see the
-# Firefox section above for why (no H.264 decoder in any arm64 Chromium).
-FROM runtime AS dev
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
-RUN pip3 install --no-cache-dir \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple \
-    "playwright==1.61.0" \
-    && python3 -m playwright install --with-deps chromium

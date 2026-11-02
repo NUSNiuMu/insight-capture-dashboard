@@ -38,3 +38,25 @@ multiview_handpose_report_assets/
 # CAD source for export_gripper_split_from_stl.py (dev tool); the runtime
 # only needs the exported .glb files
 assets/models/*.stl
+
+# Desktop Qt is distributed as its two built runtime artifacts, not build caches.
+.native-build/*
+!.native-build/insight-native
+!.native-build/qt-runtime.tar
+native_dashboard/*
+!native_dashboard/run.sh
+native_mapping/
+tests/
+docs/
+web_dashboard/src/
+web_dashboard/build.js
+web_dashboard/package.json
+
+# PDFs are documentation or user attachments, never backend runtime inputs.
+*.pdf
+
+.env
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/

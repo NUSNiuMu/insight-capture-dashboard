@@ -162,18 +162,8 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/asset", static._handle_asset)
 
     if context.web_root and context.web_root.exists():
-        app.router.add_get("/", static._handle_index)
-        app.router.add_get("/sessions", static._handle_index)
-        app.router.add_get("/3d", static._handle_spatial_page)
-        app.router.add_get("/images", static._handle_images_page)
-        app.router.add_get("/bags", static._handle_bags_page)
-        app.router.add_get("/umi-dataset", static._handle_umi_dataset_page)
-        app.router.add_get("/recording", static._handle_recording_page)
+        app.router.add_get("/", static._handle_mobile_page)
         app.router.add_get("/mobile", static._handle_mobile_page)
-        app.router.add_get("/scoring", static._handle_scoring_page)
-        app.router.add_get("/optimization", static._handle_optimization_page)
-        app.router.add_get("/handpose", static._handle_handpose_page)
-        app.router.add_get("/settings", static._handle_settings_page)
         static_root = context.web_root / "static"
         if static_root.exists():
             app.router.add_static("/static/", str(static_root), show_index=False)

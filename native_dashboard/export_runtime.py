@@ -8,7 +8,7 @@ import tarfile
 
 root = pathlib.Path('/usr/lib/aarch64-linux-gnu')
 paths = set(glob.glob(str(root / 'libQt6*.so*')))
-paths.add(str(root / 'qt6'))
+paths.update(str(root / 'qt6' / name) for name in ('plugins', 'qml'))
 for package in ('libb2-1', 'libmd4c0', 'libdouble-conversion3', 'libassimp5',
                 'libdraco4', 'libxcb-icccm4', 'libxcb-image0', 'libxcb-keysyms1',
                 'libxcb-render-util0', 'libxcb-xinput0', 'libxcb-xkb1',

@@ -52,6 +52,7 @@ fi
 "${SCRIPT_DIR}/host_setup.sh"
 
 # ── 4. build the dashboard image ────────────────────────────────────────────
+"${ROOT_DIR}/native_dashboard/build.sh"
 log "building the dashboard image (first build downloads ~2GB, later runs are cached)..."
 cd "${ROOT_DIR}"
 docker compose build

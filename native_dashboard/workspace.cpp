@@ -7,7 +7,7 @@ Workspace::Workspace(QUrl server, QObject *parent) : QObject(parent), m_server(s
     for (const char *key : {"tasks","sessions","bags","export","scoring","scoringStart",
             "handpose","capabilities","handFrames","optimization","runs","cameras",
             "trajectories","recording","topics","directories","settings","voice",
-            "volume","health","optLog","action"})
+            "volume","health","optLog","action","savedRecordings"})
         m_viewData.insert(QString::fromLatin1(key), QVariant());
 }
 void Workspace::invalidate(const QString &key) {

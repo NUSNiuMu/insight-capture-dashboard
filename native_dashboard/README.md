@@ -2,9 +2,9 @@
 
 Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬件解码的独立客户端。复用现有 Dashboard HTTP/WebSocket 服务与 ROS 图像订阅；本机优先使用直接预览通道，远程连接使用 WebRTC。
 
-当前 EgoHalo 接入与优化位于 `feat/egohalo-native` 分支。优化前基线已标记为 `native-qt-stable-2026-10-10`（稳定版本地 Qt，提交 `723ed28`）；标签保持不变。网页仍可远程访问，客户发布和 kiosk 开机入口需另行部署。
+当前实现统一在 `main`。Qt 是唯一完整桌面端；手机网页保留现场控制。发布包和镜像升级会提供 Qt 可执行文件及运行库。
 
-9 个原生页面的功能与验证范围见 [对齐清单](PARITY.md)。侧边栏与网页使用相同的入口顺序和分组，默认仍进入采集/空间页。
+9 个原生页面的功能与验证范围见 [对齐清单](PARITY.md)。侧边栏按任务、采集、处理与设置分组，默认仍进入采集/空间页。
 
 ## 构建与启动
 
@@ -14,7 +14,7 @@ Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬
 ./native_dashboard/run.sh
 ```
 
-不带参数时默认连接本机 `http://127.0.0.1:8765`，以 30 FPS 目标全屏启动；缺少可执行文件/Qt 运行库，或原生源码与 QML 资源比可执行文件更新时自动构建。Dashboard 后端需保持运行。传入参数时按指定参数启动。
+不带参数时默认连接本机 `http://127.0.0.1:8765`，以 30 FPS 目标全屏启动；缺少可执行文件或运行库时直接提示安装；源码改动后显式执行 `./native_dashboard/build.sh`。Dashboard 后端需保持运行。传入参数时按指定参数启动。
 
 构建需要 Docker、本地 Qt 构建镜像和本机 Jetson Multimedia API 头文件。首次准备或更新构建镜像时，在有外网的环境执行 `./native_dashboard/build.sh --prepare-builder`；也可通过 `docker load` 导入保存的镜像。Qt 在独立 Ubuntu 22.04 构建容器内安装，运行库导出到 `.native-build/runtime`；运行时使用宿主机已有的 NVIDIA/GStreamer 驱动，避免替换 JetPack 多媒体栈。非标准 SDK 目录可通过 `JETSON_MM_HEADERS` 指定。
 

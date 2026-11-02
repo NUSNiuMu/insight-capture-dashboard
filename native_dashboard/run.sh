@@ -3,24 +3,9 @@ set -euo pipefail
 native_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 build_dir="${INSIGHT_NATIVE_BUILD_DIR:-$(dirname -- "$native_dir")/.native-build}"
 qt_lib="$build_dir/runtime/usr/lib/aarch64-linux-gnu"
-if [[ -x "$build_dir/insight-native" && ! -d "$qt_lib" && -f "$build_dir/qt-runtime.tar" ]]; then
-    mkdir -p "$build_dir/runtime"
-    tar -xf "$build_dir/qt-runtime.tar" -C "$build_dir/runtime"
-fi
-needs_build=0
 if [[ ! -x "$build_dir/insight-native" || ! -d "$qt_lib" ]]; then
-    needs_build=1
-else
-    # Merged QML resources are embedded in the executable, not loaded from disk.
-    while IFS= read -r native_source; do
-        if [[ "$native_source" -nt "$build_dir/insight-native" ]]; then
-            needs_build=1
-            break
-        fi
-    done < <(find "$native_dir" -type f \( -name '*.cpp' -o -name '*.h' -o -name '*.qml' -o -name '*.js' -o -name '*.qrc' -o -name '*.vert' -o -name '*.frag' -o -name 'CMakeLists.txt' \) -print)
-fi
-if [[ "$needs_build" == 1 ]]; then
-    "$native_dir/build.sh"
+    echo 'Qt runtime is not installed. Install the release bundle or run ./native_dashboard/build.sh on a source checkout.' >&2
+    exit 1
 fi
 if [[ $# -eq 0 ]]; then
     set -- --fps 30 --fullscreen

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#122920">
   <title>三相机 · 手机采集</title>
-  <link rel="stylesheet" href="/static/mobile.css?v=20261029-shared-capture">
+  <link rel="stylesheet" href="/static/mobile.css?v=20261102-qt-mobile">
 </head>
 <body>
   <main>
@@ -38,8 +38,21 @@
       </div>
     </section>
     <section class="result"><div class="section-title"><h2>当前 / 最近一条</h2><span id="result-state">—</span></div><p id="filename">尚未采集</p><p id="result-error" role="alert" hidden></p></section>
-    <footer><span id="storage-help">正在读取录制配置…</span><br><a href="/">任务管理</a> · <a href="/bags#deferred-recordings">后处理合包</a> · <a href="/recording">桌面录制面板</a></footer>
+    <details id="management" class="management">
+      <summary>任务管理与后处理合包</summary>
+      <p class="hint">录制和保存结束后操作。完整回放、评分和导出请使用 Jetson 本地 Qt。</p>
+      <label for="task-select">采集任务</label><select id="task-select"></select>
+      <div class="actions"><button id="task-activate" type="button">进入任务</button><button id="task-end" type="button">结束当前任务</button></div>
+      <form id="task-create">
+        <label for="task-new-name">新任务名称</label><input id="task-new-name" required maxlength="100" autocomplete="off">
+        <label for="task-new-instruction">操作说明</label><textarea id="task-new-instruction" required rows="2"></textarea>
+        <button id="task-create-button" type="submit">创建并进入</button>
+      </form>
+      <div class="section-title"><h2>两端录制合包</h2><button id="management-refresh" class="text-button" type="button">刷新</button></div>
+      <div id="saved-recordings"></div><p id="management-message" role="status"></p>
+    </details>
+    <footer><span id="storage-help">正在读取录制配置…</span></footer>
   </main>
-  <script type="module" src="/static/pages/mobile.js?v=20261029-deferred-merge"></script>
+  <script type="module" src="/static/pages/mobile.js?v=20261102-qt-mobile"></script>
 </body>
 </html>

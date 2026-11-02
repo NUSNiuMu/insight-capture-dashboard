@@ -13,8 +13,7 @@
 # so replacing the image never touches customer data.
 services:
   insight-dashboard:
-    # Reap kiosk/browser descendants after restarts instead of leaving them
-    # adopted by the Python process that otherwise runs as container PID 1.
+    # Reap capture worker subprocesses after service restarts.
     init: true
     image: insight-dashboard:${INSIGHT_VERSION:?Run ./update.sh <image-tarball> first to load an image and set the version}
     container_name: insight-dashboard
@@ -27,10 +26,6 @@ services:
     # ── NVIDIA Container Runtime for CUDA acceleration ───────────────────────
     runtime: nvidia
 
-    # Docker's 64MB default /dev/shm is too small for the kiosk browser's
-    # media and compositor processes — see the dev compose for the full story.
-    shm_size: '2gb'
-
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}  # Must match devices; set via scripts/set_ros_domain_id.py
       # Rosbag names and log timestamps use localtime; without this they'd be
@@ -42,8 +37,6 @@ services:
       - INSIGHT_ROSBAG_REQUIRED_SOURCE=${INSIGHT_ROSBAG_REQUIRED_SOURCE:-}
       - INSIGHT_ROSBAG_FALLBACK_DIR=/workspaces/insight_capture/rosbags
       - INSIGHT_MODE=capture
-      # For the on-device kiosk window (run_dashboard.sh --jetson via docker exec)
-      - DISPLAY=${DISPLAY:-:0}
       # Uncomment to override default port:
       # - DASHBOARD_PORT=8765
 
@@ -67,8 +60,6 @@ services:
       # happens to have installed -- exactly the per-device fragility this
       # branch exists to avoid.
 
-      # X11 socket for the on-device kiosk window (--jetson)
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
       # SSH keys for rosbag remote sync (optional; remove if not using sync)
       - ${HOME}/.ssh:/root/.ssh:ro

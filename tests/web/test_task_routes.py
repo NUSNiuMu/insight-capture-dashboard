@@ -99,7 +99,7 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
             response = await routes._handle_activate(request)
 
             self.assertEqual(response.status, 409)
-            self.assertIn("不能切换任务", json.loads(response.text)["speech"])
+            self.assertIn("不能修改任务", json.loads(response.text)["speech"])
 
     async def test_recording_is_routed_into_active_task_set_folder(self):
         with tempfile.TemporaryDirectory() as temporary:
