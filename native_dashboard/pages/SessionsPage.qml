@@ -139,7 +139,7 @@ PageFrame {
                         tone: modelData.operator_valid === false ? "danger" : (modelData.quick_qc || {}).state === "pass" ? "success" : "neutral"
                     }
                     Ui.Button {
-                        text: "空间回放"
+                        text: "准备并回放"
                         enabled: !!modelData.bag_id && !dashboard.state.recording
                         onClicked: shell.openSpatial(modelData.bag_id)
                     }

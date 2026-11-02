@@ -14,18 +14,11 @@ CANNED_REPLIES = {
     "vio_calibration_recording_stopped": "校准数据录制已经结束。",
     "calibration_started": "校准已经开始。",
     "calibration_completed": "校准完成。",
-    "capture_check_started": "开始检测。",
-    "capture_check_pass": "双手相机位置和头部相机地图闭环正常，可以开始下一次采集。",
-    "capture_check_retry": "检测尚未通过。请确认左右手相机完全归位，并用头部相机扫视已建图工作区，然后再说检查相机。",
-    "capture_check_recalibrate": "相机位置或头部地图闭环异常。请重新校准。",
-    "capture_check_not_ready": "检测条件未满足。请确认左右手相机已经静止，头部相机和两路全局定位服务在线。",
-    "capture_check_no_reference": "检测位基准没有配置。当前版本不提供现场设置入口，请跳过这项检查。",
     "recording_already_active": "当前已经在录制。",
     "command_failed": "指令执行失败，请检查数采服务。",
 }
 
 MISHEARD_REPLY = "没听清。"
-OPENCLAW_UNAVAILABLE_REPLY = "OpenClaw 暂时不可用。"
 
 
 def speech_text(text: object, max_chars: int = 240) -> str:

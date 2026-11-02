@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a local wake-word/STT loop and send utterances to OpenClaw."""
+"""Run local wake-word recognition and deterministic capture voice commands."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ DEFAULT_WAKE_ALIASES = (
 VOLUME_SAMPLE_TEXT = "宸境科技"
 
 
-# insight_capture.voice.{audio,commands,control,openclaw_adapter,replies} hold the
+# insight_capture.voice.{audio,commands,control,replies} hold the
 # real implementations; this module only re-exports them as a stable facade for
 # existing callers of insight_capture.voice.service.
 from insight_capture.voice.audio import (
@@ -58,8 +58,6 @@ from insight_capture.voice.commands import (
     LOCAL_COMMAND_REPLY_KEYS,
     LocalCommandFailure,
     calibration_is_complete,
-    capture_check_reply_key,
-    capture_check_speech,
     match_local_command,
     normalize_transcript,
     wake_word_detected,
@@ -70,11 +68,9 @@ from insight_capture.voice.control import (
     save_playback_volume,
     validate_playback_volume,
 )
-from insight_capture.voice.openclaw_adapter import build_agent_command, extract_openclaw_reply
 from insight_capture.voice.replies import (
     CANNED_REPLIES,
     MISHEARD_REPLY,
-    OPENCLAW_UNAVAILABLE_REPLY,
     clean_utterance_transcript,
     speech_text,
     strip_wake_prefix,
@@ -512,30 +508,6 @@ class VoiceService:
             port=self.args.control_port,
         )
 
-    def ask_openclaw(self, utterance: str) -> str:
-        if not self.args.openclaw_bin.is_file():
-            raise RuntimeError("OpenClaw optional assistant is not installed")
-        command = build_agent_command(
-            self.args.openclaw_bin,
-            self.args.session_key,
-            utterance,
-            self.args.agent_timeout_sec,
-            self.args.agent_thinking,
-            self.args.agent_model,
-        )
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=self.args.agent_timeout_sec + 15,
-        )
-        if completed.returncode != 0:
-            detail = completed.stderr.strip().splitlines()
-            message = detail[-1] if detail else f"exit {completed.returncode}"
-            raise RuntimeError(f"OpenClaw agent failed: {message}")
-        return speech_text(extract_openclaw_reply(json.loads(completed.stdout)))
-
     def execute_local_command(self, action: str) -> str:
         endpoint = LOCAL_COMMAND_ENDPOINTS[action]
         request = urllib.request.Request(
@@ -595,12 +567,6 @@ class VoiceService:
         )
         if action == "calibration_start":
             self._start_calibration_monitor()
-        if action == "capture_check":
-            detail = capture_check_speech(payload)
-            if detail:
-                self._pending_spoken_reply = detail
-                return "dynamic_reply"
-            return capture_check_reply_key(payload)
         if (
             action == "recording_stop"
             and payload.get("recording_mode") == "vio_calibration"
@@ -667,30 +633,6 @@ class VoiceService:
         except Exception as exc:  # noqa: BLE001 - status is an added safety signal
             self._emit("error", stage=stage, message=str(exc))
             return None
-
-    def _rollback_new_unconfirmed_recording(
-        self, before: Optional[dict[str, object]]
-    ) -> bool:
-        if before is None or before.get("recording"):
-            return False
-        after = self._read_recording_status("recording_feedback_status_after")
-        if after is None or not after.get("recording"):
-            return False
-        output_path = Path(str(after.get("output_path") or ""))
-        take = after.get("current_take") if isinstance(after.get("current_take"), dict) else {}
-        if not (
-            output_path.name.startswith("looper_record_")
-            or take.get("trigger") == "voice"
-        ):
-            return False
-        self._emit(
-            "recording_feedback_rollback",
-            ok=False,
-            reason="new_automation_recording_has_no_feedback",
-            output_path=str(output_path),
-        )
-        self._rollback_unconfirmed_recording()
-        return True
 
     def _start_calibration_monitor(self) -> None:
         self._calibration_monitor_generation += 1
@@ -799,10 +741,8 @@ class VoiceService:
             )
             return
 
-    def handle_utterance(
-        self, utterance: str, *, allow_local_commands: bool = True
-    ) -> None:
-        local_action = match_local_command(utterance) if allow_local_commands else None
+    def handle_utterance(self, utterance: str) -> None:
+        local_action = match_local_command(utterance)
         if local_action is not None:
             interaction_started = time.monotonic()
             self._last_local_command_timing = {}
@@ -813,7 +753,6 @@ class VoiceService:
                     "vio_calibration_recording_starting"
                 ),
                 "recording_stop": "recording_stopping",
-                "capture_check": "capture_check_started",
             }.get(local_action)
             if immediate_feedback is not None:
                 immediate_feedback_started = time.monotonic()
@@ -901,25 +840,7 @@ class VoiceService:
             ):
                 self._rollback_unconfirmed_recording()
             return
-        recording_before = self._read_recording_status(
-            "recording_feedback_status_before"
-        )
-        try:
-            reply = self.ask_openclaw(utterance)
-        except Exception as exc:  # noqa: BLE001 - stay available after transient failures
-            self._emit("error", stage="agent", message=str(exc))
-            self._rollback_new_unconfirmed_recording(recording_before)
-            with contextlib.suppress(Exception):
-                self.speak(OPENCLAW_UNAVAILABLE_REPLY)
-            return
-        self._emit("reply", text=reply)
-        try:
-            feedback_played = self.speak(reply)
-        except Exception as exc:  # noqa: BLE001 - keep listening after playback errors
-            self._emit("error", stage="agent_feedback", message=str(exc))
-            feedback_played = False
-        if not feedback_played:
-            self._rollback_new_unconfirmed_recording(recording_before)
+        self.speak("未识别到采集指令，请说开始录制、停止录制或开始校准。")
 
     def run_forever(self) -> None:
         try:
@@ -939,7 +860,7 @@ class VoiceService:
         while True:
             activation, transcript = self.wait_for_activation()
             if activation == "local_command":
-                self.handle_utterance(transcript, allow_local_commands=True)
+                self.handle_utterance(transcript)
                 continue
             try:
                 self.play_wake_feedback()
@@ -953,11 +874,10 @@ class VoiceService:
                 except Exception as exc:  # noqa: BLE001 - keep the listener alive
                     self._emit("error", stage="no_speech_feedback", message=str(exc))
                 continue
-            self.handle_utterance(utterance, allow_local_commands=False)
+            self.handle_utterance(utterance)
 
 
 # Historical public name retained for host scripts and downstream tests.
-OpenClawVoiceBridge = VoiceService
 
 
 def parse_args() -> argparse.Namespace:
@@ -1032,19 +952,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-wake-candidates", action="store_true")
     parser.add_argument("--wake-phrase", action="append", default=[])
     parser.add_argument("--wake-alias", action="append", default=[])
-    parser.add_argument("--session-key", default="looper-voice")
-    parser.add_argument("--agent-model", default="openai/gpt-5.6-luna")
-    parser.add_argument(
-        "--openclaw-bin",
-        type=Path,
-        default=Path.home() / ".openclaw" / "bin" / "openclaw",
-    )
-    parser.add_argument("--agent-timeout-sec", type=int, default=90)
-    parser.add_argument(
-        "--agent-thinking",
-        choices=("off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"),
-        default="off",
-    )
     parser.add_argument("--command-timeout-sec", type=float, default=15.0)
     parser.add_argument("--dashboard-url", default="http://127.0.0.1:8765")
     parser.add_argument("--dashboard-timeout-sec", type=float, default=40.0)
@@ -1076,12 +983,12 @@ def parse_args() -> argparse.Namespace:
     test_mode.add_argument(
         "--wake-only",
         action="store_true",
-        help="Exit after detecting the wake phrase without sending anything to OpenClaw.",
+        help="Exit after detecting the wake phrase without executing capture commands.",
     )
     test_mode.add_argument(
         "--transcribe-once",
         action="store_true",
-        help="Transcribe one utterance and exit without sending anything to OpenClaw.",
+        help="Transcribe one utterance and exit without executing capture commands.",
     )
     test_mode.add_argument(
         "--speak-text",
@@ -1105,7 +1012,6 @@ def parse_args() -> argparse.Namespace:
     args.vad_min_speech_sec = max(0.1, args.vad_min_speech_sec)
     args.vad_max_speech_sec = max(1.0, args.vad_max_speech_sec)
     args.wake_pause_sec = max(0.2, args.wake_pause_sec)
-    args.agent_timeout_sec = max(10, args.agent_timeout_sec)
     args.command_timeout_sec = max(1.0, args.command_timeout_sec)
     args.dashboard_timeout_sec = max(1.0, args.dashboard_timeout_sec)
     args.calibration_monitor_timeout_sec = max(

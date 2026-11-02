@@ -12,8 +12,6 @@ from insight_capture.postprocess.bags import BagLibrary, PreparedPlaybackManager
 from insight_capture.postprocess.optimization import OptimizationManager
 from insight_capture.runtime.recording import RecordingManager
 
-from insight_capture.services.dataset_export import UmiExportManager
-from insight_capture.services.gripper_extraction import GripperExtractionManager
 from insight_capture.services.scoring import ScoringManager
 
 
@@ -29,8 +27,6 @@ class DashboardContext:
     prepared_playback_manager: PreparedPlaybackManager
     optimization_manager: OptimizationManager
     handpose_manager: HandPoseManager
-    gripper_extraction_manager: GripperExtractionManager
-    umi_export_manager: UmiExportManager
     take_store: SessionTakeStore
     capture_preflight: CapturePreflight
     voice_alerts: VoiceAlertQueue

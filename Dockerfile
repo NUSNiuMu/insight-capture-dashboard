@@ -124,8 +124,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-tf2-ros \
     ros-humble-sensor-msgs-py \
     ros-humble-rosidl-runtime-py \
-    # Detection2DArray for the insight9_a hand-landmark overlay (Settings page)
-    ros-humble-vision-msgs \
     # COLMAP runtime dependencies for the binary baked in by the
     # colmap-builder stage above (shared libs only, no -dev headers)
     libboost-program-options1.74.0 \
@@ -217,8 +215,8 @@ RUN cd /workspaces/looper-vio-colmap-handoff && \
     grep -q 'stdbuf", "-oL", "-eL", args.colmap_bin' scripts/run_colmap_from_images.py
 
 # ── Python packages not available as apt ────────────────────────────────────
-# opencv-contrib-python-headless provides the cv2.aruco APIs used by gripper
-# tracking. Headless avoids the GTK/X11 shared-lib deps of the full wheel;
+# opencv-contrib-python-headless provides the cv2.aruco APIs used by offline
+# board evaluation. Headless avoids the GTK/X11 shared-lib deps of the full wheel;
 # nothing here calls cv2.imshow/highgui.
 # matplotlib: only looper-vio-colmap-handoff's plot_trajectories.py needs it
 # (run_pipeline_from_rosbag.py's --make-plots, currently always "false" from
@@ -231,7 +229,6 @@ RUN pip3 install --no-cache-dir \
     "aiohttp==3.13.3" \
     "numpy==1.26.4" \
     "opencv-contrib-python-headless==4.11.0.86" \
-    "pyarrow==17.0.0" \
     "rosbags==0.11.3" \
     "matplotlib"
 
@@ -335,10 +332,8 @@ RUN pip3 install --no-cache-dir \
 # the apt layer at the top) so the cached model and Python layers do not rebuild.
 # plugins-bad (webrtcbin/dtls/srtp/h264parse) + nice (ICE) serve the WebRTC
 # camera streams in insight_capture/media/webrtc.py; the H.264 encoder itself is the
-# host-injected nvv4l2h264enc. sqlite3 (the CLI) is the .recover salvage tool
-# for power-cut-corrupted recordings (recording recovery).
+# host-injected nvv4l2h264enc. Interrupted MCAP recovery uses rosbag2 reindex.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    sqlite3 \
     gstreamer1.0-tools \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \

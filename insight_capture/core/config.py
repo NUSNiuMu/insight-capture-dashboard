@@ -126,7 +126,6 @@ def dashboard_streams(camera: Dict) -> List[Dict]:
         item.setdefault("rotation_deg", int(camera.get("dashboard_rotation_deg", 0)))
         item.setdefault("row", int(camera.get("dashboard_row", 0)))
         item.setdefault("column", int(camera.get("dashboard_column", 0)))
-        item["hand_tracking"] = bool(camera.get("dashboard_hand_tracking", False))
         resolved.append(item)
     return resolved
 

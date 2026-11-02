@@ -383,7 +383,6 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         const auto previousOffset = p->modelOffset;
         const auto previousModelRotation = p->modelRotation;
         const auto previousScale = p->modelScale;
-        const auto previousOpening = p->opening;
         const auto previousVisible = p->visible;
         const auto previousSeq = p->lastSeq;
         const auto previousGeneration = p->generation;
@@ -402,8 +401,6 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         // Their difference is a local Y half-turn, after the configured rotation.
         p->modelRotation = QQuaternion::fromEulerAngles(-r.x(), -r.y(), r.z()) *
                            QQuaternion::fromAxisAndAngle(0, 1, 0, 180);
-        if (d["gripper_opening"].isDouble())
-            p->opening = qBound(0.0, d["gripper_opening"].toDouble(), 1.0);
         cacheModel(p, d);
         auto trace = d["trace_update"].toObject();
         auto points = trace.isEmpty() ? d["trace"].toArray() : trace["points"].toArray();
@@ -466,8 +463,6 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
             emit p->poseChanged();
         if (previousOffset != p->modelOffset || previousModelRotation != p->modelRotation || previousScale != p->modelScale)
             emit p->modelChanged();
-        if (previousOpening != p->opening)
-            emit p->openingChanged();
         if (traceChanged)
             emit p->traceChanged();
         if (qEnvironmentVariable("INSIGHT_LATENCY_TRACE") == "1" && d.contains("latency_trace")) {
@@ -696,42 +691,6 @@ void Dashboard::setPlaybackTime(double seconds) {
         poses.append(p);
     }
     acceptPose({{"poses", poses}, {"trace_capacity", qMax(300, int(frame) + 1)}});
-}
-void Dashboard::resetGripper(QObject *root) {
-    m_gripperNodes.remove(root);
-    m_gripperOpenings.remove(root);
-}
-void Dashboard::updateGripper(QObject *root, double opening) {
-    if (!root)
-        return;
-    if (!m_gripperNodes.contains(root)) {
-        QList<QPointer<QObject>> nodes;
-        for (auto *node : root->findChildren<QObject *>())
-            if (node->objectName().contains("finger_holder"))
-                nodes.append(node);
-        m_gripperNodes.insert(root, nodes);
-        connect(root, &QObject::destroyed, this, [this, root] { resetGripper(root); });
-    }
-    if (m_gripperOpenings.contains(root) && m_gripperOpenings.value(root) == opening)
-        return;
-    m_gripperOpenings[root] = opening;
-    for (const auto &pointer : m_gripperNodes.value(root)) {
-        auto *node = pointer.data();
-        if (!node)
-            continue;
-        QVariant value = node->property("position");
-        if (!value.canConvert<QVector3D>())
-            continue;
-        auto rest = node->property("nativeRest");
-        if (!rest.isValid()) {
-            node->setProperty("nativeRest", value);
-            rest = value;
-        }
-        auto pos = rest.value<QVector3D>();
-        float travel = qMax(0.f, std::abs(pos.x()) - .001f);
-        pos.setX(pos.x() + (pos.x() < 0 ? 1 : -1) * travel * (1 - qBound(0.0, opening, 1.0)));
-        node->setProperty("position", QVariant::fromValue(pos));
-    }
 }
 QVariantMap Dashboard::diagnostics() const {
     QVariantList data;

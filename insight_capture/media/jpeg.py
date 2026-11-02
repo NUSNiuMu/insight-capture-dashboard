@@ -3,7 +3,6 @@
 import threading
 from typing import Dict, Optional, Tuple
 
-import numpy as np
 
 try:
     import gi
@@ -126,43 +125,6 @@ class HwJpegCodec:
         if jpeg is None:
             return None
         return jpeg, width, height
-
-    # ── BGRx round-trip for the hand-overlay draw path ──────────────────────
-
-    def decode_jpeg_bgrx(self, key: str, jpeg: bytes) -> Optional[np.ndarray]:
-        """Decode a JPEG to a writable HxWx4 BGRx array (cv2 draws on 4
-        channels fine, and BGRx feeds back into encode_bgrx without another
-        color conversion)."""
-        pipe_key = ("dec", key)
-        result = self._run(
-            pipe_key,
-            lambda: _Pipeline(
-                "appsrc name=src is-live=true format=time do-timestamp=true "
-                "caps=image/jpeg ! nvjpegdec ! nvvidconv ! "
-                "video/x-raw,format=BGRx ! appsink name=sink sync=false max-buffers=2 drop=true",
-                "BGRx",
-            ),
-            jpeg,
-        )
-        if result is None:
-            return None
-        data, caps = result
-        structure = caps.get_structure(0)
-        width = structure.get_value("width")
-        height = structure.get_value("height")
-        if not width or not height or len(data) < height * width * 4:
-            return None
-        stride = len(data) // height  # nvvidconv may pad rows
-        rows = np.frombuffer(data, dtype=np.uint8).reshape(height, stride)
-        # Explicit copy: frombuffer views are read-only, and the caller draws
-        # onto this array in place.
-        return rows[:, : width * 4].reshape(height, width, 4).copy()
-
-    def encode_bgrx(self, key: str, image: np.ndarray, quality: int = 90) -> Optional[bytes]:
-        if image.ndim != 3 or image.shape[2] != 4:
-            return None
-        height, width = image.shape[:2]
-        return self._encode(key, np.ascontiguousarray(image).tobytes(), "BGRx", width, height, quality)
 
     # ── internals ───────────────────────────────────────────────────────────
 

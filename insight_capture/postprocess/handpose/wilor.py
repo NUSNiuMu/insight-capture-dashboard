@@ -19,6 +19,7 @@ from wilor_mini.pipelines.wilor_hand_pose3d_estimation_pipeline import (
     WiLorHandPose3dEstimationPipeline,
 )
 
+from insight_capture.core.bag import single_mcap
 from insight_capture.postprocess.handpose.filtering import stabilize_wilor
 from insight_capture.postprocess.handpose.schema import DEFAULT_IMAGE_TOPIC
 
@@ -71,6 +72,7 @@ def main() -> None:
     raw_records = []
     frame_count = 0
     first_stamp_ns = None
+    single_mcap(args.bag_dir)
     with AnyReader([args.bag_dir], default_typestore=typestore) as reader:
         connections = [
             connection

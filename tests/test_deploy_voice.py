@@ -38,7 +38,6 @@ class DeployVoiceTest(unittest.TestCase):
 
         self.assertIn("sync_host_runtime", updater)
         self.assertIn('"${VOICE_INSTALLER}" --if-ready', updater)
-        self.assertIn('legacy_unit="looper-openclaw-voice.service"', installer)
         self.assertIn("systemctl --user enable insight-voice-control.service", installer)
 
 

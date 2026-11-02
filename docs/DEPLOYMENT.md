@@ -10,7 +10,7 @@
 ./native_dashboard/run.sh                    # Qt 桌面
 ```
 
-`jetson-nx` 使用 Insight9 + 双 Insight3，`jetson-nx-egohalo` 使用 EgoHalo + 双 Insight3；`lite` 与 `lite-779` 是开发配置。设备差异位于 `config/devices/<name>/`，代码共用 `main`。
+`jetson-nx` 使用 Insight9 + 双 Insight3，`jetson-nx-egohalo` 使用 EgoHalo + 双 Insight3。设备差异位于 `config/devices/<name>/`，代码共用 `main`。
 
 选择配置会覆盖现场 `cameras.json`、`runtime.json`，停止旧配置读取者，再按实际设置启停服务。跨 ROS 域启用转发，校正配置启用校正，编码输入启用 H.264 编码。无需手动指定 Compose profile。切换前结束录制和保存，切换后重新校准。
 
@@ -80,7 +80,7 @@ INSIGHT_ROSBAG_REQUIRED_SOURCE=/dev/disk/by-uuid/<采集盘UUID>
 - `/api/cameras`：对应相机图像/VIO是否新鲜。
 - `/api/mapping`：地图、三路定位与时钟状态。
 - `/api/mobile/status`：实际录制、保存和设备列表。
-- Qt：九个页面、回放及手动合包。
+- Qt：八个页面、回放及手动合包。
 - 手机：任务、录制启停、校准、单路预览和合包。
 
 健康状态不代替相机有数据、录制不掉帧或定位精度验收。开发验收记录要区分模拟 UI、真实设备、保存文件和离线测量。

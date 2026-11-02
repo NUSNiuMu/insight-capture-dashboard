@@ -59,7 +59,6 @@ def parse_args() -> argparse.Namespace:
         default=str(PROJECT_ROOT / "web_dashboard" / "dist"),
     )
     parser.add_argument("--view-mode", choices=("3d",), default="3d")
-    parser.add_argument("--fake-pose", action="store_true")
     parser.add_argument("--pose-publish-hz", type=float, default=50.0)
     parser.add_argument(
         "--runtime-config",
@@ -117,7 +116,6 @@ def main() -> None:
     node = PoseBridgeNode(
         settings.config_path,
         post_processing_config_path=settings.runtime_config_path,
-        fake_pose=args.fake_pose,
         pose_publish_hz=args.pose_publish_hz,
         webrtc_port=args.webrtc_port,
     )
@@ -128,11 +126,6 @@ def main() -> None:
     recording_manager = build_recording_manager(settings, node)
     recording_manager.start_orphan_recovery()
     node.recording_manager = recording_manager
-    node.configure_capture_check(
-        dict(settings.runtime_config.get("capture_check") or {}),
-        settings.results_root,
-    )
-
     # Small ordered callbacks avoid thread-pool/GIL contention at high message rates.
     threads = node.ros_executor_threads
     executor = SingleThreadedExecutor() if threads == 1 else MultiThreadedExecutor(num_threads=threads or None)

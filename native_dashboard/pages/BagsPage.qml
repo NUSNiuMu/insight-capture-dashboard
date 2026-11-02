@@ -86,7 +86,7 @@ PageFrame {
                 }
                 RowLayout {
                     Ui.Button {
-                        text: "空间回放"
+                        text: "准备并回放"
                         enabled: !dashboard.state.recording
                         onClicked: shell.openSpatial(String(modelData.id || modelData.name))
                     }

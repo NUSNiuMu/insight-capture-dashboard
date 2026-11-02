@@ -10,7 +10,6 @@ class SessionMetadata:
     session_id: str
     task: str
     operator: str
-    station_check_after_take: bool
 
     @classmethod
     def from_config(cls, config: Optional[Dict], slug) -> "SessionMetadata":
@@ -20,5 +19,4 @@ class SessionMetadata:
             session_id=slug(settings.get("session_id"), f"{today}-default"),
             task=str(settings.get("task") or "unspecified"),
             operator=str(settings.get("operator") or "unknown"),
-            station_check_after_take=bool(settings.get("station_check_after_take", False)),
         )

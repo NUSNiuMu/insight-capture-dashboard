@@ -53,7 +53,6 @@ def _catalog() -> CaptureTaskCatalog:
                 instruction="Stack the cups",
                 capture_profile="dual_arm_umi",
                 voice_aliases=("叠杯子",),
-                station_check_after_take=True,
             )
         ],
         default_task_id="cup_stacking",

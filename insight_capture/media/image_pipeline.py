@@ -11,7 +11,7 @@ import numpy as np
 try:
     import rclpy
     from sensor_msgs.msg import Image as RosImage
-except Exception:  # pragma: no cover - fake mode can run without ROS imports
+except Exception:  # pragma: no cover - host-side tools may import without ROS
     rclpy = None
     RosImage = None
 
@@ -94,19 +94,10 @@ class ImagePipeline:
                 # Share one decode; skip CPU decode when NVJPEG can consume raw data.
                 display_image = None
                 if topic_type != "compressed" and (
-                    camera_name in self.owner.gripper_tracking_cameras
-                    or self.owner._hw_jpeg is None
+                    self.owner._hw_jpeg is None
                     or not self.owner._hw_jpeg.can_encode_ros_image(camera_name, msg)
                 ):
                     display_image = self.owner._decode_display_image(msg)
-                if camera_name in self.owner.gripper_tracking_cameras:
-                    gripper_image = (
-                        display_image
-                        if display_image is not None
-                        else self._decode_raw_image(topic_type, msg)
-                    )
-                    if gripper_image is not None:
-                        self.owner._process_gripper_image(camera_name, gripper_image)
                 now = time.monotonic()
                 # Refresh the hidden HTTP fallback at low rate during WebRTC.
                 refresh_fallback = (
@@ -123,8 +114,7 @@ class ImagePipeline:
                     else None
                 )
                 with self.owner.camera_frame_lock:
-                    # Keep the prior composite visible until its replacement returns.
-                    if frame is not None and not frame.hand_overlay_pending:
+                    if frame is not None:
                         self.owner.latest_camera_frames[camera_name] = frame
                         if topic_type != "compressed":
                             self.owner._last_webrtc_fallback_jpeg_at[camera_name] = frame.received_monotonic
@@ -148,10 +138,6 @@ class ImagePipeline:
         if topic_type == "compressed":
             data = bytes(msg.data)
             self._encoding_paths[camera_name] = ("source-jpeg", time.monotonic())
-            hand_overlay_pending = False
-            if camera_name in self.owner.hand_overlay_enabled:
-                # Dispatch overlay work asynchronously and serve the source meanwhile.
-                hand_overlay_pending = self.owner.compose_hand_overlay_jpeg(camera_name, data, version)
             width, height = self.owner._jpeg_dimensions(data)
             return CameraFrame(
                 data=data,
@@ -161,7 +147,6 @@ class ImagePipeline:
                 width=width,
                 height=height,
                 version=version,
-                hand_overlay_pending=hand_overlay_pending,
             )
         if self.owner._hw_jpeg is not None:
             with track(f"image_encode_hw:{camera_name}"):

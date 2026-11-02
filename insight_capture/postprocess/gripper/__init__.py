@@ -1,1 +1,0 @@
-"""Offline gripper extraction."""

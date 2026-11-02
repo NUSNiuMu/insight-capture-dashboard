@@ -246,7 +246,7 @@ class RecordingRoutes:
             raise
         return web.json_response({
             **status,
-            "automation": "openclaw" if automation else None,
+            "automation": "voice" if automation else None,
             "trigger": "voice" if automation else "web",
             "recording_mode": preflight_mode,
             "preflight": report,
@@ -302,7 +302,7 @@ class RecordingRoutes:
         """Stop only recordings created through the automation start route."""
         current = self.context.recording_manager.status()
         if not current.get("recording"):
-            return web.json_response({"automation": "openclaw", **current})
+            return web.json_response({"automation": "voice", **current})
         output_path = str(current.get("output_path") or "")
         take_store = getattr(self.context, "take_store", None)
         current_take = take_store.current() if take_store is not None else None
@@ -331,7 +331,7 @@ class RecordingRoutes:
             if take_store is not None and not calibration_owned
             else None
         )
-        return web.json_response({"automation": "openclaw", "trigger": "voice", **status, "take": take})
+        return web.json_response({"automation": "voice", "trigger": "voice", **status, "take": take})
 
     async def _handle_rosbag_list(self, request: web.Request) -> web.Response:
         scope = str(request.query.get("scope", "all")).strip().lower()

@@ -21,7 +21,6 @@ class CaptureTask:
     instruction: str
     capture_profile: str
     voice_aliases: tuple[str, ...]
-    station_check_after_take: bool
 
     def as_dict(self) -> Dict[str, object]:
         return {
@@ -31,7 +30,6 @@ class CaptureTask:
             "instruction": self.instruction,
             "capture_profile": self.capture_profile,
             "voice_aliases": list(self.voice_aliases),
-            "station_check_after_take": self.station_check_after_take,
         }
 
     def as_config_dict(self) -> Dict[str, object]:
@@ -42,7 +40,6 @@ class CaptureTask:
             "instruction": self.instruction,
             "capture_profile": self.capture_profile,
             "voice_aliases": list(self.voice_aliases),
-            "station_check_after_take": self.station_check_after_take,
         }
 
 
@@ -121,7 +118,6 @@ class CaptureTaskCatalog:
             instruction=instruction,
             capture_profile=str(raw.get("capture_profile") or "").strip(),
             voice_aliases=aliases,
-            station_check_after_take=bool(raw.get("station_check_after_take", False)),
         )
 
     def _persist(self, task: CaptureTask) -> None:

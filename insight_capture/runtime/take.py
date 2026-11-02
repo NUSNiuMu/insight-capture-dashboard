@@ -44,7 +44,6 @@ class SessionTakeStore:
         self.capture_profile = ""
         self.operator = "unknown"
         self.session_id = ""
-        self.station_check_after_take = False
         self.root = self.sessions_root
         self.takes_root = self.sessions_root / "takes"
         if task_catalog is not None:
@@ -60,7 +59,6 @@ class SessionTakeStore:
         self.task_id = _slug(metadata.task, "unspecified")
         self.operator = metadata.operator
         self.session_id = metadata.session_id
-        self.station_check_after_take = metadata.station_check_after_take
         self.root = self.sessions_root / self.session_id
         self.takes_root = self.root / "takes"
         self.takes_root.mkdir(parents=True, exist_ok=True)
@@ -73,7 +71,6 @@ class SessionTakeStore:
         self.task_speech_name = task.speech_name
         self.capture_profile = task.capture_profile
         self.session_id = session_id
-        self.station_check_after_take = task.station_check_after_take
         self.root = self.sessions_root / session_id
         self.takes_root = self.root / "takes"
         self.takes_root.mkdir(parents=True, exist_ok=True)
@@ -162,7 +159,6 @@ class SessionTakeStore:
             "task_instruction": self.task_instruction,
             "capture_profile": self.capture_profile,
             "operator": self.operator,
-            "station_check_after_take": self.station_check_after_take,
             "state": "active" if self._active else "ended",
             "created_at_epoch_s": created,
             "updated_at_epoch_s": time.time(),
@@ -218,7 +214,6 @@ class SessionTakeStore:
                 self.task_instruction = task.instruction
                 self.task_speech_name = task.speech_name
                 self.capture_profile = task.capture_profile
-                self.station_check_after_take = task.station_check_after_take
                 self._write_session()
                 self._write_active_state()
             return task.as_dict()
@@ -309,7 +304,6 @@ class SessionTakeStore:
                 "start_epoch_s": time.time(),
                 "end_epoch_s": None,
                 "quick_qc": {"state": "pending", "reasons": []},
-                "station_check": {"required": self.station_check_after_take, "state": "pending"},
                 "operator_valid": None,
                 "operator_decision": "pending",
                 "reject_reason": None,
@@ -430,20 +424,6 @@ class SessionTakeStore:
             self._write_json(self._path(payload["take_id"]), payload)
             return deepcopy(payload)
 
-    def record_station_check(self, result: Dict) -> Optional[Dict]:
-        with self._lock:
-            payload = self.current()
-            if payload is None:
-                return None
-            payload["station_check"] = {
-                "required": self.station_check_after_take,
-                "state": str(result.get("state") or "unknown"),
-                "result": result,
-                "checked_at_epoch_s": time.time(),
-            }
-            self._write_json(self._path(payload["take_id"]), payload)
-            return deepcopy(payload)
-
     def current(self) -> Optional[Dict]:
         with self._lock:
             if not self._active:
@@ -485,7 +465,6 @@ class SessionTakeStore:
                 "task_instruction": self.task_instruction,
                 "capture_profile": self.capture_profile,
                 "operator": self.operator,
-                "station_check_after_take": self.station_check_after_take,
                 "recording_subdirectory": self.recording_subdirectory(),
                 "active": self._active,
             },
@@ -552,7 +531,6 @@ class SessionTakeStore:
                 "speech_name": self.task_speech_name,
                 "instruction": self.task_instruction,
                 "capture_profile": self.capture_profile,
-                "station_check_after_take": self.station_check_after_take,
                 "recording_subdirectory": self.recording_subdirectory(),
             }
             return {

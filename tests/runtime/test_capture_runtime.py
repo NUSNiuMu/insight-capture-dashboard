@@ -56,12 +56,11 @@ class CaptureRuntimeTest(unittest.TestCase):
             _participant_watchdog=SimpleNamespace(close=lambda: calls.append("watchdog")),
             _preview_manager=SimpleNamespace(close=lambda: calls.append("preview")),
             stop_webrtc_worker=lambda: calls.append("webrtc"),
-            stop_hand_overlay_worker=lambda: calls.append("hand_overlay"),
         )
 
         PoseBridgeNode.close(node)
 
-        self.assertEqual(calls, ["watchdog", "preview", "webrtc", "hand_overlay"])
+        self.assertEqual(calls, ["watchdog", "preview", "webrtc"])
 
     def test_pose_payload_keeps_configured_3d_model(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -84,14 +83,12 @@ class CaptureRuntimeTest(unittest.TestCase):
                 trace_generation=1,
                 latest_pose_sample={"cam": None},
                 last_pose_received_time={"cam": 0.0},
-                fake_pose=True,
                 pose_timeout_sec=2.0,
                 raw_traces={"cam": deque()},
                 raw_trace_sequences={"cam": deque()},
                 trace_sequences={"cam": 0},
                 display_fps_limit=30.0,
                 max_points=100,
-                gripper_opening_percent=lambda _name: None,
             )
             builder = PayloadBuilder(owner)
 
@@ -184,7 +181,6 @@ class CaptureRuntimeTest(unittest.TestCase):
                 for name in ("a", "b", "c")
             ]
             node = SimpleNamespace(
-                fake_pose=False,
                 cameras=cameras,
                 poses=poses,
                 camera_input_lock=threading.Lock(),
@@ -259,7 +255,6 @@ class CaptureRuntimeTest(unittest.TestCase):
                     instruction="Stack the cups",
                     capture_profile="dual_arm_umi",
                     voice_aliases=("叠杯子",),
-                    station_check_after_take=True,
                 )
             ],
             default_task_id="cup_stacking",
@@ -305,7 +300,6 @@ class CaptureRuntimeTest(unittest.TestCase):
                     instruction="Stack the cups",
                     capture_profile="dual_arm_umi",
                     voice_aliases=("叠杯子",),
-                    station_check_after_take=False,
                 )
             ],
             default_task_id="cup_stacking",

@@ -50,28 +50,6 @@ install -m 0644 "${temporary_unit}" "${unit_path}"
 
 systemctl --user daemon-reload
 
-# v2.0.6 and earlier used an OpenClaw-owned unit and entry point. Stop it
-# before starting the offline-first service so both processes never compete
-# for the same ALSA capture device.
-legacy_unit="looper-openclaw-voice.service"
-legacy_unit_path="${unit_dir}/${legacy_unit}"
-if [[ -e "${legacy_unit_path}" ]]; then
-  systemctl --user stop "${legacy_unit}"
-fi
-
 systemctl --user enable insight-voice-control.service
 systemctl --user restart insight-voice-control.service
 systemctl --user --no-pager --full status insight-voice-control.service
-
-if [[ -e "${legacy_unit_path}" ]]; then
-  systemctl --user disable "${legacy_unit}"
-  rm -f "${legacy_unit_path}"
-  systemctl --user daemon-reload
-  echo "Migrated legacy ${legacy_unit} to insight-voice-control.service."
-fi
-
-if [[ -x "${HOME}/.openclaw/bin/openclaw" ]]; then
-  echo "OpenClaw detected; non-fixed natural-language requests are enabled when its gateway is available."
-else
-  echo "OpenClaw not installed; all fixed capture commands remain fully offline."
-fi

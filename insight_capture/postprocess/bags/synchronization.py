@@ -10,18 +10,17 @@ import shutil
 import subprocess
 import threading
 import time
-from collections import deque
 from pathlib import Path
-from typing import Callable, Deque, Dict, Iterable, Optional
+from typing import Callable, Dict, Iterable, Optional
 from urllib.parse import quote
 
 import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
-from insight_capture.postprocess.gripper.extraction import decode_color_image
-from insight_capture.legacy.composite_bag import iter_messages, source_files, topic_types
-from insight_capture.legacy.composite_bag import MANIFEST_NAME
+from insight_capture.media.ros_image import decode_color_image
+from insight_capture.core.bag import iter_messages, source_files, topic_types
+from insight_capture.core.bag import MANIFEST_NAME
 from .playback import _read_bag_topics
 
 
@@ -499,7 +498,7 @@ def _recording_mode(bag_path: Path) -> str:
 def _bag_topic_stamps(
     bag_path: Path, topics: Iterable[str]
 ) -> dict[str, np.ndarray]:
-    """Read recorder timestamps from every storage part."""
+    """Read recorder timestamps from the MCAP file."""
     requested = [str(topic) for topic in topics]
     result: dict[str, list[int]] = {topic: [] for topic in requested}
     for topic, _raw, timestamp in iter_messages(bag_path, requested):
@@ -518,13 +517,6 @@ def _bag_topic_messages(
     bag_path: Path, topics: Iterable[str]
 ) -> Iterable[tuple[str, bytes, int]]:
     yield from iter_messages(bag_path, topics)
-
-
-# Stable compatibility names retained for tests and downstream imports. The
-# implementations now support both SQLite and composite MCAP sessions.
-_sqlite_topic_stamps = _bag_topic_stamps
-_sqlite_topic_types = _bag_topic_types
-_sqlite_topic_messages = _bag_topic_messages
 
 
 def _decode_review_image(
@@ -552,11 +544,9 @@ class PreparedPlaybackManager:
         cache_root: Path,
         *,
         bag_resolver: Optional[Callable[[str], Path]] = None,
-        bag_references: Optional[Callable[[], Iterable[str]]] = None,
     ) -> None:
         self.rosbag_root = rosbag_root.resolve()
         self._bag_resolver = bag_resolver
-        self._bag_references = bag_references
         self.cache_root = cache_root.resolve()
         self.cache_root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
@@ -572,17 +562,10 @@ class PreparedPlaybackManager:
         self._cache_key = ""
         self._timings: dict[str, float] = {}
         self._browser_stats: dict[str, object] = {}
-        self._background_active = False
         self._recording_manager = None
-        self._configuration_provider: Optional[
-            Callable[[], tuple[list[dict[str, object]], list[dict[str, object]]]]
-        ] = None
-        self._queue: Deque[str] = deque()
-        self._queued_names: set[str] = set()
-        self._queue_errors: dict[str, str] = {}
-        self._queue_condition = threading.Condition(self._lock)
-        self._scheduler_stop = threading.Event()
-        self._scheduler_thread: Optional[threading.Thread] = None
+
+    def shutdown(self) -> None:
+        self.stop()
 
     def status(self) -> Dict[str, object]:
         with self._lock:
@@ -596,9 +579,6 @@ class PreparedPlaybackManager:
             "progress": round(self._progress, 3),
             "stage": self._stage,
             "error": self._error,
-            "background": self._background_active,
-            "queued": list(self._queue),
-            "queue_errors": dict(self._queue_errors),
             "timings": dict(self._timings),
         }
         if self._browser_stats:
@@ -615,26 +595,15 @@ class PreparedPlaybackManager:
         recording_manager,
         cameras: list[dict[str, object]],
         poses: list[dict[str, object]],
-        *,
-        background: bool = False,
     ) -> Dict[str, object]:
         bag_path = self._bag_path(bag_name)
-        stopping_thread = None
         with self._lock:
             if self._state == "playing":
                 raise RuntimeError("Stop the active playback before preparing another bag.")
             if self._thread is not None and self._thread.is_alive():
                 if self._state == "preparing" and self._bag_name == bag_name:
                     return self._status_unlocked()
-                if not background and self._background_active:
-                    self._cancel.set()
-                    stopping_thread = self._thread
-                else:
-                    raise RuntimeError("Previous playback preparation is still stopping.")
-        if stopping_thread is not None:
-            stopping_thread.join(timeout=3.0)
-            if stopping_thread.is_alive():
-                raise RuntimeError("Background review preparation is still stopping; retry shortly.")
+                raise RuntimeError("Previous playback preparation is still stopping.")
         with recording_manager._lock:
             recording_manager._cleanup_if_exited_unlocked()
             if recording_manager.processes:
@@ -682,7 +651,6 @@ class PreparedPlaybackManager:
             self._cache_key = ""
             self._timings = {}
             self._browser_stats = {}
-            self._background_active = background
             self._recording_manager = recording_manager
             self._thread = threading.Thread(
                 target=self._run,
@@ -692,123 +660,6 @@ class PreparedPlaybackManager:
             )
             self._thread.start()
         return self.status()
-
-    def configure_background(
-        self,
-        recording_manager,
-        configuration_provider: Callable[
-            [], tuple[list[dict[str, object]], list[dict[str, object]]]
-        ],
-    ) -> None:
-        """Generate newly completed review bundles away from the recording path."""
-        with self._queue_condition:
-            self._recording_manager = recording_manager
-            self._configuration_provider = configuration_provider
-            if self._scheduler_thread is not None:
-                return
-            self._scheduler_thread = threading.Thread(
-                target=self._scheduler_loop,
-                daemon=True,
-                name="review_prebuild_scheduler",
-            )
-            self._scheduler_thread.start()
-
-    def enqueue(self, bag_name: str) -> Dict[str, object]:
-        self._bag_path(bag_name)
-        with self._queue_condition:
-            if bag_name != self._bag_name and bag_name not in self._queued_names:
-                self._queue.append(bag_name)
-                self._queued_names.add(bag_name)
-                self._queue_errors.pop(bag_name, None)
-                self._queue_condition.notify_all()
-            return self._status_unlocked()
-
-    def enqueue_all(self) -> Dict[str, object]:
-        if self._bag_references is not None:
-            for reference in self._bag_references():
-                self.enqueue(reference)
-            return self.status()
-        for path in sorted(self.rosbag_root.iterdir(), key=lambda item: item.stat().st_mtime):
-            if path.is_dir() and (
-                (path / "metadata.yaml").is_file() or (path / MANIFEST_NAME).is_file()
-            ):
-                self.enqueue(path.name)
-        return self.status()
-
-    def shutdown(self) -> None:
-        self._scheduler_stop.set()
-        self.stop()
-        with self._queue_condition:
-            self._queue_condition.notify_all()
-        scheduler = self._scheduler_thread
-        if scheduler is not None and scheduler is not threading.current_thread():
-            scheduler.join(timeout=3.0)
-
-    def _scheduler_loop(self) -> None:
-        while not self._scheduler_stop.is_set():
-            with self._queue_condition:
-                while not self._queue and not self._scheduler_stop.is_set():
-                    self._queue_condition.wait(timeout=1.0)
-                if self._scheduler_stop.is_set():
-                    return
-                bag_name = self._queue.popleft()
-                self._queued_names.discard(bag_name)
-                recording_manager = self._recording_manager
-                provider = self._configuration_provider
-            if recording_manager is None or provider is None:
-                continue
-            if self._recording_busy(recording_manager):
-                self._requeue_after_pause(bag_name)
-                continue
-            try:
-                cameras, poses = provider()
-                status = self.prepare(
-                    bag_name,
-                    recording_manager,
-                    cameras,
-                    poses,
-                    background=True,
-                )
-            except (OSError, ValueError) as exc:
-                with self._lock:
-                    self._queue_errors[bag_name] = str(exc)
-                continue
-            except RuntimeError as exc:
-                if self._recording_busy(recording_manager) or self._state in {
-                    "playing",
-                    "preparing",
-                }:
-                    self._requeue_after_pause(bag_name, delay=1.0)
-                else:
-                    with self._lock:
-                        self._queue_errors[bag_name] = str(exc)
-                continue
-            if status.get("state") == "ready":
-                continue
-            while not self._scheduler_stop.is_set():
-                with self._lock:
-                    thread = self._thread
-                if thread is None or not thread.is_alive():
-                    break
-                if self._recording_busy(recording_manager):
-                    self._cancel.set()
-                thread.join(timeout=0.25)
-            state = str(self.status().get("state", "idle"))
-            if state not in {"ready", "error"} and not self._scheduler_stop.is_set():
-                self._requeue_after_pause(bag_name)
-
-    def _requeue_after_pause(self, bag_name: str, delay: float = 0.5) -> None:
-        if self._scheduler_stop.wait(delay):
-            return
-        with self._queue_condition:
-            if bag_name not in self._queued_names:
-                self._queue.appendleft(bag_name)
-                self._queued_names.add(bag_name)
-            self._queue_condition.wait(timeout=1.0)
-
-    @staticmethod
-    def _recording_busy(recording_manager) -> bool:
-        return recording_manager.is_recording() or recording_manager.merge_state == "merging"
 
     def activate(self, bag_name: str) -> Dict[str, object]:
         with self._lock:
@@ -1094,7 +945,7 @@ class PreparedPlaybackManager:
                     self._stage = ""
                     self._bag_name = ""
                     self._bag_label = ""
-        except Exception as exc:  # noqa: BLE001 - surface background failure to UI
+        except Exception as exc:  # noqa: BLE001 - surface preparation failure to UI
             with self._lock:
                 if self._bag_name == bag_name:
                     self._state = "error"
@@ -1103,10 +954,8 @@ class PreparedPlaybackManager:
         finally:
             with self._lock:
                 self._writer = None
-                self._background_active = False
                 if self._thread is threading.current_thread():
                     self._thread = None
-                self._queue_condition.notify_all()
             if temporary.exists():
                 shutil.rmtree(temporary, ignore_errors=True)
 
@@ -1122,8 +971,8 @@ class PreparedPlaybackManager:
         image_by_topic = {str(item["topic"]): str(item["name"]) for item in cameras}
         pose_by_topic = {str(item["topic"]): str(item["name"]) for item in poses}
         topics = [*image_by_topic, *pose_by_topic]
-        image_topic_stamps = _sqlite_topic_stamps(bag_path, image_by_topic)
-        topic_types = _sqlite_topic_types(bag_path)
+        image_topic_stamps = _bag_topic_stamps(bag_path, image_by_topic)
+        topic_types = _bag_topic_types(bag_path)
         missing = [topic for topic in topics if topic not in topic_types]
         if missing:
             raise ValueError(f"bag is missing playback topics: {', '.join(missing)}")
@@ -1132,7 +981,7 @@ class PreparedPlaybackManager:
             name: {"stamps": [], "positions": [], "quaternions": []}
             for name in pose_by_topic.values()
         }
-        for topic, raw, record_stamp in _sqlite_topic_messages(bag_path, pose_by_topic):
+        for topic, raw, record_stamp in _bag_topic_messages(bag_path, pose_by_topic):
             self._check_cancelled()
             message = deserialize_message(raw, classes[topic])
             position, quaternion = _message_pose(message)
@@ -1181,7 +1030,7 @@ class PreparedPlaybackManager:
         camera_by_topic = {str(item["topic"]): item for item in cameras}
         topics = list(camera_by_topic)
         cells_by_topic = dict(zip(topics, _review_cells(len(cameras))))
-        topic_types = _sqlite_topic_types(bag_path)
+        topic_types = _bag_topic_types(bag_path)
         missing = [topic for topic in topics if topic not in topic_types]
         if missing:
             raise ValueError(f"bag is missing playback topics: {', '.join(missing)}")
@@ -1207,7 +1056,7 @@ class PreparedPlaybackManager:
             writer = _video_writer(output, shape, PLAYBACK_FPS)
             with self._lock:
                 self._writer = writer
-            for current_topic, raw, _stamp in _sqlite_topic_messages(bag_path, topics):
+            for current_topic, raw, _stamp in _bag_topic_messages(bag_path, topics):
                 self._check_cancelled()
                 camera = camera_by_topic.get(current_topic)
                 if camera is None:

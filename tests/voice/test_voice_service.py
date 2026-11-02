@@ -17,16 +17,12 @@ sys.path.insert(0, str(ROOT))
 from insight_capture.voice.service import (  # noqa: E402
     CANNED_REPLIES,
     LocalCommandFailure,
-    OpenClawVoiceBridge,
-    build_agent_command,
+    VoiceService,
     calibration_is_complete,
-    capture_check_reply_key,
-    capture_check_speech,
     clean_utterance_transcript,
     configure_pulse_card_volume,
     discover_alsa_device,
     discover_pulse_sink,
-    extract_openclaw_reply,
     match_local_command,
     normalize_transcript,
     speech_text,
@@ -40,7 +36,7 @@ from insight_capture.voice.service import (  # noqa: E402
 from insight_capture.voice.tts import synthesize_piper_wav  # noqa: E402
 
 
-class OpenClawVoiceBridgeTest(unittest.TestCase):
+class VoiceServiceTest(unittest.TestCase):
     def test_recording_start_uses_requested_immediate_prompt(self):
         self.assertEqual(
             CANNED_REPLIES["recording_starting"],
@@ -73,7 +69,6 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         )
         self.assertEqual(match_local_command("请停止录制"), "recording_stop")
         self.assertEqual(match_local_command("帮我重新校准一下"), "calibration_start")
-        self.assertEqual(match_local_command("检查相机"), "capture_check")
         self.assertIsNone(match_local_command("请设置检测位"))
         self.assertEqual(match_local_command("系统状态"), "system_status")
         self.assertEqual(match_local_command("请本条作废"), "take_reject")
@@ -291,7 +286,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 playback_volume=40,
                 audio_settings=Path(temporary) / "settings.json",
             )
-            bridge = OpenClawVoiceBridge(args)
+            bridge = VoiceService(args)
             with (
                 mock.patch(
                     "insight_capture.voice.service.configure_pulse_card_volume",
@@ -343,7 +338,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 playback_volume=40,
                 audio_settings=Path(temporary) / "settings.json",
             )
-            bridge = OpenClawVoiceBridge(args)
+            bridge = VoiceService(args)
             connected = {
                 "id": "plughw:CARD=NEW,DEV=0",
                 "card": "NEW",
@@ -387,7 +382,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 playback_volume=40,
                 audio_settings=Path(temporary) / "settings.json",
             )
-            bridge = OpenClawVoiceBridge(args)
+            bridge = VoiceService(args)
             connected = {
                 "id": args.playback_device,
                 "card": "USB",
@@ -420,13 +415,8 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 ("alsa_output.usb-speaker.2", 31),
             )
 
-    def test_missing_openclaw_only_disables_optional_requests(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace(openclaw_bin=Path("/missing/openclaw")))
-        with self.assertRaisesRegex(RuntimeError, "optional assistant"):
-            bridge.ask_openclaw("今天采了多少条")
-
-    def test_local_command_bypasses_openclaw(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
+    def test_local_command_executes_without_assistant(self):
+        bridge = VoiceService(SimpleNamespace())
         events = []
 
         def execute(action):
@@ -442,7 +432,6 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 bridge, "execute_local_command", side_effect=execute
             ) as execute,
             mock.patch.object(bridge, "speak_canned", side_effect=speak),
-            mock.patch.object(bridge, "ask_openclaw") as ask_openclaw,
             mock.patch.object(bridge, "_rollback_unconfirmed_recording") as rollback,
         ):
             bridge.handle_utterance("开始录制")
@@ -455,11 +444,10 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 ("speak", "recording_started"),
             ],
         )
-        ask_openclaw.assert_not_called()
         rollback.assert_not_called()
 
     def test_vio_calibration_command_uses_dedicated_feedback(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        bridge = VoiceService(SimpleNamespace())
         events = []
 
         def execute(action):
@@ -475,7 +463,6 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 bridge, "execute_local_command", side_effect=execute
             ),
             mock.patch.object(bridge, "speak_canned", side_effect=speak),
-            mock.patch.object(bridge, "ask_openclaw") as ask_openclaw,
         ):
             bridge.handle_utterance("录制校准模式")
 
@@ -487,10 +474,9 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 ("speak", "vio_calibration_recording_started"),
             ],
         )
-        ask_openclaw.assert_not_called()
 
     def test_recording_is_rolled_back_when_start_feedback_fails(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        bridge = VoiceService(SimpleNamespace())
         with (
             mock.patch.object(
                 bridge, "execute_local_command", return_value="recording_started"
@@ -506,7 +492,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         rollback.assert_called_once_with()
 
     def test_recording_is_not_started_without_immediate_feedback(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        bridge = VoiceService(SimpleNamespace())
         with (
             mock.patch.object(bridge, "speak_canned", return_value=False) as speak,
             mock.patch.object(bridge, "execute_local_command") as execute,
@@ -516,7 +502,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         execute.assert_not_called()
 
     def test_recording_stop_announces_before_waiting_for_finalization(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        bridge = VoiceService(SimpleNamespace())
         events = []
 
         def speak(key):
@@ -542,7 +528,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         )
 
     def test_non_recording_feedback_failure_does_not_crash_or_rollback(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        bridge = VoiceService(SimpleNamespace())
         with (
             mock.patch.object(
                 bridge, "execute_local_command", return_value="calibration_started"
@@ -556,7 +542,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         rollback.assert_not_called()
 
     def test_shared_playback_uses_pulse_sink(self):
-        bridge = OpenClawVoiceBridge(
+        bridge = VoiceService(
             SimpleNamespace(
                 playback_backend="pulse",
                 pulse_sink="alsa_output.usb-E3",
@@ -579,7 +565,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         )
 
     def test_unconfirmed_recording_rollback_retries_until_stopped(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        bridge = VoiceService(SimpleNamespace())
         with (
             mock.patch.object(
                 bridge,
@@ -593,62 +579,8 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         execute.assert_called_with("recording_stop")
         sleep.assert_called_once_with(0.5)
 
-    def test_wake_followup_forces_openclaw_even_for_fixed_command(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
-        with (
-            mock.patch.object(bridge, "execute_local_command") as execute,
-            mock.patch.object(bridge, "ask_openclaw", return_value="好的。") as ask,
-            mock.patch.object(bridge, "speak") as speak,
-            mock.patch.object(
-                bridge, "_read_recording_status", return_value={"recording": False}
-            ),
-        ):
-            bridge.handle_utterance("开始录制", allow_local_commands=False)
-        execute.assert_not_called()
-        ask.assert_called_once_with("开始录制")
-        speak.assert_called_once_with("好的。")
-
-    def test_openclaw_recording_is_rolled_back_when_reply_is_not_played(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
-        with (
-            mock.patch.object(bridge, "ask_openclaw", return_value="录制已经开始。"),
-            mock.patch.object(bridge, "speak", return_value=False),
-            mock.patch.object(
-                bridge,
-                "_read_recording_status",
-                side_effect=[
-                    {"recording": False},
-                    {
-                        "recording": True,
-                        "output_path": "/bags/looper_record_20260814_160000",
-                    },
-                ],
-            ),
-            mock.patch.object(bridge, "_rollback_unconfirmed_recording") as rollback,
-        ):
-            bridge.handle_utterance("帮我开始这一轮采集", allow_local_commands=False)
-        rollback.assert_called_once_with()
-
-    def test_unplayed_openclaw_reply_does_not_stop_manual_recording(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
-        with (
-            mock.patch.object(bridge, "ask_openclaw", return_value="好的。"),
-            mock.patch.object(bridge, "speak", return_value=False),
-            mock.patch.object(
-                bridge,
-                "_read_recording_status",
-                side_effect=[
-                    {"recording": False},
-                    {"recording": True, "output_path": "/bags/manual_capture"},
-                ],
-            ),
-            mock.patch.object(bridge, "_rollback_unconfirmed_recording") as rollback,
-        ):
-            bridge.handle_utterance("查看录制状态", allow_local_commands=False)
-        rollback.assert_not_called()
-
     def test_local_command_calls_dashboard_automation_endpoint(self):
-        bridge = OpenClawVoiceBridge(
+        bridge = VoiceService(
             SimpleNamespace(
                 dashboard_url="http://127.0.0.1:8765/",
                 dashboard_timeout_sec=7.0,
@@ -678,7 +610,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         )
 
     def test_vio_calibration_command_calls_dedicated_endpoint(self):
-        bridge = OpenClawVoiceBridge(
+        bridge = VoiceService(
             SimpleNamespace(
                 dashboard_url="http://127.0.0.1:8765/",
                 dashboard_timeout_sec=7.0,
@@ -700,7 +632,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         )
 
     def test_task_status_uses_deterministic_local_endpoint_and_dynamic_reply(self):
-        bridge = OpenClawVoiceBridge(
+        bridge = VoiceService(
             SimpleNamespace(
                 dashboard_url="http://127.0.0.1:8765",
                 dashboard_timeout_sec=7.0,
@@ -721,7 +653,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         )
 
     def test_local_recording_emits_end_to_end_timing(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
+        bridge = VoiceService(SimpleNamespace())
         bridge._last_recognition_timing = {
             "vad_silence_sec": 0.5,
             "decode_sec": 0.08,
@@ -757,7 +689,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         )
 
     def test_calibration_command_calls_mapping_reset(self):
-        bridge = OpenClawVoiceBridge(
+        bridge = VoiceService(
             SimpleNamespace(
                 dashboard_url="http://127.0.0.1:8765",
                 dashboard_timeout_sec=7.0,
@@ -778,7 +710,7 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         )
 
     def test_calibration_camera_failure_uses_dashboard_speech(self):
-        bridge = OpenClawVoiceBridge(
+        bridge = VoiceService(
             SimpleNamespace(
                 dashboard_url="http://127.0.0.1:8765",
                 dashboard_timeout_sec=7.0,
@@ -802,81 +734,6 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(raised.exception.speech, speech)
         monitor.assert_not_called()
 
-    def test_capture_check_command_calls_local_quality_gate(self):
-        bridge = OpenClawVoiceBridge(
-            SimpleNamespace(
-                dashboard_url="http://127.0.0.1:8765",
-                dashboard_timeout_sec=7.0,
-            )
-        )
-        response = mock.MagicMock()
-        response.__enter__.return_value.read.return_value = b'{"state": "pass"}'
-        with mock.patch("urllib.request.urlopen", return_value=response) as urlopen:
-            reply_key = bridge.execute_local_command("capture_check")
-        self.assertEqual(reply_key, "capture_check_pass")
-        self.assertEqual(
-            urlopen.call_args.args[0].full_url,
-            "http://127.0.0.1:8765/api/capture-check/run",
-        )
-
-    def test_failed_capture_check_uses_dynamic_camera_details(self):
-        bridge = OpenClawVoiceBridge(
-            SimpleNamespace(
-                dashboard_url="http://127.0.0.1:8765",
-                dashboard_timeout_sec=7.0,
-            )
-        )
-        response = mock.MagicMock()
-        response.__enter__.return_value.read.return_value = json.dumps(
-            {
-                "state": "retry",
-                "comparisons": {
-                    "insight3_a": {"state": "retry"},
-                    "insight3_b": {"state": "pass"},
-                },
-            }
-        ).encode()
-        with mock.patch("urllib.request.urlopen", return_value=response):
-            reply_key = bridge.execute_local_command("capture_check")
-        self.assertEqual(reply_key, "dynamic_reply")
-        self.assertIn("右手相机", bridge._pending_spoken_reply)
-
-    def test_capture_check_announces_start_before_calling_dashboard(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
-        events = []
-
-        def speak(key):
-            events.append(("speak", key))
-            return True
-
-        def execute(action):
-            events.append(("execute", action))
-            return "capture_check_pass"
-
-        with (
-            mock.patch.object(bridge, "speak_canned", side_effect=speak),
-            mock.patch.object(bridge, "execute_local_command", side_effect=execute),
-        ):
-            bridge.handle_utterance("检测相机")
-        self.assertEqual(
-            events,
-            [
-                ("speak", "capture_check_started"),
-                ("execute", "capture_check"),
-                ("speak", "capture_check_pass"),
-            ],
-        )
-
-    def test_capture_check_is_not_run_without_start_feedback(self):
-        bridge = OpenClawVoiceBridge(SimpleNamespace())
-        with (
-            mock.patch.object(bridge, "speak_canned", return_value=False) as speak,
-            mock.patch.object(bridge, "execute_local_command") as execute,
-        ):
-            bridge.handle_utterance("检查相机")
-        speak.assert_called_once_with("capture_check_started")
-        execute.assert_not_called()
-
     def test_calibration_completion_requires_both_insight3_devices(self):
         self.assertFalse(calibration_is_complete({"statuses": {}}))
         self.assertFalse(
@@ -899,66 +756,6 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
                 }
             )
         )
-
-    def test_capture_check_states_have_deterministic_canned_replies(self):
-        self.assertEqual(capture_check_reply_key({"state": "pass"}), "capture_check_pass")
-        self.assertEqual(capture_check_reply_key({"state": "retry"}), "capture_check_retry")
-        self.assertEqual(
-            capture_check_reply_key({"state": "recalibrate"}),
-            "capture_check_recalibrate",
-        )
-
-    def test_capture_check_speech_names_each_failed_camera(self):
-        speech = capture_check_speech(
-            {
-                "state": "retry",
-                "comparisons": {
-                    "insight3_a": {"state": "retry"},
-                    "insight3_b": {"state": "pass"},
-                    "insight9_a": {
-                        "state": "retry",
-                        "reason": "Insight9 closure is stale",
-                    },
-                },
-            }
-        )
-        self.assertIn("右手相机没有回到检测位", speech)
-        self.assertNotIn("左手相机", speech)
-        self.assertIn("头部相机没有获得新的地图闭环", speech)
-        self.assertIn("暂时不需要重新校准", speech)
-
-    def test_capture_check_speech_requests_calibration_for_large_offset(self):
-        speech = capture_check_speech(
-            {
-                "state": "recalibrate",
-                "comparisons": {"insight3_b": {"state": "recalibrate"}},
-            }
-        )
-        self.assertIn("左手相机位置偏差过大", speech)
-        self.assertIn("需要重新校准", speech)
-
-    def test_extract_reply_prefers_visible_final_text(self):
-        payload = {
-            "payloads": [{"text": "fallback"}],
-            "meta": {"finalAssistantVisibleText": "录制已开始。"},
-        }
-        self.assertEqual(extract_openclaw_reply(payload), "录制已开始。")
-
-    def test_extract_reply_accepts_payload_list(self):
-        self.assertEqual(
-            extract_openclaw_reply({"payloads": [{"text": "第一句。"}, {"text": "第二句。"}]}),
-            "第一句。\n第二句。",
-        )
-
-    def test_extract_reply_accepts_gateway_result_wrapper(self):
-        payload = {
-            "status": "ok",
-            "result": {
-                "payloads": [{"text": "我是宸境。"}],
-                "meta": {"finalAssistantVisibleText": "我是宸境。"},
-            },
-        }
-        self.assertEqual(extract_openclaw_reply(payload), "我是宸境。")
 
     def test_speech_text_removes_markdown_and_caps_length(self):
         self.assertEqual(speech_text("**查看** [页面](http://localhost)"), "查看 页面")
@@ -1009,15 +806,6 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
             self.assertEqual(audio.getframerate(), 16000)
             self.assertEqual(audio.getnframes(), 2240)
 
-    def test_agent_command_keeps_utterance_in_single_argument(self):
-        command = build_agent_command(Path("/openclaw"), "voice", "开始录制", 90)
-        self.assertEqual(command[:4], ["/openclaw", "agent", "--session-key", "voice"])
-        self.assertIn("openai/gpt-5.6-luna", command)
-        self.assertIn("用户说：开始录制", command[7])
-        self.assertIn("off", command)
-        self.assertEqual(command[-3:], ["--timeout", "90", "--json"])
-        self.assertEqual(json.loads(json.dumps(command)), command)
-
     def test_voice_defaults_use_two_stage_fast_interaction(self):
         with mock.patch.object(sys, "argv", ["voice.service"]):
             args = parse_args()
@@ -1032,7 +820,6 @@ class OpenClawVoiceBridgeTest(unittest.TestCase):
         self.assertEqual(args.playback_backend, "pulse")
         self.assertEqual(args.pulse_sink, "auto")
         self.assertEqual(args.playback_volume, 40)
-        self.assertEqual(args.agent_thinking, "off")
         self.assertEqual(args.dashboard_timeout_sec, 40.0)
 
 

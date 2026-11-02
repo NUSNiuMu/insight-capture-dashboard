@@ -23,7 +23,7 @@ Post-capture
 `insight_capture/media/`，HTTP 接口位于 `insight_capture/api/routes/`，后台任务
 编排位于 `insight_capture/services/`。API route 只做协议转换，不持有线程、
 subprocess 或数据集路由逻辑。
-SQLite/composite 只保留历史数据兼容，新录制不得依赖它们。
+录制、回放与检查统一使用一条录制一个 MCAP；内部 Chunk 由 MCAP 管理。SQLite、自定义组合包及多文件分包兼容已移除。
 
 `runtime/app.py` 只负责解析启动参数、触发进程级服务组装并关闭生命周期；跨越
 runtime、postprocess、services 和 API 的组装细节集中在 `insight_capture/composition.py`。

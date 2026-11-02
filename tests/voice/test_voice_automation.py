@@ -54,7 +54,7 @@ def _payload(response):
     return json.loads(response.text)
 
 
-class OpenClawAutomationRoutesTest(unittest.IsolatedAsyncioTestCase):
+class VoiceAutomationRoutesTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         async def direct(function, *args, **kwargs):
             return function(*args, **kwargs)
@@ -75,7 +75,7 @@ class OpenClawAutomationRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self.assertEqual(manager.start_calls[0][0], None)
         self.assertTrue(manager.start_calls[0][1].startswith("looper_record_"))
-        self.assertEqual(_payload(response)["automation"], "openclaw")
+        self.assertEqual(_payload(response)["automation"], "voice")
 
     async def test_start_refuses_to_replace_active_recording(self):
         manager = _RecordingManager(recording=True, output_path="/bags/manual")

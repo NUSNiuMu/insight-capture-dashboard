@@ -33,8 +33,9 @@ class RecordingStorageTest(unittest.TestCase):
             new_bag = new_root / "take-b"
             for bag in (old_bag, new_bag):
                 bag.mkdir(parents=True)
+                (bag / "capture.mcap").write_bytes(b"mcap")
                 (bag / "metadata.yaml").write_text(
-                    "rosbag2_bagfile_information:\n  message_count: 1\n"
+                    "rosbag2_bagfile_information:\n  storage_identifier: mcap\n  message_count: 1\n"
                 )
             manager = _manager(root)
             manager.select_recording_root(str(new_root))
@@ -56,7 +57,8 @@ class RecordingStorageTest(unittest.TestCase):
             for campaign in ("campaign-a", "campaign-b"):
                 bag = root / campaign / "take-0001"
                 bag.mkdir(parents=True)
-                (bag / "metadata.yaml").write_text("rosbag2_bagfile_information: {}\n")
+                (bag / "capture.mcap").write_bytes(b"mcap")
+                (bag / "metadata.yaml").write_text("rosbag2_bagfile_information:\n  storage_identifier: mcap\n")
             manager = _manager(root)
             library = BagLibrary(manager.storage_browse_roots, lambda: manager.rosbag_root)
 

@@ -21,7 +21,6 @@ Qt 默认连接 `http://127.0.0.1:8765`。退出 Qt 不停止后端，也不停�
 | --- | --- |
 | `jetson-nx` | Insight9 + 双 Insight3 |
 | `jetson-nx-egohalo` | EgoHalo + 双 Insight3 |
-| `lite` / `lite-779` | 对应开发设备机群 |
 
 ```bash
 ./scripts/select_device.sh jetson-nx-egohalo
@@ -34,9 +33,9 @@ Qt 默认连接 `http://127.0.0.1:8765`。退出 Qt 不停止后端，也不停�
 
 ## Qt 与手机各做什么
 
-Qt 包含任务、空间采集、录制库、数据集、评分、手部姿态、优化、逐话题录制和设置九个入口。录制库支持两端原始数据回传合包。Qt 使用 C++/QML、Quick 3D 与 GStreamer，没有内嵌网页。
+Qt 包含任务、空间采集、录制库、评分、手部姿态、优化、逐话题录制和设置八个入口。录制库支持两端原始数据回传合包。Qt 使用 C++/QML、Quick 3D 与 GStreamer，没有内嵌网页。
 
-手机支持任务选择/创建/结束、录制启停、录制期间校准、设备状态、按需单路预览和手动合包。任务管理与合包位于页面底部的折叠区域，直接复用后端 API。回放、评分、导出和完整设置在 Qt 操作。
+手机支持任务选择/创建/结束、录制启停、录制期间校准、设备状态、按需单路预览和手动合包。任务管理与合包位于页面底部的折叠区域，直接复用后端 API。回放、评分、离线手部重建、优化和完整设置在 Qt 操作。
 
 EgoHalo 可以先开始录制，再开始校准，保存完整过程。停止只保存两端原始数据，保存完成即可开始下一条；结束采集后在 Qt 录制库或手机管理区手动回传合包。手机断线不停止设备录制。校准板只用于离线误差评估，不参与自然场景建图定位。
 
@@ -45,6 +44,8 @@ EgoHalo 可以先开始录制，再开始校准，保存完整过程。停止只
 ## 存储与数据
 
 `rosbags/` 保存录制，`outputs/` 和 `runs/` 保存处理产物。正式部署通过 `INSIGHT_ROSBAG_HOST_DIR` 绑定采集盘，`INSIGHT_ROSBAG_REQUIRED_SOURCE` 核对实际挂载；采集盘不可用时仍明确显示备用存储状态。不要清空这个设置来隐藏存储异常。
+
+回放缓存仅在手动点击“准备并回放”后生成，录制或合包完成不会自动转码。
 
 完整性、掉帧、轨迹评分和定位精度是不同维度；不能用图像连续或 VIO 状态正常替代相对定位验证。原始图像、时间戳、设备 VIO 与全局位姿保留各自含义。离线评估方法见 [标定板协议](docs/BOARD_ACCURACY_PROTOCOL.md)。
 
@@ -73,6 +74,8 @@ node web_dashboard/build.js
 | `insight_capture/api/` | 两端共用的 HTTP/WebSocket |
 | `insight_capture/runtime/` | 相机、定位、录制与任务 |
 | `insight_capture/media/` | 编解码和预览 |
-| `insight_capture/postprocess/` | 合包、回放、质量检查、优化、导出 |
+| `insight_capture/postprocess/` | 合包、回放、质量检查、优化、手部重建 |
 | `native_mapping/` | LooperVIO 原生核心与独立镜像 |
 | `deploy/` | 服务选择、镜像构建和客户升级 |
+
+录制与交付统一为每条一个标准 MCAP，内部多个 Chunk。保留 ROS 2 的 `metadata.yaml`；旧组合包、SQLite 与多文件分包读取已移除，既有原始文件不会被清理。EgoHalo 两端原始暂存仍在手动合包时写成一个 MCAP。

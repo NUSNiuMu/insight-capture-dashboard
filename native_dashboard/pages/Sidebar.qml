@@ -20,14 +20,11 @@ Rectangle {
             "page": "bags",
             "name": "Rosbags",
             "group": ""
-        }, {
-            "page": "datasets",
-            "name": "Datasets",
-            "group": "Process"
+
         }, {
             "page": "scoring",
             "name": "Scoring",
-            "group": ""
+            "group": "Process"
         }, {
             "page": "handpose",
             "name": "Hand pose",

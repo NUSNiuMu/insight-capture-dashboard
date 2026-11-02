@@ -25,7 +25,6 @@ class PoseSpec:
 class CameraSpec:
     name: str
     namespace: str
-    hand_tracking: bool
     label: str
     topic: str
     topic_type: str
@@ -46,4 +45,3 @@ class CameraFrame:
     width: int
     height: int
     version: int
-    hand_overlay_pending: bool = False

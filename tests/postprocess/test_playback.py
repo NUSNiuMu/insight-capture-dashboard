@@ -26,18 +26,23 @@ class PlaybackManagerTest(unittest.TestCase):
     def test_start_replays_only_dashboard_topics_present_in_bag(self) -> None:
         metadata = """\
 rosbag2_bagfile_information:
+  storage_identifier: mcap
   topics_with_message_count:
     - topic_metadata:
         name: /camera
+        type: sensor_msgs/msg/Image
     - topic_metadata:
         name: /pose
+        type: geometry_msgs/msg/PoseStamped
     - topic_metadata:
         name: /unused/imu
+        type: sensor_msgs/msg/Imu
 """
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bag_path = root / "sample"
             bag_path.mkdir()
+            (bag_path / "capture.mcap").write_bytes(b"mcap")
             (bag_path / "metadata.yaml").write_text(metadata, encoding="utf-8")
             manager = PlaybackManager(root, 20)
             process = mock.Mock()

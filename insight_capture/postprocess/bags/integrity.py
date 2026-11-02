@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 
-"""Check rosbag completeness by exact stamp gaps or fast SQLite aggregates."""
+"""Check rosbag completeness by source stamp gaps or recorder timestamp aggregates."""
 
 import argparse
-import glob
 import json
-import sqlite3
 import struct
 import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from insight_capture.legacy.composite_bag import iter_messages, read_metadata, session_parts
+from insight_capture.core.bag import iter_messages, read_metadata, single_mcap
 from insight_capture.quality.topic_rates import nominal_for
 
 DEFAULT_MAX_LOSS_PCT = 0.5
@@ -67,56 +65,17 @@ def gap_stats(ts, nominal_hz):
 
 
 def _read_topic_windows(bag_dir: Path) -> Dict[str, Dict[str, int]]:
-    """Aggregate topic counts and recorder windows without reading payloads."""
-    parts = session_parts(bag_dir)
-    if not parts:
-        raise ValueError(f"no readable rosbag2 parts in {bag_dir}")
-    windows: Dict[str, Dict[str, int]] = {}
-    for part in parts:
-        db3_files = sorted(glob.glob(str(part / "*.db3")))
-        if not db3_files:
-            info = read_metadata(part)
-            first_ns = int(
-                (info.get("starting_time") or {}).get("nanoseconds_since_epoch", 0) or 0
-            )
-            duration_ns = int((info.get("duration") or {}).get("nanoseconds", 0) or 0)
-            last_ns = first_ns + max(duration_ns, 0)
-            for entry in info.get("topics_with_message_count") or []:
-                name = str((entry.get("topic_metadata") or {}).get("name") or "")
-                if not name:
-                    continue
-                count = int(entry.get("message_count", 0) or 0)
-                item = windows.setdefault(
-                    name, {"msgs": 0, "first_ns": first_ns, "last_ns": last_ns}
-                )
-                item["msgs"] += count
-                if count:
-                    item["first_ns"] = min(item["first_ns"], first_ns)
-                    item["last_ns"] = max(item["last_ns"], last_ns)
-            continue
-        for db3 in db3_files:
-            try:
-                conn = sqlite3.connect(f"file:{db3}?mode=ro", uri=True)
-                with conn:
-                    rows = conn.execute(
-                        "SELECT topics.name, COUNT(messages.id), MIN(messages.timestamp), MAX(messages.timestamp) "
-                        "FROM topics LEFT JOIN messages ON messages.topic_id = topics.id "
-                        "GROUP BY topics.id"
-                    ).fetchall()
-                conn.close()
-            except sqlite3.Error as exc:
-                raise ValueError(f"cannot read {db3}: {exc}") from exc
-            for name, count, first_ns, last_ns in rows:
-                if first_ns is None or last_ns is None:
-                    windows.setdefault(name, {"msgs": 0, "first_ns": 0, "last_ns": 0})
-                    continue
-                item = windows.get(name)
-                if item is None or item["msgs"] == 0:
-                    item = {"msgs": 0, "first_ns": first_ns, "last_ns": last_ns}
-                    windows[name] = item
-                item["msgs"] += int(count)
-                item["first_ns"] = min(item["first_ns"], int(first_ns))
-                item["last_ns"] = max(item["last_ns"], int(last_ns))
+    """Count each topic over its own recorder-time span without CDR decoding."""
+    single_mcap(bag_dir)
+    windows = {entry["topic_metadata"]["name"]: {"msgs": 0, "first_ns": 0, "last_ns": 0}
+               for entry in read_metadata(bag_dir).get("topics_with_message_count", [])}
+    for topic, _raw, stamp in iter_messages(bag_dir, windows):
+        item = windows[topic]
+        if item["msgs"] == 0:
+            item["first_ns"] = stamp
+        item["first_ns"] = min(item["first_ns"], stamp)
+        item["last_ns"] = max(item["last_ns"], stamp)
+        item["msgs"] += 1
     return windows
 
 
@@ -218,84 +177,7 @@ def _analyze_fast(
 def _analyze_deep(
     bag_dir: Path, max_loss_pct: float, warmup_s: float,
 ) -> List[Dict[str, object]]:
-    """Original per-message stamp-gap scan (slow: reads the whole table)."""
-    parts = session_parts(bag_dir)
-    if len(parts) != 1 or parts[0] != bag_dir or not list(parts[0].glob("*.db3")):
-        return _analyze_deep_storage(bag_dir, max_loss_pct, warmup_s)
-    db3 = sorted(glob.glob(str(bag_dir / "*.db3")))
-    if not db3:
-        raise ValueError(f"no .db3 file in {bag_dir}")
-    try:
-        conn = sqlite3.connect(f"file:{db3[0]}?mode=ro", uri=True)
-        topic_names = dict(conn.execute("SELECT id, name FROM topics"))
-    except sqlite3.Error as exc:
-        raise ValueError(f"cannot read {db3[0]}: {exc}") from exc
-
-    topics: List[Dict[str, object]] = []
-    with conn:
-        for tid, name in sorted(topic_names.items(), key=lambda kv: kv[1]):
-            if is_latched_static_topic(name):
-                msgs = int(conn.execute(
-                    "SELECT COUNT(*) FROM messages WHERE topic_id=?", (tid,)
-                ).fetchone()[0])
-                topics.append(latched_static_result(name, msgs))
-                continue
-            nominal = nominal_for(name)
-            if nominal is None:
-                msgs = int(conn.execute(
-                    "SELECT COUNT(*) FROM messages WHERE topic_id=?", (tid,)
-                ).fetchone()[0])
-                topics.append({
-                    "name": name,
-                    "ok": True,
-                    "msgs": msgs,
-                    "avg_hz": 0.0,
-                    "audit": "unconfigured_rate_presence" if msgs > 0 else "source_silent",
-                    "error": (
-                        "recorded; event/unknown-rate topic checked for presence only"
-                        if msgs > 0 else "conditional/event topic was silent; loss cannot be calculated"
-                    ),
-                })
-                continue
-            # Read only the 12-byte stamp instead of full image payloads.
-            rows = conn.execute(
-                "SELECT timestamp, substr(data,1,12) FROM messages "
-                "WHERE topic_id=? ORDER BY timestamp",
-                (tid,),
-            ).fetchall()
-            if len(rows) < 2:
-                topics.append({
-                    "name": name, "ok": False, "msgs": len(rows),
-                    "error": f"only {len(rows)} message(s)",
-                })
-                continue
-            stamps = [header_stamp_ns(r[1]) for r in rows]
-            cutoff = stamps[0] + int(warmup_s * 1e9)
-            settled = [t for t in stamps if t >= cutoff] or stamps
-            source_span = (settled[-1] - settled[0]) / 1e9
-            avg_hz = (len(settled) - 1) / source_span if source_span > 0 else 0.0
-            missing, events, worst = gap_stats(settled, nominal)
-            loss_pct = missing / (len(settled) + missing) * 100 if missing else 0.0
-            topics.append({
-                "name": name,
-                "ok": loss_pct <= max_loss_pct,
-                "audit": "header_stamp_gaps",
-                "msgs": len(rows),
-                "avg_hz": round(avg_hz, 2),
-                "nominal_hz": nominal,
-                "missing": missing,
-                "loss_pct": round(loss_pct, 2),
-                "gap_events": events,
-                "worst_gaps": worst,
-            })
-    _add_missing_selected_topics(bag_dir, topics)
-    return topics
-
-
-def _analyze_deep_storage(
-    bag_dir: Path, max_loss_pct: float, warmup_s: float,
-) -> List[Dict[str, object]]:
-    """Scan composite/MCAP parts through the rosbag2 storage API."""
+    """Scan MCAP messages through the rosbag2 storage API."""
     windows = _read_topic_windows(bag_dir)
     names = sorted(windows)
     counts = {name: 0 for name in names}
@@ -416,7 +298,7 @@ def main():
     parser.add_argument("--warmup", type=float, default=DEFAULT_WARMUP_S,
                         help=f"seconds forgiven at each topic's start (default {DEFAULT_WARMUP_S})")
     parser.add_argument("--fast", action="store_true",
-                        help="fast per-topic timestamp aggregate; does not read message payloads")
+                        help="per-topic recorder timestamps without decoding message contents")
     parser.add_argument("--deep", action="store_true",
                         help="deprecated compatibility alias; exact mode is already the default")
     args = parser.parse_args()

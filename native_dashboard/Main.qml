@@ -294,12 +294,10 @@ ApplicationWindow {
                                             RuntimeLoader {
                                                 id: avatar; source: poseRoot.modelData.modelSource
                                                 position: Qt.vector3d(-(bounds.minimum.x+bounds.maximum.x)/2, -(bounds.minimum.y+bounds.maximum.y)/2, -(bounds.minimum.z+bounds.maximum.z)/2)
-                                                onStatusChanged: { if (status===RuntimeLoader.Success) { dashboard.resetGripper(avatar); dashboard.updateGripper(avatar,poseRoot.modelData.opening) } }
                                             }
                                         }
                                         Model { source: "#Sphere"; visible: avatar.status !== RuntimeLoader.Success; scale: Qt.vector3d(.07,.07,.07); materials: DefaultMaterial { diffuseColor: poseRoot.modelData.color } }
                                     }
-                                    Connections { target: poseRoot.modelData; function onOpeningChanged() { if(poseRoot.modelData.role!=="head" && avatar.status===RuntimeLoader.Success)dashboard.updateGripper(avatar,poseRoot.modelData.opening) } }
                                 }
                             }
                         }

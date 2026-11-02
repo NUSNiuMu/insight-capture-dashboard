@@ -48,26 +48,25 @@ class MappingRoutes:
                 {"error": "recording_busy", "speech": "当前采集或保存期间不能重新校准，请先停止并等待保存完成。"},
                 status=409,
             )
-        if not getattr(self.context.node, "fake_pose", False):
-            stale_sec = max(
-                0.2,
-                float(getattr(self.context.node, "camera_stale_timeout_sec", 2.0)),
+        stale_sec = max(
+            0.2,
+            float(getattr(self.context.node, "camera_stale_timeout_sec", 2.0)),
+        )
+        health, unavailable = evaluate_calibration_cameras(
+            self.context.node,
+            stale_sec,
+        )
+        if unavailable:
+            return web.json_response(
+                {
+                    "ok": False,
+                    "error": "calibration_cameras_not_ready",
+                    "speech": _camera_failure_speech(unavailable),
+                    "camera_health": health,
+                    "unavailable_cameras": unavailable,
+                },
+                status=409,
             )
-            health, unavailable = evaluate_calibration_cameras(
-                self.context.node,
-                stale_sec,
-            )
-            if unavailable:
-                return web.json_response(
-                    {
-                        "ok": False,
-                        "error": "calibration_cameras_not_ready",
-                        "speech": _camera_failure_speech(unavailable),
-                        "camera_health": health,
-                        "unavailable_cameras": unavailable,
-                    },
-                    status=409,
-                )
         payload = await asyncio.to_thread(self.context.node.reset_mapping)
         if not payload["ok"]:
             payload["speech"] = "校准服务未就绪，请检查建图和重定位服务。"

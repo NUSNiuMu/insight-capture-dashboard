@@ -1,89 +1,17 @@
 # 项目结构
 
-仓库采用模块化单体：`runtime` 负责现场采集，`services` 负责任务编排，
-`api` 只负责 HTTP/WebSocket 适配，`perception` 和 `quality` 是在线与离线流程
-都可复用的领域能力。`postprocess` 只处理已有数据，`scripts` 只保留部署命令、
-运维命令，不能再承载业务实现。
+- `native_dashboard/`：Qt 八个入口，原生图像、空间轨迹、任务、录制库、评分、WiLoR、COLMAP、录制与设置。
+- `web_dashboard/`：轻量手机采集页，保留任务、校准、按需预览与手动合包。
+- `insight_capture/api/`：两端共用的 HTTP/WebSocket。
+- `insight_capture/runtime/`：ROS 输入、LooperVIO 接入、时钟、任务、录制、双端合包与中断恢复。
+- `insight_capture/media/`：图像解码、Jetson 编解码、Qt 直通及手机 WebRTC。
+- `insight_capture/postprocess/`：录制库、手动同步回放、完整性/轨迹评分、离线 WiLoR 与 COLMAP。
+- `insight_capture/core/bag.py`：每条录制一个标准 MCAP，内部多 Chunk；不读取旧组合包、SQLite 或多文件分包。
+- `insight_capture/voice/`：本地唤醒、固定指令、识别与播报，不接入外部助手。
+- `native_mapping/`：唯一在线 C++ 建图/定位核心；其测试和 SuperGlue 推理构建工具保留。
+- `config/devices/`：仅 Insight9 与 EgoHalo 两套配置。
+- `tools/device_cli/`、`tools/diagnostics/`：设备与系统运维。
+- `tools/mapping_validation/`：在线推理构建及标定板外参采集工具，不含稠密地图或 RViz 服务。
+- `deploy/`：镜像、Qt 产物交付、配置联动和升级。
 
-```text
-insight_capture/
-  composition.py             进程级 composition root，组装 runtime/postprocess/services/API
-  core/                    最底层 models、paths、config、性能工具
-  runtime/                 现场录制、Preflight、Session/Take、主动 QC、建图定位
-    app.py                 仅负责配置、服务组装和进程生命周期
-    bootstrap.py           路径解析、崩溃诊断和 recorder factory
-    ros/                   PoseBridgeNode、ROS QoS、订阅与 adapter 协调
-    recording/             MCAP recorder、存储、header audit、恢复
-    mapping/               LooperVIO ROS 适配、时间同步、几何与特征处理
-  voice/                   离线固定命令、ALSA、SenseVoice/VAD、Piper、可选 OpenClaw
-  perception/
-    gripper/               在线/离线共用的 marker tracking、hand overlay、calibration
-  quality/                 在线与采后共用的 capture gate、topic rate 目录
-  media/                   viewer 出现后才工作的 JPEG、preview、WebRTC worker
-  services/                dataset export、scoring、gripper extraction 任务编排
-  api/                     aiohttp app、context、WebSocket 和薄 routes
-  postprocess/
-    bags/                  catalog、完整性、回放、同步
-    quality/               采后轨迹评分
-    handpose/              WiLoR、滤波和 schema
-    gripper/               离线 extraction
-    datasets/              routing、LeRobot、Ego LeRobot、UMI 导出
-    optimization/          COLMAP
-  legacy/                  SQLite/composite bag 与 UMI Zarr 兼容实现
-
-native_mapping/            唯一的 C++ 地图、BA、回环和定位核心
-
-web_dashboard/src/
-  mobile/ sessions/ review/ datasets/ storage/
-  advanced/{handpose,trajectory,optimization,system}/
-  shared/
-
-scripts/
-  run_dashboard.sh run_voice.sh select_device.sh
-  reboot_cameras.sh sync_camera_restart.py
-  check_bag.py export_lerobot.py
-  system_doctor.py system_doctor.sh
-  merge_distributed_recording.py set_ros_domain_id.py
-
-tools/
-  device_cli/ mapping_validation/ diagnostics/
-
-deploy/
-  docker-compose.yml update.sh systemd/ kiosk/
-  build_release.sh setup_host.sh host_setup.sh
-
-tests/
-  runtime/ voice/ postprocess/ web/ legacy/
-```
-
-依赖方向固定为“入口/API → services/runtime → 领域包 → core”。API route 可以调用
-service，service 不反向导入 route；runtime 与 postprocess 都可依赖 perception/quality，
-但 runtime 不得反向依赖 postprocess；worker 可以调用媒体或感知实现，实现模块不启动
-worker。结构测试会拒绝生产代码重新导入旧 `common/web` 路径或旧的
-`postprocess.gripper` 感知实现路径。
-
-根目录 `pyproject.toml` 统一声明项目 metadata、Python 依赖、console scripts 以及
-pytest/ruff/mypy/pyright 配置。当前阶段保留根目录 package 布局，待入口和部署全部通过
-安装后的 console scripts 验证后，再单独迁移到 `src/insight_capture/`。
-
-## 入口与历史数据
-
-- `scripts/` 只保留上面列出的现场入口；业务实现不得放回该目录。
-- Dashboard、语音、后处理和工程工具可通过 `pyproject.toml` 声明的
-  `insight-*` console scripts、`python3 -m insight_capture...` 或 `tools/...`
-  调用；已移除旧 `common/web` namespace 和无调用的 wrapper，调用方使用实际模块路径。
-- 旧 SQLite/composite bag 和 UMI Zarr 仍需读取历史数据，因此集中在 `legacy/`，
-  不能在没有数据迁移策略时删除。
-- `config/runtime.json` 是唯一现场配置；文件缺失直接报错，不再读取旧配置文件。
-- 新录制只有单 MCAP 写入与发布流程。中断恢复先复制原始数据，再重建索引、完整转换和逐话题核对数量及类型；全部通过后发布恢复包，并将原始目录原样保留为 `_staging/.<录制名>.original`。恢复清单记录原始数据的位置。不剔除坏子包，不切换转换方式。
-
-## 运行边界
-
-- Capture Mode 无 viewer 时不做 JPEG preview、WebRTC 传输或手部显示叠加；录制、
-  header audit、VIO/mapping/QC 持续运行。定位适配器直接订阅图像，不经 Dashboard 中继。
-- viewer lease 到来后按需启动媒体 worker，最后一个 viewer 离开并超过 idle grace
-  后停止。
-- 图像能力接口区分硬件可用性和实际输出路径，逐相机报告最近成功的 JPEG 编码方式及其时效；查询能力不会激活预览。
-- 固定语音命令完全离线执行；OpenClaw adapter 只处理非固定自然语言。
-- Dense Mapping、RViz、COLMAP 位于 Engineering/Advanced 路径，不进入日常采集主流程。
-- 3D review 保留真实相机模型、三路 camera frame、pose、trajectory、TCP 和 hand pose。
+UMI Zarr/LeRobot 导出、夹爪开合追踪、设备手部骨架叠加、固定检测位、Lite 配置、OpenClaw 和假位姿模式已删除。定位图像夹爪遮罩、离线 WiLoR 手姿、COLMAP、原始录制保留。回放无后台预生成或排队；用户手动选择录制并准备。

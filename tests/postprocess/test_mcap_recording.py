@@ -17,11 +17,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from insight_capture.postprocess.bags.catalog import list_rosbags  # noqa: E402
-from insight_capture.legacy.composite_bag import (  # noqa: E402
-    COMPOSITE_FORMAT,
-    aggregate_metadata,
+from insight_capture.core.bag import (  # noqa: E402
     recorded_topics,
-    session_parts,
+    single_mcap,
 )
 from insight_capture.runtime.recording.storage import (  # noqa: E402
     probe_recording_root,
@@ -60,15 +58,7 @@ def _write_part(
     return part
 
 
-def _write_manifest(root: Path, parts: list[Path]) -> None:
-    (root / "recording_manifest.json").write_text(json.dumps({
-        "version": 2,
-        "format": COMPOSITE_FORMAT,
-        "parts": [{"path": part.name} for part in parts],
-    }), encoding="utf-8")
-
-
-class CompositeBagTest(unittest.TestCase):
+class McapRecordingTest(unittest.TestCase):
     def test_live_audit_republishes_latched_tf_after_recorder_resume(self) -> None:
         owner = mock.Mock()
         owner._recording_writer_lock = threading.Lock()
@@ -277,66 +267,6 @@ class CompositeBagTest(unittest.TestCase):
                 fallback.resolve(),
             )
 
-    def test_aggregates_parts_and_catalogs_session(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            bag = root / "capture"
-            bag.mkdir()
-            parts = [
-                _write_part(bag, "camera", "/camera", start_ns=1_000, duration_ns=500, messages=5),
-                _write_part(bag, "auxiliary", "/imu", start_ns=900, duration_ns=800, messages=20),
-            ]
-            _write_manifest(bag, parts)
-
-            self.assertEqual(session_parts(bag), parts)
-            self.assertEqual(recorded_topics(bag), ["/camera", "/imu"])
-            metadata = aggregate_metadata(bag)
-            self.assertEqual(metadata["message_count"], 25)
-            self.assertEqual(metadata["duration"]["nanoseconds"], 800)
-
-            entries = list_rosbags(root, root / "results")
-            self.assertEqual(entries[0]["name"], "capture")
-            self.assertEqual(entries[0]["topic_count"], 2)
-            self.assertEqual(entries[0]["message_count"], 25)
-
-    def test_playback_starts_one_process_per_relevant_part(self) -> None:
-        class Recording:
-            _lock = threading.Lock()
-            processes = []
-
-            @staticmethod
-            def _cleanup_if_exited_unlocked() -> None:
-                return None
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            bag = root / "capture"
-            bag.mkdir()
-            parts = [
-                _write_part(bag, "camera", "/camera", start_ns=1_000_000_000, duration_ns=500, messages=5),
-                _write_part(bag, "auxiliary", "/pose", start_ns=1_250_000_000, duration_ns=500, messages=20),
-            ]
-            _write_manifest(bag, parts)
-            processes = [mock.Mock(), mock.Mock()]
-            for process in processes:
-                process.poll.return_value = None
-            with mock.patch(
-                "insight_capture.postprocess.bags.playback.subprocess.Popen", side_effect=processes
-            ) as popen, mock.patch("insight_capture.postprocess.bags.playback.threading.Thread.start"):
-                PlaybackManager(root, 20).start(
-                    "capture",
-                    Recording(),
-                    remap_topics={"/camera": "/bagplay/camera", "/pose": "/bagplay/pose"},
-                )
-
-            self.assertEqual(popen.call_count, 2)
-            first = popen.call_args_list[0].args[0]
-            second = popen.call_args_list[1].args[0]
-            self.assertIn("1.000000", first)
-            self.assertIn("1.250000", second)
-            self.assertIn("/camera", first)
-            self.assertIn("/pose", second)
-
     def test_publish_single_mcap_is_a_standard_rosbag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -369,7 +299,7 @@ class CompositeBagTest(unittest.TestCase):
             self.assertFalse(staging.exists())
             self.assertTrue((output / "capture_0.mcap").is_file())
             self.assertTrue((output / "metadata.yaml").is_file())
-            self.assertEqual(session_parts(output), [output])
+            self.assertEqual(single_mcap(output), output / "capture_0.mcap")
             manifest = json.loads((output / "recording_manifest.json").read_text())
             self.assertNotIn("parts", manifest)
             self.assertEqual(manager.merge_timings["method"], "single_mcap_publish")

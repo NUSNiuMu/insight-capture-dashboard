@@ -1,4 +1,4 @@
-"""WebRTC and hand-overlay worker processes, IPC, and health."""
+"""WebRTC worker processes, IPC, and health."""
 
 from __future__ import annotations
 
@@ -14,19 +14,17 @@ from pathlib import Path
 
 try:
     import rclpy
-except Exception:  # pragma: no cover - fake mode can run without ROS imports
+except Exception:  # pragma: no cover - host-side tools may import without ROS
     rclpy = None
 
 from insight_capture.media.jpeg import HwJpegCodec
 from insight_capture.media.rate import select_frame
 from insight_capture.media.h264 import H264Queue
 
-from insight_capture.core.models import CameraFrame
 
 
 class WorkerSupervisor:
     _WEBRTC_MODULE = "insight_capture.media.webrtc_worker"
-    _HAND_OVERLAY_MODULE = "insight_capture.media.hand_overlay_worker"
 
     def __init__(self, owner) -> None:
         self.owner = owner
@@ -81,9 +79,6 @@ class WorkerSupervisor:
     def _maybe_queue_webrtc_frame(self, camera_name: str, topic_type: str, msg, frame) -> None:
         """Queue a frame only when the camera has active WebRTC viewers."""
         if not self.owner._webrtc_has_sessions.get(camera_name):
-            return
-        # Wait for the matching composite instead of interleaving raw frames.
-        if frame is not None and frame.hand_overlay_pending:
             return
         if not self._webrtc_frame_due(camera_name):
             return
@@ -162,115 +157,6 @@ class WorkerSupervisor:
             self.owner._webrtc_has_sessions.clear()
             self.owner._webrtc_session_fps.clear()
             self.owner._pending_webrtc_frames.clear()
-
-    def _start_hand_overlay_worker(self) -> "subprocess.Popen":
-        env = dict(os.environ)
-        env["INSIGHT_HANDOVERLAY_AUTHKEY"] = self.owner._hand_overlay_authkey.hex()
-        log_path = self.owner.project_root / "outputs" / "hand_overlay_worker.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_file = open(log_path, "a", buffering=1)
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                self._HAND_OVERLAY_MODULE,
-                "--ipc-socket",
-                self.owner._hand_overlay_ipc_path,
-            ],
-            cwd=str(self.owner.project_root),
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-        )
-        log_file.close()
-        self.owner.get_logger().info(f"hand_overlay: spawned hand_overlay_worker.py pid={proc.pid}")
-        return proc
-
-    def ensure_hand_overlay_worker(self) -> None:
-        with self.owner._hand_overlay_worker_lock:
-            proc = getattr(self.owner, "_hand_overlay_proc", None)
-            if proc is not None and proc.poll() is None:
-                return
-            self.owner._hand_overlay_proc = self._start_hand_overlay_worker()
-
-    def stop_hand_overlay_worker(self) -> None:
-        with self.owner._hand_overlay_worker_lock:
-            proc = getattr(self.owner, "_hand_overlay_proc", None)
-            if proc is None:
-                return
-            self.owner._hand_overlay_proc = None
-            proc.terminate()
-            try:
-                proc.wait(timeout=3.0)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=3.0)
-            self.owner._pending_hand_overlay_frames.clear()
-
-    def _dispatch_hand_overlay(self, camera_name: str, version: int, jpeg_bytes: bytes, hands: list) -> None:
-        """Keep only the newest overlay request per camera."""
-        self.ensure_hand_overlay_worker()
-        self.owner._pending_hand_overlay_frames[camera_name] = (version, jpeg_bytes, hands)
-        self.owner._hand_overlay_frame_event.set()
-
-    def _hand_overlay_ipc_loop(self) -> None:
-        """Send overlay requests and apply results over one IPC connection."""
-        authkey = self.owner._hand_overlay_authkey
-        while rclpy is not None and rclpy.ok():
-            if getattr(self.owner, "_hand_overlay_proc", None) is None:
-                time.sleep(0.25)
-                continue
-            try:
-                conn = Client(self.owner._hand_overlay_ipc_path, family="AF_UNIX", authkey=authkey)
-            except OSError:
-                time.sleep(1.0)
-                continue
-            try:
-                while rclpy is not None and rclpy.ok():
-                    while conn.poll(0):
-                        message = conn.recv()
-                        if not (isinstance(message, tuple) and len(message) == 3):
-                            continue
-                        camera_name, version, composited = message
-                        self.owner._apply_composited_hand_overlay(camera_name, version, composited)
-                    if self.owner._hand_overlay_frame_event.wait(timeout=0.05):
-                        self.owner._hand_overlay_frame_event.clear()
-                        for camera_name in list(self.owner._pending_hand_overlay_frames.keys()):
-                            payload = self.owner._pending_hand_overlay_frames.pop(camera_name, None)
-                            if payload is None:
-                                continue
-                            conn.send((camera_name,) + payload)
-            except (EOFError, OSError) as exc:
-                if getattr(self.owner, "_hand_overlay_proc", None) is not None:
-                    self.owner.get_logger().warning(
-                        f"hand overlay ipc: lost connection to worker ({exc}); reconnecting"
-                    )
-            finally:
-                with contextlib.suppress(Exception):
-                    conn.close()
-            time.sleep(1.0)
-
-    def _apply_composited_hand_overlay(self, camera_name: str, version: int, composited: bytes) -> None:
-        """Apply a composite unless a newer result already won the race."""
-        if version <= self.owner._hand_overlay_last_applied.get(camera_name, -1):
-            return
-        width, height = self.owner._jpeg_dimensions(composited)
-        with self.owner.camera_frame_lock:
-            current = self.owner.latest_camera_frames.get(camera_name)
-            if current is None:
-                return
-            self.owner._hand_overlay_last_applied[camera_name] = version
-            self.owner.latest_camera_frames[camera_name] = CameraFrame(
-                data=composited,
-                stamp_ns=current.stamp_ns,
-                received_monotonic=time.monotonic(),
-                mime_type="image/jpeg",
-                width=width,
-                height=height,
-                version=version,
-            )
-        if self.owner._webrtc_has_sessions.get(camera_name):
-            self._queue_webrtc_frame(camera_name, ("JPEG", width, height, composited))
 
     def _webrtc_ipc_loop(self) -> None:
         """Send frames and receive session state over one IPC connection."""

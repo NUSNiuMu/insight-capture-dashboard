@@ -7,12 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
-from insight_capture.legacy.composite_bag import MANIFEST_NAME, aggregate_metadata
-
-try:
-    import yaml
-except Exception:  # pragma: no cover - metadata parsing degrades gracefully
-    yaml = None
+from insight_capture.core.bag import read_metadata, is_mcap_bag
 
 
 @dataclass(frozen=True)
@@ -61,7 +56,7 @@ class BagLibrary:
                 for name in child_names
                 if not name.startswith(".") and name not in {"_outputs", "_staging", "_distributed", "review"}
             ]
-            if (path / "metadata.yaml").is_file() or (path / MANIFEST_NAME).is_file():
+            if is_mcap_bag(path):
                 child_names[:] = []
                 yield path.resolve()
 
@@ -113,10 +108,7 @@ class BagLibrary:
 
     def reference_for_path(self, path: Path) -> Optional[str]:
         resolved = Path(path).resolve()
-        if not (
-            (resolved / "metadata.yaml").is_file()
-            or (resolved / MANIFEST_NAME).is_file()
-        ):
+        if not is_mcap_bag(resolved):
             return None
         for root in self._roots():
             if resolved == root or root in resolved.parents:
@@ -161,17 +153,6 @@ def _result_exists(results_root: Path, category: str, bag_name: str) -> bool:
     return any(candidate.exists() for candidate in candidates)
 
 
-def _read_bag_metadata(metadata_path: Path) -> Dict[str, object]:
-    if yaml is None or not metadata_path.exists():
-        return {}
-    try:
-        # Prefer libyaml because every bag-list request parses all metadata.
-        loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-        payload = yaml.load(metadata_path.read_text(encoding="utf-8"), Loader=loader) or {}
-    except Exception:
-        return {}
-    info = payload.get("rosbag2_bagfile_information", {})
-    return info if isinstance(info, dict) else {}
 
 
 def list_rosbag_locations(
@@ -180,7 +161,7 @@ def list_rosbag_locations(
     entries: List[Dict[str, object]] = []
     for location in locations:
         bag_dir = location.path
-        metadata = aggregate_metadata(bag_dir) or _read_bag_metadata(bag_dir / "metadata.yaml")
+        metadata = read_metadata(bag_dir)
         if not metadata:
             continue
         duration_ns = int((metadata.get("duration") or {}).get("nanoseconds", 0) or 0)
@@ -246,7 +227,7 @@ def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object
     ):
         if not bag_dir.is_dir():
             continue
-        if not (bag_dir / "metadata.yaml").exists() and not (bag_dir / MANIFEST_NAME).exists():
+        if not is_mcap_bag(bag_dir):
             continue
         locations.append(
             BagLocation(

@@ -53,7 +53,6 @@ class VioCalibrationRecordingTest(unittest.TestCase):
             for name in ("insight3_a", "insight3_b", "insight9_a")
         ]
         node = SimpleNamespace(
-            fake_pose=False,
             cameras=cameras,
             poses=[],
             camera_input_lock=threading.Lock(),

@@ -79,23 +79,7 @@ class SettingsRoutes:
             }
         return payload
 
-    async def _handle_settings_hand_overlay(self, request: web.Request) -> web.Response:
-        payload = await read_json_body(request)
-        name = str(payload.get("name", "")).strip()
-        if not name or "enabled" not in payload:
-            raise ValueError("Fields 'name' and 'enabled' are required.")
-        self.context.node.set_hand_overlay_enabled(name, bool(payload.get("enabled")))
-        return web.json_response(await self._settings_payload())
-
     async def _handle_settings_get(self, _request: web.Request) -> web.Response:
-        return web.json_response(await self._settings_payload())
-
-    async def _handle_settings_gripper_tracking(self, request: web.Request) -> web.Response:
-        payload = await read_json_body(request)
-        name = str(payload.get("name", "")).strip()
-        if not name or "enabled" not in payload:
-            raise ValueError("Fields 'name' and 'enabled' are required.")
-        self.context.node.set_gripper_tracking_enabled(name, bool(payload.get("enabled")))
         return web.json_response(await self._settings_payload())
 
     async def _handle_settings_insight3_gripper_mask(

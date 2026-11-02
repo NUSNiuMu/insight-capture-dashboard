@@ -15,9 +15,7 @@ Item {
         }, {
             "key": "bags",
             "file": "BagsPage.qml"
-        }, {
-            "key": "datasets",
-            "file": "DatasetsPage.qml"
+
         }, {
             "key": "scoring",
             "file": "ScoringPage.qml"
@@ -37,7 +35,6 @@ Item {
     property var titles: ({
             "sessions": "Sessions · 任务",
             "bags": "Rosbags · 录制库",
-            "datasets": "Datasets · 数据集",
             "scoring": "Scoring · 评分",
             "handpose": "Hand pose · 手部姿态",
             "optimization": "Optimization · 优化",
@@ -60,10 +57,8 @@ Item {
             get("tasks", "/api/tasks", force);
             get("sessions", "/api/sessions", force);
         }
-        if (["bags", "datasets", "scoring", "handpose", "optimization"].indexOf(page) >= 0)
+        if (["bags", "scoring", "handpose", "optimization"].indexOf(page) >= 0)
             get("bags", "/api/rosbags?scope=" + scope, force);
-        if (page === "datasets")
-            get("export", "/api/umi-export/status", force);
         if (page === "bags")
             get("savedRecordings", "/api/postprocessing/recordings", force);
         if (page === "scoring")
@@ -88,7 +83,6 @@ Item {
     function poll() {
         var key = {
             "bags": "savedRecordings",
-            "datasets": "export",
             "scoring": "scoring",
             "handpose": "handpose",
             "optimization": "optimization",
@@ -96,7 +90,6 @@ Item {
         }[page];
         var path = {
             "bags": "/api/postprocessing/recordings",
-            "datasets": "/api/umi-export/status",
             "scoring": "/api/scoring/status",
             "handpose": "/api/handpose/status",
             "optimization": "/api/optimization/status",

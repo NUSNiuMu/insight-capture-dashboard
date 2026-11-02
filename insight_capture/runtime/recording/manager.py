@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable, Deque, Dict, List, Optional, Sequence, Set
 
 
-from insight_capture.legacy.composite_bag import MANIFEST_NAME, read_metadata
+from insight_capture.core.bag import MANIFEST_NAME, read_metadata
 from .storage import probe_recording_root
 from .recorder import (
     _normalize_topics,

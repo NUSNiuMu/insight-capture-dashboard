@@ -14,8 +14,8 @@ def first_decodable_stamps(bag_path, cameras, check_cancelled):
         return starts
     from rclpy.serialization import deserialize_message
     from sensor_msgs.msg import CompressedImage
-    from .synchronization import _sqlite_topic_messages
-    for topic, raw, stamp in _sqlite_topic_messages(bag_path, names):
+    from .synchronization import _bag_topic_messages
+    for topic, raw, stamp in _bag_topic_messages(bag_path, names):
         check_cancelled()
         if names[topic] in starts:
             continue
@@ -36,11 +36,11 @@ def encode_review(manager, bag_path, cameras, selections, output, progress):
     from rclpy.serialization import deserialize_message
     from rosidl_runtime_py.utilities import get_message
     from .synchronization import (
-        _sqlite_topic_messages, _sqlite_topic_types, _decode_review_image,
+        _bag_topic_messages, _bag_topic_types, _decode_review_image,
         _video_writer, _compose_review_frame, REVIEW_HEIGHT, REVIEW_WIDTH, PLAYBACK_FPS,
     )
     by_topic = {str(c["topic"]): c for c in cameras}
-    types = _sqlite_topic_types(bag_path)
+    types = _bag_topic_types(bag_path)
     classes = {topic: get_message(types[topic]) for topic in by_topic}
     indices = {c["name"]: 0 for c in cameras}
     wanted = {}
@@ -87,7 +87,7 @@ def encode_review(manager, bag_path, cameras, selections, output, progress):
         writer = _video_writer(output, shape, PLAYBACK_FPS)
         with manager._lock:
             manager._writer = writer
-        for topic, raw, _stamp in _sqlite_topic_messages(bag_path, by_topic):
+        for topic, raw, _stamp in _bag_topic_messages(bag_path, by_topic):
             manager._check_cancelled()
             camera = by_topic[topic]
             name = camera["name"]

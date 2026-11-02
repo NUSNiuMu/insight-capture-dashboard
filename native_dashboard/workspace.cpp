@@ -4,7 +4,7 @@
 
 Workspace::Workspace(QUrl server, QObject *parent) : QObject(parent), m_server(server) {
     m_clock.start();
-    for (const char *key : {"tasks","sessions","bags","export","scoring","scoringStart",
+    for (const char *key : {"tasks","sessions","bags","scoring","scoringStart",
             "handpose","capabilities","handFrames","optimization","runs","cameras",
             "trajectories","recording","topics","directories","settings","voice",
             "volume","health","optLog","action","savedRecordings"})

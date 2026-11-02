@@ -7,7 +7,7 @@ import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, TYPE_CHECKING
 
-from insight_capture.legacy.composite_bag import read_metadata, recorded_topics, session_parts
+from insight_capture.core.bag import recorded_topics, single_mcap
 
 if TYPE_CHECKING:
     from insight_capture.runtime.recording.manager import RecordingManager
@@ -49,46 +49,22 @@ class PlaybackManager:
             bag_path = (self.rosbag_root / bag_name).resolve()
             if not bag_path.exists():
                 raise ValueError(f"Bag not found: {bag_name}")
-            parts = session_parts(bag_path)
-            if not parts:
-                raise ValueError(f"Bag has no readable rosbag2 parts: {bag_name}")
-            starts = [
-                int((read_metadata(part).get("starting_time") or {}).get(
-                    "nanoseconds_since_epoch", 0
-                ) or 0)
-                for part in parts
-            ]
-            base_start = min((stamp for stamp in starts if stamp), default=0)
             env = os.environ.copy()
             env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
-            processes = []
-            for part, start_ns in zip(parts, starts):
-                cmd = ["ros2", "bag", "play", str(part)]
-                if len(parts) > 1:
-                    delay = 1.0 + max(0.0, (start_ns - base_start) / 1e9)
-                    cmd += ["--delay", f"{delay:.6f}"]
-                if remap_topics:
-                    part_topics = set(recorded_topics(part))
-                    playback_topics = [
-                        topic for topic in remap_topics if topic in part_topics
-                    ]
-                    if not playback_topics:
-                        continue
-                    cmd += ["--topics", *playback_topics]
-                    cmd += ["--remap"] + [
-                        f"{old}:={new}" for old, new in remap_topics.items()
-                    ]
-                processes.append(subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                    env=env,
-                ))
-            if not processes:
-                raise ValueError("Bag contains none of the requested playback topics")
+            single_mcap(bag_path)
+            cmd = ["ros2", "bag", "play", str(bag_path)]
+            if remap_topics:
+                available = set(recorded_topics(bag_path))
+                selected = [topic for topic in remap_topics if topic in available]
+                if not selected:
+                    raise ValueError("Bag contains none of the requested playback topics")
+                cmd += ["--topics", *selected, "--remap"]
+                cmd += [f"{old}:={new}" for old, new in remap_topics.items()]
+            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+            processes = [process]
             self._processes = processes
-            self._process = processes[0]
+            self._process = process
             self._bag_name = bag_name
         threading.Thread(
             target=self._monitor, args=(processes,), daemon=True, name="playback_monitor"

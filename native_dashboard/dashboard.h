@@ -32,7 +32,6 @@ class Pose : public QObject {
     Q_PROPERTY(TrailGeometry *trail READ trail CONSTANT)
     Q_PROPERTY(bool trailEnabled MEMBER trailEnabled NOTIFY traceChanged)
     Q_PROPERTY(int pointCount READ pointCount NOTIFY traceChanged)
-    Q_PROPERTY(double opening MEMBER opening NOTIFY openingChanged)
   public:
     explicit Pose(QObject *parent = nullptr) : QObject(parent), geometry(new TrailGeometry) {}
     ~Pose() override { delete geometry; }
@@ -48,7 +47,6 @@ class Pose : public QObject {
     QQuaternion displayRotation() const { return displayFilter.rotation; }
     QUrl modelSource;
     float modelScale = 20;
-    double opening = 1;
     QVector<QVector3D> points, kept;
     qint64 generation = -1, firstSeq = 1, lastSeq = 0, lastGeometry = 0;
     TrailGeometry *geometry;
@@ -58,7 +56,6 @@ class Pose : public QObject {
         emit poseChanged();
         emit modelChanged();
         emit traceChanged();
-        emit openingChanged();
     }
     Q_INVOKABLE void setTrail(bool enabled) {
         trailEnabled = enabled;
@@ -69,7 +66,6 @@ class Pose : public QObject {
     void poseChanged();
     void modelChanged();
     void traceChanged();
-    void openingChanged();
 };
 
 class Dashboard : public QObject {
@@ -107,8 +103,6 @@ class Dashboard : public QObject {
     Q_INVOKABLE void setSpatialActive(bool value);
     Q_INVOKABLE void command(const QString &action, const QString &value = QString());
     Q_INVOKABLE void setPlaybackTime(double seconds);
-    Q_INVOKABLE void updateGripper(QObject *root, double opening);
-    Q_INVOKABLE void resetGripper(QObject *root);
     Q_INVOKABLE QVariantMap diagnostics() const;
     void shutdown();
   signals:
@@ -149,8 +143,6 @@ class Dashboard : public QObject {
     QVariantMap m_state;
     QVariantMap m_cameraAvailability;
     QVariantMap m_localization, m_nativeVioFresh;
-    QHash<QObject *, QList<QPointer<QObject>>> m_gripperNodes;
-    QHash<QObject *, double> m_gripperOpenings;
     QString m_message = "正在连接后端", m_requestedPlayback;
     QJsonObject m_manifest, m_latestLive;
     QSet<QString> m_pending;

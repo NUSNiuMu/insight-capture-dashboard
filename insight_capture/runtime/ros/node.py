@@ -1,6 +1,5 @@
 """ROS node coordinating field-capture adapters and domain services."""
 
-import math
 import http.client
 import json
 import os
@@ -24,8 +23,7 @@ try:
     from rclpy.qos_event import SubscriptionEventCallbacks
     from sensor_msgs.msg import CompressedImage, Image as RosImage
     from tf2_msgs.msg import TFMessage
-    from vision_msgs.msg import Detection2DArray
-except Exception:  # pragma: no cover - fake mode can run without ROS imports
+except Exception:  # pragma: no cover - host-side tools may import without ROS
     rclpy = None
     PoseStamped = None
     ReentrantCallbackGroup = None
@@ -39,15 +37,12 @@ except Exception:  # pragma: no cover - fake mode can run without ROS imports
     CompressedImage = None
     RosImage = None
     TFMessage = None
-    Detection2DArray = None
 
 from insight_capture.core.config import (
     build_dashboard_config,
     load_setup,
 )
 from insight_capture.core.paths import runtime_config_path
-from insight_capture.perception.gripper.tracking import GripperTrackingMixin
-from insight_capture.perception.gripper.overlay import HandOverlayMixin
 from insight_capture.media.jpeg import HwJpegCodec
 from insight_capture.core import performance as perf_tracker
 from insight_capture.runtime.recording import RecordingManager
@@ -58,7 +53,6 @@ from insight_capture.media.image_pipeline import ImagePipeline
 from insight_capture.media.native_preview import NativePreviewHub
 from insight_capture.media.preview_manager import PreviewManager
 from insight_capture.media.worker_supervisor import WorkerSupervisor
-from insight_capture.quality.capture_check import CaptureCheckManager
 from insight_capture.runtime.mapping.stream import MappingStream
 from insight_capture.runtime.payloads import PayloadBuilder
 from insight_capture.runtime.recording.header_audit import RecordingBridge
@@ -88,11 +82,10 @@ def make_image_qos(depth: int = 1, reliability: str = "best_effort") -> QoSProfi
     )
 
 
-class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
+class PoseBridgeNode(Node):
     def __init__(
         self,
         config_path: Path,
-        fake_pose: bool = False,
         pose_publish_hz: float = 50.0,
         webrtc_port: int = 8766,
         post_processing_config_path: Optional[Path] = None,
@@ -113,7 +106,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             if post_processing_config_path is not None
             else runtime_config_path()
         )
-        self.fake_pose = bool(fake_pose)
         self.max_points = 300
 
         raw_config = load_setup(config_path)
@@ -135,7 +127,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             CameraSpec(
                 name=item["name"],
                 namespace=item["namespace"],
-                hand_tracking=bool(item.get("hand_tracking", False)),
                 label=item["label"],
                 topic=item["topic"],
                 topic_type=item["type"],
@@ -216,9 +207,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             camera.name: threading.Event() for camera in self.cameras
         }
         self.native_preview = NativePreviewHub(self.cameras)
-        self._configure_gripper_tracking(str(self.project_root / "config" / "gripper_calibration.json"))
-        self._configure_hand_overlay()
-        self._capture_check_manager: Optional[CaptureCheckManager] = None
         # NVJPEG is optional; call sites retain their cv2 fallback.
         self._hw_jpeg = HwJpegCodec.create(log=self.get_logger().info)
         # WebRTC runs out of process to avoid GIL contention with pose broadcasts.
@@ -258,34 +246,19 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         )
         threading.Thread(target=self._webrtc_ipc_loop, daemon=True, name="webrtc_ipc").start()
         threading.Thread(target=self._webrtc_healthz_loop, daemon=True, name="webrtc_healthz").start()
-        # Hand-overlay JPEG compositing also runs out of process.
-        self._hand_overlay_ipc_path = os.path.join(tempfile.gettempdir(), f"insight_hand_overlay_{os.getpid()}.sock")
-        self._hand_overlay_authkey = secrets.token_bytes(32)
-        self._pending_hand_overlay_frames: Dict[str, Tuple[int, bytes, list]] = {}
-        self._hand_overlay_frame_event = threading.Event()
-        self._hand_overlay_worker_lock = threading.Lock()
-        # Reject only composites older than the last applied result.
-        self._hand_overlay_last_applied: Dict[str, int] = {}
-        self._hand_overlay_proc: Optional[subprocess.Popen] = None
-        threading.Thread(target=self._hand_overlay_ipc_loop, daemon=True, name="hand_overlay_ipc").start()
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
-        if self.fake_pose:
-            self.create_timer(1.0 / self.pose_publish_hz, self._update_fake_pose, callback_group=self.ros_callback_group)
-            self.get_logger().info("Running in fake-pose demo mode")
-        else:
-            self._mapping_stream.start()
-            self._create_tf_static_relay()
-            self._create_pose_subscriptions()
-            self._create_dashboard_image_subscriptions()
-            self._create_hand_overlay_subscriptions()
-            self._participant_watchdog.enable_discovery_recovery(
-                rclpy.get_rmw_implementation_identifier()
-            )
-            threading.Thread(
-                target=self._stale_participant_watchdog_loop,
-                daemon=True,
-                name="stale_dds_watchdog",
-            ).start()
+        self._mapping_stream.start()
+        self._create_tf_static_relay()
+        self._create_pose_subscriptions()
+        self._create_dashboard_image_subscriptions()
+        self._participant_watchdog.enable_discovery_recovery(
+            rclpy.get_rmw_implementation_identifier()
+        )
+        threading.Thread(
+            target=self._stale_participant_watchdog_loop,
+            daemon=True,
+            name="stale_dds_watchdog",
+        ).start()
 
     def _create_tf_static_relay(self) -> None:
         """Cache the latched transforms so a paused recorder can receive them."""
@@ -428,48 +401,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
                 event_callbacks=self.subscription_event_callbacks,
             ))
 
-    def _create_hand_overlay_subscriptions(self) -> None:
-        if Detection2DArray is None:
-            return
-        # Subscribe only configured HandEngine sources; availability becomes
-        # true after the first message.
-        hand_qos = make_image_qos(depth=5, reliability="best_effort")
-        for camera in self.cameras:
-            if not camera.hand_tracking:
-                continue
-            namespace = camera.namespace
-            hand_topic = f"/{namespace}/camera/hand"
-            keypoints_topic = f"/{namespace}/camera/hand_keypoints"
-            box_sub = self.create_subscription(
-                Detection2DArray,
-                hand_topic,
-                lambda msg, name=camera.name: self._on_hand_boxes(name, msg),
-                hand_qos,
-                callback_group=self.ros_callback_group,
-                event_callbacks=self.subscription_event_callbacks,
-            )
-            kp_sub = self.create_subscription(
-                Detection2DArray,
-                keypoints_topic,
-                lambda msg, name=camera.name: self._on_hand_keypoints(name, msg),
-                hand_qos,
-                callback_group=self.ros_callback_group,
-                event_callbacks=self.subscription_event_callbacks,
-            )
-            # Replay keypoints for gesture/skeleton behavior. Box metadata is
-            # live-only and intentionally omitted from rosbag playback.
-            kp_playback_sub = self.create_subscription(
-                Detection2DArray,
-                playback_topic(keypoints_topic),
-                lambda msg, name=camera.name: self._on_hand_keypoints(name, msg, is_live=False),
-                hand_qos,
-                callback_group=self.ros_callback_group,
-                event_callbacks=self.subscription_event_callbacks,
-            )
-            self.dashboard_subscriptions.extend(
-                [box_sub, kp_sub, kp_playback_sub]
-            )
-
     def _log_perf_summary(self) -> None:
         snapshot = perf_tracker.snapshot_and_reset()
         if not snapshot["percent_of_one_core"]:
@@ -599,54 +530,10 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         self._participant_watchdog.close()
         self._preview_manager.close()
         self.stop_webrtc_worker()
-        self.stop_hand_overlay_worker()
 
 
     def stop_webrtc_worker(self) -> None:
         self._worker_supervisor.stop_webrtc_worker()
-
-
-    def _start_hand_overlay_worker(self) -> "subprocess.Popen":
-        return self._worker_supervisor._start_hand_overlay_worker()
-
-    def ensure_hand_overlay_worker(self) -> None:
-        self._worker_supervisor.ensure_hand_overlay_worker()
-
-    def stop_hand_overlay_worker(self) -> None:
-        self._worker_supervisor.stop_hand_overlay_worker()
-
-    def configure_capture_check(
-        self, config: Dict[str, object], results_root: Path
-    ) -> None:
-        self._capture_check_manager = CaptureCheckManager(
-            pose_roles={pose.name: pose.teleop_role for pose in self.poses},
-            mapping_snapshot=self.build_mapping_payload,
-            results_root=results_root,
-            config=config,
-        )
-
-    def capture_check_status(self, *, bag_name: Optional[str] = None) -> Dict[str, object]:
-        manager = self._capture_check_manager
-        if manager is None:
-            return {"type": "capture_check", "enabled": False, "state": "disabled"}
-        return manager.snapshot(bag_name=bag_name)
-
-    def run_capture_check(self, *, bag_name: Optional[str] = None) -> Dict[str, object]:
-        manager = self._capture_check_manager
-        if manager is None:
-            return {"type": "capture_check_result", "state": "disabled"}
-        return manager.check(bag_name=bag_name)
-
-    def _dispatch_hand_overlay(self, camera_name: str, version: int, jpeg_bytes: bytes, hands: list) -> None:
-        self._worker_supervisor._dispatch_hand_overlay(camera_name, version, jpeg_bytes, hands)
-
-
-    def _hand_overlay_ipc_loop(self) -> None:
-        self._worker_supervisor._hand_overlay_ipc_loop()
-
-
-    def _apply_composited_hand_overlay(self, camera_name: str, version: int, composited: bytes) -> None:
-        self._worker_supervisor._apply_composited_hand_overlay(camera_name, version, composited)
 
 
     def _webrtc_ipc_loop(self) -> None:
@@ -688,10 +575,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
             self.trace_sequences[pose_name] += 1
             self.raw_traces[pose_name].append(pose_sample.position)
             self.raw_trace_sequences[pose_name].append(self.trace_sequences[pose_name])
-        capture_check = self._capture_check_manager
-        if capture_check is not None:
-            capture_check.record_pose(pose_name, pose_sample, received)
-
     def clear_traces(self) -> None:
         with self.pose_lock:
             for name in self.raw_traces:
@@ -705,28 +588,6 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
         # Topic remapping, not boot-relative timestamps, separates playback.
         self._playback_mode = enabled
         self.get_logger().info(f"Playback mode {'ON' if enabled else 'OFF'}")
-
-    def _update_fake_pose(self) -> None:
-        now = time.monotonic()
-        roles = {
-            "head": (0.0, 0.0, 1.45),
-            "left_hand": (-0.35, 0.0, 1.10),
-            "right_hand": (0.35, 0.0, 1.10),
-        }
-        phase = now * 0.9
-        for pose in self.poses:
-            base = roles.get(pose.teleop_role, (0.0, 0.0, 1.0))
-            swing = 0.16 if pose.teleop_role != "head" else 0.08
-            x = base[0] + swing * math.sin(phase + self._role_phase(pose.teleop_role))
-            y = base[1] + 0.20 * math.cos(phase * 0.6 + self._role_phase(pose.name))
-            z = base[2] + 0.08 * math.sin(phase * 1.4 + self._role_phase(pose.teleop_role) * 0.5)
-            yaw = 0.45 * math.sin(phase * 0.7 + self._role_phase(pose.name))
-            quaternion = self._yaw_quaternion(yaw)
-            sample = PoseSample(
-                position=(x, y, z),
-                orientation_xyzw=quaternion,
-            )
-            self._record_pose_sample(pose.name, sample)
 
     def build_pose_payload(
         self, trace_cursor: Optional[Dict[str, object]] = None
@@ -757,12 +618,3 @@ class PoseBridgeNode(GripperTrackingMixin, HandOverlayMixin, Node):
     @staticmethod
     def _stamp_to_ns(stamp) -> int:
         return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
-
-    @staticmethod
-    def _role_phase(name: str) -> float:
-        return (sum(ord(ch) for ch in name) % 17) * 0.19
-
-    @staticmethod
-    def _yaw_quaternion(yaw_rad: float) -> Tuple[float, float, float, float]:
-        half = yaw_rad * 0.5
-        return (0.0, 0.0, math.sin(half), math.cos(half))

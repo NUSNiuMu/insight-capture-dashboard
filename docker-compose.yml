@@ -126,22 +126,6 @@ services:
     stop_signal: SIGINT
     restart: unless-stopped
 
-  insight9-dense-mapper:
-    profiles: ["mapping-validation"]
-    image: insight-dashboard:latest
-    network_mode: host
-    ipc: host
-    environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
-    volumes:
-      - .:/workspaces/insight_capture
-    command:
-      - python3
-      - -u
-      - tools/mapping_validation/dense_mapper.py
-    stop_signal: SIGINT
-    restart: "no"
-
   insight3-global-localizer:
     image: insight-dashboard:latest
     network_mode: host
@@ -162,33 +146,6 @@ services:
     stop_signal: SIGINT
     stop_grace_period: 35s
     restart: unless-stopped
-
-  insight9-mapping-rviz:
-    profiles: ["mapping-validation"]
-    build:
-      context: .
-      dockerfile: Dockerfile.rviz-validation
-      network: host
-    image: insight-rviz-validation:humble
-    network_mode: host
-    ipc: host
-    runtime: nvidia
-    environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
-    volumes:
-      - .:/workspaces/insight_capture
-    command:
-      - rviz2
-      - -d
-      - /workspaces/insight_capture/tools/mapping_validation/rviz/insight9_global_localization.rviz
-    depends_on:
-      insight9-sparse-mapper:
-        condition: service_started
-      insight3-global-localizer:
-        condition: service_started
-    restart: "no"
 
   device-domain-relay:
     profiles: ["egohalo"]

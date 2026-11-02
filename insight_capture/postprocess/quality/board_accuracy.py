@@ -16,7 +16,8 @@ import numpy as np
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
-from insight_capture.postprocess.gripper.extraction import (
+from insight_capture.core.bag import single_mcap
+from insight_capture.media.ros_image import (
     IMAGE_TYPES,
     decode_color_image,
     header_stamp_ns,
@@ -190,10 +191,7 @@ def print_board(config: dict, output: Path) -> None:
 
 
 def reader_for(bag: Path) -> AnyReader:
-    if not bag.is_dir() or not (bag / "metadata.yaml").is_file():
-        raise ValueError(
-            "--bag must be one finalized rosbag2 directory with metadata.yaml"
-        )
+    single_mcap(bag)
     return AnyReader([bag], default_typestore=get_typestore(Stores.ROS2_HUMBLE))
 
 

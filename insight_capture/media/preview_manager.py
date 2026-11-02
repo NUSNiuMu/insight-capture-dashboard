@@ -65,7 +65,6 @@ class PreviewManager:
                 viewers = self._websocket_viewers
             if viewers == 0 and idle >= self.idle_stop_sec:
                 self.owner.stop_webrtc_worker()
-                self.owner.stop_hand_overlay_worker()
 
     def close(self) -> None:
         self._stop.set()

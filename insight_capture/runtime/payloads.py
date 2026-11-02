@@ -25,7 +25,6 @@ class PayloadBuilder:
     ) -> Dict[str, object]:
         now = time.monotonic()
         poses = []
-        hand_entries = []  # payload dicts for visible hands
         cursor_sequences = {} if trace_cursor is None else trace_cursor.get("sequences", {})
         if not isinstance(cursor_sequences, dict):
             cursor_sequences = {}
@@ -37,7 +36,7 @@ class PayloadBuilder:
             force_trace_snapshot = cursor_generation != trace_generation
             for pose in self.owner.poses:
                 raw_sample = self.owner.latest_pose_sample.get(pose.name)
-                visible = raw_sample is not None and (self.owner.fake_pose or (now - self.owner.last_pose_received_time[pose.name]) <= self.owner.pose_timeout_sec)
+                visible = raw_sample is not None and (now - self.owner.last_pose_received_time[pose.name]) <= self.owner.pose_timeout_sec
                 if raw_sample is None:
                     position = [0.0, 0.0, 0.0]
                     quaternion = [0.0, 0.0, 0.0, 1.0]
@@ -104,7 +103,6 @@ class PayloadBuilder:
                     "avatar_offset_xyz": [
                         float(value) for value in pose.avatar_offset_xyz
                     ],
-                    "gripper_opening": self.owner.gripper_opening_percent(pose.name),
                 }
                 if self._trace_latency:
                     entry["latency_trace"] = {
@@ -112,8 +110,6 @@ class PayloadBuilder:
                         "received_ns": int(self.owner.last_pose_received_time[pose.name] * 1e9),
                     }
                 poses.append(entry)
-                if raw_sample is not None and visible and pose.teleop_role in ("left_hand", "right_hand"):
-                    hand_entries.append(entry)
         return {
             "type": "pose_update",
             "display_fps_limit": self.owner.display_fps_limit,
@@ -231,28 +227,8 @@ class PayloadBuilder:
         return f"/asset?path={quote(avatar_model, safe='')}&v={version}"
 
     def build_settings_payload(self) -> Dict[str, object]:
-        hand_cameras = {
-            name
-            for name, calibration in getattr(
-                self.owner, "gripper_calibrations", {}
-            ).items()
-            if calibration.is_valid
-        }
-        poses = []
-        for pose in self.owner.poses:
-            entry = {
-                "name": pose.name,
-                "role": pose.teleop_role,
-            }
-            if pose.name in hand_cameras:
-                entry["gripper_tracking_available"] = True
-                entry["gripper_tracking_enabled"] = pose.name in self.owner.gripper_tracking_cameras
-            if pose.name in getattr(self.owner, "hand_overlay_available", set()):
-                entry["hand_overlay_available"] = True
-                entry["hand_overlay_enabled"] = pose.name in self.owner.hand_overlay_enabled
-            poses.append(entry)
         return {
-            "poses": poses,
+            "poses": [{"name": pose.name, "role": pose.teleop_role} for pose in self.owner.poses],
             "insight3_gripper_mask_height_ratio": load_gripper_mask_height_ratio(
                 self.owner.post_processing_config_path
             ),

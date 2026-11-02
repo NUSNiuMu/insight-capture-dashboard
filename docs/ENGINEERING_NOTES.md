@@ -1,3 +1,5 @@
+> 历史工程记录。当前功能以 README 和 PROJECT_STRUCTURE 为准；导出、固定检测位、骨架叠加及 OpenClaw 等已于 2026-11-02 移除。
+
 # Engineering Notes
 
 本文记录影响 Insight Capture Dashboard 实现方式的实机结论。代码旁只保留当前必须遵守的约束；测量背景和历史原因集中在这里，避免关键路径被长篇排查记录淹没。

@@ -27,22 +27,6 @@ class PlaybackRoutes:
         )
         return web.json_response(status)
 
-    async def _handle_playback_prebuild(self, request: web.Request) -> web.Response:
-        body = await request.json() if request.can_read_body else {}
-        if not isinstance(body, dict):
-            return web.json_response({"error": "Request body must be an object."}, status=400)
-        if body.get("all"):
-            return web.json_response(self.context.prepared_playback_manager.enqueue_all())
-        bag_names = body.get("bag_names")
-        if not isinstance(bag_names, list) or not bag_names:
-            return web.json_response({"error": "bag_names must be a non-empty list."}, status=400)
-        try:
-            for bag_name in bag_names:
-                self.context.prepared_playback_manager.enqueue(str(bag_name).strip())
-        except ValueError as exc:
-            return web.json_response({"error": str(exc)}, status=400)
-        return web.json_response(self.context.prepared_playback_manager.status())
-
     async def _handle_playback_activate(self, request: web.Request) -> web.Response:
         body = await request.json()
         bag_name = str(body.get("bag_name", "")).strip()

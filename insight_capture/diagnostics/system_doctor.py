@@ -983,7 +983,7 @@ class SystemDoctor:
             "Dashboard",
             "PASS",
             "Dashboard HTTP 服务正常",
-            evidence=[f"url={self.api_url}/healthz", f"fake_pose={health.get('fake_pose')}"] + [f"optional_api_error[{name}]={error}" for name, error in errors.items() if name != "health"],
+            evidence=[f"url={self.api_url}/healthz"] + [f"optional_api_error[{name}]={error}" for name, error in errors.items() if name != "health"],
         )
 
         system = payloads.get("system") if isinstance(payloads.get("system"), dict) else {}
@@ -1255,7 +1255,7 @@ class SystemDoctor:
         if compose_logs.returncode == 0:
             recent_evidence.extend(_error_lines(compose_logs.stdout.splitlines()))
         file_evidence = []
-        for name in ("backend_crash.log", "webrtc_worker.log", "hand_overlay_worker.log", "voice_control_worker.log"):
+        for name in ("backend_crash.log", "webrtc_worker.log", "voice_control_worker.log"):
             matches = _error_lines(_tail_lines(self.root / "outputs" / name), limit=4)
             file_evidence.extend(f"{name}: {line}" for line in matches)
         if recent_evidence:

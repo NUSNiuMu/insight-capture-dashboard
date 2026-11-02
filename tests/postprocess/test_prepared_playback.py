@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sqlite3
 import sys
 import tempfile
 import types
@@ -27,9 +26,6 @@ from insight_capture.postprocess.bags.synchronization import (  # noqa: E402
     _review_cells,
     _review_content_size,
     _select_recorded_streams,
-    _sqlite_topic_messages,
-    _sqlite_topic_stamps,
-    _sqlite_topic_types,
 )
 from insight_capture.postprocess.bags.catalog import list_rosbags  # noqa: E402
 
@@ -105,7 +101,7 @@ class PreparedPlaybackTest(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "insight_capture.postprocess.bags.synchronization._sqlite_topic_types",
+                    "insight_capture.postprocess.bags.synchronization._bag_topic_types",
                     return_value={
                         "/epoch/image": "Image",
                         "/boot/image": "Image",
@@ -113,11 +109,11 @@ class PreparedPlaybackTest(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "insight_capture.postprocess.bags.synchronization._sqlite_topic_messages",
+                    "insight_capture.postprocess.bags.synchronization._bag_topic_messages",
                     return_value=[entry for entry in entries if entry[0] == "/epoch/pose"],
                 ),
                 patch(
-                    "insight_capture.postprocess.bags.synchronization._sqlite_topic_stamps",
+                    "insight_capture.postprocess.bags.synchronization._bag_topic_stamps",
                     return_value={
                         "/epoch/image": np.asarray(
                             [10_000_000_000, 10_033_000_000], dtype=np.int64
@@ -283,7 +279,7 @@ class PreparedPlaybackTest(unittest.TestCase):
             self.assertEqual(_recording_mode(bag), "")
 
     def test_cache_key_includes_playback_schema(self) -> None:
-        signature = [{"name": "bag.db3", "size": 10, "mtime_ns": 20}]
+        signature = [{"name": "bag.mcap", "size": 10, "mtime_ns": 20}]
         configuration = {"cameras": [{"name": "camera"}], "poses": []}
         self.assertEqual(
             _cache_key(signature, configuration),
@@ -314,8 +310,9 @@ class PreparedPlaybackTest(unittest.TestCase):
             review = bag / "review"
             review.mkdir(parents=True)
             (bag / "metadata.yaml").write_text(
-                "rosbag2_bagfile_information:\n  duration:\n    nanoseconds: 1\n"
+                "rosbag2_bagfile_information:\n  storage_identifier: mcap\n  duration:\n    nanoseconds: 1\n"
             )
+            (bag / "capture.mcap").write_bytes(b"mcap")
             (review / "review.mp4").write_bytes(b"video")
             (review / "manifest.json").write_text(
                 json.dumps({"schema_version": SCHEMA_VERSION, "quality": {"state": "good"}})
@@ -352,34 +349,6 @@ class PreparedPlaybackTest(unittest.TestCase):
         self.assertLessEqual(portrait_size[1], 1920 // 2)
         self.assertGreater(landscape_size[0], 1920 // 2)
         self.assertGreater(landscape_size[1], 1080 // 2)
-
-    def test_sqlite_topic_stamps_do_not_read_payloads(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            bag = Path(directory)
-            conn = sqlite3.connect(bag / "bag_0.db3")
-            try:
-                conn.executescript(
-                    "CREATE TABLE topics(id INTEGER PRIMARY KEY, name TEXT, type TEXT);"
-                    "CREATE TABLE messages(id INTEGER PRIMARY KEY, topic_id INTEGER, "
-                    "timestamp INTEGER, data BLOB);"
-                    "INSERT INTO topics VALUES "
-                    "(1, '/camera/image', 'sensor_msgs/msg/CompressedImage'), "
-                    "(2, '/pose', 'geometry_msgs/msg/PoseStamped');"
-                    "INSERT INTO messages VALUES "
-                    "(1, 1, 30, X'00'), (2, 1, 10, X'01'), (3, 2, 20, X'02');"
-                )
-                conn.commit()
-            finally:
-                conn.close()
-
-            stamps = _sqlite_topic_stamps(bag, ["/camera/image", "/missing"])
-            topic_types = _sqlite_topic_types(bag)
-            messages = list(_sqlite_topic_messages(bag, ["/camera/image"]))
-
-        self.assertEqual(stamps["/camera/image"].tolist(), [10, 30])
-        self.assertEqual(stamps["/missing"].tolist(), [])
-        self.assertEqual(topic_types["/camera/image"], "sensor_msgs/msg/CompressedImage")
-        self.assertEqual(messages, [("/camera/image", b"\x01", 10), ("/camera/image", b"\x00", 30)])
 
     def test_reduced_jpeg_decode_preserves_color_and_halves_dimensions(self) -> None:
         source = np.zeros((720, 1280, 3), dtype=np.uint8)

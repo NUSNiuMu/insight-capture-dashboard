@@ -13,15 +13,9 @@ DEFAULT_POST_PROCESSING_CONFIG = {
     "max_cache_size": 1073741824,
     "recording_rmw_implementation": "rmw_cyclonedds_cpp",
     "record_topics": [],
-    "capture_check": {
-        "enabled": True,
-        "maximum_insight9_validation_age_sec": 30.0,
-        "insight9_validation_wait_sec": 12.0,
-    },
     "capture_session": {
         "task": "unspecified",
         "operator": "unknown",
-        "station_check_after_take": False,
     },
     "preflight": {
         "camera_stale_sec": 2.0,

@@ -43,21 +43,6 @@ class CapturePreflight:
         failures = []
         warnings = []
         camera_health = {}
-        if getattr(self.node, "fake_pose", False):
-            return {
-                "type": "capture_preflight",
-                "ok": True,
-                "checked_at_epoch_s": time.time(),
-                "failures": [],
-                "warnings": [],
-                "camera_health": {},
-                "mapping": {},
-                "storage": {},
-                "topics": {},
-                "fake": True,
-                "mode": mode,
-            }
-
         configured_camera_names = {camera.name for camera in self.node.cameras}
         if calibration_mode:
             missing_cameras = sorted(

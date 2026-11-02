@@ -335,7 +335,7 @@ def test_storage_fallback_is_counted_only_by_dedicated_check(monkeypatch) -> Non
         runner=StubRunner(CommandResult([], 1, "", "not mounted", 0)),
     )
     payloads = {
-        "/healthz": {"ok": True, "fake_pose": False},
+        "/healthz": {"ok": True},
         "/api/system/status": {
             "preflight": {
                 "failures": [],

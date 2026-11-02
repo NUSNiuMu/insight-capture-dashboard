@@ -12,62 +12,10 @@ PageFrame {
     property int restartTicks: 0
     property int pendingVolume: -1
     heading: "Settings · 设置"
-    description: "管理相机功能、语音提示与采集工作台。"
+    description: "管理定位遮罩、语音提示与采集工作台。"
     Ui.Button {
         text: "刷新设置"
         onClicked: shell.refresh()
-    }
-    GridLayout {
-        columns: page.width < 1000 ? 1 : 2
-        Layout.fillWidth: true
-        rowSpacing: 20
-        columnSpacing: 20
-        Repeater {
-            model: page.settings.poses || []
-            delegate: Ui.Section {
-                id: camera
-                required property var modelData
-                Layout.fillWidth: true
-                eyebrow: "CAMERA FEATURES"
-                heading: camera.modelData.label || camera.modelData.name
-                Ui.Badge {
-                    text: ({
-                            "head": "头部相机",
-                            "left_hand": "左手相机",
-                            "right_hand": "右手相机"
-                        })[camera.modelData.role] || camera.modelData.role
-                    tone: "accent"
-                }
-                Ui.CheckBox {
-                    objectName: "gripper-toggle"
-                    text: "夹爪追踪"
-                    visible: !!camera.modelData.gripper_tracking_available
-                    checked: !!camera.modelData.gripper_tracking_enabled
-                    enabled: !workspace.busy.action && !dashboard.state.recording
-                    onToggled: shell.mutate("/api/settings/gripper-tracking", {
-                            "name": camera.modelData.name,
-                            "enabled": checked
-                        })
-                }
-                Ui.CheckBox {
-                    objectName: "overlay-toggle"
-                    text: "手部叠加"
-                    visible: !!camera.modelData.hand_overlay_available
-                    checked: !!camera.modelData.hand_overlay_enabled
-                    enabled: !workspace.busy.action && !dashboard.state.recording
-                    onToggled: shell.mutate("/api/settings/hand-overlay", {
-                            "name": camera.modelData.name,
-                            "enabled": checked
-                        })
-                }
-                Label {
-                    text: "该相机暂无可切换的功能"
-                    visible: !camera.modelData.gripper_tracking_available && !camera.modelData.hand_overlay_available
-                    color: Ui.Theme.muted
-                    font.pixelSize: 13
-                }
-            }
-        }
     }
     GridLayout {
         columns: page.width < 1050 ? 1 : 2

@@ -1,13 +1,11 @@
 """Recover interrupted recordings into validated copies while retaining originals."""
 
 from collections import Counter
-from contextlib import closing
 import json
 import os
 from pathlib import Path
 import re
 import shutil
-import sqlite3
 import subprocess
 import tempfile
 from typing import Sequence
@@ -16,7 +14,7 @@ from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 import yaml
 
-from insight_capture.legacy.composite_bag import MANIFEST_NAME, read_metadata
+from insight_capture.core.bag import MANIFEST_NAME, read_metadata
 
 RECORDING_TARGET_NAME = ".recording_target.json"
 
@@ -49,41 +47,16 @@ class RecordingRecovery:
             workspace = Path(directory)
             source = workspace / "source"
             shutil.copytree(staging, source)
-            bags = [source] if (list(source.glob("*.mcap")) or list(source.glob("*.db3"))) else sorted(
-                p for p in source.iterdir() if p.is_dir() and
-                (list(p.glob("*.db3")) or list(p.glob("*.mcap")))
-            )
-            if not bags:
-                raise RuntimeError("no recording data found")
-            expected = Counter()
-            types = {}
-            for bag in bags:
-                if list(bag.glob("*.mcap")) and list(bag.glob("*.db3")):
-                    raise RuntimeError(f"mixed storage formats in one recording: {bag}")
-                storage = "mcap" if list(bag.glob("*.mcap")) else "sqlite3"
-                if storage == "sqlite3":
-                    # Flush committed WAL records only in the working copy.
-                    for database in bag.glob("*.db3"):
-                        with closing(sqlite3.connect(database)) as connection:
-                            busy, _, _ = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
-                            if busy:
-                                raise RuntimeError(f"copied SQLite WAL is busy: {database}")
-                self._run(["ros2", "bag", "reindex", "-s", storage, str(bag)])
-                counts, definitions = self._validate(bag)
-                expected.update(counts)
-                for topic, msgtype in definitions.items():
-                    if topic in types and types[topic] != msgtype:
-                        raise RuntimeError(f"conflicting message types for {topic}")
-                    types[topic] = msgtype
+            if len(list(source.glob("*.mcap"))) != 1 or list(source.glob("*.db3")):
+                raise RuntimeError("recovery requires one MCAP data file")
+            self._run(["ros2", "bag", "reindex", "-s", "mcap", str(source)])
+            expected, types = self._validate(source)
             generated = workspace / "output"
             config = workspace / "convert.yaml"
             config.write_text(yaml.safe_dump({"output_bags": [
                 {"uri": str(generated), "storage_id": "mcap", "all": True}
             ]}))
-            command = ["ros2", "bag", "convert"]
-            for bag in bags:
-                command.extend(["-i", str(bag)])
-            self._run([*command, "-o", str(config)])
+            self._run(["ros2", "bag", "convert", "-i", str(source), "-o", str(config)])
             actual, actual_types = self._validate(generated)
             if actual != expected or actual_types != types:
                 raise RuntimeError("recovered topic counts or types do not match the complete source")

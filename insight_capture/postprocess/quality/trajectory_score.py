@@ -7,6 +7,7 @@ import math
 import sys
 from pathlib import Path
 
+from insight_capture.core.bag import single_mcap
 import rosbag2_py
 from rclpy.serialization import deserialize_message
 from rosidl_runtime_py.utilities import get_message
@@ -142,9 +143,10 @@ def compute_stats(stamps_s: list, traces: list, cal_median_l: float, cal_sigma_l
 
 
 def open_reader(bag_path: str, topic: str) -> rosbag2_py.SequentialReader:
+    single_mcap(Path(bag_path))
     reader = rosbag2_py.SequentialReader()
     reader.open(
-        rosbag2_py.StorageOptions(uri=bag_path, storage_id=""),
+        rosbag2_py.StorageOptions(uri=bag_path, storage_id="mcap"),
         rosbag2_py.ConverterOptions(
             input_serialization_format="cdr",
             output_serialization_format="cdr",
@@ -221,7 +223,7 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("bag_path", help="Path to the ROS2 bag directory or .db3 file.")
+    parser.add_argument("bag_path", help="Path to a standard single-MCAP ROS2 bag directory.")
     parser.add_argument(
         "--topic",
         "-t",

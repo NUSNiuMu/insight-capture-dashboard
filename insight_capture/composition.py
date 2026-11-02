@@ -14,8 +14,6 @@ from insight_capture.runtime.preflight import CapturePreflight
 from insight_capture.runtime.recording import RecordingManager
 from insight_capture.runtime.take import SessionTakeStore
 from insight_capture.runtime.tasks import CaptureTaskCatalog
-from insight_capture.services.dataset_export import UmiExportManager
-from insight_capture.services.gripper_extraction import GripperExtractionManager
 from insight_capture.services.scoring import ScoringManager
 
 
@@ -25,8 +23,6 @@ class DashboardDependencies(TypedDict):
     prepared_playback_manager: PreparedPlaybackManager
     optimization_manager: OptimizationManager
     handpose_manager: HandPoseManager
-    gripper_extraction_manager: GripperExtractionManager
-    umi_export_manager: UmiExportManager
     take_store: SessionTakeStore
     capture_preflight: CapturePreflight
     voice_alerts: VoiceAlertQueue
@@ -46,8 +42,6 @@ class RuntimeServices:
     prepared_playback_manager: PreparedPlaybackManager
     optimization_manager: OptimizationManager
     handpose_manager: HandPoseManager
-    gripper_extraction_manager: GripperExtractionManager
-    umi_export_manager: UmiExportManager
     take_store: SessionTakeStore
     capture_preflight: CapturePreflight
     voice_alerts: VoiceAlertQueue
@@ -98,8 +92,6 @@ class RuntimeServices:
             "prepared_playback_manager": self.prepared_playback_manager,
             "optimization_manager": self.optimization_manager,
             "handpose_manager": self.handpose_manager,
-            "gripper_extraction_manager": self.gripper_extraction_manager,
-            "umi_export_manager": self.umi_export_manager,
             "take_store": self.take_store,
             "capture_preflight": self.capture_preflight,
             "voice_alerts": self.voice_alerts,
@@ -146,9 +138,6 @@ def build_runtime_services(
             rosbag_root=recording_manager.rosbag_root,
             cache_root=results_root / "playback_cache",
             bag_resolver=bag_library.resolve,
-            bag_references=lambda: [
-                item.bag_id for item in bag_library.locations("all")
-            ],
         ),
         optimization_manager=OptimizationManager(
             project_root=project_root,
@@ -161,16 +150,6 @@ def build_runtime_services(
             bag_resolver=bag_library.resolve,
         ),
         handpose_manager=HandPoseManager(
-            project_root=project_root,
-            rosbag_root=recording_manager.rosbag_root,
-            bag_resolver=bag_library.resolve,
-        ),
-        gripper_extraction_manager=GripperExtractionManager(
-            project_root=project_root,
-            rosbag_root=recording_manager.rosbag_root,
-            bag_resolver=bag_library.resolve,
-        ),
-        umi_export_manager=UmiExportManager(
             project_root=project_root,
             rosbag_root=recording_manager.rosbag_root,
             bag_resolver=bag_library.resolve,
@@ -190,17 +169,8 @@ def build_runtime_services(
             runtime_config.get("active_qc"),
         ),
     )
-    services.prepared_playback_manager.configure_background(
-        recording_manager,
-        services.playback_configuration,
-    )
     on_session_finished = getattr(recording_manager, "add_session_finished_callback", None)
     if callable(on_session_finished):
         on_session_finished(services.take_store.complete_distributed)
-    recording_manager.add_recording_completed_callback(
-        lambda path: services.prepared_playback_manager.enqueue(
-            services.bag_library.reference_for_path(path) or path.name
-        )
-    )
     services.active_qc.start()
     return services
