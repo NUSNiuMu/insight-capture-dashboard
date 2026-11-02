@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -18,6 +19,11 @@ class DashboardLauncherStorageTests(unittest.TestCase):
             ROOT / "deploy" / "run_dashboard.sh",
             self.test_root / "deploy" / "run_dashboard.sh",
         )
+        shutil.copy2(ROOT / "deploy" / "device_services.sh", self.test_root / "deploy")
+        (self.test_root / "config").mkdir()
+        (self.test_root / "config" / "cameras.json").write_text(
+            json.dumps({"ros_domain_id": 20, "cameras": []})
+        )
         self.bin_dir = self.test_root / "bin"
         self.bin_dir.mkdir()
         self.capture_path = self.test_root / "compose-host-dir.txt"
@@ -29,10 +35,10 @@ if [[ "$*" == "compose config --environment" ]]; then
     printf 'INSIGHT_ROSBAG_REQUIRED_SOURCE=%s\n' "${TEST_REQUIRED_SOURCE}"
     exit 0
 fi
-if [[ "$*" == "compose ps --status running --services" ]]; then
+if [[ "$*" == "compose ps --status running --services"* || "$*" == "compose stop"* ]]; then
     exit 0
 fi
-if [[ "$*" == "compose up -d" ]]; then
+if [[ "$*" == "compose up -d"* ]]; then
     printf '%s\n' "${INSIGHT_ROSBAG_HOST_DIR:-${TEST_CONFIGURED_SOURCE}}" > "${TEST_CAPTURE_PATH}"
     exit 73
 fi

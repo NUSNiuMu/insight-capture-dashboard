@@ -11,6 +11,11 @@ Insight3 全局重定位服务；稠密建图和 RViz 验证服务不进入客�
 主镜像压缩包同时包含同版本的 `insight-dashboard` 和 `insight-loopervio` 镜像；
 `update.sh` 检查两者齐全后启动，缺少原生核心时直接报错。
 
+设备切换统一使用 `./scripts/select_device.sh jetson-nx` 或
+`./scripts/select_device.sh jetson-nx-egohalo`，自动同步配置和服务；无需手动指定 Compose
+profile。普通启动、开机服务和升级共用同一套配置解析。升级会刷新 Compose、设备模板与宿主机工具，保留现场 `cameras.json`、`runtime.json` 及其他标定设置。
+切换前请结束录制与保存；切换会重载建图定位，需要重新校准。
+
 ## 环境要求
 
 - NVIDIA Jetson（JetPack 6.x，已装 Docker 与 nvidia-container-runtime）

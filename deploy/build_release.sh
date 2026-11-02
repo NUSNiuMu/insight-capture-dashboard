@@ -18,10 +18,10 @@ mkdir -p release
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
-# Customer releases must contain the jetson-nx live profile.
+# Both Jetson rigs ship the same code and all device templates.
 selected_device="$(cat config/.device 2>/dev/null || echo "<none>")"
-[[ "${selected_device}" == "jetson-nx" ]] \
-    || { echo "ERROR: config/ is currently set to '${selected_device}', not 'jetson-nx' -- run ./scripts/select_device.sh jetson-nx first" >&2; exit 1; }
+[[ "${selected_device}" == "jetson-nx" || "${selected_device}" == "jetson-nx-egohalo" ]] \
+    || { echo "ERROR: select jetson-nx or jetson-nx-egohalo before building a Jetson release" >&2; exit 1; }
 
 log "Building ${IMAGE_NAME}:${version} ..."
 # --network host: same Jetson iptables raw-table workaround as docker-compose.yml
@@ -55,6 +55,7 @@ mkdir -p \
     "${bundle_dir}/tools/diagnostics"
 cp deploy/docker-compose.yml deploy/update.sh deploy/README.md "${bundle_dir}/"
 cp deploy/run_dashboard.sh \
+    deploy/device_services.sh \
     deploy/host_setup.sh \
     deploy/configure_camera_network.sh \
     deploy/install_voice_control_service.sh \
@@ -75,6 +76,7 @@ cp deploy/systemd/insight-voice-control.service.in "${bundle_dir}/deploy/systemd
 cp deploy/systemd/insight-capture.service "${bundle_dir}/deploy/systemd/"
 chmod +x "${bundle_dir}/update.sh" \
     "${bundle_dir}/deploy/run_dashboard.sh" \
+    "${bundle_dir}/deploy/device_services.sh" \
     "${bundle_dir}/deploy/host_setup.sh" \
     "${bundle_dir}/deploy/configure_camera_network.sh" \
     "${bundle_dir}/deploy/install_voice_control_service.sh" \

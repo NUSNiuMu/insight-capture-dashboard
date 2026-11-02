@@ -230,10 +230,11 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 
 ### 设备与 config profile
 
-三台设备（`jetson-nx`/`lite`/`lite-779`）现在共用同一个 `main` 分支，不再各自维护
+四套配置（`jetson-nx`/`jetson-nx-egohalo`/`lite`/`lite-779`）共用同一个 `main` 分支，不再各自维护
 一个 git 分支——设备差异收敛到 `config/devices/<name>/` 下的两个文件（见上方"单一
-配置入口"一节），用 `scripts/select_device.sh <name>` 选择。只有 `jetson-nx` 会打
-正式发布镜像，`lite`/`lite-779` 是开发机专用 profile。
+配置入口"一节），用 `scripts/select_device.sh <name>` 选择并自动同步服务。
+`jetson-nx` 和 `jetson-nx-egohalo` 支持正式 Jetson 发布镜像，`lite`/`lite-779` 是开发配置。
+切换前结束录制和保存，切换后重新校准；离线准备配置使用 `--no-start`。
 
 ### COLMAP：只在 jetson-nx profile 上开箱即用
 

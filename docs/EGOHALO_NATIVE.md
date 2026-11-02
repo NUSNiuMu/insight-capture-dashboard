@@ -33,20 +33,17 @@ Mapper 输入话题与坐标系由配置覆盖。内部 `/insight9_sparse_map/*`
 
 ```bash
 ./scripts/select_device.sh jetson-nx-egohalo
-docker compose --profile egohalo up -d device-domain-relay egohalo-stereo-rectifier
-docker compose restart insight9-sparse-mapper insight3-global-localizer insight-dashboard
-./native_dashboard/build.sh
 ./native_dashboard/run.sh
 ```
 
-若 GPU 解码元素缺失，应重新构建镜像依赖，不能只在临时容器安装后视为已发布。开发和客户 compose 都有可选 `egohalo` profile；客户使用包含本变更的发布镜像及对应配置文件。
+切换脚本会停止读取旧配置的服务、替换相机与运行配置，再按新配置启动所需服务，等待 HTTP 健康检查。跨 ROS 域的相机启用转发，鱼眼校正配置启用校正服务，H.264 编码输入启用编码服务，无需手动选择 Compose profile。录制、保存或手机命令执行期间拒绝切换；运行中的后端无法查询状态时也不会继续修改配置。推理服务保持运行。
+
+若 GPU 解码元素缺失，应重新构建镜像依赖，不能只在临时容器安装后视为已发布。客户使用包含本变更的发布镜像及对应配置文件。
 
 切回 Insight9 时同样先停止录制：
 
 ```bash
-docker compose --profile egohalo stop egohalo-stereo-rectifier device-domain-relay
 ./scripts/select_device.sh jetson-nx
-docker compose restart insight9-sparse-mapper insight3-global-localizer insight-dashboard
 ./native_dashboard/run.sh
 ```
 

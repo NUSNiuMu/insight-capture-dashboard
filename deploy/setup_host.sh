@@ -26,7 +26,7 @@ done
 
 # ── 0. device config profile ─────────────────────────────────────────────────
 if [[ -n "${device}" ]]; then
-    "${ROOT_DIR}/scripts/select_device.sh" "${device}"
+    "${ROOT_DIR}/scripts/select_device.sh" "${device}" --no-start
 elif [[ ! -f "${ROOT_DIR}/config/.device" ]]; then
     fail "no device profile selected yet -- run ./scripts/select_device.sh <name> first (or pass --device <name> here)."
 fi

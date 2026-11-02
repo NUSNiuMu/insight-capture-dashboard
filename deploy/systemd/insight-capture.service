@@ -9,8 +9,8 @@ RemainAfterExit=yes
 User=nvidia
 Group=nvidia
 WorkingDirectory=/home/nvidia/insight-capture-dashboard
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose stop
+ExecStart=/home/nvidia/insight-capture-dashboard/deploy/device_services.sh start
+ExecStop=/home/nvidia/insight-capture-dashboard/deploy/device_services.sh stop
 TimeoutStartSec=1200
 
 [Install]

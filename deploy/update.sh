@@ -28,7 +28,7 @@ fi
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-sync_host_voice_runtime() {
+sync_host_runtime() {
     local image="$1"
     local container temporary
     temporary="$(mktemp -d)"
@@ -46,6 +46,10 @@ sync_host_voice_runtime() {
     docker cp "${container}:/workspaces/insight_capture/deploy/install_voice_control_service.sh" "${temporary}/install_voice_control_service.sh"
     docker cp "${container}:/workspaces/insight_capture/deploy/systemd/insight-voice-control.service.in" "${temporary}/insight-voice-control.service.in"
     docker cp "${container}:/workspaces/insight_capture/deploy/update.sh" "${temporary}/update.sh"
+    docker cp "${container}:/workspaces/insight_capture/deploy/device_services.sh" "${temporary}/device_services.sh"
+    docker cp "${container}:/workspaces/insight_capture/scripts/select_device.sh" "${temporary}/select_device.sh"
+    docker cp "${container}:/workspaces/insight_capture/deploy/docker-compose.yml" "${temporary}/docker-compose.yml"
+    docker cp "${container}:/workspaces/insight_capture/config/devices" "${temporary}/devices"
 
     mkdir -p \
         "${HOST_RUNTIME_ROOT}/insight_capture" \
@@ -58,7 +62,13 @@ sync_host_voice_runtime() {
     install -m 0755 "${temporary}/set_ros_domain_id.py" "${HOST_RUNTIME_ROOT}/scripts/set_ros_domain_id.py"
     install -m 0755 "${temporary}/install_voice_control_service.sh" "${HOST_RUNTIME_ROOT}/deploy/install_voice_control_service.sh"
     install -m 0644 "${temporary}/insight-voice-control.service.in" "${HOST_RUNTIME_ROOT}/deploy/systemd/insight-voice-control.service.in"
-    install -m 0755 "${temporary}/update.sh" "${SCRIPT_DIR}/update.sh"
+    install -m 0755 "${temporary}/update.sh" "${SCRIPT_DIR}/.update.sh.next"
+    mv "${SCRIPT_DIR}/.update.sh.next" "${SCRIPT_DIR}/update.sh"
+    mkdir -p "${SCRIPT_DIR}/deploy" "${SCRIPT_DIR}/scripts"
+    install -m 0755 "${temporary}/device_services.sh" "${SCRIPT_DIR}/deploy/device_services.sh"
+    install -m 0755 "${temporary}/select_device.sh" "${SCRIPT_DIR}/scripts/select_device.sh"
+    install -m 0644 "${temporary}/docker-compose.yml" "${SCRIPT_DIR}/docker-compose.yml"
+    cp -r "${temporary}/devices" "${SCRIPT_DIR}/config/"
 
     trap - EXIT
     cleanup_voice_sync
@@ -164,7 +174,13 @@ printf 'INSIGHT_VERSION=%s\n' "${version}" >> "${env_next}"
 mv "${env_next}" .env
 
 log "Starting ${IMAGE_NAME}:${version} ..."
-docker compose up -d
+if [[ "${rollback}" == false ]]; then
+    log "Synchronizing host tools and Compose definitions from ${IMAGE_NAME}:${version} ..."
+    sync_host_runtime "${IMAGE_NAME}:${version}"
+fi
+ROOT_DIR="${SCRIPT_DIR}"
+source "${SCRIPT_DIR}/deploy/device_services.sh"
+start_device_services
 
 log "Waiting for the backend to become healthy on :${PORT} ..."
 deadline=$(( $(date +%s) + 90 ))
@@ -179,8 +195,6 @@ until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
     sleep 2
 done
 
-log "Synchronizing the host offline voice runtime from ${IMAGE_NAME}:${version} ..."
-sync_host_voice_runtime "${IMAGE_NAME}:${version}"
 "${VOICE_INSTALLER}" --if-ready
 
 log "Done. Dashboard is running ${IMAGE_NAME}:${version} on port ${PORT}."

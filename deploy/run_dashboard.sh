@@ -12,57 +12,7 @@ PORT="${DASHBOARD_PORT:-8765}"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 
-compose_environment_value() {
-    local name="$1"
-    awk -v name="${name}" '
-        index($0, name "=") == 1 {
-            print substr($0, length(name) + 2)
-            exit
-        }
-    ' <<< "${compose_environment}"
-}
-
-prepare_recording_bind_source() {
-    local configured_source required_source mounted_source fallback_source reason
-
-    # Compose resolves bind sources before the container starts. Read its
-    # effective interpolation environment without sourcing the local .env.
-    compose_environment="$(docker compose config --environment)"
-    configured_source="$(compose_environment_value INSIGHT_ROSBAG_HOST_DIR)"
-    required_source="$(compose_environment_value INSIGHT_ROSBAG_REQUIRED_SOURCE)"
-    [[ -n "${configured_source}" ]] || return 0
-
-    reason=""
-    if [[ -n "${required_source}" && ! -e "${required_source}" ]]; then
-        # Avoid touching a systemd automount when its backing device is absent:
-        # that lookup returns ENODEV and prevents Docker from creating the
-        # container, before the application-level NVMe fallback can run.
-        reason="required source ${required_source} is absent"
-    elif [[ ! -d "${configured_source}" ]]; then
-        reason="configured path ${configured_source} is unavailable"
-    elif [[ -n "${required_source}" ]]; then
-        mounted_source="$(
-            timeout 3 findmnt -no SOURCE --target "${configured_source}" 2>/dev/null \
-                || true
-        )"
-        if [[ "${mounted_source}" != "${required_source}" \
-            && "${mounted_source}" != "${required_source}["* ]]; then
-            reason="required source ${required_source} does not match ${mounted_source:-an unmounted path}"
-        fi
-    fi
-
-    [[ -n "${reason}" ]] || return 0
-    fallback_source="${ROOT_DIR}/rosbags"
-    mkdir -p "${fallback_source}"
-    export INSIGHT_ROSBAG_HOST_DIR="${fallback_source}"
-    log "WARNING: recording USB unavailable (${reason}); starting with NVMe fallback ${fallback_source}."
-}
-
-recording_is_active() {
-    curl -sf "http://localhost:${PORT}/api/recording/status" 2>/dev/null \
-        | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("recording") else 1)' \
-        2>/dev/null
-}
+source "${SCRIPT_DIR}/device_services.sh"
 
 # Standard Docker marker file -- present in every container, regardless of
 # how it was started (compose, devcontainer, plain `docker run`).
@@ -97,33 +47,21 @@ elif [[ -n "$(docker compose ps --status running --services 2>/dev/null)" ]]; th
     # Already running: restart for a guaranteed-clean launch (picks up any
     # git-pulled code, clears whatever state accumulated) -- unless a
     # recording is in flight, in which case restarting would kill it.
-    if recording_is_active; then
+    read_capture_state
+    if [[ "${capture_busy}" == true ]]; then
         log "Backend is already running with a recording in progress -- not restarting (would kill it). Using the running backend as-is."
     else
         # Reconcile changed commands, mounts, and environment before reloading
         # the bind-mounted dashboard code. A plain restart preserves stale
         # container definitions after a Compose refactor.
         log "Backend is already running -- reconciling Compose and restarting the dashboard..."
-        prepare_recording_bind_source
-        docker compose up -d
+        start_device_services
         docker compose restart insight-dashboard
     fi
 else
     log "Starting dashboard backend via docker compose..."
-    prepare_recording_bind_source
-    docker compose up -d
+    start_device_services
 fi
-
-wait_for_backend_health() {
-    local deadline=$(( $(date +%s) + 60 ))
-    until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
-        if (( $(date +%s) > deadline )); then
-            log "ERROR: backend did not come up within 60s. Check: docker compose logs -f"
-            exit 1
-        fi
-        sleep 1
-    done
-}
 
 all_cameras_live() {
     curl -sf "http://localhost:${PORT}/api/cameras" 2>/dev/null \
@@ -241,7 +179,7 @@ fi
 if [[ "${in_container}" == "true" ]]; then
     trap 'echo; log "Ctrl-C received, exiting (backend keeps running)."; exit 0' INT TERM
 else
-    trap 'echo; log "Ctrl-C received, stopping backend (docker compose down)..."; docker compose down; exit 0' INT TERM
+    trap 'echo; log "Ctrl-C received, stopping capture services..."; stop_device_services; exit 0' INT TERM
 fi
 
 if [[ "${logs_mode}" == "true" ]]; then

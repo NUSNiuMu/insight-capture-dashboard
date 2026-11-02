@@ -181,17 +181,16 @@ class ProjectStructureTest(unittest.TestCase):
 
     def test_dashboard_launcher_reconciles_compose_before_restart(self) -> None:
         source = (ROOT / "deploy" / "run_dashboard.sh").read_text(encoding="utf-8")
-        self.assertIn("docker compose up -d", source)
+        self.assertLess(source.index("        start_device_services"),
+                        source.index("docker compose restart insight-dashboard"))
         self.assertNotIn("docker compose restart\n", source)
 
     def test_dashboard_launcher_preserves_raw_only_calibration_capture(self) -> None:
         source = (ROOT / "deploy" / "run_dashboard.sh").read_text(encoding="utf-8")
-        wait_loop = source[source.index("while true; do") :]
         self.assertIn("native_vio_fresh", source)
-        self.assertIn("if recording_is_active; then", wait_loop)
         self.assertLess(
-            wait_loop.index("if recording_is_active; then"),
-            wait_loop.index("docker compose restart insight-dashboard"),
+            source.index('if [[ "${capture_busy}" == true ]]; then'),
+            source.index("docker compose restart insight-dashboard"),
         )
 
 

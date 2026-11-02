@@ -14,11 +14,20 @@
 
 ### 设备与 config profile
 
-三台设备（`jetson-nx`/`lite`/`lite-779`）现在共用同一个 `main` 分支，不再各自一个 git
+四套配置（`jetson-nx`/`jetson-nx-egohalo`/`lite`/`lite-779`）共用同一个 `main` 分支，不再各自一个 git
 分支。设备差异收敛到 `config/devices/<name>/{cameras.json,runtime.json}`
 两个文件，`scripts/select_device.sh <name>` 把选中的 profile
-复制成 `config/` 下真正生效的文件（这两个文件本身是 `.gitignore` 掉的本地生成产物）。
-只有 `jetson-nx` 会走 §1 打成正式发布镜像；`lite`/`lite-779` 是开发机专用 profile。
+复制成 `config/` 下真正生效的文件，并自动同步服务（这些本地生成文件已忽略）。
+`jetson-nx` 与 `jetson-nx-egohalo` 均支持正式发布镜像；`lite`/`lite-779` 是开发机专用 profile。
+
+```bash
+./scripts/select_device.sh jetson-nx-egohalo  # EgoHalo + 双 Insight3，切换并启动
+./scripts/select_device.sh jetson-nx          # Insight9 + 双 Insight3，停止不需要的附加服务
+```
+
+切换期间会重新加载建图定位和 Dashboard，原校准需重新进行。录制、保存或手机命令进行中拒绝切换；后端运行但状态不可查询时停止操作。健康检查通过只表示服务可用，相机是否在线仍需查看实时输入。
+
+首次安装或离线准备配置时使用 `./scripts/select_device.sh <name> --no-start`，该选项仅复制配置，不操作 Docker。常规启动 `./scripts/run_dashboard.sh`、开机服务 `insight-capture.service` 与镜像升级均复用 `deploy/device_services.sh`，按实际配置选择转发、校正、编码服务，无需手动启用 Compose profile。不要以普通 `docker compose up -d` 代替这个配置入口。
 
 ---
 
@@ -30,7 +39,7 @@
   （COLMAP 的 CUDA sm_87 编译在 `colmap-builder` 阶段，依赖宿主机的 NVIDIA 工具链）。
 - 当前 `main` 就是要发布的版本——`build_release.sh` 直接 `docker build` 工作目录，
   发布前先确认 `git status` 干净、该合的改动都合并了。
-- `config/` 必须选中 `jetson-nx` profile（`scripts/select_device.sh jetson-nx`）——
+- `config/` 必须选中 `jetson-nx` 或 `jetson-nx-egohalo` profile——
   三台设备现在共用同一个分支，`config/cameras.json` 等两个文件是本地生成产物，
   见"分支与部署"一节；`build_release.sh` 会自己校验这一点，选错了会直接报错退出。
 - 本地先用根目录的开发机 `docker-compose.yml`（`docker compose build && docker compose up -d`）
@@ -182,7 +191,7 @@ cd insight_capture
 ./deploy/setup_host.sh --device jetson-nx
 ```
 
-`main` 现在是唯一的代码分支，三台设备（`jetson-nx`/`lite`/`lite-779`）的差异只体现在
+`main` 是共享代码主线，四套设备配置的差异只体现在
 `config/devices/<name>/{cameras.json,runtime.json}`——
 `--device <name>` 会先跑一次 `scripts/select_device.sh <name>`，把对应 profile 复制成
 `config/` 下真正生效的文件（已经选过的话这个参数可以省略）。
@@ -199,8 +208,7 @@ cd insight_capture
 
 批量部署多台设备时不要每台都走这条路径重新编译——在一台机器上按 §1 打包，
 其余设备走下面的使用者路径导入镜像即可，省去每台 20-40 分钟的 COLMAP 编译。
-**注意**：目前只有 `jetson-nx` 这个 profile 会走 §1 打成正式发布镜像——`deploy/lite`、
-`deploy/lite-779` 是两台开发机，只用 `select_device.sh` 切本地 config，不发布镜像。
+**注意**：正式 Jetson 镜像支持 `jetson-nx` 与 `jetson-nx-egohalo`；`lite`、`lite-779` 仍只作为开发配置，不承诺当前 Orin NX 镜像兼容其他硬件。
 
 ### 3.2 使用者路径（拿到部署包 + 两个镜像 tar，机器上没有源码）
 
