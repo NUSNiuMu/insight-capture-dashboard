@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-import cv2
 import numpy as np
 
 
@@ -58,16 +57,6 @@ class StereoCalibration:
         left_x = self.left_projection[0, 3] / self.left_projection[0, 0]
         right_x = self.right_projection[0, 3] / self.right_projection[0, 0]
         return abs(float(right_x - left_x))
-
-
-@dataclass(frozen=True)
-class TriangulationResult:
-    """通过几何门限的左目三维点，以及它们在原始匹配数组中的索引。"""
-
-    points_left: np.ndarray
-    source_indices: np.ndarray
-    reprojection_error_px: np.ndarray
-    disparity_px: np.ndarray
 
 
 def _normalized_quaternion(value: Sequence[float]) -> np.ndarray:
@@ -188,103 +177,3 @@ def rotation_distance_deg(first: np.ndarray, second: np.ndarray) -> float:
     )[:3, :3]
     cosine = float(np.clip((np.trace(relative) - 1.0) * 0.5, -1.0, 1.0))
     return float(np.degrees(np.arccos(cosine)))
-
-
-def triangulate_rectified(
-    left_points: np.ndarray,
-    right_points: np.ndarray,
-    calibration: StereoCalibration,
-    *,
-    max_epipolar_error_px: float = 1.5,
-    min_disparity_px: float = 1.0,
-    max_disparity_px: float = 320.0,
-    min_depth_m: float = 0.20,
-    max_depth_m: float = 8.0,
-    max_reprojection_error_px: float = 1.5,
-) -> TriangulationResult:
-    """三角化双目匹配点，并剔除不满足成像物理约束的结果。
-
-    依次执行有限值、极线、正视差、深度和左右重投影检查。``source_indices`` 让调用方
-    能把保留的三维点精确对应回 SuperGlue 描述子与置信度。
-    """
-
-    left = np.asarray(left_points, dtype=np.float64).reshape(-1, 2)
-    right = np.asarray(right_points, dtype=np.float64).reshape(-1, 2)
-    if left.shape != right.shape:
-        raise ValueError("left and right match arrays must have the same shape")
-    if left.size == 0:
-        return TriangulationResult(
-            np.empty((0, 3), dtype=np.float64),
-            np.empty((0,), dtype=np.int64),
-            np.empty((0,), dtype=np.float64),
-            np.empty((0,), dtype=np.float64),
-        )
-
-    # 校正双目中同一空间点应位于近似相同的扫描线，且左目横坐标大于右目。
-    disparity = left[:, 0] - right[:, 0]
-    preliminary = (
-        np.isfinite(left).all(axis=1)
-        & np.isfinite(right).all(axis=1)
-        & (np.abs(left[:, 1] - right[:, 1]) <= float(max_epipolar_error_px))
-        & (disparity >= float(min_disparity_px))
-        & (disparity <= float(max_disparity_px))
-    )
-    source_indices = np.flatnonzero(preliminary)
-    if source_indices.size == 0:
-        return TriangulationResult(
-            np.empty((0, 3), dtype=np.float64),
-            source_indices.astype(np.int64),
-            np.empty((0,), dtype=np.float64),
-            np.empty((0,), dtype=np.float64),
-        )
-
-    filtered_left = left[source_indices]
-    filtered_right = right[source_indices]
-    # OpenCV 返回齐次坐标；w 过小表示点在数值上接近无穷远，不能可靠归一化。
-    homogeneous = cv2.triangulatePoints(
-        calibration.left_projection,
-        calibration.right_projection,
-        filtered_left.T,
-        filtered_right.T,
-    ).T
-    valid_w = np.abs(homogeneous[:, 3]) > 1e-12
-    points = np.full((len(homogeneous), 3), np.nan, dtype=np.float64)
-    points[valid_w] = homogeneous[valid_w, :3] / homogeneous[valid_w, 3:4]
-
-    ones = np.ones((len(points), 1), dtype=np.float64)
-    points_h = np.concatenate([points, ones], axis=1)
-    left_projected = points_h @ calibration.left_projection.T
-    right_projected = points_h @ calibration.right_projection.T
-    projection_valid = (
-        np.abs(left_projected[:, 2]) > 1e-12
-    ) & (np.abs(right_projected[:, 2]) > 1e-12)
-    left_uv = np.full_like(filtered_left, np.nan)
-    right_uv = np.full_like(filtered_right, np.nan)
-    left_uv[projection_valid] = (
-        left_projected[projection_valid, :2]
-        / left_projected[projection_valid, 2:3]
-    )
-    right_uv[projection_valid] = (
-        right_projected[projection_valid, :2]
-        / right_projected[projection_valid, 2:3]
-    )
-    # 取左右两侧较大的误差，避免单侧偶然拟合良好掩盖错误匹配。
-    reprojection = np.maximum(
-        np.linalg.norm(left_uv - filtered_left, axis=1),
-        np.linalg.norm(right_uv - filtered_right, axis=1),
-    )
-    depth = points[:, 2]
-    valid = (
-        valid_w
-        & projection_valid
-        & np.isfinite(points).all(axis=1)
-        & (depth >= float(min_depth_m))
-        & (depth <= float(max_depth_m))
-        & (reprojection <= float(max_reprojection_error_px))
-    )
-    return TriangulationResult(
-        points_left=points[valid],
-        source_indices=source_indices[valid].astype(np.int64),
-        reprojection_error_px=reprojection[valid],
-        disparity_px=disparity[source_indices[valid]],
-    )

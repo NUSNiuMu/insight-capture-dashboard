@@ -6,7 +6,6 @@ import json
 import os
 import pty
 import re
-import shutil
 import signal
 import subprocess
 import threading

@@ -87,24 +87,6 @@ def gripper_width_valid_mask(
     return valid
 
 
-def gripper_width_quality(
-    widths_m: np.ndarray,
-    *,
-    maximum_step_m: float = DEFAULT_MAX_GRIPPER_STEP_M,
-) -> dict[str, float | int]:
-    """Summarize raw jump events and invalid samples for one episode trace."""
-
-    values = np.asarray(widths_m, dtype=np.float64).reshape(-1)
-    steps = np.abs(np.diff(values))
-    finite_steps = steps[np.isfinite(steps)]
-    valid = gripper_width_valid_mask(values, maximum_step_m=maximum_step_m)
-    return {
-        "jump_events": int(np.count_nonzero(finite_steps > maximum_step_m)),
-        "maximum_step_mm": float(finite_steps.max(initial=0.0) * 1000.0),
-        "invalid_frames": int(np.count_nonzero(~valid)),
-    }
-
-
 class FfmpegVideoWriter:
     """Stream RGB frames to an H.264 MP4 without retaining them in memory."""
 

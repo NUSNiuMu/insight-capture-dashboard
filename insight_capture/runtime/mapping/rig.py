@@ -1,6 +1,5 @@
 """Bounded multi-view input scheduling and calibration identities."""
 
-from dataclasses import dataclass
 import hashlib
 import json
 import queue
@@ -8,8 +7,6 @@ import threading
 import time
 
 import numpy as np
-
-from .synchronization import StereoPair
 
 
 def calibration_identity(infos, transforms):
@@ -24,11 +21,6 @@ def calibration_identity(infos, transforms):
             raise ValueError("Rig transforms must be finite")
         payload.append(np.round(matrix, 10).tolist())
     return hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()[:16]
-
-
-@dataclass(frozen=True)
-class ViewPair(StereoPair):
-    view: str = "front"
 
 
 class LatestViewQueue:
@@ -112,41 +104,3 @@ def stereo_views(config):
     if len(set(topics)) != len(topics) or len(set(frames)) != len(frames):
         raise ValueError("Rig output topics and frames must be unique")
     return views
-
-
-class ReferenceSelector:
-    """Explore views, then retain a geometric match long enough for consensus."""
-
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.cursor = {}
-        self.preferred = {}
-        self.misses = {}
-
-    def select(self, camera, references):
-        with self.lock:
-            preferred = references.get(self.preferred.get(camera))
-            if preferred is not None:
-                return preferred
-            names = sorted(references)
-            return references[names[self.cursor.get(camera, 0) % len(names)]] if names else None
-
-    def advance(self, camera):
-        with self.lock:
-            self.cursor[camera] = self.cursor.get(camera, 0) + 1
-
-    def observe(self, camera, view, accepted):
-        with self.lock:
-            if accepted:
-                self.preferred[camera] = view
-                self.misses[camera] = 0
-            elif self.preferred.get(camera) == view:
-                self.misses[camera] = self.misses.get(camera, 0) + 1
-                if self.misses[camera] >= 2:
-                    self.preferred.pop(camera, None)
-
-    def reset(self):
-        with self.lock:
-            self.cursor.clear()
-            self.preferred.clear()
-            self.misses.clear()

@@ -5,21 +5,16 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import io
 import json
-import math
 import os
-import re
-import struct
 import subprocess
 import tempfile
 import threading
 import time
 import urllib.error
 import urllib.request
-import wave
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 
 DEFAULT_DATA_ROOT = Path.home() / ".local" / "share" / "looper-voice"
@@ -59,7 +54,6 @@ from insight_capture.voice.audio import (
     wake_tone_wav,
 )
 from insight_capture.voice.commands import (
-    LOCAL_COMMAND_ALIASES,
     LOCAL_COMMAND_ENDPOINTS,
     LOCAL_COMMAND_REPLY_KEYS,
     LocalCommandFailure,

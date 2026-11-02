@@ -104,7 +104,7 @@ class InferenceServer:
                 )
                 return
             if command == "extract":
-                # 单图提取供全局描述子地图回退路径使用。
+                # Wrist localization uses single-image features.
                 if len(payloads) != 1:
                     raise ValueError("expected one grayscale image for extraction")
                 height = int(metadata["height"])

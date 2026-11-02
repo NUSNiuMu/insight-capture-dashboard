@@ -94,11 +94,3 @@ def read_disk_space(path: Path) -> Dict[str, object]:
         "free_bytes": usage.free,
         "free_ratio": usage.free / usage.total if usage.total else None,
     }
-
-
-def bagplay_topic(topic: str) -> str:
-    """Retain the legacy API helper while delegating to the ROS mapping."""
-
-    from insight_capture.runtime.ros.topics import playback_topic
-
-    return playback_topic(topic)

@@ -256,14 +256,3 @@ def discover_live_topics(
                 continue
         filtered = with_publishers
     return build_recording_topic_catalog(raw_config, filtered, build_default_topics(raw_config))
-
-
-def _topic_group(topic: str) -> str:
-    """Keep global poses with their camera recorder instead of spawning extras."""
-
-    if topic.startswith("/insight9_sparse_map/"):
-        return "insight9_a"
-    for namespace in ("insight3_a", "insight3_b"):
-        if topic.startswith(f"/insight_global/{namespace}/"):
-            return namespace
-    return topic.strip("/").split("/", 1)[0]
