@@ -15,7 +15,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PORT="${DASHBOARD_PORT:-8765}"
 IMAGE_NAME="insight-dashboard"
 SUPERGLUE_IMAGE="insight-superglue-validation:25.04"
-SUPERGLUE_TARBALL="insight-superglue-validation-25.04.tar.gz"
 
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
@@ -120,27 +119,9 @@ else
     version="${tag}"
 fi
 
-# The stable mapping/relocalization dependency ships as a separate archive so
-# routine dashboard upgrades do not resend it. First install auto-discovers the
-# dependency beside the dashboard archive (or in this deployment directory).
-if [[ "${rollback}" == false ]]; then
-    dependency_dirs=("${SCRIPT_DIR}")
-    if [[ -n "${tarball}" ]]; then
-        tarball_dir="$(cd "$(dirname "${tarball}")" && pwd)"
-        dependency_dirs=("${tarball_dir}" "${SCRIPT_DIR}")
-    fi
-    for dependency_dir in "${dependency_dirs[@]}"; do
-        dependency_tarball="${dependency_dir}/${SUPERGLUE_TARBALL}"
-        if [[ -f "${dependency_tarball}" ]]; then
-            log "Loading inference dependency from ${dependency_tarball} ..."
-            docker load -i "${dependency_tarball}"
-            break
-        fi
-    done
-    if ! docker image inspect "${SUPERGLUE_IMAGE}" >/dev/null 2>&1; then
-        die "missing ${SUPERGLUE_IMAGE}; place ${SUPERGLUE_TARBALL} beside the dashboard archive and retry"
-    fi
-fi
+# The single Release payload contains the inference and native-core images too.
+docker image inspect "${SUPERGLUE_IMAGE}" >/dev/null 2>&1 \
+    || die "missing ${SUPERGLUE_IMAGE}; use the complete Release installer"
 
 docker image inspect "insight-loopervio:${version}" >/dev/null 2>&1 \
     || die "missing insight-loopervio:${version}; load the matching release archive"

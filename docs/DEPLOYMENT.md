@@ -38,37 +38,21 @@ node web_dashboard/build.js
 ./deploy/build_release.sh v2.1.0
 ```
 
-该命令构建 Qt、后端运行镜像、独立的 LooperVIO 核心和 SuperGlue 依赖，生成：
+该命令构建 Qt、后端运行镜像、LooperVIO 核心和 SuperGlue 依赖，统一生成 **`release/insight-dashboard-v2.1.0.run`**。客户只接收这一个文件，包含全部运行镜像、更新器和 Qt 产物，无需联网下载依赖。
 
-- `insight-dashboard-v2.1.0.tar.gz`：包含同版本 Dashboard 与 LooperVIO 镜像。
-- `insight-superglue-validation-25.04.tar.gz`：首次安装所需的推理镜像。
-- `insight-dashboard-deploy-v2.1.0.tar.gz`：Compose、更新和启动脚本、Qt 可执行文件及运行库。
-
-支持从 `jetson-nx` 或 `jetson-nx-egohalo` 配置打包。Qt 构建工具、头文件和构建缓存不交付；运行镜像仅带手机构建产物，不带桌面网页、浏览器或浏览器测试环境。原生建图运行镜像不携带 WiLoR、COLMAP、Python 或 ROS。
-
-不要把镜像标称体积相加当作真实磁盘占用：旧版本可能共享层。删除依赖需要重新构建镜像，删除工作区文件或在运行容器中临时卸载不会缩小既有镜像层。
+支持从 `jetson-nx` 或 `jetson-nx-egohalo` 配置打包。Qt 构建工具、头文件和构建缓存不交付；运行镜像仅带手机构建产物，不带桌面网页或浏览器。
 
 ## 首次安装与升级
 
-解压部署包，把镜像压缩包放到同一目录，在 Jetson 宿主机执行：
+停止录制、等待保存完成，关闭 Qt，然后执行：
 
 ```bash
-./update.sh insight-dashboard-v2.1.0.tar.gz
-./native_dashboard/run.sh
+bash insight-dashboard-v2.1.0.run /原安装目录
 ```
 
-第一次安装从镜像种入配置；之后升级保留现场配置、标定和数据，同时刷新 Compose、设备模板、宿主机工具和 Qt 产物。Qt 二进制及库通过新文件替换，不截断旧进程已映射的库；升级后关闭并重新打开 Qt。不得录制中升级。
+`/原安装目录` 是原来存放 `docker-compose.yml` 和 `config/` 的目录。首次安装指定目标目录即可。文件自动解包、加载全部镜像、迁移配置并启动服务；不需要旧版更新脚本。完成后重新打开 Qt，手机网址不变。
 
-旧 Release（已用 v2.0.6、v2.0.7、v2.0.8 配置验证）升级时，必须先取得新部署包中的更新脚本。把新的推理镜像包放在主镜像包旁边，然后执行：
-
-```bash
-tar -xzf insight-dashboard-deploy-v2.1.0.tar.gz
-bash ./insight-dashboard-deploy/update.sh --install-dir /旧安装目录 /绝对路径/insight-dashboard-v2.1.0.tar.gz
-```
-
-旧版本号不会导致拒绝升级。升级器一次性补齐新建图配置、迁移旧运行设置与任务索引；现场 `.env`、相机标定、原始录制保持保留。修改前的配置在 `config/.upgrade-backup-*`。旧原始数据仍在原位置，不重新引入已删除的旧组合包读取链路。可选语音服务失败只提示；推理服务初始化期间后端先启动。镜像缺失或后端无法启动仍报告具体错误，不能把失败当作安装成功。
-
-使用当前升级器后的普通更新可只传同版本主镜像；依赖变化时同时传推理镜像。Qt 更新已包含在主镜像中，无需客户安装编译器或下载 Qt。回退已加载旧版本时保留宿主机工具；旧镜像仍需满足其后端/原生核心与当前配置的兼容要求。
+v2.0.6、v2.0.7、v2.0.8 的实际配置已验证迁移。升级不按旧版本号拒绝，保留 `.env`、相机标定、任务和原始录制；修改前的配置备份到 `config/.upgrade-backup-*`。可选语音服务失败只提示；推理初始化期间后端先启动。镜像损坏或后端无法启动时报告具体错误。
 
 源码开发使用根目录 Compose，挂载源码；客户部署使用部署包 Compose，只挂载配置和数据。依赖改变必须重建镜像；只有源码挂载改变时，重启对应服务即可。
 
