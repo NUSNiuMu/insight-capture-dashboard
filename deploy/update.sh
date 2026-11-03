@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Install, upgrade, or roll back a customer deployment.
+# Install or upgrade a customer deployment.
 #
 # Usage:
-#   ./update.sh insight-dashboard-v1.2.0.tar.gz
-#   ./update.sh --install-dir /path/to/old-release insight-dashboard-v2.1.0.tar.gz
-#   ./update.sh --rollback v1.1.0
+#   ./update.sh --install-dir /path/to/installation /tmp/images.tar
 #
 # Refuses to restart while a recording is in progress (override: --force).
-# Old images remain available for rollback.
+# Superseded Release images and packages are removed after successful startup.
 
 set -euo pipefail
 
@@ -68,17 +66,11 @@ sync_host_runtime() {
 }
 
 force=false
-rollback=false
 tarball=""
-rollback_version=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --force) force=true; shift ;;
         --install-dir) SCRIPT_DIR="$(cd "${2:?--install-dir needs the existing Release directory}" && pwd)"; shift 2 ;;
-        --rollback)
-            rollback=true
-            rollback_version="${2:?--rollback needs a version, e.g. --rollback v1.1.0}"
-            shift 2 ;;
         -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) die "unknown option: $1 (see --help)" ;;
         *) tarball="$(realpath -m "$1")"; shift ;;
@@ -101,23 +93,15 @@ if curl -sf "http://localhost:${PORT}/api/recording/status" 2>/dev/null \
     fi
 fi
 
-# ── Resolve the target version ───────────────────────────────────────────────
-if [[ "${rollback}" == "true" ]]; then
-    version="${rollback_version}"
-    docker image inspect "${IMAGE_NAME}:${version}" >/dev/null 2>&1 \
-        || die "image ${IMAGE_NAME}:${version} is not loaded on this machine (docker image ls ${IMAGE_NAME})"
-    log "Rolling back to ${IMAGE_NAME}:${version}"
-else
-    [[ -n "${tarball}" ]] || die "usage: $0 <image-tarball.tar.gz>  (see --help)"
-    [[ -f "${tarball}" ]] || die "file not found: ${tarball}"
-    log "Loading image from ${tarball} (this can take a few minutes)..."
-    load_output="$(docker load -i "${tarball}")"
-    echo "${load_output}"
-    # "Loaded image: insight-dashboard:v1.2.0" -> v1.2.0
-    tag="$(sed -n "s/^Loaded image: ${IMAGE_NAME}://p" <<<"${load_output}" | head -1)"
-    [[ -n "${tag}" ]] || die "tarball did not contain an ${IMAGE_NAME}:* image (got: ${load_output})"
-    version="${tag}"
-fi
+# Keep the previous dependency ID before docker load replaces its stable tag.
+previous_inference="$(docker image inspect --format '{{.Id}}' "${SUPERGLUE_IMAGE}" 2>/dev/null || true)"
+[[ -n "${tarball}" ]] || die "usage: $0 <image-archive> (see --help)"
+[[ -f "${tarball}" ]] || die "file not found: ${tarball}"
+log "Loading image from ${tarball} (this can take a few minutes)..."
+load_output="$(docker load -i "${tarball}")"
+echo "${load_output}"
+version="$(sed -n "s/^Loaded image: ${IMAGE_NAME}://p" <<<"${load_output}" | head -1)"
+[[ -n "${version}" ]] || die "archive did not contain an ${IMAGE_NAME}:* image"
 
 # The single Release payload contains the inference and native-core images too.
 docker image inspect "${SUPERGLUE_IMAGE}" >/dev/null 2>&1 \
@@ -138,8 +122,7 @@ if [[ ! -d config ]]; then
     docker rm "${seed_ctr}" >/dev/null
 fi
 
-# ── Record the previous version (for the rollback hint), switch, restart ────
-prev_version="$(sed -n 's/^INSIGHT_VERSION=//p' .env 2>/dev/null | head -1 || true)"
+# ── Switch the installed version ───────────────────────────────────────────
 env_next=".env.next.$$"
 if [[ -f .env ]]; then
     grep -v '^INSIGHT_VERSION=' .env > "${env_next}" || true
@@ -150,18 +133,16 @@ printf 'INSIGHT_VERSION=%s\n' "${version}" >> "${env_next}"
 mv "${env_next}" .env
 
 log "Starting ${IMAGE_NAME}:${version} ..."
-if [[ "${rollback}" == false ]]; then
-    log "Synchronizing host tools and Compose definitions from ${IMAGE_NAME}:${version} ..."
-    # Stop the previous Compose project without removing volumes or recordings.
-    if [[ -f docker-compose.yml ]]; then
-        docker compose down --remove-orphans || log "WARNING: old Compose teardown was incomplete; continuing with the new definitions."
-    fi
-    sync_host_runtime "${IMAGE_NAME}:${version}"
-    log "Migrating installed configuration; calibration and original recordings are retained ..."
-    docker run --rm --network none --entrypoint python3 \
-        -v "${SCRIPT_DIR}:/installation" "${IMAGE_NAME}:${version}" \
-        /workspaces/insight_capture/deploy/migrate_release.py /installation
+log "Synchronizing host tools and Compose definitions from ${IMAGE_NAME}:${version} ..."
+# Stop the previous Compose project without removing volumes or recordings.
+if [[ -f docker-compose.yml ]]; then
+    docker compose --profile "*" down --remove-orphans || log "WARNING: old Compose teardown was incomplete; continuing with the new definitions."
 fi
+sync_host_runtime "${IMAGE_NAME}:${version}"
+log "Migrating installed configuration; calibration and original recordings are retained ..."
+docker run --rm --network none --entrypoint python3 \
+    -v "${SCRIPT_DIR}:/installation" "${IMAGE_NAME}:${version}" \
+    /workspaces/insight_capture/deploy/migrate_release.py /installation
 ROOT_DIR="${SCRIPT_DIR}"
 source "${SCRIPT_DIR}/deploy/device_services.sh"
 # Keep the phone/API reachable while inference engines initialize.
@@ -177,9 +158,7 @@ deadline=$(( $(date +%s) + 90 ))
 until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
     if (( $(date +%s) > deadline )); then
         echo "ERROR: backend did not come up within 90s. Check: docker compose logs -f" >&2
-        if [[ -n "${prev_version}" && "${prev_version}" != "${version}" ]]; then
-            echo "To roll back: ./update.sh --rollback ${prev_version}" >&2
-        fi
+        echo "Old Release artifacts have been retained." >&2
         exit 1
     fi
     sleep 2
@@ -189,8 +168,11 @@ if [[ -x "${VOICE_INSTALLER}" ]]; then
     "${VOICE_INSTALLER}" --if-ready || log "WARNING: optional voice service was not updated; other services remain installed."
 fi
 
+log "Removing superseded Release images and installation packages ..."
+python3 "${SCRIPT_DIR}/deploy/cleanup_release.py" "${SCRIPT_DIR}" "${version}" \
+    --installer "${INSIGHT_RELEASE_INSTALLER:-${tarball}}" \
+    --previous-inference "${previous_inference}" --services "${device_services[@]}" \
+    || log "WARNING: cleanup was incomplete; the new services remain installed."
+
 log "Done. Dashboard is running ${IMAGE_NAME}:${version} on port ${PORT}."
 log "On the Jetson desktop, launch ./native_dashboard/run.sh."
-if [[ -n "${prev_version}" && "${prev_version}" != "${version}" ]]; then
-    log "Previous version ${prev_version} is still loaded; roll back anytime with: ./update.sh --rollback ${prev_version}"
-fi

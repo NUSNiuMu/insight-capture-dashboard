@@ -4,8 +4,8 @@
 # `docker save` image tarballs applied with ./update.sh.
 #
 # INSIGHT_VERSION comes from the .env file next to this compose file, which
-# update.sh writes after each `docker load`. Rollback = point .env back at a
-# previously loaded tag and `docker compose up -d`.
+# update.sh writes after docker load. Obsolete unused Release images are
+# removed only after the replacement services have started successfully.
 #
 # Differences from the repo-root dev compose (keep the two in sync when
 # changing runtime settings!): no `build:` section, no whole-repo source
