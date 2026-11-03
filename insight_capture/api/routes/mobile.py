@@ -69,6 +69,8 @@ class MobileCaptureRoutes:
         devices = [{"name": pose.name, "role": pose.teleop_role,
                     "label": role_names[pose.teleop_role] + " · " + pose.name.split("_")[0].upper()}
                    for pose in self.context.node.poses]
+        heads = {pose.name for pose in self.context.node.poses if pose.teleop_role == "head"}
+        preview_cameras = sorted(self.context.node.cameras, key=lambda camera: camera.device_name not in heads)
         return {
             "state": state, "recording": bool(status.get("recording")),
             "recording_mode": status.get("recording_mode"),
@@ -76,7 +78,7 @@ class MobileCaptureRoutes:
             "started_at_epoch_s": getattr(manager, "started_at", None),
             "server_time": time.time(), "operation": self._operation,
             "preflight": report, "devices": devices, "task_status": task_status,
-            "preview_cameras": [{"name": c.name, "label": c.label} for c in self.context.node.cameras],
+            "preview_cameras": [{"name": c.name, "label": c.label} for c in preview_cameras],
             "distributed": status.get("distributed"),
             "storage": status.get("storage", {}),
             "error": status.get("merge_error"),

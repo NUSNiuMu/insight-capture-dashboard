@@ -28,7 +28,8 @@ export class MobilePreview {
       if (!response.ok) throw new Error("设备状态读取失败");
       const camera = (await response.json()).cameras.find(c => c.name === name);
       if (!current()) return;
-      if (!camera?.webrtc_available) throw new Error("该相机实时视频服务未就绪");
+      if (!camera || camera.stale) throw new Error("该相机当前无图像输入，请检查设备连接");
+      if (!camera.webrtc_available) throw new Error("该相机实时视频服务未就绪");
       const { pc, ws } = openCameraWebRtc({
         cameraName: name, port: camera.webrtc_port, fps: 15, isCurrent: current,
         onTrack: event => {
