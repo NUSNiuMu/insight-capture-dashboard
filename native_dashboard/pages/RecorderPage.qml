@@ -16,7 +16,7 @@ PageFrame {
     property bool locked: !!status.recording || finalizing || !!workspace.busy.action || !!dashboard.state.captureAction
     property bool taskActive: !!(status.task_status || {}).active
     property bool starting: false
-    heading: "Recorder · 录制"
+    heading: "话题录制"
     description: distributed.enabled ? "Ego 四路视频录到头环 TF 卡；Jetson 保存腕部数据。两端保存后即可录下一条，在本地录制库手动回传合包。" : "选择 ROS 话题和存储目录，查看录制与保存状态。完整性检查请前往评分或录制库。"
     function browse(path) {
         workspace.request("directories", "/api/recording/storage/directories" + (path ? "?path=" + encodeURIComponent(path) : ""));
@@ -39,7 +39,7 @@ PageFrame {
         known = topics.slice();
     }
     Ui.Section {
-        eyebrow: "01  CAPTURE CONTROL"
+        eyebrow: "01  录制控制"
         heading: "录制控制"
         RowLayout {
             Layout.fillWidth: true
@@ -205,7 +205,7 @@ PageFrame {
         }
     }
     Ui.Section {
-        eyebrow: "02  RECORDING STORAGE"
+        eyebrow: "02  存储位置"
         heading: "存储位置"
         Layout.fillWidth: true
         ColumnLayout {

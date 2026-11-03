@@ -31,6 +31,7 @@
     <file>ui/TextArea.qml</file>
     <file>ui/TextField.qml</file>
     <file>ui/Theme.qml</file>
+    <file>ui/Texts.qml</file>
     <file>ui/fonts/InterVariable.ttf</file>
     <file>ui/fonts/LICENSE.md</file>
     <file>ui/qmldir</file>

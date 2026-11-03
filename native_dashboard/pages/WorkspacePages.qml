@@ -30,12 +30,12 @@ Item {
             "file": "SettingsPage.qml"
         }]
     property var titles: ({
-            "sessions": "Sessions · 任务",
-            "bags": "Rosbags · 录制库",
-            "scoring": "Scoring · 评分",
-            "optimization": "Optimization · 优化",
-            "recording": "Recorder · 录制",
-            "settings": "Settings · 设置"
+            "sessions": "任务管理",
+            "bags": "录制库",
+            "scoring": "轨迹评分",
+            "optimization": "轨迹优化",
+            "recording": "话题录制",
+            "settings": "系统设置"
         })
     function get(key, path, force) {
         if (force)

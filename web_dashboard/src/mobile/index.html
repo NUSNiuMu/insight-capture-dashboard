@@ -1,58 +1,58 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#122920">
-  <title>三相机 · 手机采集</title>
-  <link rel="stylesheet" href="/static/mobile.css?v=20261102-qt-mobile">
+  <meta name="theme-color" content="#f5f5f7">
+  <title>Insight Capture</title>
+  <link rel="stylesheet" href="/static/mobile.css?v=20261103-english-mobile">
 </head>
 <body>
   <main>
-    <header><div id="brand" class="brand">三相机采集</div><span id="connection" class="pill">连接中</span></header>
-    <div class="intro"><p class="eyebrow">现场采集控制台</p><h1>记录每一次行动。</h1><p id="device-summary">正在读取设备配置…</p><p id="task-name"></p></div>
+    <header><div id="brand" class="brand">INSIGHT</div><span id="connection" class="pill">Connecting</span></header>
+    <div class="intro"><p class="eyebrow">CAPTURE</p><h1>Capture</h1><p id="device-summary">Loading devices…</p><p id="task-name"></p></div>
     <section class="capture-card" aria-labelledby="state">
-      <div class="state-line"><span id="orb" class="orb"></span><h2 id="state" aria-live="polite">正在连接设备</h2><span id="timer">00:00</span></div>
-      <p id="state-help">读取 Jetson 上的实际采集状态…</p>
-      <div class="stats"><div><small>可用空间</small><strong id="disk">—</strong></div><div><small>录制存储</small><strong id="storage">—</strong></div></div>
-      <button id="start" class="primary" disabled>开始采集</button>
-      <button id="stop" class="stop" hidden disabled>停止并保存</button>
-      <p class="hint">手机断线或锁屏后，Jetson 仍会继续采集。</p>
+      <div class="state-line"><span id="orb" class="orb"></span><h2 id="state" aria-live="polite">Connecting</h2><span id="timer">00:00</span></div>
+      <p id="state-help">Connecting to Jetson…</p>
+      <div class="stats"><div><small>Free space</small><strong id="disk">—</strong></div><div><small>Storage</small><strong id="storage">—</strong></div></div>
+      <button id="start" class="primary" disabled>Start recording</button>
+      <button id="stop" class="stop" hidden disabled>Stop & save</button>
+      <p class="hint">Recording continues if this page disconnects.</p>
     </section>
-    <section class="inputs"><div class="section-title"><h2>设备状态</h2><span>图像 / VIO</span></div><div id="cameras" class="camera-list"><p>等待设备状态…</p></div></section>
+    <section class="inputs"><div class="section-title"><h2>Devices</h2><span>Video / VIO</span></div><div id="cameras" class="camera-list"><p>Loading devices…</p></div></section>
     <section id="issues" class="issues" hidden aria-live="polite"></section>
     <section class="calibration">
-      <div class="section-title"><h2>建图与校准</h2><button id="calibrate" class="text-button" disabled>开始校准</button></div>
-      <p id="calibration-summary" aria-live="polite">正在读取校准状态…</p>
-      <div class="camera-row"><span class="camera-name">头部建图</span><span id="mapping-head" class="camera-status">—</span></div>
-      <div class="camera-row"><span class="camera-name">右手定位</span><span id="mapping-right" class="camera-status">—</span></div>
-      <div class="camera-row"><span class="camera-name">左手定位</span><span id="mapping-left" class="camera-status">—</span></div>
-      <p class="hint">完整测试可先开始采集，再校准。重新校准会清空当前地图和定位；保存期间请等待完成。</p>
+      <div class="section-title"><h2>Calibration</h2><button id="calibrate" class="text-button" disabled>Calibrate</button></div>
+      <p id="calibration-summary" aria-live="polite">Checking calibration…</p>
+      <div class="camera-row"><span class="camera-name">Head</span><span id="mapping-head" class="camera-status">—</span></div>
+      <div class="camera-row"><span class="camera-name">Wrist A</span><span id="mapping-right" class="camera-status">—</span></div>
+      <div class="camera-row"><span class="camera-name">Wrist B</span><span id="mapping-left" class="camera-status">—</span></div>
+      <p class="hint">Record first to include calibration. Calibrate resets the current map.</p>
       <p id="calibration-message" role="status" hidden></p>
     </section>
-    <section class="preview-section"><div class="section-title"><h2>实时预览</h2><button id="preview-toggle" class="text-button">开启预览</button></div>
-      <p id="preview-description">按需开启单路画面，采集优先。</p>
+    <section class="preview-section"><div class="section-title"><h2>Live preview</h2><button id="preview-toggle" class="text-button">Show preview</button></div>
+      <p id="preview-description">One camera at a time.</p>
       <div id="preview-panel" hidden>
-        <label class="sr-only" for="preview-camera">预览相机</label><select id="preview-camera"></select>
-        <div class="media"><video id="preview-video" autoplay muted playsinline hidden></video><span id="preview-status">正在连接画面…</span></div>
+        <label class="sr-only" for="preview-camera">Camera</label><select id="preview-camera"></select>
+        <div class="media"><video id="preview-video" autoplay muted playsinline hidden></video><span id="preview-status">Connecting video…</span></div>
       </div>
     </section>
-    <section class="result"><div class="section-title"><h2>当前 / 最近一条</h2><span id="result-state">—</span></div><p id="filename">尚未采集</p><p id="result-error" role="alert" hidden></p></section>
+    <section class="result"><div class="section-title"><h2>Latest recording</h2><span id="result-state">—</span></div><p id="filename">No recordings yet</p><p id="result-error" role="alert" hidden></p></section>
     <details id="management" class="management">
-      <summary>任务管理与后处理合包</summary>
-      <p class="hint">录制和保存结束后操作。完整回放、评分和设置请使用 Jetson 本地 Qt。</p>
-      <label for="task-select">采集任务</label><select id="task-select"></select>
-      <div class="actions"><button id="task-activate" type="button">进入任务</button><button id="task-end" type="button">结束当前任务</button></div>
+      <summary>Tasks & recordings</summary>
+      <p class="hint">Manage tasks when idle. Review recordings in the Jetson desktop app.</p>
+      <label for="task-select">Task</label><select id="task-select"></select>
+      <div class="actions"><button id="task-activate" type="button">Use task</button><button id="task-end" type="button">End task</button></div>
       <form id="task-create">
-        <label for="task-new-name">新任务名称</label><input id="task-new-name" required maxlength="100" autocomplete="off">
-        <label for="task-new-instruction">操作说明</label><textarea id="task-new-instruction" required rows="2"></textarea>
-        <button id="task-create-button" type="submit">创建并进入</button>
+        <label for="task-new-name">Task name</label><input id="task-new-name" required maxlength="100" autocomplete="off">
+        <label for="task-new-instruction">Instructions</label><textarea id="task-new-instruction" required rows="2"></textarea>
+        <button id="task-create-button" type="submit">Create & use</button>
       </form>
-      <div class="section-title"><h2>两端录制合包</h2><button id="management-refresh" class="text-button" type="button">刷新</button></div>
+      <div class="section-title"><h2>Transfer recordings</h2><button id="management-refresh" class="text-button" type="button">Refresh</button></div>
       <div id="saved-recordings"></div><p id="management-message" role="status"></p>
     </details>
-    <footer><span id="storage-help">正在读取录制配置…</span></footer>
+    <footer><span id="storage-help">Loading storage…</span></footer>
   </main>
-  <script type="module" src="/static/pages/mobile.js?v=20261103-preview-startup"></script>
+  <script type="module" src="/static/pages/mobile.js?v=20261103-english-mobile"></script>
 </body>
 </html>

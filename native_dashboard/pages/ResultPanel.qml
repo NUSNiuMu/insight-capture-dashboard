@@ -6,18 +6,6 @@ import "../ui" as Ui
 Ui.Panel {
     id: panel
     property var value: ({})
-    property var words: ({
-            "idle": "待命",
-            "running": "进行中",
-            "done": "已完成",
-            "error": "失败",
-            "pass": "通过",
-            "suspect": "待复核",
-            "pending": "等待处理",
-            "good": "良好",
-            "yes": "是",
-            "no": "否"
-        })
     property string heading: "结果与状态"
     property var labels: ({
             "session": "当前任务",
@@ -42,8 +30,8 @@ Ui.Panel {
             "ok": "通过",
             "loss_pct": "丢帧率 %",
             "msgs": "消息数",
-            "avg_hz": "实际 Hz",
-            "nominal_hz": "标称 Hz",
+            "avg_hz": "实际频率",
+            "nominal_hz": "标称频率",
             "recording": "录制中",
             "available": "可用",
             "missing": "缺少依赖",
@@ -57,7 +45,7 @@ Ui.Panel {
             "current_bag": "当前录制",
             "recorded_takes": "录制条数",
             "next_take_id": "下一条编号",
-            "session_id": "任务 ID",
+            "session_id": "任务标识",
             "instruction": "操作说明",
             "operator_decision": "人工判断",
             "reject_reason": "作废原因",
@@ -65,7 +53,7 @@ Ui.Panel {
             "integrity_report": "完整性报告",
             "topics": "话题",
             "cameras": "相机",
-            "results": "导出结果",
+            "results": "处理结果",
             "result": "结果",
             "storage": "存储",
             "voice_audio": "语音",
@@ -73,7 +61,10 @@ Ui.Panel {
             "root": "根目录",
             "path": "路径",
             "method": "方法",
-            "recording_subdirectory": "录制子目录"
+            "recording_subdirectory": "录制子目录",
+            "run_name": "运行名称", "step": "步骤编号", "sub_progress": "当前进度",
+            "started_at": "启动时间", "finished_at": "结束时间", "pid": "进程号",
+            "elapsed_s": "耗时（秒）", "returncode": "退出状态", "has_sim3": "已完成轨迹对齐"
         })
     function rows(v, prefix, out, depth) {
         if (depth > 5 || v === null || v === undefined)
@@ -81,7 +72,7 @@ Ui.Panel {
         if (typeof v !== "object") {
             out.push({
                     "label": prefix,
-                    "value": typeof v === "boolean" ? (v ? "是" : "否") : (words[String(v)] || String(v))
+                    "value": typeof v === "boolean" ? (v ? "是" : "否") : Ui.Texts.value(v)
                 });
             return;
         }

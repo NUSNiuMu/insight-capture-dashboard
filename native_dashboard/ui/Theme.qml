@@ -18,9 +18,6 @@ QtObject {
     readonly property color teal: "#0e7490"
     readonly property color green: "#1f8a55"
     readonly property color red: "#c2453e"
-    readonly property string bodyFont: inter.status === FontLoader.Ready ? inter.name : "Noto Sans CJK SC"
+    readonly property string bodyFont: "Noto Sans CJK SC"
     readonly property string monoFont: "DejaVu Sans Mono"
-    property FontLoader inter: FontLoader {
-        source: Qt.resolvedUrl("fonts/InterVariable.ttf")
-    }
 }

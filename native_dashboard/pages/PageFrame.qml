@@ -25,7 +25,7 @@ ScrollView {
             Layout.rightMargin: frame.width < 950 ? 20 : 38
             spacing: 20
             Label {
-                text: "CAPTURE STUDIO  /  " + frame.heading.split(" · ")[0].toUpperCase()
+                text: "采集工作台 / " + frame.heading.split(" · ")[0].toUpperCase()
                 font.family: Ui.Theme.monoFont
                 font.pixelSize: 11
                 font.letterSpacing: 1.3

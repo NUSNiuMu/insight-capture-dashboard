@@ -1,5 +1,5 @@
 const el = id => document.getElementById(id);
-const phaseLabels = { saved: "已保存 · 待合包", copying: "回传中", merging: "合包中", done: "已合包", error: "合包失败 · 原始数据保留" };
+const phaseLabels = { saved: "Saved · transfer pending", copying: "Transferring", merging: "Merging", done: "Ready", error: "Transfer failed · originals kept" };
 
 export class CaptureManagement {
   constructor(api) {
@@ -44,11 +44,11 @@ export class CaptureManagement {
   async run(action) {
     if (this.busy || this.captureBusy) return;
     this.busy = true;
-    el("management-message").textContent = "正在处理…";
+    el("management-message").textContent = "Working…";
     try {
       await action();
       await this.load();
-      el("management-message").textContent = "操作已提交。";
+      el("management-message").textContent = "Done.";
     } catch (error) { this.showError(error); }
     finally { this.busy = false; }
   }
@@ -68,17 +68,17 @@ export class CaptureManagement {
     const list = el("saved-recordings");
     list.replaceChildren();
     if (!this.status.enabled || !this.status.recordings.length) {
-      list.textContent = this.status.enabled ? "暂无两端录制。" : "当前配置为本地录制，无需两端合包。";
+      list.textContent = this.status.enabled ? "No recordings to transfer." : "Recordings are saved locally. No transfer needed.";
       return;
     }
     for (const recording of this.status.recordings) {
       const row = document.createElement("article"); row.className = "saved-recording";
       const title = document.createElement("p");
-      title.textContent = `${recording.task_name} · 第 ${recording.take_id} 条 · ${phaseLabels[recording.phase] || recording.phase}`;
+      title.textContent = `${recording.task_name} · Take ${recording.take_id} · ${phaseLabels[recording.phase] || recording.phase}`;
       row.append(title);
       if (recording.error) { const detail = document.createElement("p"); detail.textContent = recording.error; row.append(detail); }
       if (["saved", "error"].includes(recording.phase)) {
-        const button = document.createElement("button"); button.type = "button"; button.textContent = "回传并合包";
+        const button = document.createElement("button"); button.type = "button"; button.textContent = "Transfer & merge";
         button.disabled = this.busy || this.captureBusy || this.status.busy;
         button.onclick = () => this.run(() => this.post("/api/postprocessing/merge", { session_id: recording.session_id }));
         row.append(button);

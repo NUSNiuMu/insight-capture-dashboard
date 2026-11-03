@@ -17,33 +17,33 @@ export class MobilePreview {
     this.stop();
     const generation = this.generation;
     const current = () => generation === this.generation;
-    const fail = (message = "预览连接已断开，请关闭后重新开启") => {
+    const fail = (message = "Video disconnected. Close and reopen preview.") => {
       if (!current()) return;
       this.stop(); this.label.textContent = message;
     };
-    this.label.textContent = "正在连接视频…";
+    this.label.textContent = "Connecting video…";
     try {
-      if (!window.RTCPeerConnection) throw new Error("此浏览器不支持实时视频");
+      if (!window.RTCPeerConnection) throw new Error("This browser does not support live video.");
       let camera;
       const readyDeadline = performance.now() + 10000;
       while (current()) {
         const response = await fetch("/api/cameras", { cache: "no-store", signal: AbortSignal.timeout(5000) });
-        if (!response.ok) throw new Error("设备状态读取失败");
+        if (!response.ok) throw new Error("Could not load device status.");
         camera = (await response.json()).cameras.find(c => c.name === name);
         if (!current()) return;
-        if (!camera || camera.stale) throw new Error("该相机当前无图像输入，请检查设备连接");
+        if (!camera || camera.stale) throw new Error("No video input. Check the device connection.");
         if (camera.webrtc_available) break;
-        if (performance.now() >= readyDeadline) throw new Error("视频服务启动超时，请检查 Jetson 服务状态");
-        this.label.textContent = "正在启动视频服务…";
+        if (performance.now() >= readyDeadline) throw new Error("Video startup timed out. Check the Jetson service.");
+        this.label.textContent = "Starting video…";
         await new Promise(resolve => setTimeout(resolve, 250));
       }
       if (!current()) return;
-      this.label.textContent = "正在连接视频…";
+      this.label.textContent = "Connecting video…";
       const { pc, ws } = openCameraWebRtc({
         cameraName: name, port: camera.webrtc_port, fps: 15, isCurrent: current,
         onTrack: event => {
           this.video.srcObject = event.streams[0]; this.video.hidden = false;
-          this.video.play().catch(() => fail("浏览器未能播放视频，请重新开启"));
+          this.video.play().catch(() => fail("Could not play video. Close and reopen preview."));
         },
         onError: () => fail(),
       });
@@ -53,9 +53,9 @@ export class MobilePreview {
         if (!current()) return;
         if (this.video.currentTime > progress) {
           progress = this.video.currentTime; lastFrame = performance.now();
-          this.label.textContent = "实时视频 · 最高 15 fps";
+          this.label.textContent = "Live · up to 15 fps";
         }
-        if (performance.now() - lastFrame > 10000) return fail("画面已停更，请关闭后重新开启");
+        if (performance.now() - lastFrame > 10000) return fail("Video stopped. Close and reopen preview.");
         this.timer = setTimeout(watch, 1000);
       };
       watch();

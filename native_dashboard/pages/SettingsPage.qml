@@ -11,7 +11,7 @@ PageFrame {
     property bool restarting: false
     property int restartTicks: 0
     property int pendingVolume: -1
-    heading: "Settings · 设置"
+    heading: "系统设置"
     description: "管理定位遮罩、语音提示与采集工作台。"
     Ui.Button {
         text: "刷新设置"
@@ -23,8 +23,8 @@ PageFrame {
         rowSpacing: 20
         columnSpacing: 20
         Ui.Section {
-            eyebrow: "MASK CONFIGURATION"
-            heading: "夹爪遮罩"
+            eyebrow: "定位图像遮罩"
+            heading: "腕部图像遮罩"
             description: "设置 Insight3 遮罩覆盖比例，范围为 0 至 1（不含 1）。"
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignTop
@@ -54,12 +54,12 @@ PageFrame {
             }
         }
         Ui.Section {
-            eyebrow: "VOICE FEEDBACK"
+            eyebrow: "语音提示"
             heading: "语音提示"
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignTop
             Label {
-                text: page.audio.available ? ((page.audio.backend || "") + " · " + (page.audio.playback_label || "")) : page.audio.error || "语音服务不可用"
+                text: page.audio.available ? (Ui.Texts.value(page.audio.backend || "") + " · " + (page.audio.playback_label || "")) : Ui.Texts.value(page.audio.error || "语音服务不可用")
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: page.audio.available ? Ui.Theme.muted : Ui.Theme.red
@@ -95,7 +95,7 @@ PageFrame {
         }
     }
     Ui.Section {
-        eyebrow: "MAINTENANCE"
+        eyebrow: "系统维护"
         heading: "系统维护"
         description: "重启会暂时断开相机预览，完成后自动检查连接。"
         Label {
@@ -113,6 +113,7 @@ PageFrame {
     }
     Ui.Dialog {
         id: restartDialog
+        objectName: "restart-dialog"
         width: 440
         implicitWidth: 440
         title: "确认重启后端？"

@@ -1,4 +1,5 @@
 singleton Theme 1.0 Theme.qml
+singleton Texts 1.0 Texts.qml
 Badge 1.0 Badge.qml
 Button 1.0 Button.qml
 CheckBox 1.0 CheckBox.qml

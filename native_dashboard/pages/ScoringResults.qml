@@ -43,13 +43,13 @@ GridLayout {
                     out.push({label: "可用比例", value: number(100 * (c.usable_fraction !== undefined ? c.usable_fraction : 1), 1) + "%"});
                 }
                 if (c.mean_trace !== undefined)
-                    out.push({label: "平均协方差 trace", value: trace(c.mean_trace)});
+                    out.push({label: "平均协方差迹", value: trace(c.mean_trace)});
                 if (c.p50_trace !== undefined)
-                    out.push({label: "p50 trace", value: trace(c.p50_trace)});
-                out.push({label: "p90 trace", value: trace(c.p90_trace)});
-                out.push({label: "最大 trace", value: trace(c.max_trace)});
+                    out.push({label: "协方差迹中位数", value: trace(c.p50_trace)});
+                out.push({label: "协方差迹第90百分位", value: trace(c.p90_trace)});
+                out.push({label: "最大协方差迹", value: trace(c.max_trace)});
                 if (c.p99_trace !== undefined)
-                    out.push({label: "p99 trace", value: trace(c.p99_trace)});
+                    out.push({label: "协方差迹第99百分位", value: trace(c.p99_trace)});
                 return out;
             }
             RowLayout {
@@ -62,7 +62,7 @@ GridLayout {
                     color: Number(card.modelData.score) >= 90 ? Ui.Theme.green : Number(card.modelData.score) >= 70 ? Ui.Theme.teal : Number(card.modelData.score) >= 50 ? Ui.Theme.accent : Ui.Theme.red
                 }
                 Label {
-                    text: card.modelData.quality || ""
+                    text: Ui.Texts.value(card.modelData.quality || "")
                     color: Ui.Theme.muted
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap

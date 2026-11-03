@@ -8,6 +8,7 @@
 #include <QJSValue>
 #include <QJsonDocument>
 #include <QLibrary>
+#include <QLocale>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -27,6 +28,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     gst_init(&argc, &argv);
+    QLocale::setDefault(QLocale(QLocale::Chinese, QLocale::China));
     QGuiApplication app(argc, argv);
     app.setOrganizationName("Insight");
     app.setApplicationName("NativeDashboard");

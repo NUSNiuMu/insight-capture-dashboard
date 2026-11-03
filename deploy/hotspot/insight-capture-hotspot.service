@@ -1,0 +1,12 @@
+[Unit]
+Description=Insight single-radio capture hotspot
+Wants=network-online.target
+After=NetworkManager.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/insight-capture-hotspot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -24,7 +24,7 @@ Ui.Section {
             return "仅检查消息存在，不判断丢帧";
         if (topic.error)
             return topic.error;
-        return number(topic.avg_hz, 2) + " / " + number(topic.nominal_hz, 0) + " Hz · 丢帧 " + number(topic.loss_pct, 2) + "%";
+        return number(topic.avg_hz, 2) + " / " + number(topic.nominal_hz, 0) + " 赫兹 · 丢帧 " + number(topic.loss_pct, 2) + "%";
     }
     RowLayout {
         Layout.fillWidth: true

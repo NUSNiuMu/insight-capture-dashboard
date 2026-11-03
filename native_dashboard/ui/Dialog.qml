@@ -29,7 +29,9 @@ C.Dialog {
         standardButtons: dialog.standardButtons
         padding: 18
         delegate: Button {
+            objectName: dialog.objectName + (C.DialogButtonBox.buttonRole === C.DialogButtonBox.AcceptRole ? "-confirm" : "-cancel")
             tone: C.DialogButtonBox.buttonRole === C.DialogButtonBox.AcceptRole ? "primary" : "neutral"
+            text: C.DialogButtonBox.buttonRole === C.DialogButtonBox.AcceptRole ? "确定" : "取消"
         }
         background: Rectangle {
             color: "transparent"

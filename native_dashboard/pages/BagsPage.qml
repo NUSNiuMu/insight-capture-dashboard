@@ -7,7 +7,7 @@ PageFrame {
     id: page
     property var shell
     property string deleting: ""
-    heading: "Rosbags · 录制库"
+    heading: "录制库"
     description: "查看录制完整性、评分和回放准备状态。"
     SavedRecordings {
         Layout.fillWidth: true
@@ -80,7 +80,7 @@ PageFrame {
                         tone: modelData.scored ? "success" : "neutral"
                     }
                     Ui.Badge {
-                        text: "回放 · " + (modelData.review_state || "pending")
+                        text: "回放 · " + Ui.Texts.value(modelData.review_state || "pending")
                         tone: modelData.review_state === "ready" ? "accent" : "neutral"
                     }
                 }

@@ -8,6 +8,7 @@ for (const [source, target] of [
   ["mobile/style.css", "static/mobile.css"],
   ["mobile/app.js", "static/pages/mobile.js"],
   ["mobile/management.js", "static/pages/management.js"],
+  ["mobile/presentation.js", "static/pages/presentation.js"],
   ["shared/mobile-preview.js", "static/shared/mobile-preview.js"],
   ["shared/webrtc.js", "static/shared/webrtc.js"],
 ]) {

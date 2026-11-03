@@ -6,7 +6,7 @@ import "../ui" as Ui
 PageFrame {
     id: page
     property var shell
-    heading: "Sessions · 任务"
+    heading: "任务管理"
     description: "创建和管理任务，查看采集记录与质量检查。"
     property var taskData: workspace.data.tasks || {}
     property var sessionData: workspace.data.sessions || {}
@@ -23,7 +23,7 @@ PageFrame {
         editor.open();
     }
     Ui.Section {
-        eyebrow: "01  TASK CONTROL"
+        eyebrow: "01  任务管理"
         heading: "采集任务"
         RowLayout {
             Layout.fillWidth: true
@@ -129,7 +129,7 @@ PageFrame {
                 anchors.fill: parent
                 RowLayout {
                     Label {
-                        text: "TAKE " + modelData.take_id + "  ·  " + (modelData.bag_name || "等待录制归档")
+                        text: "第 " + modelData.take_id + "  ·  " + (modelData.bag_name || "等待录制归档")
                         Layout.fillWidth: true
                         font.bold: true
                         wrapMode: Text.Wrap
@@ -154,6 +154,7 @@ PageFrame {
     }
     Ui.Dialog {
         id: endDialog
+        objectName: "end-task-dialog"
         width: 440
         implicitWidth: 440
         title: "确认结束当前任务？"
@@ -175,7 +176,7 @@ PageFrame {
         ColumnLayout {
             anchors.fill: parent
             Label {
-                text: "任务 ID"
+                text: "任务标识"
             }
             Ui.TextField {
                 id: taskId

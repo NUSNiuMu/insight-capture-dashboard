@@ -10,32 +10,32 @@ Rectangle {
     signal selected(string page)
     property var links: [{
             "page": "sessions",
-            "name": "Sessions",
-            "group": "Review"
+            "name": "任务管理",
+            "group": "采集与回放"
         }, {
             "page": "spatial",
-            "name": "Spatial review",
+            "name": "空间采集",
             "group": ""
         }, {
             "page": "bags",
-            "name": "Rosbags",
+            "name": "录制库",
             "group": ""
 
         }, {
             "page": "scoring",
-            "name": "Scoring",
-            "group": "Process"
+            "name": "轨迹评分",
+            "group": "数据处理"
         }, {
             "page": "optimization",
-            "name": "Optimization",
-            "group": "Engineering"
+            "name": "轨迹优化",
+            "group": "重建分析"
         }, {
             "page": "recording",
-            "name": "Recorder",
-            "group": "Maintenance"
+            "name": "话题录制",
+            "group": "设备管理"
         }, {
             "page": "settings",
-            "name": "Settings",
+            "name": "系统设置",
             "group": ""
         }]
     color: Ui.Theme.sidebar
@@ -81,7 +81,7 @@ Rectangle {
                     color: Ui.Theme.ink
                 }
                 Label {
-                    text: "Capture Studio"
+                    text: "采集工作台"
                     font.pixelSize: 11
                     color: Ui.Theme.muted
                 }
@@ -94,7 +94,7 @@ Rectangle {
             contentItem: ColumnLayout {
                 spacing: 7
                 Label {
-                    text: "LOCAL WORKSPACE"
+                    text: "本地工作台"
                     font.family: Ui.Theme.monoFont
                     font.pixelSize: 9
                     font.letterSpacing: .7
@@ -107,7 +107,7 @@ Rectangle {
                     color: Ui.Theme.ink
                 }
                 Label {
-                    text: "采集  ·  检查  ·  导出"
+                    text: "采集  ·  检查  ·  回放"
                     font.pixelSize: 11
                     color: Ui.Theme.muted
                 }

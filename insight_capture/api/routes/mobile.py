@@ -54,7 +54,7 @@ class MobileCaptureRoutes:
             )
             if not task_status.get("active"):
                 self._last_preflight["failures"].append({
-                    "code": "task_inactive", "message": "请先在任务管理中选择数采任务。"
+                    "code": "task_inactive", "message": "Choose a task before recording."
                 })
                 self._last_preflight["ok"] = False
             if refresh:
@@ -65,7 +65,7 @@ class MobileCaptureRoutes:
                 self.context.node, self.context.capture_preflight.camera_stale_sec
             )
             report = {**self._last_preflight, "camera_health": health}
-        role_names = {"head": "头部", "right_hand": "腕部 A", "left_hand": "腕部 B"}
+        role_names = {"head": "Head", "right_hand": "Wrist A", "left_hand": "Wrist B"}
         devices = [{"name": pose.name, "role": pose.teleop_role,
                     "label": role_names[pose.teleop_role] + " · " + pose.name.split("_")[0].upper()}
                    for pose in self.context.node.poses]
@@ -108,21 +108,21 @@ class MobileCaptureRoutes:
         previous = self._commands.get(command_id)
         if previous is not None:
             if previous[0] != fingerprint:
-                raise RuntimeError("同一个命令编号不能用于不同操作。")
+                raise RuntimeError("A command ID cannot be reused for a different operation.")
             return web.json_response(previous[1], status=202)
         if self._task is not None and not self._task.done():
-            raise RuntimeError("上一项操作仍在处理，请等待状态更新。")
+            raise RuntimeError("An operation is still running. Wait for it to finish.")
         manager = self.context.recording_manager
         status = await asyncio.to_thread(manager.status)
         if status.get("merge_state") in {"finalizing", "merging"}:
-            raise RuntimeError("正在保存上一条采集。")
+            raise RuntimeError("Wait for the previous recording to finish saving.")
         if action == "start" and status.get("recording"):
-            raise RuntimeError("已有采集正在进行。")
+            raise RuntimeError("A recording is already running.")
         if action == "stop":
             if not status.get("recording") or status.get("recording_mode") != "capture":
-                raise RuntimeError("当前没有正在进行的采集。")
+                raise RuntimeError("No capture recording is running.")
             if not body.get("output_path") or body["output_path"] != status.get("output_path"):
-                raise RuntimeError("采集已变化，请刷新状态后再停止。")
+                raise RuntimeError("The recording has changed. Refresh before stopping it.")
         self._last_status = status
         self._operation = {"command_id": command_id, "action": action, "state": "running", "error": None}
         self._commands[command_id] = (fingerprint, self._operation)
@@ -143,9 +143,9 @@ class MobileCaptureRoutes:
                 )
             result = json.loads(response.body)
             if response.status >= 400:
-                raise RuntimeError(result.get("speech") or result["error"])
+                raise RuntimeError(result["error"])
             if result.get("merge_state") == "error":
-                raise RuntimeError(result.get("merge_error") or "录制文件保存失败。")
+                raise RuntimeError(result.get("merge_error") or "Could not save the recording.")
             if action == "start":
                 self._last_preflight = result["preflight"]
             operation["state"] = "complete"

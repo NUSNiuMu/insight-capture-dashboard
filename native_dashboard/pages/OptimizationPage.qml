@@ -10,8 +10,8 @@ PageFrame {
     property var trajectory: workspace.data.trajectories || {}
     property bool running: status.state === "running" || !!workspace.busy.action
     property string loadedRun: ""
-    heading: "Optimization · 优化"
-    description: "图像重建、Sim3 对齐，比较 VIO 与 COLMAP 轨迹。"
+    heading: "轨迹优化"
+    description: "进行图像重建与相似变换对齐，比较里程计和重建轨迹。"
     function load(name) {
         if (!name)
             return;
@@ -19,7 +19,7 @@ PageFrame {
         workspace.request("trajectories", "/api/optimization/trajectories?run_name=" + encodeURIComponent(name));
     }
     Ui.Section {
-        eyebrow: "01  RECONSTRUCTION INPUT"
+        eyebrow: "01  重建输入"
         heading: "重建输入"
         GridLayout {
             columns: 2
@@ -37,7 +37,9 @@ PageFrame {
             }
             Ui.ComboBox {
                 id: camera
-                model: (workspace.data.cameras || {}).cameras || []
+                model: ((workspace.data.cameras || {}).cameras || []).map(function(camera) {
+                    return {name: camera.name, label: Ui.Texts.value(camera.label)};
+                })
                 textRole: "label"
                 valueRole: "name"
                 Layout.fillWidth: true
@@ -47,7 +49,12 @@ PageFrame {
             }
             Ui.ComboBox {
                 id: stream
-                model: ["color_compressed", "color", "infra1", "infra2"]
+                model: [{label: "彩色压缩图像", value: "color_compressed"},
+                    {label: "彩色原始图像", value: "color"},
+                    {label: "左目红外图像", value: "infra1"},
+                    {label: "右目红外图像", value: "infra2"}]
+                textRole: "label"
+                valueRole: "value"
                 Layout.fillWidth: true
             }
             Label {
@@ -68,7 +75,7 @@ PageFrame {
                 onClicked: shell.mutate("/api/optimization/start", {
                         "bag_name": bag.selector,
                         "camera_name": camera.currentValue,
-                        "stream_type": stream.currentText,
+                        "stream_type": stream.currentValue,
                         "run_name": runName.text.trim() || bag.selector
                     })
             }
@@ -124,7 +131,7 @@ PageFrame {
         visible: text.length > 0
     }
     Ui.Section {
-        eyebrow: "03  TRAJECTORY COMPARISON"
+        eyebrow: "03  轨迹比较"
         heading: "轨迹比较"
         RowLayout {
             Layout.fillWidth: true
@@ -142,7 +149,7 @@ PageFrame {
             }
         }
         Label {
-            text: "VIO（红色） · COLMAP（绿色） · " + page.loadedRun
+            text: "里程计（红色） · 重建轨迹（绿色） · " + page.loadedRun
         }
         NativePlot {
             Layout.fillWidth: true

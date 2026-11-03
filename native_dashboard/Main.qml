@@ -63,13 +63,19 @@ ApplicationWindow {
     }
     function spatialDiagnostics() { var result=[]; for(var i=0;i<poseRepeater.count;++i)result.push(poseRepeater.objectAt(i).diagnostics()); return result }
     function controlPositions() {
-        var result={page:root.currentPage}; var items={scene:scenePanel,cameraDock:cameraDock,record:recordButton,activate:activateButton,load:loadButton,live:liveButton,pause:pauseButton,check:checkButton,timeline:timeline}
+        var result={page:root.currentPage,visibleTexts:root.visibleTexts(root.contentItem)}; var items={scene:scenePanel,cameraDock:cameraDock,record:recordButton,activate:activateButton,load:loadButton,live:liveButton,pause:pauseButton,check:checkButton,timeline:timeline}
         for(var key in items) { var item=items[key];var p=item.mapToItem(null,item.width/2,item.height/2);result[key]={x:p.x,y:p.y,width:item.width,height:item.height,enabled:item.enabled} }
         var nav = root.findChildrenForDiagnostics(sidebar)
         for(var j=0;j<nav.length;++j){var button=nav[j];var pos=button.mapToItem(null,button.width/2,button.height/2);result[button.objectName]={x:pos.x,y:pos.y,width:button.width,height:button.height,enabled:button.enabled}}
         var controls=root.findChildrenForDiagnostics(pageLoader).concat(root.findChildrenForDiagnostics(Overlay.overlay))
         for(var k=0;k<controls.length;++k){var c=controls[k];var cp=c.mapToItem(null,c.width/2,c.height/2);result[c.objectName]={x:cp.x,y:cp.y,width:c.width,height:c.height,enabled:c.enabled,visible:c.visible,text:c.text===undefined ? "" : c.text,checked:c.checked===undefined ? false : c.checked}}
         return result
+    }
+    function visibleTexts(item) {
+        if (!item || !item.visible || item.opacity === 0) return []
+        var texts = typeof item.text === "string" && item.text.trim() ? [item.text] : []
+        for (var i=0;i<item.children.length;++i) texts=texts.concat(visibleTexts(item.children[i]))
+        return texts
     }
     function findChildrenForDiagnostics(item) {
         var result=[]
@@ -126,7 +132,7 @@ ApplicationWindow {
     Shortcut { sequence: "Escape"; onActivated: root.visibility = Window.Windowed }
     Shortcut { sequence: "F11"; onActivated: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
     Ui.Dialog {
-        id: confirmDialog; anchors.centerIn: parent; modal: true; width: 400
+        id: confirmDialog; objectName: "confirm-dialog"; anchors.centerIn: parent; modal: true; width: 400
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: dashboard.command(root.confirmAction, root.confirmValue)
         Label { text: "操作将应用于当前设备。"; padding: 16 }
@@ -144,14 +150,14 @@ ApplicationWindow {
             Layout.fillWidth: true; Layout.preferredHeight: 56; color: "transparent"
             RowLayout {
                 anchors.fill: parent; anchors.margins: 15; spacing: 18
-                Label { text: "WORKSPACE /"; font.family: Ui.Theme.monoFont; font.pixelSize: 11; font.letterSpacing: 1; color: Ui.Theme.faint }
+                Label { text: "工作台 /"; font.family: Ui.Theme.monoFont; font.pixelSize: 11; font.letterSpacing: 1; color: Ui.Theme.faint }
                 Label { text: root.spatialActive ? "原生采集台" : (pageLoader.titles[root.currentPage] || ""); font.pixelSize: 14; font.weight: Font.DemiBold; color: Ui.Theme.ink }
                 Rectangle { width: 9; height: 9; radius: 5; color: dashboard.connected ? "#70ac82" : "#c27a6a" }
                 Label { text: dashboard.connected ? "已连接" : "未连接"; font.pixelSize: 12; color: Ui.Theme.muted }
                 Item { Layout.fillWidth: true }
                 Ui.Badge { text: dashboard.playback ? "回放" : "实时"; tone: "accent"; visible: root.spatialActive }
                 Ui.ComboBox { visible: root.spatialActive; model: [25,30]; currentIndex: dashboard.targetFps===30?1:0; onActivated: root.previewFps=Number(currentText); implicitWidth: 85 }
-                Label { visible: root.spatialActive; font.family: Ui.Theme.monoFont; font.pixelSize: 11; text: "3D " + root.sceneFps.toFixed(1) + " FPS"; color: "#776d5a" }
+                Label { visible: root.spatialActive; font.family: Ui.Theme.monoFont; font.pixelSize: 11; text: "三维 " + root.sceneFps.toFixed(1) + " 帧/秒"; color: "#776d5a" }
                 Ui.Button { text: "全屏"; onClicked: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
             }
         }
@@ -199,7 +205,7 @@ ApplicationWindow {
                                 id: cameraCard; required property var modelData
                                 property alias player: video
                                 Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 1; color: Ui.Theme.surface; radius: 12; border.color: Ui.Theme.line
-                                Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: cameraCard.modelData.label; width: parent.width-110; elide: Text.ElideRight; font.bold: true; color: "#514b3e" }
+                                Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: Ui.Texts.value(cameraCard.modelData.label); width: parent.width-110; elide: Text.ElideRight; font.bold: true; color: "#514b3e" }
                                 Label {
                                     id: cameraStatus
                                     property var localization: dashboard.localization[cameraCard.modelData.device || cameraCard.modelData.name] || {}
@@ -208,7 +214,7 @@ ApplicationWindow {
                                     elide: Text.ElideRight; width: parent.width-20; font.pixelSize: 11
                                     color: dashboard.playback ? "#51778e" : (localization.color || "#84775f")
                                 }
-                                Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " fps"; color: "#a27723"; font.bold: true }
+                                Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " 帧/秒"; color: "#a27723"; font.bold: true }
                                 Rectangle {
                                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom
                                     anchors.topMargin: 6; anchors.bottomMargin: 6; color: "#17130c"; radius: 8
@@ -314,7 +320,7 @@ ApplicationWindow {
                         Layout.fillWidth: true; Layout.margins: 10
                         Repeater {
                             model: dashboard.poses
-                            delegate: Ui.CheckBox { required property var modelData; text: modelData.role + " · " + modelData.pointCount + " 点"; checked: modelData.trailEnabled; onToggled: modelData.setTrail(checked) }
+                            delegate: Ui.CheckBox { required property var modelData; text: Ui.Texts.value(modelData.role) + " · " + modelData.pointCount + " 点"; checked: modelData.trailEnabled; onToggled: modelData.setTrail(checked) }
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -345,7 +351,7 @@ ApplicationWindow {
                     Ui.Button { id: loadButton; text: "载入"; enabled: bag.count>0&&!dashboard.state.recording&&!dashboard.playback; onClicked: dashboard.command("playback",bag.currentValue) }
                     Ui.Button { id: pauseButton; text: root.playPaused ? "继续" : "暂停"; enabled: dashboard.playback; onClicked: { root.playPaused=!root.playPaused;root.allVideos(function(v){v.paused=root.playPaused}) } }
                     Ui.Slider { id: timeline; Layout.preferredWidth: 190; from: 0; to: Math.max(1,dashboard.duration); value: root.playTime; enabled: dashboard.playback; onMoved: root.allVideos(function(v){v.seek(timeline.value)}) }
-                    Label { text: dashboard.playback ? root.playTime.toFixed(1)+" / "+dashboard.duration.toFixed(1)+" s" : (dashboard.state.playbackState || "idle"); color: "#84775f" }
+                    Label { text: dashboard.playback ? root.playTime.toFixed(1)+" / "+dashboard.duration.toFixed(1)+" s" : Ui.Texts.value(dashboard.state.playbackState || "idle"); color: "#84775f" }
                     Ui.Button { id: liveButton; text: "返回实时"; enabled: dashboard.playback; onClicked: { root.playPaused=false;dashboard.command("live") } }
                 }
                 Label { text: root.captureAction === "starting" ? "正在检查设备、校时并启动录制，请稍候…" : root.captureAction === "stopping" ? "正在停止两端录制，请稍候…" : dashboard.state.recording ? "● 录制中  " + ((dashboard.state.distributed || {}).enabled ? "Ego TF 卡 + Jetson · " : "") + (dashboard.state.output || "") : dashboard.state.recordingBusy ? "正在保存或手动合包，请稍候…" : dashboard.message; Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }

@@ -12,10 +12,10 @@ PageFrame {
     property bool awaitingResult: false
     property var scoring: workspace.data.scoring || {}
     property bool running: scoring.status === "running" || !!workspace.busy.scoringStart || !!workspace.busy.scoringIntegrity
-    heading: "Scoring · 评分"
+    heading: "轨迹评分"
     description: "先检查图像流完整性，再运行轨迹评分。"
     Ui.Section {
-        eyebrow: "01  QUALITY ASSESSMENT"
+        eyebrow: "01  质量评估"
         heading: "评分输入"
         RowLayout {
             Layout.fillWidth: true
