@@ -5,7 +5,6 @@
   "recording_rmw_implementation": "rmw_cyclonedds_cpp",
   "record_topics": [],
   "capture_session": {
-    "task": "unspecified",
     "operator": "unknown"
   },
   "preflight": {
@@ -22,6 +21,6 @@
     "minimum_free_gb": 2.0
   },
   "localization": {
-    "gripper_mask_height_ratio": 0.2
+    "gripper_mask_height_ratio": 0.0
   }
 }

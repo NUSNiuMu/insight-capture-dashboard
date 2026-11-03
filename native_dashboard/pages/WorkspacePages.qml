@@ -20,9 +20,6 @@ Item {
             "key": "scoring",
             "file": "ScoringPage.qml"
         }, {
-            "key": "handpose",
-            "file": "HandPosePage.qml"
-        }, {
             "key": "optimization",
             "file": "OptimizationPage.qml"
         }, {
@@ -36,7 +33,6 @@ Item {
             "sessions": "Sessions · 任务",
             "bags": "Rosbags · 录制库",
             "scoring": "Scoring · 评分",
-            "handpose": "Hand pose · 手部姿态",
             "optimization": "Optimization · 优化",
             "recording": "Recorder · 录制",
             "settings": "Settings · 设置"
@@ -45,7 +41,7 @@ Item {
         if (force)
             workspace.request(key, path);
         else
-            workspace.ensure(key, path, key === "bags" || key === "capabilities" ? 60000 : key === "tasks" || key === "runs" || key === "cameras" ? 15000 : 2000);
+            workspace.ensure(key, path, key === "bags" ? 60000 : key === "tasks" || key === "runs" || key === "cameras" ? 15000 : 2000);
     }
     function mutate(path, body, method) {
         workspace.request("action", path, method || "POST", body || {});
@@ -57,16 +53,12 @@ Item {
             get("tasks", "/api/tasks", force);
             get("sessions", "/api/sessions", force);
         }
-        if (["bags", "scoring", "handpose", "optimization"].indexOf(page) >= 0)
+        if (["bags", "scoring", "optimization"].indexOf(page) >= 0)
             get("bags", "/api/rosbags?scope=" + scope, force);
         if (page === "bags")
             get("savedRecordings", "/api/postprocessing/recordings", force);
         if (page === "scoring")
             get("scoring", "/api/scoring/status", force);
-        if (page === "handpose") {
-            get("capabilities", "/api/handpose/capabilities", force);
-            get("handpose", "/api/handpose/status", force);
-        }
         if (page === "optimization") {
             get("optimization", "/api/optimization/status", force);
             get("runs", "/api/optimization/runs", force);
@@ -84,14 +76,12 @@ Item {
         var key = {
             "bags": "savedRecordings",
             "scoring": "scoring",
-            "handpose": "handpose",
             "optimization": "optimization",
             "recording": "recording"
         }[page];
         var path = {
             "bags": "/api/postprocessing/recordings",
             "scoring": "/api/scoring/status",
-            "handpose": "/api/handpose/status",
             "optimization": "/api/optimization/status",
             "recording": "/api/recording/status"
         }[page];

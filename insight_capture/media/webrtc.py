@@ -1,4 +1,4 @@
-"""Per-viewer hardware H.264 WebRTC streams with polling fallback."""
+"""Per-viewer hardware H.264 WebRTC streams."""
 
 import threading
 import time

@@ -24,7 +24,7 @@ services:
     runtime: nvidia
 
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}  # Must match devices; set via scripts/set_ros_domain_id.py
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}  # Must match device firmware settings
       # Base image defaults to Etc/UTC. Without this, rosbag names
       # (insight_record_YYYYMMDD_HHMMSS, from time.strftime -> localtime)
       # and container log timestamps are 8h behind actual wall-clock time

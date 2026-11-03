@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import threading
 import time
@@ -88,12 +87,9 @@ def main() -> int:
         action="store_true",
         help="run without the dashboard safety check only after capture is stopped",
     )
-    parser.add_argument("--software", action="store_true", help="force libx264 instead of Jetson NVENC")
     args = parser.parse_args()
     if not args.all and not args.bag_names:
         parser.error("provide one or more bag names, or --all")
-    if args.software:
-        os.environ["INSIGHT_REVIEW_SOFTWARE_ENCODER"] = "1"
 
     rosbag_root = args.rosbag_root.resolve()
     if args.all:

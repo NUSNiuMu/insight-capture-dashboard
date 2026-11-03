@@ -98,12 +98,6 @@ class BagLibrary:
         by_id = next((item for item in locations if item.bag_id == reference), None)
         if by_id is not None:
             return by_id.path
-        # Keep existing clients compatible while bag names remain unique.
-        by_name = [item for item in locations if item.path.name == reference]
-        if len(by_name) == 1:
-            return by_name[0].path
-        if len(by_name) > 1:
-            raise ValueError(f"Bag name is ambiguous across recording directories: {reference}")
         raise FileNotFoundError(f"Bag not found: {reference}")
 
     def reference_for_path(self, path: Path) -> Optional[str]:
@@ -211,31 +205,3 @@ def list_rosbag_locations(
             }
         )
     return entries
-
-
-def list_rosbags(rosbag_root: Path, results_root: Path) -> List[Dict[str, object]]:
-    """List direct child bags for legacy callers."""
-
-    root = Path(rosbag_root).resolve()
-    if not root.exists():
-        return []
-    locations = []
-    for bag_dir in sorted(
-        root.iterdir(),
-        key=lambda item: item.stat().st_mtime if item.exists() else 0,
-        reverse=True,
-    ):
-        if not bag_dir.is_dir():
-            continue
-        if not is_mcap_bag(bag_dir):
-            continue
-        locations.append(
-            BagLocation(
-                bag_id=BagLibrary._id_for_path(bag_dir),
-                path=bag_dir.resolve(),
-                root=root,
-                relative_path=bag_dir.name,
-                current=True,
-            )
-        )
-    return list_rosbag_locations(locations, results_root)

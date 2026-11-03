@@ -14,8 +14,6 @@ from insight_capture.core.bag import iter_messages, read_metadata, single_mcap
 from insight_capture.quality.topic_rates import nominal_for
 
 DEFAULT_MAX_LOSS_PCT = 0.5
-# New bags are startup-trimmed; --warmup remains for legacy recordings.
-DEFAULT_WARMUP_S = 0.0
 
 
 def is_latched_static_topic(topic: str) -> bool:
@@ -114,7 +112,7 @@ def _add_missing_selected_topics(
 
 
 def _analyze_fast(
-    bag_dir: Path, max_loss_pct: float, warmup_s: float,
+    bag_dir: Path, max_loss_pct: float,
 ) -> List[Dict[str, object]]:
     """Fast per-topic loss estimate using count and each topic's own span."""
     windows = _read_topic_windows(bag_dir)
@@ -157,7 +155,7 @@ def _analyze_fast(
             })
             continue
         # Include both endpoints and use this topic's span, not the bag's.
-        expected = max(1, int(span_s * nominal - warmup_s * nominal) + 1)
+        expected = max(1, int(span_s * nominal) + 1)
         missing = max(0, expected - msgs)
         loss_pct = missing / expected * 100 if expected > 0 else 0.0
         topics.append({
@@ -175,7 +173,7 @@ def _analyze_fast(
 
 
 def _analyze_deep(
-    bag_dir: Path, max_loss_pct: float, warmup_s: float,
+    bag_dir: Path, max_loss_pct: float,
 ) -> List[Dict[str, object]]:
     """Scan MCAP messages through the rosbag2 storage API."""
     windows = _read_topic_windows(bag_dir)
@@ -219,8 +217,7 @@ def _analyze_deep(
             })
             continue
         values.sort()
-        cutoff = values[0] + int(warmup_s * 1e9)
-        settled = [stamp for stamp in values if stamp >= cutoff] or values
+        settled = values
         source_span = (settled[-1] - settled[0]) / 1e9
         avg_hz = (len(settled) - 1) / source_span if source_span > 0 else 0.0
         missing, events, worst = gap_stats(settled, nominal)
@@ -244,16 +241,15 @@ def _analyze_deep(
 def analyze_bag(
     bag_dir: Path,
     max_loss_pct: float = DEFAULT_MAX_LOSS_PCT,
-    warmup_s: float = DEFAULT_WARMUP_S,
     deep: bool = True,
 ) -> Dict[str, object]:
     """Return a JSON-ready exact or fast integrity report for one bag."""
     bag_dir = Path(bag_dir)
     method = "deep_scan"
     if deep:
-        topics = _analyze_deep(bag_dir, max_loss_pct, warmup_s)
+        topics = _analyze_deep(bag_dir, max_loss_pct)
     else:
-        topics = _analyze_fast(bag_dir, max_loss_pct, warmup_s)
+        topics = _analyze_fast(bag_dir, max_loss_pct)
         method = "timestamp_aggregates"
 
     failed = [t["name"] for t in topics if not t["ok"]]
@@ -271,7 +267,6 @@ def analyze_bag(
         "network_audit": network_audit,
         "method": method,
         "max_loss_pct": max_loss_pct,
-        "warmup_s": warmup_s,
         "checked_at_epoch_s": time.time(),
     }
 
@@ -295,19 +290,15 @@ def main():
     parser.add_argument("bag", nargs="?", help="bag directory (default: newest under rosbags/)")
     parser.add_argument("--max-loss", type=float, default=DEFAULT_MAX_LOSS_PCT,
                         help=f"max tolerated loss %% per topic (default {DEFAULT_MAX_LOSS_PCT})")
-    parser.add_argument("--warmup", type=float, default=DEFAULT_WARMUP_S,
-                        help=f"seconds forgiven at each topic's start (default {DEFAULT_WARMUP_S})")
     parser.add_argument("--fast", action="store_true",
                         help="per-topic recorder timestamps without decoding message contents")
-    parser.add_argument("--deep", action="store_true",
-                        help="deprecated compatibility alias; exact mode is already the default")
     args = parser.parse_args()
 
     bag_dir = find_bag(args.bag)
     print(f"bag: {bag_dir}\n")
     try:
         report = analyze_bag(bag_dir, max_loss_pct=args.max_loss,
-                             warmup_s=args.warmup, deep=args.deep or not args.fast)
+                             deep=not args.fast)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(2)

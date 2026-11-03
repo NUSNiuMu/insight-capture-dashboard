@@ -179,7 +179,7 @@ class PayloadBuilder:
                         "device_name": camera.device_name or camera.name,
                         "encoding": camera.topic_type,
                         "topic": camera.topic,
-                        "visible": (not stale) if camera.topic_type == "h264" else frame is not None,
+                        "visible": not stale,
                         "stale": stale,
                         "input_age_sec": input_age,
                         "native_vio_age_sec": liveness_age,

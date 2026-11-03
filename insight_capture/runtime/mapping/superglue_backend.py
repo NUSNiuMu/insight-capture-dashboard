@@ -1,15 +1,8 @@
-"""SuperPoint/SuperGlue 的业务数据结构、Torch 对照后端和生产 IPC 客户端。
-
-mapper 与 localizer 只依赖本文件的统一接口。客户运行使用 ``IpcSuperGlueBackend``
-访问独立 TensorRT 服务；``OfficialSuperGlueBackend`` 保留用于开发环境与官方
-PyTorch 实现做数值对照，不应在客户镜像里临时安装 PyTorch 启用。
-"""
+"""SuperPoint/SuperGlue data structures and the production TensorRT IPC client."""
 
 from __future__ import annotations
 
-import importlib
 import socket
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -19,7 +12,6 @@ import numpy as np
 from insight_capture.runtime.mapping.superglue_ipc import receive_message, send_message
 
 
-OFFICIAL_SUPERGLUE_COMMIT = "ddcf11f42e7e0732a0c4607648f9448ea8d73590"
 
 
 @dataclass(frozen=True)
@@ -43,141 +35,6 @@ class ImageFeatures:
     descriptors: np.ndarray
     scores: np.ndarray
     backend_inference_ms: Optional[float] = None
-
-
-class OfficialSuperGlueBackend:
-    """运行固定提交的官方 PyTorch 实现，仅用于开发基线对照。"""
-
-    def __init__(
-        self,
-        checkout: Path,
-        *,
-        weights: str = "indoor",
-        max_keypoints: int = 1024,
-        keypoint_threshold: float = 0.005,
-        match_threshold: float = 0.2,
-        device: str = "cuda",
-    ) -> None:
-        checkout = Path(checkout).resolve()
-        matching_file = checkout / "models" / "matching.py"
-        weights_dir = checkout / "models" / "weights"
-        required_weights = (
-            weights_dir / "superpoint_v1.pth",
-            weights_dir / f"superglue_{weights}.pth",
-        )
-        if not matching_file.is_file() or any(not path.is_file() for path in required_weights):
-            raise RuntimeError(
-                "official SuperGlue checkout is incomplete; run "
-                "tools/mapping_validation/superglue/setup_validation.sh --accept-license"
-            )
-        try:
-            import torch
-        except ImportError as exc:
-            raise RuntimeError(
-                "PyTorch is absent. Use an NVIDIA Jetson PyTorch container for the "
-                "official GPU baseline; do not install an arbitrary ARM wheel."
-            ) from exc
-        if device == "cuda" and not torch.cuda.is_available():
-            raise RuntimeError("CUDA was requested but the PyTorch build has no CUDA device")
-        if device not in {"cuda", "cpu"}:
-            raise ValueError("device must be cuda or cpu")
-
-        sys.path.insert(0, str(checkout))
-        try:
-            matching_module = importlib.import_module("models.matching")
-        finally:
-            try:
-                sys.path.remove(str(checkout))
-            except ValueError:
-                pass
-        config = {
-            "superpoint": {
-                "nms_radius": 4,
-                "keypoint_threshold": float(keypoint_threshold),
-                "max_keypoints": int(max_keypoints),
-            },
-            "superglue": {
-                "weights": weights,
-                "sinkhorn_iterations": 20,
-                "match_threshold": float(match_threshold),
-            },
-        }
-        self._torch = torch
-        self._device = device
-        self._matching = matching_module.Matching(config).eval().to(device)
-
-    def extract(self, gray: np.ndarray) -> ImageFeatures:
-        """Extract SuperPoint features from one uint8 grayscale image."""
-
-        image = np.asarray(gray)
-        if image.dtype != np.uint8 or image.ndim != 2:
-            raise ValueError("extractor input must be a uint8 grayscale image")
-        torch = self._torch
-        tensor = torch.from_numpy(image).to(self._device, non_blocking=True)
-        tensor = tensor.float().div_(255.0)[None, None]
-        with torch.inference_mode():
-            prediction = self._matching.superpoint({"image": tensor})
-        return ImageFeatures(
-            keypoints=prediction["keypoints"][0].detach().cpu().numpy().astype(
-                np.float32
-            ),
-            descriptors=prediction["descriptors"][0]
-            .detach()
-            .cpu()
-            .numpy()
-            .T.astype(np.float32),
-            scores=prediction["scores"][0].detach().cpu().numpy().astype(np.float32),
-        )
-
-    def match(
-        self,
-        left_gray: np.ndarray,
-        right_gray: np.ndarray,
-        *,
-        left_mask: Optional[np.ndarray] = None,
-    ) -> StereoMatches:
-        """Extract and match features from two same-sized uint8 grayscale images."""
-
-        left = np.asarray(left_gray)
-        right = np.asarray(right_gray)
-        if left.dtype != np.uint8 or right.dtype != np.uint8 or left.shape != right.shape:
-            raise ValueError("matcher inputs must be same-sized uint8 grayscale images")
-        torch = self._torch
-        image0 = torch.from_numpy(left).to(self._device, non_blocking=True)
-        image1 = torch.from_numpy(right).to(self._device, non_blocking=True)
-        image0 = image0.float().div_(255.0)[None, None]
-        image1 = image1.float().div_(255.0)[None, None]
-        with torch.inference_mode():
-            prediction = self._matching({"image0": image0, "image1": image1})
-
-        keypoints0 = prediction["keypoints0"][0].detach().cpu().numpy()
-        keypoints1 = prediction["keypoints1"][0].detach().cpu().numpy()
-        descriptors0 = prediction["descriptors0"][0].detach().cpu().numpy().T
-        matches0 = prediction["matches0"][0].detach().cpu().numpy()
-        scores0 = prediction["matching_scores0"][0].detach().cpu().numpy()
-        valid = matches0 >= 0
-        if left_mask is not None and len(keypoints0):
-            mask = np.asarray(left_mask, dtype=bool)
-            pixels = np.rint(keypoints0).astype(np.int64)
-            inside = (
-                (pixels[:, 0] >= 0)
-                & (pixels[:, 0] < mask.shape[1])
-                & (pixels[:, 1] >= 0)
-                & (pixels[:, 1] < mask.shape[0])
-            )
-            masked = np.zeros((len(pixels),), dtype=bool)
-            masked[inside] = mask[pixels[inside, 1], pixels[inside, 0]]
-            valid &= ~masked
-        left_indices = np.flatnonzero(valid)
-        right_indices = matches0[left_indices].astype(np.int64)
-        return StereoMatches(
-            left_points=keypoints0[left_indices].astype(np.float32),
-            right_points=keypoints1[right_indices].astype(np.float32),
-            descriptors=descriptors0[left_indices].astype(np.float32),
-            scores=scores0[left_indices].astype(np.float32),
-            detected_left=len(keypoints0),
-            detected_right=len(keypoints1),
-        )
 
 
 class IpcSuperGlueBackend:

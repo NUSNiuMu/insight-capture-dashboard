@@ -22,7 +22,10 @@ RUN git clone --filter=blob:none https://github.com/magicleap/SuperGluePretraine
         /opt/SuperGluePretrainedNetwork/models/weights/superglue_outdoor.pth \
         | sha256sum -c -
 
-COPY insight_capture/runtime/mapping/superglue_tensorrt.py /opt/insight/superglue_tensorrt.py
+COPY insight_capture/__init__.py /opt/insight/insight_capture/__init__.py
+COPY insight_capture/runtime/__init__.py /opt/insight/insight_capture/runtime/__init__.py
+COPY insight_capture/runtime/mapping/__init__.py /opt/insight/insight_capture/runtime/mapping/__init__.py
+COPY insight_capture/runtime/mapping/superglue_tensorrt.py /opt/insight/insight_capture/runtime/mapping/superglue_tensorrt.py
 COPY tools/mapping_validation/superglue/export_onnx.py /opt/insight/export_superglue_onnx.py
 RUN cd /opt/insight && python3 export_superglue_onnx.py
 
@@ -80,9 +83,12 @@ RUN ln -s libnvinfer.so.10.9.0 /usr/lib/aarch64-linux-gnu/libnvinfer.so.10 \
     && ln -s libnvrtc-builtins.so.12.9 /usr/local/cuda/targets/aarch64-linux/lib/libnvrtc-builtins.so
 
 COPY --from=onnx-builder /opt/insight/onnx /opt/insight/onnx
-COPY insight_capture/runtime/mapping/superglue_ipc.py /opt/insight/superglue_ipc.py
-COPY insight_capture/runtime/mapping/superglue_worker.py /opt/insight/superglue_inference_worker.py
-COPY insight_capture/runtime/mapping/superglue_tensorrt_runtime.py /opt/insight/superglue_tensorrt_runtime.py
+COPY insight_capture/__init__.py /opt/insight/insight_capture/__init__.py
+COPY insight_capture/runtime/__init__.py /opt/insight/insight_capture/runtime/__init__.py
+COPY insight_capture/runtime/mapping/__init__.py /opt/insight/insight_capture/runtime/mapping/__init__.py
+COPY insight_capture/runtime/mapping/superglue_ipc.py /opt/insight/insight_capture/runtime/mapping/superglue_ipc.py
+COPY insight_capture/runtime/mapping/superglue_worker.py /opt/insight/insight_capture/runtime/mapping/superglue_worker.py
+COPY insight_capture/runtime/mapping/superglue_tensorrt_runtime.py /opt/insight/insight_capture/runtime/mapping/superglue_tensorrt_runtime.py
 COPY tools/mapping_validation/superglue/prepare_tensorrt.py /opt/insight/prepare_superglue_tensorrt.py
 COPY tools/mapping_validation/superglue/start_inference.sh /opt/insight/start_superglue_inference.sh
 RUN chmod +x /opt/insight/start_superglue_inference.sh

@@ -1,32 +1,13 @@
-# Capture-first 架构
+# 架构
 
-系统仍使用单一 Dashboard `Dockerfile`，MCAP 录制、回放、WiLoR、LeRobot 与 Web/Kiosk
-共用一个镜像；没有拆分 runtime/postprocess 镜像。SuperGlue、Insight9 sparse mapper 和
-Insight3 global localizer 保持正式在线服务。
+Qt 桌面与手机页面共用采集后端；Dashboard 镜像负责 ROS 接入、MCAP 录制、预览、回放、评分、语音与离线 COLMAP。原生 C++ LooperVIO 建图定位和 TensorRT SuperGlue 匹配各使用独立运行镜像。
 
-```text
-Field capture
-  ROS image readers ─┬─ native MCAP recorder subscriptions
-                     ├─ header audit / camera health / active QC
-                     └─ 2 Hz Insight3 localization relay
-  host voice ────────── Preflight / Recording / Session-Take API
+图像订阅优先保留录制与输入审计，只有观看者存在时才处理 Native/WebRTC 预览。JPEG 编码和派生回放编码仅使用 Jetson 硬件，不维护并行备用 JPEG。
 
-Viewer lease exists
-  same image readers ── JPEG fallback / lazy WebRTC / optional hand overlay
+三设备坐标使用统一 30 Hz 时间网格，但各设备按自身有效 VIO 独立发布。纠偏变换按时间网格保存，迟到设备使用同一时刻的历史变换；单路未初始化、缺样本或跟踪异常不再通过发布条件阻塞其他设备。初始世界坐标关系仍需建立；SDK 跟踪异常时的清除及整图重置策略保留，后续单独讨论。
 
-Post-capture
-  playback / integrity / WiLoR / Ego LeRobot / UMI / LeRobot export
-```
+正式入口为 `insight_capture.runtime.app`。服务组装集中在 `insight_capture/composition.py`，ROS 接入位于 `runtime/ros`，定位位于 `runtime/mapping`，媒体位于 `media`，HTTP/WebSocket 位于 `api`，离线处理位于 `postprocess`。
 
-正式入口直接使用 `insight_capture.runtime.app` 与各领域模块，不再经由 `scripts/`
-中的 Python facade。现场状态位于 `insight_capture/runtime/`，显示管线位于
-`insight_capture/media/`，HTTP 接口位于 `insight_capture/api/routes/`，后台任务
-编排位于 `insight_capture/services/`。API route 只做协议转换，不持有线程、
-subprocess 或数据集路由逻辑。
-录制、回放与检查统一使用一条录制一个 MCAP；内部 Chunk 由 MCAP 管理。SQLite、自定义组合包及多文件分包兼容已移除。
+每条录制使用单个标准 MCAP，内部可以有多个 Chunk。EgoHalo 与 Jetson 先分别保存，再手动回传合包；原始两端数据保留。回放只在用户请求时准备。
 
-`runtime/app.py` 只负责解析启动参数、触发进程级服务组装并关闭生命周期；跨越
-runtime、postprocess、services 和 API 的组装细节集中在 `insight_capture/composition.py`。
-`runtime/bootstrap.py` 解析现场路径并创建 recorder，ROS node 实现在
-`runtime/ros/node.py`。图像、录制、mapping、payload 和 worker 的具体工作继续委托给
-各自模块，不能重新堆回入口。
+WiLoR、系统医生、通用设备维护 CLI、旧 ChArUco 测量和旧数据格式兼容入口已删除。保留启动所需的相机准备/同步脚本、COLMAP 和在线 TensorRT 引擎构建工具。

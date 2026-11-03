@@ -72,7 +72,7 @@ class LatestViewQueue:
 
 
 def stereo_views(config):
-    """Validate optional overlapping pairs without changing legacy profiles."""
+    """Validate configured overlapping stereo pairs."""
     views = config.get("mapping", {}).get("stereo_views", [])
     if not views:
         return []

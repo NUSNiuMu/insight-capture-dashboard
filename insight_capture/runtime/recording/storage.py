@@ -14,7 +14,6 @@ DEFAULT_POST_PROCESSING_CONFIG = {
     "recording_rmw_implementation": "rmw_cyclonedds_cpp",
     "record_topics": [],
     "capture_session": {
-        "task": "unspecified",
         "operator": "unknown",
     },
     "preflight": {

@@ -45,7 +45,7 @@ log "docker + nvidia runtime: OK"
 
 if ! grep -qs "libgstnvjpeg" /etc/nvidia-container-runtime/host-files-for-container.d/*.csv 2>/dev/null; then
     log "WARNING: NVIDIA runtime CSV does not list libgstnvjpeg.so -- hardware JPEG"
-    log "         encode will fall back to CPU inside the container (dashboard still works)."
+    log "         JPEG encoding will be unavailable until the hardware plugin is exposed."
 fi
 
 # Shared host tuning is also bundled for customer deployments.

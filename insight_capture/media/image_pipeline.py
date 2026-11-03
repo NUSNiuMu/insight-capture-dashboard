@@ -1,26 +1,20 @@
-"""Latest-frame image processing, preview encoding, and decode helpers."""
+"""Latest-frame preview routing and hardware JPEG encoding."""
 
 from __future__ import annotations
 
 import time
-from typing import Optional, Tuple
-
-import cv2
-import numpy as np
+from typing import Tuple
 
 try:
     import rclpy
-    from sensor_msgs.msg import Image as RosImage
 except Exception:  # pragma: no cover - host-side tools may import without ROS
     rclpy = None
-    RosImage = None
 
 from insight_capture.core.performance import track
 
 from insight_capture.core.models import CameraFrame
 from insight_capture.media.cdr import compressed_image_view
 
-WEBRTC_JPEG_FALLBACK_INTERVAL_SEC = 0.5
 RECORDING_WEBRTC_PREVIEW_FPS = 10.0
 
 
@@ -91,33 +85,21 @@ class ImagePipeline:
                     if preview_now - previous < min_interval:
                         continue
                     self.owner._last_recording_preview_at[camera_name] = preview_now
-                # Share one decode; skip CPU decode when NVJPEG can consume raw data.
-                display_image = None
-                if topic_type != "compressed" and (
-                    self.owner._hw_jpeg is None
-                    or not self.owner._hw_jpeg.can_encode_ros_image(camera_name, msg)
-                ):
-                    display_image = self.owner._decode_display_image(msg)
                 now = time.monotonic()
-                # Refresh the hidden HTTP fallback at low rate during WebRTC.
-                refresh_fallback = (
+                native = getattr(self.owner, "native_preview", None)
+                # Source JPEG also feeds WebRTC; raw streams use their active transport only.
+                encode_jpeg = (
                     topic_type == "compressed"
                     or not (self.owner._webrtc_has_sessions.get(camera_name)
-                            or (getattr(self.owner, "native_preview", None) is not None
-                                and self.owner.native_preview.active(camera_name)))
-                    or now - self.owner._last_webrtc_fallback_jpeg_at.get(camera_name, 0.0)
-                    >= WEBRTC_JPEG_FALLBACK_INTERVAL_SEC
+                            or (native is not None and native.active(camera_name)))
                 )
                 frame = (
-                    self.owner._encode_dashboard_frame(camera_name, topic_type, msg, display_image)
-                    if refresh_fallback
+                    self.owner._encode_dashboard_frame(camera_name, topic_type, msg)
+                    if encode_jpeg
                     else None
                 )
                 with self.owner.camera_frame_lock:
-                    if frame is not None:
-                        self.owner.latest_camera_frames[camera_name] = frame
-                        if topic_type != "compressed":
-                            self.owner._last_webrtc_fallback_jpeg_at[camera_name] = frame.received_monotonic
+                    self.owner.latest_camera_frames[camera_name] = frame
                     self.owner.camera_frame_times[camera_name].append(now)
                 self.owner._maybe_queue_webrtc_frame(camera_name, topic_type, msg, frame)
             except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the worker
@@ -128,8 +110,7 @@ class ImagePipeline:
         camera_name: str,
         topic_type: str,
         msg: object,
-        decoded_image: Optional[np.ndarray] = None,
-    ) -> Optional[CameraFrame]:
+    ) -> CameraFrame:
         stamp_ns = self.owner._stamp_to_ns(msg.header.stamp)
         received_monotonic = time.monotonic()
         with self.owner.camera_frame_lock:
@@ -148,73 +129,20 @@ class ImagePipeline:
                 height=height,
                 version=version,
             )
-        if self.owner._hw_jpeg is not None:
-            with track(f"image_encode_hw:{camera_name}"):
-                hw_result = self.owner._hw_jpeg.encode_ros_image(camera_name, msg, quality=82)
-            if hw_result is not None:
-                data, width, height = hw_result
-                self._encoding_paths[camera_name] = ("jpeg-hardware-nvjpeg", time.monotonic())
-                return CameraFrame(
-                    data=data,
-                    stamp_ns=stamp_ns,
-                    received_monotonic=received_monotonic,
-                    mime_type="image/jpeg",
-                    width=width,
-                    height=height,
-                    version=version,
-                )
-        image = decoded_image if decoded_image is not None else self.owner._decode_display_image(msg)
-        if image is None:
-            return None
-        with track(f"image_encode:{camera_name}"):
-            ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
-        if not ok:
-            return None
-        self._encoding_paths[camera_name] = ("jpeg-software", time.monotonic())
-        height, width = image.shape[:2]
+        if self.owner._hw_jpeg is None:
+            raise RuntimeError("Hardware JPEG encoding is unavailable")
+        with track(f"image_encode_hw:{camera_name}"):
+            data, width, height = self.owner._hw_jpeg.encode_ros_image(camera_name, msg, quality=82)
+        self._encoding_paths[camera_name] = ("jpeg-hardware-nvjpeg", time.monotonic())
         return CameraFrame(
-            data=encoded.tobytes(),
+            data=data,
             stamp_ns=stamp_ns,
             received_monotonic=received_monotonic,
             mime_type="image/jpeg",
-            width=int(width),
-            height=int(height),
+            width=width,
+            height=height,
             version=version,
         )
-
-    def _decode_display_image(self, msg: object) -> Optional[np.ndarray]:
-        # Keep mono8 direct; route NV12 through full YUV-to-BGR conversion.
-        if isinstance(msg, RosImage) and msg.width > 0:
-            encoding = msg.encoding.lower()
-            if encoding in ("mono8", "8uc1"):
-                data = np.frombuffer(msg.data, dtype=np.uint8)
-                return data.reshape((msg.height, msg.width))
-        return self._decode_raw_image("image", msg)
-
-    def _decode_raw_image(self, topic_type: str, msg: object) -> Optional[np.ndarray]:
-        """Decode a raw or compressed ROS image message into a mono/BGR array."""
-        if topic_type == "compressed":
-            buffer = np.frombuffer(bytes(msg.data), dtype=np.uint8)
-            return cv2.imdecode(buffer, cv2.IMREAD_COLOR)
-        if not isinstance(msg, RosImage) or msg.width <= 0:
-            return None
-        height, width, step = int(msg.height), int(msg.width), int(msg.step)
-        if step < width:
-            return None
-        raw = np.frombuffer(msg.data, dtype=np.uint8)
-        encoding = msg.encoding.lower()
-        if encoding in ("mono8", "8uc1"):
-            required = height * step
-            if raw.size < required:
-                return None
-            return raw[:required].reshape(height, step)[:, :width].copy()
-        if encoding == "nv12":
-            total_rows, remainder = divmod(raw.size, step)
-            if remainder or total_rows <= 0 or (total_rows * 2) % 3:
-                return None
-            yuv = raw[: total_rows * step].reshape(total_rows, step)[:, :width].copy()
-            return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
-        return None
 
     @staticmethod
     def _jpeg_dimensions(data: bytes) -> Tuple[int, int]:

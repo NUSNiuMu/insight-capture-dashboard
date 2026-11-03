@@ -1,4 +1,3 @@
-# Diagnostics
+# 诊断支持
 
-Engineering-only diagnostics belong here. Field operators should use voice status,
-Preflight, and the Web review pages instead of invoking these tools directly.
+此目录保留开机相机准备所需的同步支持脚本，以及手动回放准备工具。通用设备维护 CLI 与系统医生已移除。现场使用 Qt、手机和预检状态查看采集情况。

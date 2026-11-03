@@ -70,7 +70,6 @@ cp scripts/run_dashboard.sh \
     scripts/run_voice.sh \
     scripts/select_device.sh \
     scripts/reboot_cameras.sh \
-    scripts/set_ros_domain_id.py \
     scripts/sync_camera_restart.py \
     scripts/check_bag.py \
     "${bundle_dir}/scripts/"
@@ -88,18 +87,14 @@ chmod +x "${bundle_dir}/update.sh" \
     "${bundle_dir}/scripts/run_voice.sh" \
     "${bundle_dir}/scripts/select_device.sh" \
     "${bundle_dir}/scripts/reboot_cameras.sh" \
-    "${bundle_dir}/scripts/set_ros_domain_id.py" \
     "${bundle_dir}/scripts/sync_camera_restart.py" \
     "${bundle_dir}/scripts/check_bag.py"
 
 # Bundle the same host tuning used by source-checkout installations.
 cp deploy/systemd/insight-camera-network.service "${bundle_dir}/deploy/systemd/"
 cp deploy/systemd/insight-camera-reboot.service "${bundle_dir}/deploy/systemd/"
-cp -r tools/device_cli "${bundle_dir}/tools/"
 cp tools/diagnostics/sync_camera_restart.py "${bundle_dir}/tools/diagnostics/"
-find "${bundle_dir}/tools/device_cli" -name '__pycache__' -type d -exec rm -rf {} +
-chmod +x "${bundle_dir}/tools/device_cli/reboot_cameras.sh" \
-    "${bundle_dir}/tools/diagnostics/sync_camera_restart.py"
+chmod +x "${bundle_dir}/tools/diagnostics/sync_camera_restart.py"
 
 bundle_tarball="release/${IMAGE_NAME}-deploy-${version}.tar.gz"
 tar -C release -czf "${bundle_tarball}" "${IMAGE_NAME}-deploy"

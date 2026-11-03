@@ -39,8 +39,8 @@ def _load_config(config_path: Path) -> dict:
 
 
 def load_gripper_mask_height_ratio(config_path: Path) -> float:
-    """Read the required localization mask setting."""
-    return validate_gripper_mask_height_ratio(_load_config(config_path)[SETTINGS_SECTION][GRIPPER_MASK_HEIGHT_RATIO_KEY])
+    """Read the localization mask ratio, disabled by default."""
+    return validate_gripper_mask_height_ratio(_load_config(config_path)[SETTINGS_SECTION].get(GRIPPER_MASK_HEIGHT_RATIO_KEY, 0.0))
 
 
 def save_gripper_mask_height_ratio(config_path: Path, value: object) -> float:

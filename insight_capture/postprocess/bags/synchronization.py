@@ -7,7 +7,6 @@ import json
 import math
 import os
 import shutil
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -19,7 +18,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 from insight_capture.media.ros_image import decode_color_image
-from insight_capture.core.bag import iter_messages, source_files, topic_types
+from insight_capture.core.bag import iter_messages, source_files, topic_types as bag_topic_types
 from insight_capture.core.bag import MANIFEST_NAME
 from .playback import _read_bag_topics
 
@@ -42,95 +41,8 @@ class _RecordingStarted(_Cancelled):
     pass
 
 
-class _FfmpegWriter:
-    def __init__(self, path: Path, shape: tuple[int, int], fps: float) -> None:
-        height, width = shape
-        ffmpeg = shutil.which("ffmpeg")
-        if ffmpeg is None:
-            raise RuntimeError("ffmpeg is required for prepared playback")
-        self.frames = 0
-        self.encoder_name = "libx264"
-        self.uses_bgrx = False
-        self._process = subprocess.Popen(
-            [
-                ffmpeg,
-                "-y",
-                "-loglevel",
-                "error",
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "bgr24",
-                "-s:v",
-                f"{width}x{height}",
-                "-r",
-                f"{fps:g}",
-                "-i",
-                "pipe:0",
-                "-an",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast",
-                "-tune",
-                "fastdecode",
-                "-crf",
-                "20",
-                "-g",
-                str(round(fps)),
-                "-keyint_min",
-                str(round(fps)),
-                "-sc_threshold",
-                "0",
-                "-threads",
-                "4",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                str(path),
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-
-    @property
-    def process(self) -> subprocess.Popen:
-        return self._process
-
-    def write(self, frame: np.ndarray) -> None:
-        if frame.ndim == 2:
-            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-        if frame.ndim != 3 or frame.shape[2] != 3 or frame.dtype != np.uint8:
-            raise ValueError(f"unsupported video frame shape: {frame.shape}")
-        assert self._process.stdin is not None
-        try:
-            self._process.stdin.write(np.ascontiguousarray(frame).tobytes())
-        except BrokenPipeError as exc:
-            raise RuntimeError(self._error_text() or "ffmpeg stopped early") from exc
-        self.frames += 1
-
-    def close(self) -> None:
-        if self._process.stdin is not None and not self._process.stdin.closed:
-            self._process.stdin.close()
-        return_code = self._process.wait()
-        if return_code:
-            raise RuntimeError(self._error_text() or f"ffmpeg exited with {return_code}")
-
-    def abort(self) -> None:
-        if self._process.poll() is None:
-            self._process.kill()
-            self._process.wait()
-
-    def _error_text(self) -> str:
-        if self._process.stderr is None:
-            return ""
-        return self._process.stderr.read().decode("utf-8", errors="replace").strip()
-
-
 class _GstH264Writer:
-    """Jetson hardware H.264 MP4 writer with the same interface as ffmpeg."""
+    """Jetson hardware H.264 MP4 writer."""
 
     def __init__(self, path: Path, shape: tuple[int, int], fps: float) -> None:
         try:
@@ -164,7 +76,6 @@ class _GstH264Writer:
         self._closed = False
         self.frames = 0
         self.encoder_name = "nvv4l2h264enc"
-        self.uses_bgrx = True
         if self._pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
             self._pipeline.set_state(Gst.State.NULL)
             raise RuntimeError("Jetson review encoder refused to start")
@@ -216,15 +127,6 @@ class _GstH264Writer:
             return
         error, debug = message.parse_error()
         raise RuntimeError(f"Jetson review encoder failed: {error} ({debug or 'no details'})")
-
-
-def _video_writer(path: Path, shape: tuple[int, int], fps: float):
-    if os.environ.get("INSIGHT_REVIEW_SOFTWARE_ENCODER", "").strip() != "1":
-        try:
-            return _GstH264Writer(path, shape, fps)
-        except Exception:  # noqa: BLE001 - any unavailable Jetson path uses libx264
-            pass
-    return _FfmpegWriter(path, shape, fps)
 
 
 def _message_pose(message: object) -> tuple[np.ndarray, np.ndarray]:
@@ -507,16 +409,6 @@ def _bag_topic_stamps(
         topic: np.asarray(sorted(stamps), dtype=np.int64)
         for topic, stamps in result.items()
     }
-
-
-def _bag_topic_types(bag_path: Path) -> dict[str, str]:
-    return topic_types(bag_path)
-
-
-def _bag_topic_messages(
-    bag_path: Path, topics: Iterable[str]
-) -> Iterable[tuple[str, bytes, int]]:
-    yield from iter_messages(bag_path, topics)
 
 
 def _decode_review_image(
@@ -972,7 +864,7 @@ class PreparedPlaybackManager:
         pose_by_topic = {str(item["topic"]): str(item["name"]) for item in poses}
         topics = [*image_by_topic, *pose_by_topic]
         image_topic_stamps = _bag_topic_stamps(bag_path, image_by_topic)
-        topic_types = _bag_topic_types(bag_path)
+        topic_types = bag_topic_types(bag_path)
         missing = [topic for topic in topics if topic not in topic_types]
         if missing:
             raise ValueError(f"bag is missing playback topics: {', '.join(missing)}")
@@ -981,7 +873,7 @@ class PreparedPlaybackManager:
             name: {"stamps": [], "positions": [], "quaternions": []}
             for name in pose_by_topic.values()
         }
-        for topic, raw, record_stamp in _bag_topic_messages(bag_path, pose_by_topic):
+        for topic, raw, record_stamp in iter_messages(bag_path, pose_by_topic):
             self._check_cancelled()
             message = deserialize_message(raw, classes[topic])
             position, quaternion = _message_pose(message)
@@ -1030,7 +922,7 @@ class PreparedPlaybackManager:
         camera_by_topic = {str(item["topic"]): item for item in cameras}
         topics = list(camera_by_topic)
         cells_by_topic = dict(zip(topics, _review_cells(len(cameras))))
-        topic_types = _bag_topic_types(bag_path)
+        topic_types = bag_topic_types(bag_path)
         missing = [topic for topic in topics if topic not in topic_types]
         if missing:
             raise ValueError(f"bag is missing playback topics: {', '.join(missing)}")
@@ -1053,10 +945,10 @@ class PreparedPlaybackManager:
         shape = (REVIEW_HEIGHT, REVIEW_WIDTH)
         next_target = 0
         try:
-            writer = _video_writer(output, shape, PLAYBACK_FPS)
+            writer = _GstH264Writer(output, shape, PLAYBACK_FPS)
             with self._lock:
                 self._writer = writer
-            for current_topic, raw, _stamp in _bag_topic_messages(bag_path, topics):
+            for current_topic, raw, _stamp in iter_messages(bag_path, topics):
                 self._check_cancelled()
                 camera = camera_by_topic.get(current_topic)
                 if camera is None:
@@ -1113,7 +1005,7 @@ class PreparedPlaybackManager:
                         cameras,
                         duplicate_flags,
                         next_target,
-                        bgrx=bool(getattr(writer, "uses_bgrx", False)),
+                        bgrx=True,
                     )
                     writer.write(review)
                     pending[next_target].clear()

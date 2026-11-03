@@ -40,5 +40,5 @@ if ! "${PREPARE[@]}" check; then
     "${PREPARE[@]}" finalize
 fi
 
-exec python3 -u /opt/insight/superglue_inference_worker.py \
+exec python3 -u -m insight_capture.runtime.mapping.superglue_worker \
     --engine-dir "${ENGINE_DIR}"

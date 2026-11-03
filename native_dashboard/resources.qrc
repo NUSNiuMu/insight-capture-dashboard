@@ -6,8 +6,6 @@
     <file>pages/BagPicker.qml</file>
     <file>pages/BagsPage.qml</file>
     <file>pages/SavedRecordings.qml</file>
-    <file>pages/HandPosePage.qml</file>
-    <file>pages/HandTracking.js</file>
     <file>pages/IntegrityPanel.qml</file>
     <file>pages/NativePlot.qml</file>
     <file>pages/OptimizationPage.qml</file>

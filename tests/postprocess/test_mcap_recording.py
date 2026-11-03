@@ -16,7 +16,6 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from insight_capture.postprocess.bags.catalog import list_rosbags  # noqa: E402
 from insight_capture.core.bag import (  # noqa: E402
     recorded_topics,
     single_mcap,

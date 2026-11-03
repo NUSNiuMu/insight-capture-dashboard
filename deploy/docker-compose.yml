@@ -27,7 +27,7 @@ services:
     runtime: nvidia
 
     environment:
-      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}  # Must match devices; set via scripts/set_ros_domain_id.py
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}  # Must match device firmware settings
       # Rosbag names and log timestamps use localtime; without this they'd be
       # 8h behind wall clock on a China-based host (base image is Etc/UTC).
       - TZ=Asia/Shanghai

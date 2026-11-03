@@ -12,8 +12,6 @@ from collections import deque
 from pathlib import Path
 from typing import Deque, Dict, List, Optional, Tuple
 
-import numpy as np
-
 try:
     import rclpy
     from geometry_msgs.msg import PoseStamped
@@ -207,7 +205,7 @@ class PoseBridgeNode(Node):
             camera.name: threading.Event() for camera in self.cameras
         }
         self.native_preview = NativePreviewHub(self.cameras)
-        # NVJPEG is optional; call sites retain their cv2 fallback.
+        # JPEG availability must not prevent native/H.264 capture and preview.
         self._hw_jpeg = HwJpegCodec.create(log=self.get_logger().info)
         # WebRTC runs out of process to avoid GIL contention with pose broadcasts.
         self.webrtc_port = webrtc_port
@@ -235,7 +233,6 @@ class PoseBridgeNode(Node):
         }
         self._webrtc_worker_stats: Dict[str, Dict[str, object]] = {}
         self._webrtc_browser_stats: Dict[str, Dict[str, object]] = {}
-        self._last_webrtc_fallback_jpeg_at: Dict[str, float] = {}
         self._last_recording_preview_at: Dict[str, float] = {}
         self._webrtc_worker_lock = threading.Lock()
         self._webrtc_proc: Optional[subprocess.Popen] = None
@@ -545,15 +542,11 @@ class PoseBridgeNode(Node):
 
 
     def _encode_dashboard_frame(
-        self, camera_name: str, topic_type: str, msg: object, decoded_image: Optional[np.ndarray] = None
-    ) -> Optional[CameraFrame]:
+        self, camera_name: str, topic_type: str, msg: object
+    ) -> CameraFrame:
         return self._image_pipeline._encode_dashboard_frame(
-            camera_name, topic_type, msg, decoded_image
+            camera_name, topic_type, msg
         )
-
-
-    def _decode_display_image(self, msg: object) -> Optional[np.ndarray]:
-        return self._image_pipeline._decode_display_image(msg)
 
 
     @staticmethod

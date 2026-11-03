@@ -18,10 +18,7 @@ from typing import Optional
 
 import numpy as np
 
-try:
-    from insight_capture.runtime.mapping.superglue_ipc import receive_message, send_message
-except ModuleNotFoundError:  # isolated SuperGlue runtime image
-    from superglue_ipc import receive_message, send_message
+from insight_capture.runtime.mapping.superglue_ipc import receive_message, send_message
 
 
 class InferenceServer:
@@ -194,10 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    try:
-        from insight_capture.runtime.mapping.superglue_tensorrt_runtime import TensorRTMatcher
-    except ModuleNotFoundError:
-        from superglue_tensorrt_runtime import TensorRTMatcher
+    from insight_capture.runtime.mapping.superglue_tensorrt_runtime import TensorRTMatcher
 
     matcher = TensorRTMatcher(
         Path(args.engine_dir),

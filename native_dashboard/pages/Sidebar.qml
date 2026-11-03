@@ -26,10 +26,6 @@ Rectangle {
             "name": "Scoring",
             "group": "Process"
         }, {
-            "page": "handpose",
-            "name": "Hand pose",
-            "group": "Advanced"
-        }, {
             "page": "optimization",
             "name": "Optimization",
             "group": "Engineering"

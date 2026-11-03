@@ -27,7 +27,7 @@ from insight_capture.postprocess.bags.synchronization import (  # noqa: E402
     _review_content_size,
     _select_recorded_streams,
 )
-from insight_capture.postprocess.bags.catalog import list_rosbags  # noqa: E402
+from insight_capture.postprocess.bags.catalog import BagLibrary, list_rosbag_locations  # noqa: E402
 
 
 class PreparedPlaybackTest(unittest.TestCase):
@@ -101,7 +101,7 @@ class PreparedPlaybackTest(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "insight_capture.postprocess.bags.synchronization._bag_topic_types",
+                    "insight_capture.postprocess.bags.synchronization.bag_topic_types",
                     return_value={
                         "/epoch/image": "Image",
                         "/boot/image": "Image",
@@ -109,7 +109,7 @@ class PreparedPlaybackTest(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "insight_capture.postprocess.bags.synchronization._bag_topic_messages",
+                    "insight_capture.postprocess.bags.synchronization.iter_messages",
                     return_value=[entry for entry in entries if entry[0] == "/epoch/pose"],
                 ),
                 patch(
@@ -318,7 +318,7 @@ class PreparedPlaybackTest(unittest.TestCase):
                 json.dumps({"schema_version": SCHEMA_VERSION, "quality": {"state": "good"}})
             )
 
-            entries = list_rosbags(root, root / "results")
+            entries = list_rosbag_locations(BagLibrary(lambda: [root], lambda: root).locations(), root / "results")
 
         self.assertEqual(entries[0]["review_state"], "ready")
         self.assertEqual(entries[0]["review_quality"], "good")

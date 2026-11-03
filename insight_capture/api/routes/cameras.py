@@ -87,9 +87,6 @@ class CameraRoutes:
                     "nvjpegenc",
                     "nvjpegdec",
                     "nvvidconv",
-                    "openh264enc",
-                    "x264enc",
-                    "vp8enc",
                 ]
             )
         elements = self.context._image_capabilities_cache
@@ -99,11 +96,6 @@ class CameraRoutes:
             hardware_encoder = "nvv4l2h264enc"
         elif elements.get("nvv4l2h265enc"):
             hardware_encoder = "nvv4l2h265enc"
-        software_encoder = None
-        for candidate in ("openh264enc", "x264enc", "vp8enc"):
-            if elements.get(candidate):
-                software_encoder = candidate
-                break
         # Live H.264 readiness comes from the worker; encoding paths describe JPEG output.
         hw_jpeg = getattr(self.context.node, "_hw_jpeg", None)
         encoders = self.context.node._image_pipeline.encoding_status()
@@ -126,7 +118,6 @@ class CameraRoutes:
             },
             "webrtc_ready": has_webrtc,
             "hardware_encoder": hardware_encoder,
-            "software_encoder": software_encoder,
             "decode_acceleration": {
                 "nvjpegdec": bool(elements.get("nvjpegdec")),
                 "nvv4l2decoder": bool(elements.get("nvv4l2decoder")),

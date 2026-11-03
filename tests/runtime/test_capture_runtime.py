@@ -46,6 +46,14 @@ class _Manager:
         }
 
 
+def _take_store(root):
+    catalog = CaptureTaskCatalog(
+        [CaptureTask("fold", "Fold", "Fold", "Fold", "capture", ())],
+        default_task_id="fold",
+    )
+    return SessionTakeStore(root, task_catalog=catalog)
+
+
 class CaptureRuntimeTest(unittest.TestCase):
     def test_playback_topic_is_owned_by_ros_runtime(self):
         self.assertEqual(playback_topic("/camera/image"), "/bagplay/camera/image")
@@ -235,7 +243,7 @@ class CaptureRuntimeTest(unittest.TestCase):
     def test_reject_take_preserves_raw_bag(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            store = SessionTakeStore(root, {"session_id": "s1", "task": "fold"})
+            store = _take_store(root)
             take = store.reserve_take()
             bag = root / "bags" / take["bag_name"]
             bag.mkdir(parents=True)
@@ -290,53 +298,11 @@ class CaptureRuntimeTest(unittest.TestCase):
             self.assertTrue(task_set["active"])
             self.assertEqual(task_set["stats"]["recorded_takes"], 1)
 
-    def test_active_dated_session_metadata_migrates_to_stable_task_set(self):
-        catalog = CaptureTaskCatalog(
-            [
-                CaptureTask(
-                    task_id="cup_stacking",
-                    name="Cup stacking",
-                    speech_name="叠杯子",
-                    instruction="Stack the cups",
-                    capture_profile="dual_arm_umi",
-                    voice_aliases=("叠杯子",),
-                )
-            ],
-            default_task_id="cup_stacking",
-        )
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            sessions = root / "sessions"
-            legacy = sessions / "20260820-cup_stacking-003"
-            (legacy / "takes").mkdir(parents=True)
-            (legacy / "session.json").write_text(json.dumps({
-                "session_id": legacy.name,
-                "created_at_epoch_s": 1,
-            }))
-            (legacy / "takes" / "take_0001.json").write_text(json.dumps({
-                "session_id": legacy.name,
-                "take_id": 1,
-                "bag_path": "/bags/existing",
-                "state": "complete",
-                "end_epoch_s": 1,
-            }))
-            (sessions / "active_session.json").write_text(json.dumps({
-                "active": True,
-                "task_id": "cup_stacking",
-                "session_id": legacy.name,
-            }))
-
-            store = SessionTakeStore(root, task_catalog=catalog)
-
-            self.assertEqual(store.session_id, "cup_stacking")
-            self.assertFalse(legacy.exists())
-            self.assertEqual(store.list_takes()[0]["session_id"], "cup_stacking")
-            self.assertEqual(store.task_status()["stats"]["next_take_id"], 2)
 
     def test_sustained_camera_fault_records_anomaly_and_voice_alert(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            store = SessionTakeStore(root, {"session_id": "s1"})
+            store = _take_store(root)
             store.reserve_take()
             store.mark_recording(root / "bag")
             manager = _Manager(root)
@@ -373,7 +339,7 @@ class CaptureRuntimeTest(unittest.TestCase):
     def test_dashboard_reader_gap_does_not_alert_or_mark_take_suspect(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            store = SessionTakeStore(root, {"session_id": "s1"})
+            store = _take_store(root)
             store.reserve_take()
             store.mark_recording(root / "bag")
             manager = _Manager(root)
@@ -428,7 +394,7 @@ class CaptureRuntimeTest(unittest.TestCase):
     def test_one_off_authoritative_gap_is_not_sustained(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            store = SessionTakeStore(root, {"session_id": "s1"})
+            store = _take_store(root)
             store.reserve_take()
             store.mark_recording(root / "bag")
             manager = _Manager(root)
@@ -516,7 +482,7 @@ class CaptureRuntimeTest(unittest.TestCase):
     def test_fallback_storage_warning_does_not_make_take_suspect(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            store = SessionTakeStore(root, {"session_id": "s1"})
+            store = _take_store(root)
             store.reserve_take()
             store.mark_recording(root / "bag")
             manager = _Manager(root)

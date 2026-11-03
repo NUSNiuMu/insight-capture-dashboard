@@ -14,11 +14,8 @@ class ProjectStructureTest(unittest.TestCase):
             "run_dashboard.sh",
             "run_voice.sh",
             "select_device.sh",
-            "set_ros_domain_id.py",
             "merge_distributed_recording.py",
             "sync_camera_restart.py",
-            "system_doctor.py",
-            "system_doctor.sh",
         }
         actual = {path.name for path in (ROOT / "scripts").iterdir() if path.is_file()}
         self.assertEqual(actual, expected)
@@ -73,7 +70,6 @@ class ProjectStructureTest(unittest.TestCase):
             scoring_manager=dependency,
             prepared_playback_manager=dependency,
             optimization_manager=dependency,
-            handpose_manager=dependency,
             take_store=dependency,
             capture_preflight=dependency,
             voice_alerts=dependency,

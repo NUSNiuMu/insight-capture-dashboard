@@ -49,7 +49,7 @@ native_dashboard/run.sh --fps 30 --quit-after 60 --diagnostics /tmp/insight-nati
 
 实时 H.264 解码启用 `disable-dpb=true`，避免 Insight3 的解码缓冲积累。仅适用于当前无 B 帧的实时编码流，MP4 回放保留正常 DPB。诊断文件中的 `decode_median_ms` / `decode_p95_ms` 匹配解码器输入和输出的 PTS，统计最近最多 120 帧，不包含相机曝光、网络和屏幕扫描延迟；无有效样本为 -1。排查时可用 `INSIGHT_NATIVE_DECODER_DPB=1` 临时恢复默认 DPB 做对照。[NVIDIA 低延迟模式说明](https://docs.nvidia.com/jetson/archives/r36.4.3/DeveloperGuide/SD/Multimedia/AcceleratedGstreamer.html#supported-decoder-features-with-gstreamer-1-0)。
 
-本地客户端已接入任务、录制库、评分、手部姿态、优化、独立录制和设置页面，随客户发布包交付。长时间运行、断电恢复和现场录制质量仍需后续验收。
+本地客户端已接入任务、录制库、评分、优化、独立录制和设置页面，随客户发布包交付。长时间运行、断电恢复和现场录制质量仍需后续验收。
 
 ## 验证原则
 

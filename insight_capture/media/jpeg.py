@@ -1,4 +1,4 @@
-"""Persistent Jetson NVJPEG pipelines with a caller-managed CPU fallback."""
+"""Persistent Jetson NVJPEG hardware encoding pipelines."""
 
 import threading
 from typing import Dict, Optional, Tuple
@@ -12,9 +12,7 @@ try:
 except Exception:  # pragma: no cover - non-Jetson dev machines
     Gst = None
 
-_REQUIRED_ELEMENTS = ("nvjpegenc", "nvjpegdec", "nvvidconv")
-# Rebuild once, then disable a repeatedly failing pipeline key.
-_MAX_KEY_FAILURES = 3
+_REQUIRED_ELEMENTS = ("nvjpegenc", "nvvidconv")
 _PULL_TIMEOUT_NS = int(1e9)
 
 
@@ -58,31 +56,29 @@ class _Pipeline:
 
 
 class HwJpegCodec:
-    """Keyed registry of hardware encode/decode pipelines. Use create()."""
+    """Keyed registry of hardware JPEG encoding pipelines. Use create()."""
 
-    def __init__(self, log=print) -> None:
-        self._log = log
+    def __init__(self) -> None:
         self._pipelines: Dict[Tuple, _Pipeline] = {}
-        self._failures: Dict[Tuple, int] = {}
         self._registry_lock = threading.Lock()
 
     @classmethod
     def create(cls, log=print) -> Optional["HwJpegCodec"]:
         if Gst is None:
-            log("hw_jpeg: PyGObject/GStreamer not importable; using CPU JPEG codec")
+            log("hw_jpeg: PyGObject/GStreamer not importable; JPEG encoding unavailable")
             return None
         try:
             if not Gst.is_initialized():
                 Gst.init(None)
         except Exception as exc:
-            log(f"hw_jpeg: Gst.init failed ({exc}); using CPU JPEG codec")
+            log(f"hw_jpeg: Gst.init failed ({exc}); JPEG encoding unavailable")
             return None
         missing = [name for name in _REQUIRED_ELEMENTS if Gst.ElementFactory.find(name) is None]
         if missing:
-            log(f"hw_jpeg: missing GStreamer elements {missing}; using CPU JPEG codec")
+            log(f"hw_jpeg: missing GStreamer elements {missing}; JPEG encoding unavailable")
             return None
-        log("hw_jpeg: NVJPEG hardware JPEG encode/decode enabled")
-        return cls(log=log)
+        log("hw_jpeg: NVJPEG hardware JPEG encoding enabled")
+        return cls()
 
     # ── ROS raw-image encode ────────────────────────────────────────────────
 
@@ -108,27 +104,18 @@ class HwJpegCodec:
             return None
         return None
 
-    def can_encode_ros_image(self, key: str, msg) -> bool:
-        layout = self.ros_image_layout(msg)
-        if layout is None:
-            return False
-        fmt, width, height = layout
-        return self._failures.get(("enc", key, fmt, width, height), 0) < _MAX_KEY_FAILURES
-
-    def encode_ros_image(self, key: str, msg, quality: int = 82) -> Optional[Tuple[bytes, int, int]]:
+    def encode_ros_image(self, key: str, msg, quality: int = 82) -> Tuple[bytes, int, int]:
         """Encode mono8/NV12 image data, returning JPEG dimensions on success."""
         layout = self.ros_image_layout(msg)
         if layout is None:
-            return None
+            raise ValueError("Hardware JPEG encoding requires packed mono8 or NV12 image data")
         fmt, width, height = layout
         jpeg = self._encode(key, bytes(msg.data), fmt, width, height, quality)
-        if jpeg is None:
-            return None
         return jpeg, width, height
 
     # ── internals ───────────────────────────────────────────────────────────
 
-    def _encode(self, key: str, data: bytes, fmt: str, width: int, height: int, quality: int) -> Optional[bytes]:
+    def _encode(self, key: str, data: bytes, fmt: str, width: int, height: int, quality: int) -> bytes:
         pipe_key = ("enc", key, fmt, width, height)
         if fmt == "GRAY8":
             # nvjpegenc takes system-memory GRAY8 directly.
@@ -143,11 +130,9 @@ class HwJpegCodec:
             f"{convert}nvjpegenc quality={int(quality)} ! appsink name=sink sync=false max-buffers=2 drop=true"
         )
         result = self._run(pipe_key, lambda: _Pipeline(description, "jpeg"), data)
-        return None if result is None else result[0]
+        return result[0]
 
-    def _run(self, pipe_key: Tuple, factory, data: bytes) -> Optional[Tuple[bytes, object]]:
-        if self._failures.get(pipe_key, 0) >= _MAX_KEY_FAILURES:
-            return None
+    def _run(self, pipe_key: Tuple, factory, data: bytes) -> Tuple[bytes, object]:
         try:
             with self._registry_lock:
                 pipeline = self._pipelines.get(pipe_key)
@@ -155,30 +140,18 @@ class HwJpegCodec:
                     pipeline = factory()
                     self._pipelines[pipe_key] = pipeline
             result = pipeline.process(data)
+            if result is None:
+                raise RuntimeError("no hardware JPEG output buffer")
         except Exception as exc:
-            self._record_failure(pipe_key, f"error: {exc}")
-            return None
-        if result is None:
-            self._record_failure(pipe_key, "no output buffer")
-            return None
-        self._failures.pop(pipe_key, None)
+            with self._registry_lock:
+                pipeline = self._pipelines.pop(pipe_key, None)
+            if pipeline is not None:
+                pipeline.destroy()
+            raise RuntimeError(f"Hardware JPEG encoding failed for {pipe_key}: {exc}") from exc
         return result
-
-    def _record_failure(self, pipe_key: Tuple, reason: str) -> None:
-        with self._registry_lock:
-            pipeline = self._pipelines.pop(pipe_key, None)
-            count = self._failures.get(pipe_key, 0) + 1
-            self._failures[pipe_key] = count
-        if pipeline is not None:
-            pipeline.destroy()
-        if count >= _MAX_KEY_FAILURES:
-            self._log(f"hw_jpeg: {pipe_key} failed {count}x ({reason}); disabled, CPU fallback from now on")
-        else:
-            self._log(f"hw_jpeg: {pipe_key} failed ({reason}); pipeline rebuilt on next frame")
 
     def status(self) -> Dict[str, object]:
         with self._registry_lock:
             return {
                 "active_pipelines": [str(k) for k in self._pipelines],
-                "disabled": [str(k) for k, v in self._failures.items() if v >= _MAX_KEY_FAILURES],
             }

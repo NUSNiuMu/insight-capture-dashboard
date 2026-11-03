@@ -51,7 +51,7 @@ class RecordingStorageTest(unittest.TestCase):
             self.assertEqual([item.path for item in current_locations], [new_bag.resolve()])
             self.assertEqual(library.resolve(all_locations[0].bag_id), all_locations[0].path)
 
-    def test_library_rejects_ambiguous_legacy_bag_names(self):
+    def test_library_requires_stable_ids_for_duplicate_bag_names(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "rosbags"
             for campaign in ("campaign-a", "campaign-b"):
@@ -62,8 +62,10 @@ class RecordingStorageTest(unittest.TestCase):
             manager = _manager(root)
             library = BagLibrary(manager.storage_browse_roots, lambda: manager.rosbag_root)
 
-            with self.assertRaisesRegex(ValueError, "ambiguous"):
+            with self.assertRaises(FileNotFoundError):
                 library.resolve("take-0001")
+            for location in library.locations():
+                self.assertEqual(library.resolve(location.bag_id), location.path)
 
     def test_browser_stays_inside_allowed_roots_and_hides_bags(self):
         with tempfile.TemporaryDirectory() as temporary:

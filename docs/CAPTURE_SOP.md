@@ -46,7 +46,7 @@ Sessions 页面中的 **Open rosbag** 使用 Take 保存的 bag path 定位录�
 
 打开本机 Firefox/Kiosk 或远程 Web 后，首个 viewer lease 启动 preview/WebRTC。最后一个
 viewer 离开并空闲 45 秒后，WebRTC 和 hand-overlay worker 自动停止。采后再运行完整性、
-回放、WiLoR/Ego LeRobot、UMI/LeRobot 导出和其他重处理。
+回放、COLMAP 和其他重处理。
 
 固定治具检查由 capture profile 的 `station_check_after_take` 控制；自由运动任务不强制
 每条回到固定 pose。Dense Mapping、RViz 和 COLMAP 属于 Engineering/Advanced，不进入

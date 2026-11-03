@@ -21,14 +21,9 @@ if PROJECT_ROOT is not None:
 
 import tensorrt
 
-try:
-    from insight_capture.runtime.mapping.superglue_tensorrt_runtime import (
-        CudaRuntime, IMAGE_HEIGHT, IMAGE_WIDTH, OFFICIAL_COMMIT,
-    )
-except ModuleNotFoundError:  # isolated SuperGlue runtime image
-    from superglue_tensorrt_runtime import (
-        CudaRuntime, IMAGE_HEIGHT, IMAGE_WIDTH, OFFICIAL_COMMIT,
-    )
+from insight_capture.runtime.mapping.superglue_tensorrt_runtime import (
+    CudaRuntime, IMAGE_HEIGHT, IMAGE_WIDTH, OFFICIAL_COMMIT,
+)
 
 
 ONNX_NAMES = ("superpoint.onnx", "superglue.onnx")

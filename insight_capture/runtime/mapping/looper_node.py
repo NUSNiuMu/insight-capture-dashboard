@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from dataclasses import dataclass, field
 from functools import partial
 import json
@@ -71,6 +72,7 @@ class CameraState:
     last_match: float = 0.
     map_revision: int = 0
     tracking_epoch: int = 0
+    last_pose_tick: int | None = None
 
 
 class LooperNode(Node):
@@ -128,6 +130,7 @@ class LooperNode(Node):
         self.reference_points = self.create_publisher(PointCloud2, base + "/points", geometry_qos)
         self.last_geometry = 0.
         self.last_pose_tick = None
+        self.pose_corrections = deque(maxlen=1000)
         for camera in config["cameras"]:
             calibration = camera.get("camera_center_to_tcp")
             if calibration is None:
@@ -254,6 +257,7 @@ class LooperNode(Node):
         self.sync.clear()
         self.last_geometry = 0.
         self.last_pose_tick = None
+        self.pose_corrections.clear()
         for state in self.cameras.values():
             state.correction = None
             state.fusion = PoseCorrectionFilter()
@@ -261,6 +265,7 @@ class LooperNode(Node):
             state.diagnostics = {}
             state.last_match = 0.
             state.map_revision = 0
+            state.last_pose_tick = None
         self.stats = {"state": "building", "map_point_count": 0}
         self.publish_geometry(None, [np.empty((0, 259), np.float32), np.empty((0, 5), np.float32)])
 
@@ -307,6 +312,7 @@ class LooperNode(Node):
             state.correction = None
             state.fusion = PoseCorrectionFilter()
             state.tracking_epoch += 1
+            state.last_pose_tick = None
             state.buffer.clear()
             state.odometry = FrameOdometry()
             state.clock = SourceClock()
@@ -353,39 +359,70 @@ class LooperNode(Node):
 
     def publish_poses(self):
         with self.lock:
-            states = list(self.cameras.values())
-            if not self.ready or any(s.correction is None or not s.clock.ready
-                    or s.map_revision != states[0].map_revision
-                    or s.tracking not in {"TRACKING", "TRACKING_STATIC"} for s in states):
-                self.last_pose_tick = None
+            head = self.cameras[self.head]
+            if not self.ready or head.correction is None:
                 return
-            latest = min(s.latest_source_ns + s.clock.offset_ns for s in states)
-            latest_tick = latest * 30 // 1_000_000_000
+            states = {name: state for name, state in self.cameras.items()
+                      if state.correction is not None and state.clock.ready
+                      and state.tracking in {"TRACKING", "TRACKING_STATIC"}}
+            # Correction injection uses each device's latest native anchor.
+            # Published poses below always use that device's timestamped VIO.
+            anchors = {}
+            for name, state in tuple(states.items()):
+                pose = state.buffer.lookup(state.latest_source_ns)
+                if pose is None:
+                    del states[name]
+                    continue
+                anchors[name] = matrix_from_pose(pose) @ state.center
+            if not states:
+                return
+            latest_tick = max(state.latest_source_ns + state.clock.offset_ns
+                              for state in states.values()) * 30 // 1_000_000_000
             first_tick = latest_tick if self.last_pose_tick is None else self.last_pose_tick + 1
             for tick in range(first_tick, latest_tick + 1):
                 stamp = tick * 1_000_000_000 // 30
-                poses = [s.buffer.lookup(stamp - s.clock.offset_ns) for s in states]
-                if any(p is None for p in poses):
-                    self.last_pose_tick = None
-                    return
-                self.last_pose_tick = tick
-                transforms = []
-                native = [matrix_from_pose(pose) @ state.center for pose, state in zip(poses, states)]
-                positions = [native[0][:3, 3], *[(s.fusion.emitted @ O)[:3, 3]
-                             for s, O in zip(states[1:], native[1:])]]
+                positions = {name: (state.correction @ anchors[name])[:3, 3]
+                             for name, state in states.items()}
+                positions[self.head] = head.fusion.native[:3, 3]
                 relative_step = 0.
-                for index, (state, O) in enumerate(zip(states[1:], native[1:]), 1):
-                    previous = state.fusion.emitted @ O
-                    lever = max(np.linalg.norm(positions[index] - p) for p in positions)
-                    state.correction = state.fusion.output(O, stamp, lever_arm=lever)
-                    relative_step = max(relative_step, np.linalg.norm((state.correction @ O)[:3, 3] - previous[:3, 3]))
-                lever = max(np.linalg.norm((state.correction @ O)[:3, 3] - native[0][:3, 3])
-                            for state, O in zip(states[1:], native[1:]))
-                shared_speed = max(0., .15 - relative_step * 30.)
-                states[0].correction = states[0].fusion.output(native[0], stamp, speed=shared_speed, lever_arm=lever)
-                world = [np.eye(4), states[0].correction, states[0].correction]
-                for name, state, O, frame in zip(self.names, states, native, world):
-                    transform = frame @ state.correction @ O
+                for name, state in states.items():
+                    if name == self.head:
+                        continue
+                    native = anchors[name]
+                    previous = state.correction @ native
+                    lever = max(np.linalg.norm(positions[name] - p) for p in positions.values())
+                    state.correction = state.fusion.output(native, stamp, lever_arm=lever)
+                    relative_step = max(relative_step, np.linalg.norm(
+                        (state.correction @ native)[:3, 3] - previous[:3, 3]))
+                if self.head in states:
+                    lever = max(np.linalg.norm((state.correction @ anchors[name])[:3, 3]
+                                              - anchors[self.head][:3, 3])
+                                for name, state in states.items())
+                    head.correction = head.fusion.output(anchors[self.head], stamp,
+                        speed=max(0., .15 - relative_step * 30.), lever_arm=lever)
+                # Retain one common correction per tick, so late cameras use
+                # the same world transform as cameras already published.
+                corrections = {name: (state.tracking_epoch, (head.correction if name == self.head
+                    else head.correction @ state.correction).copy()) for name, state in states.items()}
+                self.pose_corrections.append((tick, corrections))
+                self.last_pose_tick = tick
+            transforms = []
+            for name, state in states.items():
+                latest = state.latest_source_ns + state.clock.offset_ns
+                for tick, corrections in self.pose_corrections:
+                    if state.last_pose_tick is not None and tick <= state.last_pose_tick:
+                        continue
+                    stamp = tick * 1_000_000_000 // 30
+                    if stamp > latest:
+                        break
+                    state.last_pose_tick = tick
+                    correction = corrections.get(name)
+                    if correction is None or correction[0] != state.tracking_epoch:
+                        continue
+                    pose = state.buffer.lookup(stamp - state.clock.offset_ns)
+                    if pose is None:
+                        continue
+                    transform = correction[1] @ matrix_from_pose(pose) @ state.center
                     output = PoseStamped()
                     output.header.stamp = Time(nanoseconds=stamp).to_msg()
                     output.header.frame_id = "insight9_map"
@@ -397,6 +434,7 @@ class LooperNode(Node):
                     tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = map(float, transform[:3, 3])
                     tf.transform.rotation = output.pose.orientation
                     transforms.append(tf)
+            if transforms:
                 self.tf_broadcaster.sendTransform(transforms)
 
     def request(self, item, command, **metadata):

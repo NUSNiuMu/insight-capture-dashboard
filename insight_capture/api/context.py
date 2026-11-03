@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from insight_capture.postprocess.handpose import HandPoseManager
 from insight_capture.runtime.anomaly import ActiveQcMonitor, VoiceAlertQueue
 from insight_capture.runtime.preflight import CapturePreflight
 from insight_capture.runtime.take import SessionTakeStore
@@ -26,7 +25,6 @@ class DashboardContext:
     scoring_manager: ScoringManager
     prepared_playback_manager: PreparedPlaybackManager
     optimization_manager: OptimizationManager
-    handpose_manager: HandPoseManager
     take_store: SessionTakeStore
     capture_preflight: CapturePreflight
     voice_alerts: VoiceAlertQueue

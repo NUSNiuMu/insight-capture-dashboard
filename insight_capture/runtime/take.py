@@ -10,7 +10,6 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Mapping, Optional
 
-from .session import SessionMetadata
 from .tasks import CaptureTask, CaptureTaskCatalog
 
 
@@ -26,7 +25,8 @@ class SessionTakeStore:
         self,
         results_root: Path,
         config: Optional[Dict] = None,
-        task_catalog: Optional[CaptureTaskCatalog] = None,
+        *,
+        task_catalog: CaptureTaskCatalog,
     ) -> None:
         self._lock = threading.RLock()
         self._stats_cache: Dict[Path, tuple[int, float, Dict[str, int]]] = {}
@@ -46,22 +46,8 @@ class SessionTakeStore:
         self.session_id = ""
         self.root = self.sessions_root
         self.takes_root = self.sessions_root / "takes"
-        if task_catalog is not None:
-            self.operator = str((config or {}).get("operator") or "unknown")
-            self._restore_task_session()
-            return
-        metadata = SessionMetadata.from_config(config, _slug)
-        self._configure_legacy_session(metadata)
-        self._write_session()
-
-    def _configure_legacy_session(self, metadata: SessionMetadata) -> None:
-        self.task = metadata.task
-        self.task_id = _slug(metadata.task, "unspecified")
-        self.operator = metadata.operator
-        self.session_id = metadata.session_id
-        self.root = self.sessions_root / self.session_id
-        self.takes_root = self.root / "takes"
-        self.takes_root.mkdir(parents=True, exist_ok=True)
+        self.operator = str((config or {}).get("operator") or "unknown")
+        self._restore_task_session()
 
     def _configure_task_session(self, task: CaptureTask, session_id: str) -> None:
         self._active = True
@@ -80,27 +66,6 @@ class SessionTakeStore:
     def _task_set_id(task_id: str) -> str:
         return _slug(task_id, "task")
 
-    def _migrate_active_task_set(self, previous_session_id: str, task_id: str) -> None:
-        """Move the active dated metadata folder to the stable task-set folder once."""
-
-        stable_id = self._task_set_id(task_id)
-        if not previous_session_id or previous_session_id == stable_id:
-            return
-        previous_root = self.sessions_root / previous_session_id
-        stable_root = self.sessions_root / stable_id
-        if not previous_root.is_dir() or stable_root.exists():
-            return
-        previous_root.replace(stable_root)
-        for path in [stable_root / "session.json", *(stable_root / "takes").glob("take_*.json")]:
-            if not path.is_file():
-                continue
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            payload["session_id"] = stable_id
-            self._write_json(path, payload)
-
     def _restore_task_session(self) -> None:
         state = None
         if self._active_state_path.is_file():
@@ -110,17 +75,13 @@ class SessionTakeStore:
                 state = None
         if isinstance(state, dict) and state.get("active"):
             task = self._task_catalog.get(str(state.get("task_id") or ""))
-            previous_session_id = str(state.get("session_id") or "").strip()
-            self._migrate_active_task_set(previous_session_id, task.task_id)
             self._configure_task_session(task, self._task_set_id(task.task_id))
             self._write_session()
             self._write_active_state()
             return
         if isinstance(state, dict):
             task_id = str(state.get("task_id") or "").strip()
-            previous_session_id = str(state.get("session_id") or "").strip()
             if task_id:
-                self._migrate_active_task_set(previous_session_id, task_id)
                 self._configure_task_session(
                     self._task_catalog.get(task_id), self._task_set_id(task_id)
                 )
@@ -178,8 +139,6 @@ class SessionTakeStore:
         )
 
     def activate_task(self, task_id: str) -> Dict[str, object]:
-        if self._task_catalog is None:
-            raise RuntimeError("Capture task switching is not configured.")
         with self._lock:
             current = self.current()
             if current and current.get("state") in {"starting", "recording", "finalizing"}:
@@ -193,8 +152,6 @@ class SessionTakeStore:
             return self.task_status()
 
     def create_task(self, payload: Mapping[str, object]) -> Dict[str, object]:
-        if self._task_catalog is None:
-            raise RuntimeError("Capture task management is not configured.")
         with self._lock:
             task = self._task_catalog.create(payload)
             return task.as_dict()
@@ -202,8 +159,6 @@ class SessionTakeStore:
     def update_task(
         self, task_id: str, payload: Mapping[str, object]
     ) -> Dict[str, object]:
-        if self._task_catalog is None:
-            raise RuntimeError("Capture task management is not configured.")
         with self._lock:
             current = self.current()
             if current and current.get("state") in {"starting", "recording", "finalizing"}:
@@ -232,8 +187,6 @@ class SessionTakeStore:
             return self.task_status()
 
     def list_tasks(self) -> list[Dict[str, object]]:
-        if self._task_catalog is None:
-            return []
         tasks = []
         for item in self._task_catalog.list():
             task_set_id = self._task_set_id(str(item.get("task_id") or ""))

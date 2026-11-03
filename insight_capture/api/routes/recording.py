@@ -391,7 +391,7 @@ class RecordingRoutes:
             )
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=422)
-        # Persisted next to scores/optimized so list_rosbags can surface a
+        # Persisted next to scores/optimized so the bag catalog can surface a
         # per-bag integrity badge without re-scanning gigabytes per listing.
         bag_name = bag_path.name
         integrity_dir = self.context.results_root / "integrity"

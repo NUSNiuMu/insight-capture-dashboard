@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, TypedDict
 
 from insight_capture.postprocess.bags import BagLibrary, PreparedPlaybackManager
-from insight_capture.postprocess.handpose import HandPoseManager
 from insight_capture.postprocess.optimization import OptimizationManager
 from insight_capture.runtime.anomaly import ActiveQcMonitor, VoiceAlertQueue
 from insight_capture.runtime.preflight import CapturePreflight
@@ -22,7 +21,6 @@ class DashboardDependencies(TypedDict):
     scoring_manager: ScoringManager
     prepared_playback_manager: PreparedPlaybackManager
     optimization_manager: OptimizationManager
-    handpose_manager: HandPoseManager
     take_store: SessionTakeStore
     capture_preflight: CapturePreflight
     voice_alerts: VoiceAlertQueue
@@ -41,7 +39,6 @@ class RuntimeServices:
     scoring_manager: ScoringManager
     prepared_playback_manager: PreparedPlaybackManager
     optimization_manager: OptimizationManager
-    handpose_manager: HandPoseManager
     take_store: SessionTakeStore
     capture_preflight: CapturePreflight
     voice_alerts: VoiceAlertQueue
@@ -91,7 +88,6 @@ class RuntimeServices:
             "scoring_manager": self.scoring_manager,
             "prepared_playback_manager": self.prepared_playback_manager,
             "optimization_manager": self.optimization_manager,
-            "handpose_manager": self.handpose_manager,
             "take_store": self.take_store,
             "capture_preflight": self.capture_preflight,
             "voice_alerts": self.voice_alerts,
@@ -147,11 +143,6 @@ def build_runtime_services(
                 / "scripts"
                 / "run_pipeline_from_rosbag.py"
             ),
-            bag_resolver=bag_library.resolve,
-        ),
-        handpose_manager=HandPoseManager(
-            project_root=project_root,
-            rosbag_root=recording_manager.rosbag_root,
             bag_resolver=bag_library.resolve,
         ),
         take_store=take_store,

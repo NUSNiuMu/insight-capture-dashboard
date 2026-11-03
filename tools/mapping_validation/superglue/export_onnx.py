@@ -15,10 +15,7 @@ PROJECT_ROOT = next(
 if PROJECT_ROOT is not None:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-try:
-    from insight_capture.runtime.mapping.superglue_tensorrt import export_onnx
-except ModuleNotFoundError:  # isolated SuperGlue builder image
-    from superglue_tensorrt import export_onnx
+from insight_capture.runtime.mapping.superglue_tensorrt import export_onnx
 
 
 def build_parser() -> argparse.ArgumentParser:
