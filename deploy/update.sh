@@ -3,6 +3,7 @@
 #
 # Usage:
 #   ./update.sh insight-dashboard-v1.2.0.tar.gz
+#   ./update.sh --install-dir /path/to/old-release insight-dashboard-v2.1.0.tar.gz
 #   ./update.sh --rollback v1.1.0
 #
 # Refuses to restart while a recording is in progress (override: --force).
@@ -11,19 +12,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "${SCRIPT_DIR}"
 PORT="${DASHBOARD_PORT:-8765}"
 IMAGE_NAME="insight-dashboard"
 SUPERGLUE_IMAGE="insight-superglue-validation:25.04"
 SUPERGLUE_TARBALL="insight-superglue-validation-25.04.tar.gz"
 
-if [[ -x "${SCRIPT_DIR}/deploy/install_voice_control_service.sh" ]]; then
-    HOST_RUNTIME_ROOT="${SCRIPT_DIR}"
-    VOICE_INSTALLER="${SCRIPT_DIR}/deploy/install_voice_control_service.sh"
-else
-    HOST_RUNTIME_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-    VOICE_INSTALLER="${SCRIPT_DIR}/install_voice_control_service.sh"
-fi
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -41,38 +34,29 @@ sync_host_runtime() {
 
     docker cp "${container}:/workspaces/insight_capture/insight_capture/voice" "${temporary}/voice"
     docker cp "${container}:/workspaces/insight_capture/insight_capture/__init__.py" "${temporary}/insight_capture_init.py"
-    docker cp "${container}:/workspaces/insight_capture/scripts/run_voice.sh" "${temporary}/run_voice.sh"
-    docker cp "${container}:/workspaces/insight_capture/deploy/install_voice_control_service.sh" "${temporary}/install_voice_control_service.sh"
-    docker cp "${container}:/workspaces/insight_capture/deploy/systemd/insight-voice-control.service.in" "${temporary}/insight-voice-control.service.in"
-    docker cp "${container}:/workspaces/insight_capture/deploy/update.sh" "${temporary}/update.sh"
-    docker cp "${container}:/workspaces/insight_capture/deploy/device_services.sh" "${temporary}/device_services.sh"
-    docker cp "${container}:/workspaces/insight_capture/scripts/select_device.sh" "${temporary}/select_device.sh"
-    docker cp "${container}:/workspaces/insight_capture/deploy/docker-compose.yml" "${temporary}/docker-compose.yml"
+    docker cp "${container}:/workspaces/insight_capture/deploy" "${temporary}/deploy"
+    docker cp "${container}:/workspaces/insight_capture/scripts" "${temporary}/scripts"
+    docker cp "${container}:/workspaces/insight_capture/tools/diagnostics/sync_camera_restart.py" "${temporary}/sync_camera_restart.py"
     docker cp "${container}:/workspaces/insight_capture/config/devices" "${temporary}/devices"
     docker cp "${container}:/opt/insight/native" "${temporary}/native"
     docker cp "${container}:/workspaces/insight_capture/native_dashboard/run.sh" "${temporary}/run-native.sh"
 
-    mkdir -p \
-        "${HOST_RUNTIME_ROOT}/insight_capture" \
-        "${HOST_RUNTIME_ROOT}/scripts" \
-        "${HOST_RUNTIME_ROOT}/deploy/systemd"
+    mkdir -p "${HOST_RUNTIME_ROOT}/insight_capture" "${HOST_RUNTIME_ROOT}/scripts" \
+        "${HOST_RUNTIME_ROOT}/deploy" "${HOST_RUNTIME_ROOT}/tools/diagnostics" \
+        "${SCRIPT_DIR}/config" "${SCRIPT_DIR}/native_dashboard" "${SCRIPT_DIR}/.native-build"
     rm -rf "${HOST_RUNTIME_ROOT}/insight_capture/voice"
     mv "${temporary}/voice" "${HOST_RUNTIME_ROOT}/insight_capture/voice"
     install -m 0644 "${temporary}/insight_capture_init.py" "${HOST_RUNTIME_ROOT}/insight_capture/__init__.py"
-    install -m 0755 "${temporary}/run_voice.sh" "${HOST_RUNTIME_ROOT}/scripts/run_voice.sh"
-    install -m 0755 "${temporary}/install_voice_control_service.sh" "${HOST_RUNTIME_ROOT}/deploy/install_voice_control_service.sh"
-    install -m 0644 "${temporary}/insight-voice-control.service.in" "${HOST_RUNTIME_ROOT}/deploy/systemd/insight-voice-control.service.in"
-    install -m 0755 "${temporary}/update.sh" "${SCRIPT_DIR}/.update.sh.next"
+    cp -a "${temporary}/deploy/." "${HOST_RUNTIME_ROOT}/deploy/"
+    cp -a "${temporary}/scripts/." "${HOST_RUNTIME_ROOT}/scripts/"
+    install -m 0755 "${temporary}/sync_camera_restart.py" "${HOST_RUNTIME_ROOT}/tools/diagnostics/sync_camera_restart.py"
+    install -m 0755 "${temporary}/deploy/update.sh" "${SCRIPT_DIR}/.update.sh.next"
     mv "${SCRIPT_DIR}/.update.sh.next" "${SCRIPT_DIR}/update.sh"
-    mkdir -p "${SCRIPT_DIR}/deploy" "${SCRIPT_DIR}/scripts"
-    install -m 0755 "${temporary}/device_services.sh" "${SCRIPT_DIR}/deploy/device_services.sh"
-    install -m 0755 "${temporary}/select_device.sh" "${SCRIPT_DIR}/scripts/select_device.sh"
-    install -m 0644 "${temporary}/docker-compose.yml" "${SCRIPT_DIR}/docker-compose.yml"
+    install -m 0644 "${temporary}/deploy/docker-compose.yml" "${SCRIPT_DIR}/docker-compose.yml"
     cp -r "${temporary}/devices" "${SCRIPT_DIR}/config/"
-    mkdir -p "${temporary}/qt-runtime" "${SCRIPT_DIR}/native_dashboard" "${SCRIPT_DIR}/.native-build"
+    mkdir -p "${temporary}/qt-runtime"
     tar -xf "${temporary}/native/qt-runtime.tar" -C "${temporary}/qt-runtime"
     install -m 0755 "${temporary}/run-native.sh" "${SCRIPT_DIR}/native_dashboard/run.sh"
-    # Replace files without truncating libraries mapped by an existing Qt process.
     if [[ -d "${SCRIPT_DIR}/.native-build/runtime" ]]; then
         mv "${SCRIPT_DIR}/.native-build/runtime" "${temporary}/old-qt-runtime"
     fi
@@ -91,22 +75,26 @@ rollback_version=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --force) force=true; shift ;;
+        --install-dir) SCRIPT_DIR="$(cd "${2:?--install-dir needs the existing Release directory}" && pwd)"; shift 2 ;;
         --rollback)
             rollback=true
             rollback_version="${2:?--rollback needs a version, e.g. --rollback v1.1.0}"
             shift 2 ;;
         -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) die "unknown option: $1 (see --help)" ;;
-        *) tarball="$1"; shift ;;
+        *) tarball="$(realpath -m "$1")"; shift ;;
     esac
 done
 
+cd "${SCRIPT_DIR}"
+HOST_RUNTIME_ROOT="${SCRIPT_DIR}"
+VOICE_INSTALLER="${SCRIPT_DIR}/deploy/install_voice_control_service.sh"
 command -v docker >/dev/null || die "docker is not installed"
 docker compose version >/dev/null 2>&1 || die "docker compose (v2 plugin) is not available"
 
 # ── Don't kill an in-flight recording ────────────────────────────────────────
 if curl -sf "http://localhost:${PORT}/api/recording/status" 2>/dev/null \
-        | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("recording") else 1)' 2>/dev/null; then
+        | python3 -c 'import json,sys; s=json.load(sys.stdin); sys.exit(0 if s.get("recording") or s.get("state") in {"starting", "saving"} or s.get("merge_state") in {"saving", "merging"} else 1)' 2>/dev/null; then
     if [[ "${force}" == "true" ]]; then
         log "WARNING: a recording is in progress; --force given, proceeding anyway (the recording will be cut short)."
     else
@@ -135,24 +123,21 @@ fi
 # The stable mapping/relocalization dependency ships as a separate archive so
 # routine dashboard upgrades do not resend it. First install auto-discovers the
 # dependency beside the dashboard archive (or in this deployment directory).
-if ! docker image inspect "${SUPERGLUE_IMAGE}" >/dev/null 2>&1; then
+if [[ "${rollback}" == false ]]; then
     dependency_dirs=("${SCRIPT_DIR}")
     if [[ -n "${tarball}" ]]; then
         tarball_dir="$(cd "$(dirname "${tarball}")" && pwd)"
         dependency_dirs=("${tarball_dir}" "${SCRIPT_DIR}")
     fi
-    dependency_loaded=false
     for dependency_dir in "${dependency_dirs[@]}"; do
         dependency_tarball="${dependency_dir}/${SUPERGLUE_TARBALL}"
         if [[ -f "${dependency_tarball}" ]]; then
-            log "Loading first-install dependency from ${dependency_tarball} ..."
+            log "Loading inference dependency from ${dependency_tarball} ..."
             docker load -i "${dependency_tarball}"
-            dependency_loaded=true
             break
         fi
     done
-    if [[ "${dependency_loaded}" != "true" ]] \
-            || ! docker image inspect "${SUPERGLUE_IMAGE}" >/dev/null 2>&1; then
+    if ! docker image inspect "${SUPERGLUE_IMAGE}" >/dev/null 2>&1; then
         die "missing ${SUPERGLUE_IMAGE}; place ${SUPERGLUE_TARBALL} beside the dashboard archive and retry"
     fi
 fi
@@ -186,11 +171,25 @@ mv "${env_next}" .env
 log "Starting ${IMAGE_NAME}:${version} ..."
 if [[ "${rollback}" == false ]]; then
     log "Synchronizing host tools and Compose definitions from ${IMAGE_NAME}:${version} ..."
+    # Stop the previous Compose project without removing volumes or recordings.
+    if [[ -f docker-compose.yml ]]; then
+        docker compose down --remove-orphans || log "WARNING: old Compose teardown was incomplete; continuing with the new definitions."
+    fi
     sync_host_runtime "${IMAGE_NAME}:${version}"
+    log "Migrating installed configuration; calibration and original recordings are retained ..."
+    docker run --rm --network none --entrypoint python3 \
+        -v "${SCRIPT_DIR}:/installation" "${IMAGE_NAME}:${version}" \
+        /workspaces/insight_capture/deploy/migrate_release.py /installation
 fi
 ROOT_DIR="${SCRIPT_DIR}"
 source "${SCRIPT_DIR}/deploy/device_services.sh"
-start_device_services
+# Keep the phone/API reachable while inference engines initialize.
+load_device_services
+prepare_recording_bind_source
+docker compose up -d --no-deps insight-dashboard
+if ! start_device_services; then
+    log "WARNING: one or more localization services are still unavailable; check docker compose logs. The recording API remains available."
+fi
 
 log "Waiting for the backend to become healthy on :${PORT} ..."
 deadline=$(( $(date +%s) + 90 ))
@@ -205,7 +204,9 @@ until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
     sleep 2
 done
 
-"${VOICE_INSTALLER}" --if-ready
+if [[ -x "${VOICE_INSTALLER}" ]]; then
+    "${VOICE_INSTALLER}" --if-ready || log "WARNING: optional voice service was not updated; other services remain installed."
+fi
 
 log "Done. Dashboard is running ${IMAGE_NAME}:${version} on port ${PORT}."
 log "On the Jetson desktop, launch ./native_dashboard/run.sh."

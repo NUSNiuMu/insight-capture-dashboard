@@ -61,6 +61,7 @@ cp -a .native-build/runtime "${bundle_dir}/.native-build/"
 cp deploy/docker-compose.yml deploy/update.sh deploy/README.md "${bundle_dir}/"
 cp deploy/run_dashboard.sh \
     deploy/device_services.sh \
+    deploy/migrate_release.py \
     deploy/host_setup.sh \
     deploy/configure_camera_network.sh \
     deploy/install_voice_control_service.sh \
@@ -109,5 +110,5 @@ echo
 echo "First install: send all three files. Keep the two image archives together;"
 echo "update.sh auto-loads ${SUPERGLUE_IMAGE} when it is not installed, then runs"
 echo "  ./update.sh ${IMAGE_NAME}-${version}.tar.gz"
-echo "Upgrade: send only ${IMAGE_NAME}-${version}.tar.gz; the stable SuperGlue"
-echo "dependency already on the device is reused."
+echo "For legacy Releases, also send the new deploy bundle and inference archive."
+echo "Use the new update.sh --install-dir <existing-directory> <absolute-image-path>."

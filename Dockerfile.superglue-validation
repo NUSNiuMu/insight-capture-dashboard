@@ -91,7 +91,9 @@ COPY insight_capture/runtime/mapping/superglue_worker.py /opt/insight/insight_ca
 COPY insight_capture/runtime/mapping/superglue_tensorrt_runtime.py /opt/insight/insight_capture/runtime/mapping/superglue_tensorrt_runtime.py
 COPY tools/mapping_validation/superglue/prepare_tensorrt.py /opt/insight/prepare_superglue_tensorrt.py
 COPY tools/mapping_validation/superglue/start_inference.sh /opt/insight/start_superglue_inference.sh
-RUN chmod +x /opt/insight/start_superglue_inference.sh
+# Keep the installed Release healthcheck command as a link to the same module.
+RUN ln -s insight_capture/runtime/mapping/superglue_ipc.py /opt/insight/superglue_ipc.py \
+    && chmod +x /opt/insight/start_superglue_inference.sh
 
 WORKDIR /opt/insight
 

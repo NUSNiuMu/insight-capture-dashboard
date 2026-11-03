@@ -39,7 +39,20 @@ EgoHalo 可先录制再校准；停止后两端分别保存，保存完成即可
 
 ## 升级
 
-结束录制和保存后，执行新版本主镜像的 `update.sh` 命令。普通升级只需主镜像压缩包；配置和数据保留，宿主机工具、Compose 与 Qt 产物同步刷新。更新后关闭并重新打开 Qt。
+结束录制和保存后，使用**新版本部署包里的 `update.sh`**。从 v2.0.6 / v2.0.7 / v2.0.8 升级时，将新的部署包和两个镜像包一起传到 Jetson，解压新部署包到临时目录，再指向旧安装目录：
+
+```bash
+tar -xzf insight-dashboard-deploy-v2.1.0.tar.gz
+bash ./insight-dashboard-deploy/update.sh \
+  --install-dir /原来的安装目录 \
+  /镜像所在目录/insight-dashboard-v2.1.0.tar.gz
+```
+
+将新的 `insight-superglue-validation-25.04.tar.gz` 放在主镜像压缩包旁边，它会一并加载。不能继续运行旧版更新脚本：旧脚本引用的工具和服务已经改变。
+
+升级器不按旧版本号拒绝升级。它保留 `.env`、设备标定和录制数据，补齐建图配置，将旧 `post_processing.json` 设置迁入 `runtime.json`，保留任务及录制索引，并同步宿主机工具、Compose 与 Qt。被修改的配置先备份到 `config/.upgrade-backup-*`；旧原始数据不移动、不删除。可选语音服务缺失或启动失败只给出提示；相机尚未上线不阻止安装。
+
+更新后关闭并重新打开 Qt。手机仍访问同一个 Jetson 的 `/mobile` 地址。已安装当前升级器后，后续普通更新可只传主镜像包；依赖变化时同时传推理镜像包。
 
 已加载且满足当前配置/接口要求的旧镜像可用 `./update.sh --rollback <版本>` 切换。回退不会降级宿主机启动工具。
 
