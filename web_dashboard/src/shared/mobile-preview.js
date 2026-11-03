@@ -24,12 +24,21 @@ export class MobilePreview {
     this.label.textContent = "正在连接视频…";
     try {
       if (!window.RTCPeerConnection) throw new Error("此浏览器不支持实时视频");
-      const response = await fetch("/api/cameras", { cache: "no-store", signal: AbortSignal.timeout(5000) });
-      if (!response.ok) throw new Error("设备状态读取失败");
-      const camera = (await response.json()).cameras.find(c => c.name === name);
+      let camera;
+      const readyDeadline = performance.now() + 10000;
+      while (current()) {
+        const response = await fetch("/api/cameras", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+        if (!response.ok) throw new Error("设备状态读取失败");
+        camera = (await response.json()).cameras.find(c => c.name === name);
+        if (!current()) return;
+        if (!camera || camera.stale) throw new Error("该相机当前无图像输入，请检查设备连接");
+        if (camera.webrtc_available) break;
+        if (performance.now() >= readyDeadline) throw new Error("视频服务启动超时，请检查 Jetson 服务状态");
+        this.label.textContent = "正在启动视频服务…";
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
       if (!current()) return;
-      if (!camera || camera.stale) throw new Error("该相机当前无图像输入，请检查设备连接");
-      if (!camera.webrtc_available) throw new Error("该相机实时视频服务未就绪");
+      this.label.textContent = "正在连接视频…";
       const { pc, ws } = openCameraWebRtc({
         cameraName: name, port: camera.webrtc_port, fps: 15, isCurrent: current,
         onTrack: event => {

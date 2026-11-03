@@ -1,4 +1,4 @@
-import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261103-camera-preview";
+import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261103-preview-startup";
 import { CaptureManagement } from "./management.js?v=20261102-qt-mobile";
 
 const el = id => document.getElementById(id);
