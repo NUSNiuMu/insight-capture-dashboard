@@ -1,3 +1,5 @@
+import { errorText } from "./presentation.js?v=20261103-english-mobile-2";
+
 const el = id => document.getElementById(id);
 const phaseLabels = { saved: "Saved · transfer pending", copying: "Transferring", merging: "Merging", done: "Ready", error: "Transfer failed · originals kept" };
 
@@ -76,7 +78,7 @@ export class CaptureManagement {
       const title = document.createElement("p");
       title.textContent = `${recording.task_name} · Take ${recording.take_id} · ${phaseLabels[recording.phase] || recording.phase}`;
       row.append(title);
-      if (recording.error) { const detail = document.createElement("p"); detail.textContent = recording.error; row.append(detail); }
+      if (recording.error) { const detail = document.createElement("p"); detail.textContent = errorText(recording.error); row.append(detail); }
       if (["saved", "error"].includes(recording.phase)) {
         const button = document.createElement("button"); button.type = "button"; button.textContent = "Transfer & merge";
         button.disabled = this.busy || this.captureBusy || this.status.busy;

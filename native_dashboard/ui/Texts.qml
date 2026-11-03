@@ -5,6 +5,7 @@ QtObject {
     readonly property var names: ({
         "idle": "待命", "pending": "待处理", "preparing": "准备中", "starting": "启动中",
         "running": "进行中", "recording": "录制中", "saving": "保存中", "saved": "已保存",
+        "accepted": "已接受", "rejected": "已作废", "operator_rejected": "操作员作废",
         "done": "已完成", "ready": "已就绪", "playing": "回放中", "paused": "已暂停",
         "stopped": "已停止", "stopping": "停止中", "cancelled": "已取消", "failed": "失败",
         "error": "失败", "warning": "警告", "pass": "通过", "suspect": "待复核",

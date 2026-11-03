@@ -36,6 +36,9 @@ export function errorText(message) {
     calibration_cameras_not_ready: "Calibration needs video and VIO from all three devices.",
     calibration_service_not_ready: "Mapping service is not ready.",
     "Failed to fetch": "Cannot reach Jetson. Check your Wi-Fi connection.",
+    "请先结束录制或等待当前后处理完成": "Stop recording and wait for the current transfer to finish.",
+    "请选择尚未合包的已保存录制": "Choose a saved recording that has not been merged.",
+    "请连接保存该条数据的原 EgoHalo 设备": "Connect the EgoHalo that recorded this take.",
   };
   return messages[message] || message;
 }

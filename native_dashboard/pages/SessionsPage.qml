@@ -145,7 +145,7 @@ PageFrame {
                     }
                 }
                 Label {
-                    text: (modelData.operator_decision || "待审核") + " · " + (modelData.reject_reason || modelData.state || "") + " · " + (modelData.anomaly_timeline || []).length + " 个异常事件"
+                    text: Ui.Texts.value(modelData.operator_decision || "待审核") + " · " + Ui.Texts.value(modelData.reject_reason || modelData.state || "") + " · " + (modelData.anomaly_timeline || []).length + " 个异常事件"
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                 }

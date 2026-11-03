@@ -1,6 +1,6 @@
-import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261103-english-mobile";
-import { CaptureManagement } from "./management.js?v=20261103-english-mobile";
-import { cameraLabel, deviceLabel, errorText, issueText } from "./presentation.js?v=20261103-english-mobile";
+import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261103-english-mobile-2";
+import { CaptureManagement } from "./management.js?v=20261103-english-mobile-2";
+import { cameraLabel, deviceLabel, errorText, issueText } from "./presentation.js?v=20261103-english-mobile-2";
 
 const el = id => document.getElementById(id);
 const labels = { idle: "Ready", starting: "Starting", recording: "Recording", saving: "Saving", saved: "Saved", error: "Error" };
