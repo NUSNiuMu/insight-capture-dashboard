@@ -1,5 +1,12 @@
 const B = window.BABYLON;
 const colors = { left: "#83abff", right: "#ffb77d" };
+const DEFAULT_FOV = 0.8; // Babylon's default vertical field of view
+const TICK_COLOR = "#7b93af";
+// The camera view sits this far behind the head camera along its optical
+// axis, so the origin (the camera itself) and its axes stay in sight.
+const CAMERA_PULLBACK = 0.6;
+const FIT_MARGIN = 1.15; // breathing room around fitted content
+const AXIS_LENGTH = 0.15;
 let labelSequence = 0;
 function makeLabel(scene, text, position, color, options = {}) {
   const { fontSize = 48, width = 0.16, height = 0.08 } = options;
@@ -65,6 +72,15 @@ export class Trajectory {
       this.camera.minZ = 0.001;
       this.camera.wheelDeltaPercentage = 0.01;
       this.camera.panningSensibility = 1200;
+      // Orthographic views size their frustum from the orbit radius, so the
+      // wheel and zoom buttons work the same as in perspective views.
+      this.scene.onBeforeRenderObservable.add(() => {
+        const c = this.camera;
+        if (c.mode !== B.Camera.ORTHOGRAPHIC_CAMERA) return;
+        const h = c.radius * Math.tan(c.fov / 2);
+        const w = h * this.engine.getAspectRatio(c);
+        [c.orthoTop, c.orthoBottom, c.orthoLeft, c.orthoRight] = [h, -h, -w, w];
+      });
       const grid = [];
       for (let i = -10; i <= 10; i++) {
         const v = i / 10;
@@ -73,16 +89,31 @@ export class Trajectory {
           [new B.Vector3(-1, v, 0), new B.Vector3(1, v, 0)],
         );
       }
+      // The grid and its meter ticks move together to setFloor()'s height.
+      this.floor = new B.TransformNode("floor", this.scene);
+      this.floorZ = 0;
       const floor = B.MeshBuilder.CreateLineSystem(
         "grid",
         { lines: grid },
         this.scene,
       );
       floor.color = B.Color3.FromHexString("#2b4058");
+      floor.parent = this.floor;
+      // Dashed drop from the origin to the lowered grid, scaled to its depth.
+      this.drop = B.MeshBuilder.CreateDashedLines(
+        "originDrop",
+        {
+          points: [B.Vector3.Zero(), new B.Vector3(0, 0, -1)],
+          dashNb: 24,
+        },
+        this.scene,
+      );
+      this.drop.color = B.Color3.FromHexString("#91b8f7");
+      this.drop.isVisible = false;
       const axes = [
-        ["X", [0.3, 0, 0], "#ef9194"],
-        ["Y", [0, 0.3, 0], "#81cba1"],
-        ["Z", [0, 0, 0.3], "#91b8f7"],
+        ["X", [AXIS_LENGTH, 0, 0], "#ef9194"],
+        ["Y", [0, AXIS_LENGTH, 0], "#81cba1"],
+        ["Z", [0, 0, AXIS_LENGTH], "#91b8f7"],
       ];
       for (const [name, pos, color] of axes) {
         const line = B.MeshBuilder.CreateLines(
@@ -93,24 +124,23 @@ export class Trajectory {
         line.color = B.Color3.FromHexString(color);
         makeLabel(this.scene, name, new B.Vector3(...pos).scale(1.2), color, {
           fontSize: 64,
-          width: 0.07,
-          height: 0.07,
+          width: 0.035,
+          height: 0.035,
         });
       }
       // Scale reference: a couple of meter ticks along +X/+Y on top of the
       // 10 cm floor grid, so distance reads off the canvas itself.
-      const tickColor = "#7b93af";
       for (const d of [0.5, 1]) {
         const text = d.toFixed(1) + " m";
         for (const position of [
           new B.Vector3(d, 0.035, 0.001),
           new B.Vector3(0.035, d, 0.001),
         ]) {
-          makeLabel(this.scene, text, position, tickColor, {
+          makeLabel(this.scene, text, position, TICK_COLOR, {
             fontSize: 40,
             width: 0.1,
             height: 0.05,
-          });
+          }).parent = this.floor;
         }
       }
       this.tips = {};
@@ -143,6 +173,7 @@ export class Trajectory {
         axesMesh.isVisible = false;
         this.tips[side] = { tip, axes: axesMesh };
       }
+      this.view("camera");
       this.resize = new ResizeObserver(() => this.engine.resize());
       this.resize.observe(canvas);
       this.lastRender = 0;
@@ -208,7 +239,33 @@ export class Trajectory {
       }
     }
     this.empty.hidden = this.points.length > 0;
-    if (fit) this.view("free");
+    // Gravity-aligned trajectories run below the head camera at the origin;
+    // lay the grid under them (0.1 m steps) so the camera view sees it. Live
+    // updates only lower it, so a moving trail doesn't make it jump.
+    let low = 0;
+    if (this.cameraView?.gravity_aligned !== false)
+      for (const p of this.points) low = Math.min(low, p.z);
+    low = Math.floor(low * 10 + 1e-6) / 10;
+    this.setFloor(fit ? low : Math.min(this.floorZ, low));
+    if (fit) this.view("camera");
+  }
+  setFloor(z) {
+    if (z === this.floorZ) return;
+    this.floorZ = z;
+    this.floor.position.z = z;
+    this.drop.isVisible = z < 0;
+    this.drop.scaling.z = -z;
+    this.floorLabel?.dispose();
+    this.floorLabel =
+      z < 0
+        ? makeLabel(
+            this.scene,
+            `z ${z.toFixed(1)} m`,
+            new B.Vector3(0.07, -0.03, z + 0.001),
+            TICK_COLOR,
+            { fontSize: 40, width: 0.1, height: 0.05 },
+          )
+        : null;
   }
   cursor(row) {
     if (this.failed) return;
@@ -232,28 +289,84 @@ export class Trajectory {
       });
     }
   }
+  setCameraView(view) {
+    const key = JSON.stringify(view ?? null);
+    if (this.failed || key === this.cameraKey) return;
+    this.cameraKey = key;
+    this.cameraView = view;
+    if (this.currentView === "camera") this.view("camera");
+  }
   view(kind) {
     if (this.failed) return;
-    if (this.points.length) {
-      let min = this.points[0].clone(),
-        max = min.clone();
-      for (const p of this.points) {
-        min = B.Vector3.Minimize(min, p);
-        max = B.Vector3.Maximize(max, p);
-      }
-      this.camera.setTarget(min.add(max).scale(0.5));
-      this.camera.radius = Math.max(0.4, B.Vector3.Distance(min, max) * 1.6);
-    } else {
-      this.camera.setTarget(new B.Vector3(0, 0, 0.12));
-      this.camera.radius = 1.9;
+    this.currentView = kind;
+    if (kind === "camera") {
+      // Look along the head camera's optical axis from just behind it.
+      // reference_from_rgb holds its optical axes and origin in the
+      // trajectory frame; gravity-aligned sessions keep z up, older ones
+      // (optical reference frame) use image up.
+      const m = this.cameraView?.reference_from_rgb;
+      const column = (j) => new B.Vector3(m[0][j], m[1][j], m[2][j]);
+      const position = m ? column(3) : B.Vector3.Zero();
+      const forward = m ? column(2) : new B.Vector3(0, 0.8, -0.6);
+      this.camera.upVector =
+        m && this.cameraView.gravity_aligned === false
+          ? column(1).scale(-1)
+          : new B.Vector3(0, 0, 1);
+      this.camera.mode = B.Camera.PERSPECTIVE_CAMERA;
+      this.camera.fov = this.cameraView?.fov_y_rad ?? DEFAULT_FOV;
+      this.camera.setTarget(position);
+      this.camera.setPosition(position.subtract(forward.scale(CAMERA_PULLBACK)));
+      return;
     }
-    const angles = {
-      free: [-0.9, 1.03],
-      top: [-Math.PI / 2, 0.015],
-      front: [-Math.PI / 2, Math.PI / 2],
-      side: [0, Math.PI / 2],
+    this.camera.fov = DEFAULT_FOV;
+    this.camera.upVector = new B.Vector3(0, 0, 1);
+    // Fit the trajectories together with the origin (the head camera).
+    let min = B.Vector3.Zero(),
+      max = B.Vector3.Zero();
+    for (const p of this.points) {
+      min = B.Vector3.Minimize(min, p);
+      max = B.Vector3.Maximize(max, p);
+    }
+    if (!this.points.length) {
+      min = new B.Vector3(-0.3, -0.3, -0.3);
+      max = new B.Vector3(0.3, 0.3, 0.3);
+    }
+    const size = max.subtract(min);
+    const tanV = Math.tan(this.camera.fov / 2);
+    const tanH = tanV * this.engine.getAspectRatio(this.camera);
+    // Eye direction from the target, and which box axes end up on screen
+    // as [horizontal, vertical, depth]. With z up and y forward: top looks
+    // down with y up the screen, front looks forward from behind, side
+    // looks from the right with y pointing right.
+    const views = {
+      top: [new B.Vector3(0, -0.015, 1), ["x", "y", "z"]],
+      front: [new B.Vector3(0, -1, 0), ["x", "z", "y"]],
+      side: [new B.Vector3(1, 0, 0), ["y", "z", "x"]],
     };
-    [this.camera.alpha, this.camera.beta] = angles[kind] || angles.free;
+    let direction, radius;
+    // The three views are orthographic, so near content isn't enlarged.
+    this.camera.mode = views[kind]
+      ? B.Camera.ORTHOGRAPHIC_CAMERA
+      : B.Camera.PERSPECTIVE_CAMERA;
+    if (views[kind]) {
+      const [h, v, d] = views[kind][1];
+      direction = views[kind][0];
+      // The eye must also stay in front of the nearest content.
+      radius = Math.max(
+        Math.max(size[h] / 2 / tanH, size[v] / 2 / tanV) * FIT_MARGIN,
+        size[d] / 2 + 0.1,
+      );
+    } else {
+      direction = new B.Vector3(0.45, -0.75, 0.5);
+      radius =
+        ((size.length() / 2) * FIT_MARGIN) /
+        Math.sin(Math.atan(Math.min(tanH, tanV)));
+    }
+    const target = min.add(max).scale(0.5);
+    this.camera.setTarget(target);
+    this.camera.setPosition(
+      target.add(direction.normalize().scale(Math.max(0.3, radius))),
+    );
   }
   zoom(factor) {
     if (!this.failed)

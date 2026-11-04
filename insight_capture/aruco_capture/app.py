@@ -25,6 +25,7 @@ from .dataset import (
     suggest_pause_segments,
     validate_segments,
 )
+from .pose import camera_view
 from .pose_track import pose_settings, recompute, update_pose_settings
 
 
@@ -276,6 +277,13 @@ def create_app(capture):
             "streams": list(video),
             "duration_s": meta["duration_s"],
             "fps": report["fps"],
+            # Older sessions have no gravity alignment; their reference is the
+            # first head IMU pose, where the camera sits at imu_from_rgb.
+            "camera_view": camera_view(
+                meta.get("reference_from_rgb", meta.get("imu_from_rgb")),
+                meta.get("calibration"),
+                "reference_frame" in meta,
+            ),
         }
         if include_samples:
             flags = []

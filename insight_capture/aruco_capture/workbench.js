@@ -337,6 +337,7 @@ async function pollStatus() {
     const s = await api("/api/status");
     status = s;
     liveStreams = s.streams;
+    if (mode === "capture") scene.setCameraView(s.camera_view);
     $("connection").textContent = "服务已连接";
     $("connectionDot").className = "online";
     $("elapsed").textContent = seconds(s.elapsed_s, 1);
@@ -486,10 +487,12 @@ function changeMode() {
   scene.setVisible(mode !== "quality");
   if (mode === "capture") {
     videoCards(liveStreams);
+    scene.setCameraView(status?.camera_view);
     scene.setData(recentRows(liveRows, 5), true);
     $("sceneEmpty").querySelector("strong").textContent = "等待双臂定位";
   } else {
     videoCards(review?.streams || liveStreams);
+    scene.setCameraView(review?.camera_view);
     scene.setData(review?.rows || [], true);
     $("sceneEmpty").querySelector("strong").textContent = review
       ? "此录制暂无有效定位"
@@ -684,7 +687,10 @@ function installReview(data) {
   renderParts();
   renderQuality();
   renderPose(data.pose);
-  if (mode !== "capture") scene.setData(data.rows, true);
+  if (mode !== "capture") {
+    scene.setCameraView(data.camera_view);
+    scene.setData(data.rows, true);
+  }
   seek(Math.min(currentTime, data.duration_s));
   $("playbackNote").textContent =
     "TCP 与开合度随拖动即时更新；视频画面速率受浏览器解码限制，可能略有滞后";

@@ -114,8 +114,12 @@ def align(path):
         if not (path / OFFLINE_DB).is_file():
             raise ValueError("离线重算结果不存在，请重新离线重算或切回实时轨迹")
         pose_db = sqlite3.connect(f"file:{path / OFFLINE_DB}?mode=ro", uri=True)
+        correction = np.eye(4)
     else:
         pose_db = None
+        # Sessions migrated to the gravity frame keep their raw live poses;
+        # rotate them on read (an offline recompute already uses the new frame).
+        correction = np.array(meta.get("live_pose_correction", np.eye(4)), float)
     with connect(path) as db:
         # Insight9 is the master clock: each grid row is bound to the head
         # frame nearest to it (within half a frame period, so an fps that
@@ -167,6 +171,7 @@ def align(path):
                 if pose.get("valid"):
                     matrix = np.array(pose["matrix"])
                     if matrix.shape == (4, 4) and np.isfinite(matrix).all():
+                        matrix = correction @ matrix
                         state[i, offset : offset + 9] = np.r_[
                             matrix[:3, 3], matrix[:2, :3].reshape(-1)
                         ]
@@ -292,6 +297,11 @@ def validate_segments(segments, duration):
         if item.get("hands", "both") not in ("left", "right", "both"):
             raise ValueError("参与手臂须为 left、right 或 both")
         previous = end
+
+
+def _coordinate_frame(meta):
+    # Sessions recorded before gravity alignment carry no reference_frame.
+    return meta.get("reference_frame", "first synchronized head IMU pose")
 
 
 def _rotation_matrix_from_6d(row01):
@@ -585,7 +595,7 @@ def export(path):
                 "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
                 "features": features,
                 "action_semantics": "next absolute TCP state; final observation omitted; no action crosses a gap or annotation boundary",
-                "coordinate_frame": "recording first synchronized head IMU pose",
+                "coordinate_frame": "recording " + _coordinate_frame(meta),
                 "rotation_6d": "first two rotation matrix rows",
             },
         )
@@ -991,6 +1001,17 @@ def export_to_dataset(path, output_root):
                     f"目标数据集 fps/状态维度与本次不一致（已有 {existing_info['fps']}Hz/"
                     f"{state_dim} 维，本次 {fps}Hz/20 维），不能累加到同一目录"
                 )
+        coordinate_frame = (
+            f"each session's own {_coordinate_frame(meta)} (not shared across sessions)"
+        )
+        if (
+            existing_info is not None
+            and existing_info.get("coordinate_frame") != coordinate_frame
+        ):
+            raise ValueError(
+                "目标数据集与本次录制的位姿坐标系不一致（重力对齐坐标系与旧的相机 IMU 坐标系），"
+                "不能累加到同一目录"
+            )
         chunks_size = existing_info["chunks_size"] if existing_info else 1000
         data_cap_mb = existing_info["data_files_size_in_mb"] if existing_info else 100
         video_cap_mb = (
@@ -1211,7 +1232,7 @@ def export_to_dataset(path, output_root):
                 "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
                 "features": features,
                 "action_semantics": "next absolute TCP state; final observation omitted; no action crosses a gap or annotation boundary",
-                "coordinate_frame": "each session's own first synchronized head IMU pose (not shared across sessions)",
+                "coordinate_frame": coordinate_frame,
                 "rotation_6d": "first two rotation matrix rows",
             },
         )

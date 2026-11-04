@@ -12,7 +12,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .pose import DirectPose
+from .pose import GRAVITY_FRAME, DirectPose, camera_view
 
 
 def write_json(path, value):
@@ -173,6 +173,8 @@ class Capture:
                 or time.monotonic() - self.latest.get("vio/head", 0) > 2
             ):
                 raise ValueError("等待 Insight9 VIO")
+            if not self.config.get("vio_enabled", True) and self.pose.gravity_up is None:
+                raise ValueError("等待 Insight9 IMU 重力方向")
             label = (label or "").strip() or "My_Capture"
             if not re.fullmatch(r"[A-Za-z0-9_-]+", label):
                 raise ValueError("录制名称只能包含字母、数字、下划线和短横线")
@@ -361,7 +363,9 @@ class Capture:
                                 meta = json.loads(path.read_text())
                                 meta.update(
                                     reference_stamp_ns=stamp,
+                                    reference_frame=GRAVITY_FRAME,
                                     reference_from_vio_world=self.pose.reference.tolist(),
+                                    reference_from_rgb=self.pose.reference_camera.tolist(),
                                     imu_from_rgb=self.imu_from_rgb.tolist(),
                                 )
                                 write_json(path, meta)
@@ -448,6 +452,7 @@ class Capture:
                 "arms": self.observation
                 if now - self.latest.get("image/head", 0) < 1
                 else {},
+                "camera_view": camera_view(self.pose.reference_camera, self.calibration),
                 "streams": ["head"] + [x["name"] for x in self.config.get("rgb", [])],
             }
 

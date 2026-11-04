@@ -33,7 +33,7 @@ def _create_ros_node(capture):
     from rclpy.node import Node
     from rclpy.qos import qos_profile_sensor_data
     from rclpy.time import Time
-    from sensor_msgs.msg import CameraInfo, CompressedImage
+    from sensor_msgs.msg import CameraInfo, CompressedImage, Imu
     from tf2_ros import Buffer, TransformListener
 
     from rclpy.signals import SignalHandlerOptions
@@ -113,6 +113,30 @@ def _create_ros_node(capture):
 
     node.create_timer(1, extrinsic)
 
+    gravity = None
+    imu_from_frame = {head["imu_frame"]: np.eye(3), "": np.eye(3)}
+
+    def imu(message):
+        nonlocal gravity
+        a = message.linear_acceleration
+        accel = np.array([a.x, a.y, a.z])
+        # At rest the accelerometer reads +1 g pointing up; skip samples
+        # dominated by motion.
+        if not np.isfinite(accel).all() or abs(np.linalg.norm(accel) - 9.81) > 1.5:
+            return
+        frame = message.header.frame_id
+        if frame not in imu_from_frame:
+            try:
+                q = tf.lookup_transform(head["imu_frame"], frame, Time()).transform.rotation
+            except Exception:
+                return
+            imu_from_frame[frame] = matrix_from_transform(
+                [0, 0, 0], [q.x, q.y, q.z, q.w]
+            )[:3, :3]
+        accel = imu_from_frame[frame] @ accel
+        gravity = accel if gravity is None else 0.98 * gravity + 0.02 * accel
+        capture.pose.gravity_up = gravity / np.linalg.norm(gravity)
+
     def image_callback(name, compressed):
         def receive(message):
             capture.submit(
@@ -131,6 +155,11 @@ def _create_ros_node(capture):
         (head["vio_topic"], PoseStamped, vio),
         (head["info_topic"], CameraInfo, info),
         (head["image_topic"], CompressedImage, image_callback("head", True)),
+        (
+            head.get("imu_topic", head["vio_topic"].rsplit("/", 1)[0] + "/imu"),
+            Imu,
+            imu,
+        ),
     )
     bound = set()
 

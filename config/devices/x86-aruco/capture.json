@@ -7,6 +7,7 @@
     "image_topic": "/base_insight9/camera/color/image_rect_raw/compressed",
     "info_topic": "/base_insight9/camera/color/camera_info",
     "vio_topic": "/base_insight9/camera/vio_100hz",
+    "imu_topic": "/base_insight9/camera/imu",
     "imu_frame": "base_insight9_camera_imu_optical",
     "rgb_frame": "base_insight9_camera_rgb",
     "rectified": true

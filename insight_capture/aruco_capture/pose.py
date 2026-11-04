@@ -26,6 +26,50 @@ REFINEMENTS = {
 }
 
 
+GRAVITY_FRAME = (
+    "gravity-aligned frame at the first synchronized head pose: z up (against "
+    "gravity), y = head camera optical axis projected onto the horizontal "
+    "plane, x = y × z"
+)
+
+
+def gravity_frame(up, forward):
+    """Rotation from the IMU frame to GRAVITY_FRAME, as a 4x4 matrix.
+
+    ``up`` and ``forward`` (the camera optical axis) are IMU-frame vectors."""
+    z = np.asarray(up, float) / np.linalg.norm(up)
+    y = np.asarray(forward, float) - np.dot(forward, z) * z
+    if np.linalg.norm(y) < 0.1:
+        raise ValueError("头部相机光轴接近竖直，无法确定水平朝前方向")
+    y /= np.linalg.norm(y)
+    result = np.eye(4)
+    result[:3, :3] = np.stack([np.cross(y, z), y, z])
+    return result
+
+
+def camera_view(reference_from_rgb, calibration, gravity_aligned=True):
+    """What the 3D view needs to look out of the head camera, or None."""
+    if reference_from_rgb is None:
+        return None
+    reference_from_rgb = np.asarray(reference_from_rgb, float)
+    view = {
+        "gravity_aligned": gravity_aligned,
+        "reference_from_rgb": reference_from_rgb.tolist(),
+    }
+    if calibration:
+        intrinsic = np.asarray(calibration["intrinsic"], float)
+        # The view keeps its up direction vertical, so its vertical field of
+        # view spans whichever image axis lies closer to vertical (Insight9
+        # is mounted rotated, making that the image x axis).
+        rotation = reference_from_rgb[:3, :3]
+        if gravity_aligned and abs(rotation[2, 0]) > abs(rotation[2, 1]):
+            half = calibration["width"] / 2 / intrinsic[0, 0]
+        else:
+            half = calibration["height"] / 2 / intrinsic[1, 1]
+        view["fov_y_rad"] = 2 * float(np.arctan(half))
+    return view
+
+
 def marker_detector(dictionary, refinement):
     """ArUco detector with the named corner refinement.
 
@@ -96,6 +140,11 @@ class DirectPose(MultiCubeMarkerEstimator):
         self.time = 0.0
         self.generation = 0
         self.last_vio = None
+        # Unit "up" in the IMU frame from the accelerometer, set by the ROS
+        # source; only used when VIO is disabled.
+        self.gravity_up = None
+        # Head camera pose in the reference frame when the reference was set.
+        self.reference_camera = None
         self.tcp = {
             name: matrix_from_transform(value["translation_m"], value["rotation_xyzw"])
             for name, value in config["tcp"].items()
@@ -124,6 +173,7 @@ class DirectPose(MultiCubeMarkerEstimator):
 
     def reset_reference(self):
         self.reference = None
+        self.reference_camera = None
         self.previous.clear()
 
     def _solve_target(self, camera, marker_ids, objects, pixels, intrinsic):
@@ -207,7 +257,18 @@ class DirectPose(MultiCubeMarkerEstimator):
         self.world_from_rgb = world_from_imu @ imu_from_rgb
         self.time = seconds
         if self.reference is None:
-            self.reference = np.linalg.inv(world_from_imu)
+            # Insight9's VIO world is gravity-aligned with z up; without VIO
+            # the accelerometer supplies the same direction in the IMU frame.
+            if head_pose is not None:
+                up = world_from_imu[:3, :3].T @ [0.0, 0.0, 1.0]
+            elif self.gravity_up is not None:
+                up = self.gravity_up
+            else:
+                raise ValueError("等待 Insight9 IMU 重力方向")
+            self.reference = gravity_frame(up, imu_from_rgb[:3, 2]) @ np.linalg.inv(
+                world_from_imu
+            )
+            self.reference_camera = self.reference @ self.world_from_rgb
         # Offline recompute detects markers in worker processes and replays
         # them here, so the temporal state below stays sequential.
         estimates = self.estimate(

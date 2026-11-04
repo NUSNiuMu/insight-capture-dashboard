@@ -42,10 +42,10 @@ docker compose -f deploy/aruco/compose.yml logs --tail=100
 docker compose -f deploy/aruco/compose.yml down
 ```
 
-没有 Compose/Buildx 插件时，也可直接运行：
+没有 Compose 插件时，也可直接运行（需 BuildKit，Dockerfile 使用了 cache mount）：
 
 ```bash
-DOCKER_BUILDKIT=0 docker build --network host -f deploy/aruco/Dockerfile -t insight-aruco-capture:local .
+docker build -f deploy/aruco/Dockerfile -t insight-aruco-capture:local .
 mkdir -p outputs/aruco-capture outputs/lerobot_datasets
 docker run -d --name insight-aruco-capture --network host --init \
   --restart unless-stopped --stop-signal SIGINT \
@@ -171,7 +171,7 @@ Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、
 
 工作台使用深色布局，左手蓝色、右手橙色。实时页显示输入接收频率、相机/VIO/内外参状态、cube 标记与重投影误差、TCP 坐标和串口开合度。无数据时明确显示等待或无效，不填充演示数值。
 
-3D 轨迹使用仓库已有 Babylon.js，在本地提供资源，网页无需访问 CDN。支持旋转、平移、缩放、适配、俯视/正视/侧视和全屏；坐标单位米，网格间距 0.1 m，TCP 附带 XYZ 朝向轴。无效帧和超过 0.3 秒的间隔会断开轨迹。实时轨迹保留约 4 分钟、最多 2400 次观测，开始新录制或 VIO 重置时清空旧参考系轨迹；离线回放显示整次录制轨迹，长录制只抽稀绘制点，不改变原始数据和 QC。
+3D 轨迹使用仓库已有 Babylon.js，在本地提供资源，网页无需访问 CDN。默认使用相机视角（沿头部相机光轴、从相机后方 0.6 m 处看，原点即相机位置保持在画面中央；视场角按内参计算，z 轴朝上），也支持旋转、平移、缩放、适配（从后上方透视，框住全部轨迹与原点）、俯视/正视/侧视（正交投影：俯视 Y 朝上、正视从后方沿 Y 看、侧视从右侧看）和全屏；坐标单位米，网格间距 0.1 m；重力对齐的录制里网格水平铺在轨迹最低点下方（按 0.1 m 取整，标注其 z 高度），原点有虚线垂直连到网格，TCP 附带 XYZ 朝向轴。无效帧和超过 0.3 秒的间隔会断开轨迹。实时轨迹保留约 4 分钟、最多 2400 次观测，开始新录制或 VIO 重置时清空旧参考系轨迹；离线回放显示整次录制轨迹，长录制只抽稀绘制点，不改变原始数据和 QC。
 
 视频预览为按需 JPEG，实时界面最高约 5 次更新/秒；回放拖动时间轴时，3D 轨迹光标和左右手 TCP/开合度会**立即**按拖动位置更新（`review.rows` 已整个加载在浏览器内存里，纯本地数组查找，不受视频影响）；视频画面仍按浏览器实际请求与解码速度显示，快速拖动时可能滞后于当前光标位置几帧，不能把网页视频显示速率当作输入帧率。采集和导出使用原始输入与配置采样率。
 
@@ -192,10 +192,17 @@ Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、
 
 ## 位姿与有效性
 
-每次录制以**第一帧能够与头部 VIO 同步的 RGB 所对应的 IMU 位姿**建立固定参考系。双臂共用该参考系；不同录制的原点独立。
+每次录制以**第一帧能够与头部 VIO 同步的 RGB 所对应的 IMU 位姿**为原点，建立**重力对齐**的固定参考系。双臂共用该参考系；不同录制的原点和朝前方向独立：
+
+- `z` 轴：重力的反方向（竖直朝上）；
+- `y` 轴：头部相机光轴在水平面上的投影（朝前）；
+- `x` 轴：`y × z`（朝右）。
+
+重力方向取自 Insight9：使用 VIO 时取 VIO 世界坐标系的 z 轴（Insight9 VIO 世界系本身与重力对齐、z 朝上）；关闭 VIO 时取 `imu_topic`（默认 `/base_insight9/camera/imu`）加速度计的低通结果，按消息 `frame_id` 经 TF 转到 `imu_frame`，未收到 IMU 前不能起录。光轴接近竖直（与水平面夹角超过约 84°）时无法确定朝前方向，会报错。`session.json` 记录 `reference_frame` 与参考时刻的相机位姿 `reference_from_rgb`；LeRobot 导出的 `coordinate_frame` 写明所用坐标系。此前的录制没有 `reference_frame`，仍是旧的相机 IMU 坐标系，离线重算沿用录制时的参考系不变；累积数据集拒绝混入坐标系不同的录制。开启 VIO 录制的旧数据可用 `python3 -m insight_capture.aruco_capture.frame_migration <录制目录>...` 转换为重力对齐坐标系（`--revert` 还原）：只改 `session.json`，`capture.sqlite3` 不动——实时位姿在读取时乘上记录的 `live_pose_correction`，离线重算直接得到新坐标系；已有旧坐标系 `pose_offline.sqlite3` 的录制须先删除它。
 
 ```text
-T_reference_TCP = inverse(T_world_IMU_start)
+T_reference_TCP = R_gravity(start)
+                × inverse(T_world_IMU_start)
                 × T_world_IMU_at_image
                 × T_IMU_RGB
                 × T_RGB_cube
@@ -207,7 +214,7 @@ T_reference_TCP = inverse(T_world_IMU_start)
 
 **固定相机模式（不使用 VIO）**：实时采集页顶部"使用 VIO"开关默认启用；头部相机刚性固定、不会移动时可以关闭（录制中不可修改，停止后才能切换，下次开始录制起生效，设置写入 `_devices.json` 持久化）。关闭后：
 - 开始录制不再要求 Insight9 发布 VIO 话题或 VIO 数据新鲜，只要求 RGB、CameraInfo 和 IMU→RGB 外参就绪。
-- 位姿计算把 IMU 坐标系当作与世界坐标系重合（固定不变），上面公式里的 `T_world_IMU_start`/`T_world_IMU_at_image` 都退化成单位阵，cube 位姿完全相对这个固定相机计算，不再有 VIO 漂移或外推误差。
+- 位姿计算把 IMU 坐标系当作与世界坐标系重合（固定不变），上面公式里的 `T_world_IMU_start`/`T_world_IMU_at_image` 都退化成单位阵，cube 位姿完全相对这个固定相机计算，不再有 VIO 漂移或外推误差；重力方向改由 IMU 加速度计提供，开始录制还要求已收到 IMU 数据。
 - 即使 VIO 话题实际仍有数据（只是没被使用），其跳变/重置也不会触发"VIO 重置，请停止后重新录制"——这个判断只在开关开启时生效。
 - 热插拔看门狗（见下一节）判断"是否失联"时也会跳过 VIO 新鲜度，只看图像话题，避免固定相机场景下因为 VIO 永远不新鲜而误判。
 
