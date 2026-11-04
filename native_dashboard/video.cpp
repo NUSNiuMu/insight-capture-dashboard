@@ -256,16 +256,18 @@ void NativeVideo::start() {
         auto *peer = gst_element_factory_make("webrtcbin", "peer");
         QByteArray liveDecode(decode);
         const int longest = qMax(m_sourceSize.width(), m_sourceSize.height());
+        QString caps = "video/x-raw(memory:NVMM),format=I420";
         if (longest > 0) {
             const double factor = qMin(1.0, 720.0 / longest);
             const int width = qMax(2, int(m_sourceSize.width() * factor) / 2 * 2);
             const int height = qMax(2, int(m_sourceSize.height() * factor) / 2 * 2);
-            // I420 forces a separate VIC surface even when no resize is needed.
-            const auto scaling = QString("nvvidconv ! video/x-raw(memory:NVMM),format=I420,width=%1,height=%2 ! "
-                                         "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream ! ")
-                                     .arg(width).arg(height).toUtf8();
-            liveDecode.replace("nv3dsink name=display", scaling + "nv3dsink name=display");
+            caps += QString(",width=%1,height=%2").arg(width).arg(height);
         }
+        // Release decoder surfaces even before the source size is known.
+        const auto scaling = QString("nvvidconv ! %1 ! queue max-size-buffers=1 "
+                                     "max-size-bytes=0 max-size-time=0 leaky=downstream ! ")
+                                 .arg(caps).toUtf8();
+        liveDecode.replace("nv3dsink name=display", scaling + "nv3dsink name=display");
         m_decode = gst_parse_bin_from_description(
             liveDecode.replace("nv3dsink", sinkName).constData(), TRUE, &error);
         if (!peer || !m_decode || error) {
@@ -739,6 +741,7 @@ QVariantMap NativeVideo::diagnostics() const {
     }
     std::sort(timings.begin(), timings.end());
     return {{"camera", m_name},
+            {"instance_age_ms", m_clock.elapsed()},
             {"transport", !m_media.isEmpty() ? "replay" : m_useNative ? "local" : "webrtc"},
             {"native_received", qulonglong(m_nativeReceived)},
             {"frame_trace", frameTrace},

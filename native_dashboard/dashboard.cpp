@@ -163,8 +163,9 @@ void Dashboard::poll() {
             }
             list.append(QVariantMap{{"name", c["name"].toString()},
                                     {"device", c["device_name"].toString(c["name"].toString())},
-                                    {"width", c["width"].toInt()},
-                                    {"height", c["height"].toInt()},
+                                    // Preview cache updates must not replace live video items.
+                                    {"width", c["source_width"].toInt()},
+                                    {"height", c["source_height"].toInt()},
                                     {"row", c["row"].toInt()},
                                     {"column", c["column"].toInt()},
                                     {"label", c["label"].toString()},
