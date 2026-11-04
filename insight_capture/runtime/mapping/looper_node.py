@@ -515,7 +515,7 @@ class LooperNode(Node):
                         reason=update["reason"] if not update["localized"] else wrist.fusion.diagnostics["mode"])
                     wrist.diagnostics["map_update_alignment"] = update["alignment"]
                     wrist.map_revision = update["map_revision"]
-                self.stats = {"state": "mapping" if result["landmarks"]>=40 else "building", "map_point_count": result["landmarks"],
+                self.stats = {"state": "mapping" if result["localization_ready"] else "building", "map_point_count": result["landmarks"],
                               "geometric_match": result["verified_relocalization"],
                               "keyframes": result["keyframes"], "raw_landmarks": result["raw_landmarks"]}
             else:

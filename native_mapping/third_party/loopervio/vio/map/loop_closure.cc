@@ -108,7 +108,7 @@ bool LoopClosure::Process(KeyFrame* cur_kf) {
     static common::Timer timer2("Loop OptimizeLoopPose");
     timer2.Tic();
     // use map points in local frames
-    auto opt_loop_pose = OptimizeLoopPose(cur_kf, loop_frm0, Twc0.value());
+    auto opt_loop_pose = OptimizeLoopPose(cur_kf, loop_frm0, Twc0.value(), 40);
     timer2.Toc();
     VLOG(2) << timer2;
     if (!opt_loop_pose.has_value()) {
@@ -169,9 +169,9 @@ std::optional<dm::math::Rigid3d> LoopClosure::Localize(KeyFrame* query) {
   auto candidates = map_->RetrieveSimilarFrames(query->bow_vecs(query->master_cam_id()), 5);
   std::vector<std::pair<dm::math::Rigid3d,Evidence>> hypotheses;
   for (const auto& candidate : candidates) {
-    auto initial = SolveLoopPose(query, candidate.kf, 10);
+    auto initial = SolveLoopPose(query, candidate.kf, kLocalizationMinInliers);
     if (!initial) continue;
-    auto refined = OptimizeLoopPose(query, candidate.kf, *initial);
+    auto refined = OptimizeLoopPose(query, candidate.kf, *initial, kLocalizationMinInliers);
     if (!refined) continue;
     evidence_.reference=candidate.kf;
     const auto camera_pose=*refined*KeyFrame::Extrinsic(query->master_cam_id());
@@ -291,7 +291,8 @@ std::optional<dm::math::Rigid3d> LoopClosure::SolveLoopPose2(KeyFrame* query_kf,
 
 std::optional<dm::math::Rigid3d> LoopClosure::OptimizeLoopPose(KeyFrame* query_kf,
                                                                KeyFrame* loop_kf,
-                                                               const math::Rigid3d& query_Twi) {
+                                                               const math::Rigid3d& query_Twi,
+                                                               size_t minimum_inliers) {
   MapPointSet local_mpts;
   KeyFrameSet loop_kfs = {loop_kf};
   auto kfs = loop_kf->GetBestCovisibilityKeyFrames(5);
@@ -310,7 +311,7 @@ std::optional<dm::math::Rigid3d> LoopClosure::OptimizeLoopPose(KeyFrame* query_k
   ORBMatcher matcher(100, 150, 0.85);
   std::vector<MapPoint*> matched_mpts;
   matcher.SearchByProjectionForLoop(query_kf, query_Twi, local_mpts, &matched_mpts, 20);
-  return RefinePose(query_kf,matched_mpts,query_Twi,40,.5);
+  return RefinePose(query_kf,matched_mpts,query_Twi,minimum_inliers,.5);
 }
 
 std::optional<dm::math::Rigid3d> LoopClosure::RefinePose(KeyFrame* query_kf,

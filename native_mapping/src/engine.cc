@@ -74,7 +74,7 @@ Json Engine::Map(const Json& request, const std::vector<cv::Mat>& images) {
       ++retained;
     }
     auto seed=query.anchor->pose()*query.anchor_pose.Inverse()*query.frame->pose();
-    auto pose=loops_->RefinePose(query.frame.get(),matched,seed,10,.8);
+    auto pose=loops_->RefinePose(query.frame.get(),matched,seed,LoopClosure::kLocalizationMinInliers,.8);
     auto evidence=loops_->evidence();
     Json updated={{"localized",pose.has_value()},{"map_revision",map_revision_},
       {"reason",evidence.reason},{"alignment",{{"retained",retained},
@@ -99,7 +99,7 @@ Json Engine::Localize(const Json& request, const std::vector<cv::Mat>& arrays) {
   if(arrays.size()!=3) throw std::runtime_error("localization expects image, pixels and descriptors");
   const auto& image=arrays[0];
   if (!mapping_) throw std::runtime_error("mapping is not initialized");
-  if (Stats().at("landmarks").get<int>()<40)
+  if (!Stats().at("localization_ready").get<bool>())
     return {{"localized",false},{"reason","map_not_ready"},{"map_revision",map_revision_}};
   int camera_id=request.at("camera_id");
   if(camera_id<2 || camera_id>3) throw std::runtime_error("invalid wrist camera id");
@@ -142,7 +142,8 @@ Json Engine::Stats() const {
     auto point=entry.second;
     valid+=!point->IsBad() && point->NumOfObs()>=3 && point->state().refined;
   }
-  return {{"keyframes",mapping_->map()->KeyFramesSize()},{"landmarks",valid},{"map_revision",map_revision_},
+  return {{"keyframes",mapping_->map()->KeyFramesSize()},{"landmarks",valid},
+          {"localization_ready",valid>=LoopClosure::kLocalizationMinInliers},{"map_revision",map_revision_},
           {"raw_landmarks",mapping_->map()->MapPointsSize()}};
 }
 std::vector<cv::Mat> Engine::Geometry() const {

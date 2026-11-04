@@ -20,6 +20,7 @@ class LocalMapping;
 
 class LoopClosure : public vio::VioThread {
  public:
+  static constexpr size_t kLocalizationMinInliers = 10;
   using Ptr = std::shared_ptr<LoopClosure>;
   struct Evidence {
     size_t matches=0, inliers=0, cells=0;
@@ -43,7 +44,8 @@ class LoopClosure : public vio::VioThread {
 
   std::optional<dm::math::Rigid3d> OptimizeLoopPose(KeyFrame* query_kf,
                                                     KeyFrame* loop_kf,
-                                                    const math::Rigid3d& query_Twi);
+                                                    const math::Rigid3d& query_Twi,
+                                                    size_t minimum_inliers);
   std::optional<dm::math::Rigid3d> RefinePose(KeyFrame* query_kf,
       const std::vector<MapPoint*>& matched, const math::Rigid3d& initial,
       size_t minimum_inliers, double minimum_ratio);
