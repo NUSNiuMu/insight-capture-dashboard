@@ -29,6 +29,7 @@ class MobileCaptureRoutes:
         manager = self.context.recording_manager
         busy = self._task is not None and not self._task.done()
         status = self._last_status if busy else manager.status()
+        playing = self.context.prepared_playback_manager.status()["state"] == "playing"
         if not busy:
             self._last_status = status
         if busy:
@@ -46,7 +47,10 @@ class MobileCaptureRoutes:
         else:
             state = "idle"
         task_status = self.context.take_store.task_status()
-        if not busy and not status.get("recording") and state != "saving":
+        if playing:
+            state = "playback"
+            report = {**self._last_preflight, "ok": False, "failures": [], "camera_health": {}}
+        elif not busy and not status.get("recording") and state != "saving":
             now = time.monotonic()
             refresh = now >= self._next_discovery
             self._last_preflight = self.context.capture_preflight.evaluate(

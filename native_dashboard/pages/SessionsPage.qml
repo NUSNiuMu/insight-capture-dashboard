@@ -27,12 +27,12 @@ PageFrame {
         heading: "Task"
         RowLayout {
             Layout.fillWidth: true
-            Ui.ComboBox {
+            Ui.TaskPicker {
                 id: taskSelect
                 objectName: "session-task"
                 Layout.fillWidth: true
                 model: page.taskData.tasks || []
-                textRole: "name"
+                activeTaskId: page.taskData.active_task_id || ""
                 enabled: !page.locked
             }
             Ui.Button {
@@ -248,8 +248,10 @@ PageFrame {
     Connections {
         target: workspace
         function onCompleted(key, success) {
-            if (key === "action" && success)
+            if (key === "action" && success && editor.opened) {
+                taskSelect.selectedTaskId = taskId.text.trim();
                 editor.close();
+            }
         }
     }
 }

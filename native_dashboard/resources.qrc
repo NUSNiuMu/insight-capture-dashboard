@@ -22,6 +22,7 @@
     <file>ui/Button.qml</file>
     <file>ui/CheckBox.qml</file>
     <file>ui/ComboBox.qml</file>
+    <file>ui/TaskPicker.qml</file>
     <file>ui/Dialog.qml</file>
     <file>ui/Panel.qml</file>
     <file>ui/ProgressBar.qml</file>

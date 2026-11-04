@@ -735,13 +735,15 @@ class PreparedPlaybackManager:
             max_skew_ms = max(
                 float(item["max_skew_ms"]) for item in source_camera_manifest
             )
-            pose_coverage = {
+            device_names = {str(camera.get("device_name") or camera["name"]) for camera in cameras}
+            pose_coverage = {name: 0.0 for name in device_names}
+            pose_coverage.update({
                 str(item["name"]): round(
                     sum(bool(value) for value in item.get("valid", [])) / frame_count,
                     6,
                 )
                 for item in pose_manifest
-            }
+            })
             quality_state = (
                 "pass"
                 if total_duplicates == 0
@@ -792,6 +794,7 @@ class PreparedPlaybackManager:
                     "duplicate_frames": total_duplicates,
                     "max_skew_ms": round(max_skew_ms, 3),
                     "pose_coverage": pose_coverage,
+                    "missing_pose_tracks": sorted(device_names - scan["poses"].keys()),
                     "codec_discontinuities": self._review_codec_discontinuities,
                 },
                 "preparation_timings": {
@@ -891,10 +894,12 @@ class PreparedPlaybackManager:
         for name, values in pose_data.items():
             stamps = np.asarray(values["stamps"], dtype=np.int64)
             if len(stamps) < 2:
-                raise ValueError(f"{name} has fewer than two pose samples")
+                continue
             order = np.argsort(stamps)
             stamps = stamps[order]
             unique = np.concatenate(([True], np.diff(stamps) > 0))
+            if np.count_nonzero(unique) < 2:
+                continue
             normalized_poses[name] = (
                 stamps[unique],
                 np.asarray(values["positions"], dtype=np.float64)[order][unique],
@@ -1038,6 +1043,8 @@ class PreparedPlaybackManager:
         result = []
         for pose in poses:
             name = str(pose["name"])
+            if name not in samples:
+                continue
             stamps, positions, quaternions = samples[name]
             clipped = np.clip(targets, stamps[0], stamps[-1])
             output_positions = np.column_stack(

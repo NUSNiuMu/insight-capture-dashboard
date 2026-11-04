@@ -302,7 +302,7 @@ ApplicationWindow {
                                         }
                                     }
                                     Node {
-                                        visible: poseRoot.modelData.visible; position: poseRoot.modelData.displayPosition; rotation: poseRoot.modelData.displayRotation
+                                        visible: poseRoot.modelData.visible || (dashboard.playback && poseRoot.modelData.pointCount > 0); position: poseRoot.modelData.displayPosition; rotation: poseRoot.modelData.displayRotation
                                         Node {
                                             position: poseRoot.modelData.modelOffset; rotation: poseRoot.modelData.modelRotation
                                             scale: Qt.vector3d(poseRoot.modelData.modelScale,poseRoot.modelData.modelScale,poseRoot.modelData.modelScale)
@@ -329,7 +329,7 @@ ApplicationWindow {
                         Layout.fillWidth: true; Layout.margins: 10
                         Repeater {
                             model: dashboard.poses
-                            delegate: Ui.CheckBox { required property var modelData; text: Ui.Texts.value(modelData.role) + " · " + modelData.pointCount + " points"; checked: modelData.trailEnabled; onToggled: modelData.setTrail(checked) }
+                            delegate: Ui.CheckBox { required property var modelData; text: Ui.Texts.value(modelData.role) + " · " + modelData.pointCount + " points" + (dashboard.playback && !modelData.visible && modelData.pointCount > 0 ? " · Pose gap" : ""); checked: modelData.trailEnabled; onToggled: modelData.setTrail(checked) }
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -343,7 +343,7 @@ ApplicationWindow {
                 id: controls; anchors.fill: parent; anchors.margins: 11; spacing: 8
                 RowLayout {
                     Label { text: "Task"; color: "#776d5a" }
-                    Ui.ComboBox { id: task; Layout.preferredWidth: 190; model: dashboard.tasks; textRole: "name"; valueRole: "task_id"; enabled: !root.captureLocked }
+                    Ui.TaskPicker { id: task; Layout.preferredWidth: 190; model: dashboard.tasks; activeTaskId: ((dashboard.state.task || {}).task || {}).task_id || ""; enabled: !root.captureLocked }
                     Ui.Button { id: activateButton; text: "Use task"; highlighted: !root.taskActive; enabled: task.count>0&&!dashboard.state.recording&&!dashboard.playback&&!dashboard.state.recordingBusy&&!root.captureAction; onClicked: dashboard.command("task",task.currentValue) }
                     Ui.Button { text: "End task"; enabled: !root.captureLocked && root.taskActive; onClicked: dashboard.command("endTask") }
                     Rectangle { width: 1; height: 25; color: "#ddd1b9" }

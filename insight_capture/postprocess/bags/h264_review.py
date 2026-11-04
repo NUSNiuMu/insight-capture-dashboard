@@ -37,7 +37,7 @@ def encode_review(manager, bag_path, cameras, selections, output, progress):
     from rosidl_runtime_py.utilities import get_message
     from .synchronization import (
         _decode_review_image,
-        _video_writer, _compose_review_frame, REVIEW_HEIGHT, REVIEW_WIDTH, PLAYBACK_FPS,
+        _GstH264Writer, _compose_review_frame, REVIEW_HEIGHT, REVIEW_WIDTH, PLAYBACK_FPS,
     )
     by_topic = {str(c["topic"]): c for c in cameras}
     types = bag_topic_types(bag_path)
@@ -69,7 +69,7 @@ def encode_review(manager, bag_path, cameras, selections, output, progress):
                           for c in cameras]
             writer.write(_compose_review_frame(
                 [frames[c["name"]] for c in cameras], cameras, duplicates, next_target,
-                bgrx=bool(getattr(writer, "uses_bgrx", False)),
+                bgrx=True,
             ))
             next_target += 1
             if next_target % 10 == 0:
@@ -84,7 +84,7 @@ def encode_review(manager, bag_path, cameras, selections, output, progress):
             result = decoder.pull()
 
     try:
-        writer = _video_writer(output, shape, PLAYBACK_FPS)
+        writer = _GstH264Writer(output, shape, PLAYBACK_FPS)
         with manager._lock:
             manager._writer = writer
         for topic, raw, _stamp in iter_messages(bag_path, by_topic):

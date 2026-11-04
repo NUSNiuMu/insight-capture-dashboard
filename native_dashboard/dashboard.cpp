@@ -53,7 +53,7 @@ Dashboard::Dashboard(QUrl server, int fps, QObject *parent) : QObject(parent), m
     });
     connect(&m_poseSocket, &QWebSocket::disconnected, this, [this] {
         m_connected = false;
-        for (auto *p : m_poseOrder) {
+        if (!playback()) for (auto *p : m_poseOrder) {
             p->visible = false;
             p->notify();
         }
@@ -67,7 +67,7 @@ void Dashboard::setSpatialActive(bool value) {
     m_spatialActive = value;
     if (value) for (auto *p : m_poseOrder) {
         if (p->geometryDirty && p->trailEnabled) {
-            p->geometry->setPoints(m_keep ? p->kept : (p->visible ? p->points : QVector<QVector3D>()));
+            p->geometry->setPoints(m_keep ? p->kept : p->points);
             p->geometryDirty = false;
             p->lastGeometry = m_clock.elapsed();
         }
@@ -212,6 +212,10 @@ void Dashboard::poll() {
         const auto previous = m_state;
         m_state["playbackState"] = d["state"].toString();
         m_state["playbackProgress"] = d["progress"].toDouble();
+        if (!m_requestedPlayback.isEmpty() && d["state"] == "error") {
+            m_message = d["error"].toString();
+            m_requestedPlayback.clear();
+        }
         if (!m_requestedPlayback.isEmpty() && !m_playbackStarting && !playback() &&
             d.contains("manifest_url"))
             activatePlayback(d);
@@ -448,7 +452,7 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         // Consume every trace delta while hidden, but defer scene notifications and geometry.
         if (!m_spatialActive) continue;
         if (p->trailEnabled && p->geometryDirty && m_clock.elapsed() - p->lastGeometry >= 100) {
-            p->geometry->setPoints(m_keep ? p->kept : (p->visible ? p->points : QVector<QVector3D>()));
+            p->geometry->setPoints(m_keep ? p->kept : p->points);
             p->lastGeometry = m_clock.elapsed();
             p->geometryDirty = false;
         }
@@ -622,8 +626,17 @@ void Dashboard::activatePlayback(const QJsonObject &status) {
             m_manifest = manifest;
             m_message = manifest["quality"].toObject()["state"] == "warning"
                             ? "Playback ready · Quality warnings" : "Playback ready";
+            QStringList missing;
+            for (auto name : manifest["quality"].toObject()["missing_pose_tracks"].toArray())
+                missing.append(name.toString());
+            if (!missing.isEmpty())
+                m_message = "Playback ready · No global pose: " + missing.join(", ");
             m_playbackStarting = false;
             clearTraces();
+            for (auto *pose : m_poseOrder) {
+                pose->visible = false;
+                pose->notify();
+            }
             m_haveOrigin = false;
             QVariantList list;
             for (auto v : manifest["cameras"].toArray()) {
@@ -679,9 +692,17 @@ void Dashboard::setPlaybackTime(double seconds) {
         p["quaternion_xyzw"] = QJsonArray{q.x(), q.y(), q.z(), q.scalar()};
         p["visible"] = valid[qBound(0, qRound(frame), int(valid.size()) - 1)].toBool();
         QJsonArray trace;
+        int lastValid = -1;
         for (int i = 0; i <= low && i < positions.size(); ++i)
-            if (valid[i].toBool())
+            if (valid[i].toBool()) {
                 trace.append(positions[i]);
+                lastValid = i;
+            }
+        // A pose gap does not erase the last recorded device from the review scene.
+        if (!p["visible"].toBool() && lastValid >= 0) {
+            p["position"] = positions[lastValid];
+            p["quaternion_xyzw"] = quaternions[lastValid];
+        }
         p["trace"] = trace;
         p.remove("trace_update");
         poses.append(p);

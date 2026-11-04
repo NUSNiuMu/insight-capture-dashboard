@@ -43,13 +43,12 @@ PageFrame {
         heading: "Capture"
         RowLayout {
             Layout.fillWidth: true
-            Ui.ComboBox {
+            Ui.TaskPicker {
                 id: captureTask
                 objectName: "recording-task"
                 Layout.fillWidth: true
                 model: dashboard.tasks
-                textRole: "name"
-                valueRole: "task_id"
+                activeTaskId: ((page.status.task_status || {}).task || {}).task_id || ""
                 enabled: !page.locked
             }
             Ui.Button {

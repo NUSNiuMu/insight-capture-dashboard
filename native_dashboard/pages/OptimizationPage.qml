@@ -9,7 +9,7 @@ PageFrame {
     property var inputs: workspace.data.optimizationInputs || {}
     property var status: workspace.data.optimization || {}
     property var trajectory: workspace.data.trajectories || {}
-    property bool running: status.state === "running" || !!workspace.busy.action
+    property bool running: ["running", "stopping"].indexOf(status.state) >= 0 || !!workspace.busy.action
     property string loadedRun: ""
     heading: "Optimize"
     description: "Compare VIO with reconstructed trajectories."
@@ -132,12 +132,20 @@ PageFrame {
             color: "#776d5a"
         }
     }
-    Label {
-        text: workspace.data.optLog || ""
-        textFormat: Text.PlainText
-        wrapMode: Text.Wrap
+    ScrollView {
         Layout.fillWidth: true
-        visible: text.length > 0
+        Layout.preferredHeight: 240
+        visible: !!workspace.data.optLog
+        clip: true
+        TextArea {
+            text: workspace.data.optLog || ""
+            textFormat: Text.PlainText
+            wrapMode: TextEdit.Wrap
+            readOnly: true
+            selectByMouse: true
+            font.family: Ui.Theme.monoFont
+            font.pixelSize: 12
+        }
     }
     Ui.Section {
         eyebrow: "03  COMPARISON"

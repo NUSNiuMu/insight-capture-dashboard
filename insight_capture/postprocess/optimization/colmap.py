@@ -57,6 +57,10 @@ class OptimizationManager:
 
     def status(self) -> Dict:
         with self._lock:
+            result = dict(self._result)
+            log_url = result.get("colmap_log")
+            if log_url and not (self.project_root / "runs" / log_url.removeprefix("/optimization-runs/")).is_file():
+                result.pop("colmap_log")
             return {
                 "state": self._state,
                 "step": self._step,
@@ -64,7 +68,7 @@ class OptimizationManager:
                 "sub_progress": round(self._sub_progress, 4),
                 "run_name": self._run_name,
                 "log_tail": list(self._log[-30:]),
-                "result": dict(self._result),
+                "result": result,
             }
 
     def start(
@@ -77,7 +81,7 @@ class OptimizationManager:
         output_hz: float = 5.0,
     ) -> None:
         with self._lock:
-            if self._state == "running":
+            if self._process is not None:
                 raise RuntimeError("Optimization already running")
             bag_path = bag_path.resolve()
             if not bag_path.exists():
@@ -123,8 +127,9 @@ class OptimizationManager:
     def stop(self) -> None:
         with self._lock:
             process = self._process
-        if process is None:
-            return
+            if process is None:
+                return
+            self._state = "stopping"
         try:
             os.killpg(os.getpgid(process.pid), signal.SIGINT)
         except ProcessLookupError:
@@ -136,13 +141,7 @@ class OptimizationManager:
                 os.killpg(os.getpgid(process.pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        with self._lock:
-            if self._process is process:
-                self._process = None
-                self._state = "idle"
-                self._step = 0
-                self._sub_progress = 0.0
-                self._colmap_phase = ""
+            process.wait()
 
     def _monitor(self, process: subprocess.Popen) -> None:
         assert process.stdout is not None
@@ -162,13 +161,14 @@ class OptimizationManager:
         return_code = process.wait()
         success = return_code == 0
         with self._lock:
+            stopped = self._state == "stopping"
             if self._process is process:
                 self._process = None
-                self._state = "done" if success else "error"
-                if success:
+                self._state = "stopped" if stopped else "done" if success else "error"
+                if success and not stopped:
                     self._step = 4
                     self._sub_progress = 1.0
-        if self._on_finished:
+        if self._on_finished and not stopped:
             try:
                 self._on_finished(success)
             except Exception:

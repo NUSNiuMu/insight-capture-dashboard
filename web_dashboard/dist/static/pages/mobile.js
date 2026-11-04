@@ -1,9 +1,9 @@
-import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261103-english-mobile-2";
-import { CaptureManagement } from "./management.js?v=20261103-english-mobile-2";
-import { cameraLabel, deviceLabel, errorText, issueText } from "./presentation.js?v=20261103-english-mobile-2";
+import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261104-functional-fixes";
+import { CaptureManagement } from "./management.js?v=20261104-functional-fixes";
+import { cameraLabel, deviceLabel, errorText, issueText } from "./presentation.js?v=20261104-functional-fixes";
 
 const el = id => document.getElementById(id);
-const labels = { idle: "Ready", starting: "Starting", recording: "Recording", saving: "Saving", saved: "Saved", error: "Error" };
+const labels = { idle: "Ready", starting: "Starting", recording: "Recording", saving: "Saving", saved: "Saved", error: "Error", playback: "Desktop playback" };
 const management = new CaptureManagement(api);
 let devices = [];
 let previewOptions = "";
@@ -40,7 +40,7 @@ function render() {
   }
   el("state").textContent = labels[s.state] || s.state;
   el("orb").className = `orb ${s.state}`;
-  const help = { idle: "Choose a task and check your devices.", starting: "Starting recording…", recording: "Recording. You can calibrate below.", saving: "Saving your recording. Keep devices powered on.", saved: "Saved. Ready for the next recording.", error: "Check the message below." };
+  const help = { idle: "Choose a task and check your devices.", starting: "Starting recording…", recording: "Recording. You can calibrate below.", saving: "Saving your recording. Keep devices powered on.", saved: "Saved. Ready for the next recording.", error: "Check the message below.", playback: "Return to Live on Jetson to resume capture." };
   el("state-help").textContent = online ? help[s.state] : "Connection lost. Recording on Jetson continues.";
   el("storage").textContent = s.storage?.using_fallback ? "Backup disk" : "Capture disk";
   const busy = ["starting", "saving"].includes(s.state);
@@ -61,10 +61,11 @@ function render() {
       const title = document.createElement("div");
       const text = document.createElement("div"); text.className = "camera-name"; text.textContent = deviceLabel(device);
       const detail = document.createElement("div"); detail.className = "camera-detail";
-      detail.textContent = h ? `Video ${h.image_fresh ? "ready" : "missing"} · VIO ${h.vio_fresh ? "ready" : "missing"}` : "Waiting for input";
+      detail.textContent = s.state === "playback" ? "Live input paused for desktop playback" : h ? `Video ${h.image_fresh ? "ready" : "missing"} · VIO ${h.vio_fresh ? "ready" : "missing"}` : "Waiting for input";
       title.append(text, detail);
       const badge = document.createElement("span"); badge.className = `camera-status${h?.ready ? "" : " bad"}`;
-      badge.textContent = h?.ready ? `${Number(h.image_fps || 0).toFixed(0)} fps` : "Not ready";
+      badge.classList.toggle("bad", s.state !== "playback" && !h?.ready);
+      badge.textContent = s.state === "playback" ? "Paused" : h?.ready ? `${Number(h.image_fps || 0).toFixed(0)} fps` : "Not ready";
       row.append(title, badge); return row;
     }));
     const issues = [...(s.preflight.failures || []), ...(s.preflight.warnings || []),

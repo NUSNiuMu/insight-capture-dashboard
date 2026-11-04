@@ -2,10 +2,7 @@
 #include <QByteArray>
 #include <algorithm>
 
-TrailGeometry::TrailGeometry(QQuick3DObject *parent) : QQuick3DGeometry(parent) { setPoints({}); }
-void TrailGeometry::setPoints(const QVector<QVector3D> &points) {
-    ++m_revision;
-    clear();
+TrailGeometry::TrailGeometry(QQuick3DObject *parent) : QQuick3DGeometry(parent) {
     setStride(8 * sizeof(float));
     setPrimitiveType(QQuick3DGeometry::PrimitiveType::Triangles);
     addAttribute(QQuick3DGeometry::Attribute::PositionSemantic, 0, QQuick3DGeometry::Attribute::F32Type);
@@ -14,6 +11,10 @@ void TrailGeometry::setPoints(const QVector<QVector3D> &points) {
                  QQuick3DGeometry::Attribute::F32Type);
     addAttribute(QQuick3DGeometry::Attribute::TexCoord0Semantic, 6 * sizeof(float),
                  QQuick3DGeometry::Attribute::F32Type);
+    setPoints({});
+}
+void TrailGeometry::setPoints(const QVector<QVector3D> &points) {
+    ++m_revision;
     QByteArray data;
     data.resize(std::max(1, int(points.size()) - 1) * 6 * 8 * sizeof(float));
     auto *out = reinterpret_cast<float *>(data.data());
