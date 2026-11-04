@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "superglue.h"
 #include <chrono>
 #include <stdexcept>
 #include <limits>
@@ -110,7 +111,9 @@ Json Engine::Localize(const Json& request, const std::vector<cv::Mat>& arrays) {
   frame->feature_descriptors={{camera_id,arrays[2]}};
   frame->owner_cam_id={{camera_id,camera_id}};
   auto query=std::make_unique<KeyFrame>(frame, std::numeric_limits<FrameId>::max(), cv::Mat());
-  auto pose=loops_->Localize(query.get());
+  auto pose=loops_->Localize(query.get(), [&](KeyFrame* reference) {
+    return MatchReference(query.get(), reference);
+  });
   if(!pose) return {{"localized",false},{"reason","no_geometric_match"},{"map_revision",map_revision_}};
   auto evidence=loops_->evidence();
   query->set_pose(*pose);

@@ -319,6 +319,7 @@ class KeyFrame {
   const cv::Mat& descriptor(CameraId cam_id) const { return descriptors_.at(cam_id); }
 
   FrameMeta::Ptr frame_meta() const { return frame_meta_; }
+  cv::Mat MatchingImage() const;
 
   size_t FeatureSize(CameraId cam_id) { return key_points_[cam_id].size(); }
 
@@ -472,6 +473,8 @@ class KeyFrame {
   std::map<CameraId, std::vector<cv::KeyPoint>> key_points_;
   std::map<CameraId, std::vector<Eigen::Vector2d>> key_points_undistorted_;
   std::map<CameraId, cv::Mat> descriptors_;
+  std::vector<uchar> matching_image_;
+  cv::Size matching_size_;
   std::map<CameraId, StereoMatch> s2m_matches_;
 
   // Grid over the master image to speed up feature matching, index: grid[row][col]

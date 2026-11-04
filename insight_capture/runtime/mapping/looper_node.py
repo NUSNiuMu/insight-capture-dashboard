@@ -96,7 +96,7 @@ class LooperNode(Node):
         self.frames = {name: name + "_global_camera_center" for name in self.names}
         self.frames[self.head] = self.inputs[self.head]["mapping_camera_frame"]
         self.backend = LooperBackend(args.socket)
-        self.features = IpcSuperGlueBackend(args.feature_socket)
+        self.features = IpcSuperGlueBackend(Path("/run/superglue/matcher.sock"))
         self.lock = threading.RLock()
         self.processing = threading.Lock()
         self.work = LatestViewQueue((*self.names[1:], self.head))
@@ -646,7 +646,6 @@ def main():
     parser.add_argument("--config", type=Path, default=Path("config/cameras.json"))
     parser.add_argument("--runtime-config", type=Path, default=runtime_config_path())
     parser.add_argument("--socket", type=Path, default=Path("/run/looper/mapping.sock"))
-    parser.add_argument("--feature-socket", type=Path, default=Path("/run/superglue/matcher.sock"))
     args = parser.parse_args()
     os.environ["ROS_DOMAIN_ID"] = str(json.loads(args.config.read_text())["ros_domain_id"])
     rclpy.init()

@@ -116,6 +116,7 @@ services:
       - OPENBLAS_NUM_THREADS=1
     volumes:
       - looper-ipc:/run/looper
+      - superglue-ipc:/run/superglue
     command: ["/usr/local/bin/insight_mapping", "/run/looper/mapping.sock"]
     healthcheck:
       test: ["CMD", "test", "-S", "/run/looper/mapping.sock"]

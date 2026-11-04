@@ -22,7 +22,8 @@
     "Verify wrist localization with two agreeing map references before accepting a pose; expose mature-landmark head pose support for reliable relocalization.",
     "Share robust reprojection refinement between fresh localization and retained-image map updates; verify image coverage and camera-centred, depth-normalized pose observability, requiring ten retained inliers for map updates.",
     "Commit wrist query caches only after ROS fusion acceptance and preserve landmark identities across point fusion.",
-    "Share ten-landmark readiness, wrist initialization, refinement and retained-image support; keep head loop closure support independent."
+    "Share ten-landmark readiness, wrist initialization, refinement and retained-image support; keep head loop closure support independent.",
+    "Use SuperGlue image correspondences for wrist PnP, then refine against mature reference and covisible map points; retain zlib-compressed lossless master images after raw frame release, without a descriptor-only initialization fallback."
   ],
   "pruned_uncompiled_sources": [
     "config/vio_config.cc",

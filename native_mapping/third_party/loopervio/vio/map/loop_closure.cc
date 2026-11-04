@@ -164,12 +164,13 @@ bool LoopClosure::Process(KeyFrame* cur_kf) {
   return true;
 }
 
-std::optional<dm::math::Rigid3d> LoopClosure::Localize(KeyFrame* query) {
+std::optional<dm::math::Rigid3d> LoopClosure::Localize(KeyFrame* query, const MatchReference& match) {
   evidence_={};
   auto candidates = map_->RetrieveSimilarFrames(query->bow_vecs(query->master_cam_id()), 5);
   std::vector<std::pair<dm::math::Rigid3d,Evidence>> hypotheses;
   for (const auto& candidate : candidates) {
-    auto initial = SolveLoopPose(query, candidate.kf, kLocalizationMinInliers);
+    auto matched = match(candidate.kf);
+    auto initial = EstimatePose(query, matched, kLocalizationMinInliers);
     if (!initial) continue;
     auto refined = OptimizeLoopPose(query, candidate.kf, *initial, kLocalizationMinInliers);
     if (!refined) continue;
@@ -205,7 +206,12 @@ std::optional<dm::math::Rigid3d> LoopClosure::SolveLoopPose(KeyFrame* query_kf,
   }
   map_->ReleaseMptMutex();
 
-  // solve pnp, use ransac ?
+  return EstimatePose(query_kf, matched_mpts, min_inlier);
+}
+
+std::optional<dm::math::Rigid3d> LoopClosure::EstimatePose(KeyFrame* query_kf,
+    std::vector<MapPoint*>& matched_mpts, size_t min_inlier) {
+  // Solve against the same correspondences that will be geometrically refined.
   std::vector<Eigen::Vector3d> pt3ds;
   std::vector<Eigen::Vector2d> pt2ds;
   std::vector<cv::Point2f> kpt2ds;
@@ -219,6 +225,7 @@ std::optional<dm::math::Rigid3d> LoopClosure::SolveLoopPose(KeyFrame* query_kf,
     kpt2ds.push_back(query_kf->key_points(query_master_cam)[i].pt);
   }
 
+  if (pt3ds.size() < min_inlier) return std::nullopt;
   RANSACOptions options;
   options.max_error = 3.0 / KeyFrame::Intrinsic(query_kf->master_cam_id()).f();
   LORANSAC<P3PEstimator, EPNPEstimator> ransac_pnp(options);  // EPNPEstimator is too slow
@@ -229,24 +236,6 @@ std::optional<dm::math::Rigid3d> LoopClosure::SolveLoopPose(KeyFrame* query_kf,
 
   // todo: check inliers
   if (!report.success || inlier_num < min_inlier) return std::nullopt;
-
-  if (false) {
-    auto loop_cam = loop_kf->master_cam_id();
-    std::vector<cv::DMatch> pnp_matches;
-    auto loop_mpts = loop_kf->map_points(loop_cam);
-    for (int j = 0; j < pt3ds.size(); j++) {
-      if (!inlier_mask[j]) continue;
-      for (int i = 0; i < loop_mpts.size(); i++) {
-        if (!loop_mpts[i] || loop_mpts[i]->IsBad()) continue;
-        if (loop_mpts[i] == matched_mpts[mpt_indices[j]]) {
-          pnp_matches.emplace_back(mpt_indices[j], i, 0);
-        }
-      }
-    }
-    cv::Mat img = DrawMatches(query_kf, loop_kf, pnp_matches);
-    //cv::imshow("loop img", img);
-    //cv::waitKey();
-  }
 
   Eigen::Matrix4d Tcw_mat = Eigen::Matrix4d::Identity();
   Tcw_mat.block<3, 4>(0, 0) = report.model;
@@ -298,7 +287,7 @@ std::optional<dm::math::Rigid3d> LoopClosure::OptimizeLoopPose(KeyFrame* query_k
   auto kfs = loop_kf->GetBestCovisibilityKeyFrames(5);
   if (!kfs.empty()) loop_kfs.insert(kfs.begin(), kfs.end());
   map_->AcquireMptMutex();
-  for (auto& kf : kfs) {
+  for (auto& kf : loop_kfs) {
     auto mpts = kf->map_points(kf->master_cam_id());
     for (auto& mpt : mpts) {
       if (!mpt || mpt->IsBad()) continue;

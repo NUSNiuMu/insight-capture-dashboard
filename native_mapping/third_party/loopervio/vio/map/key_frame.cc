@@ -8,11 +8,22 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <zlib.h>
+#include <stdexcept>
 #include "common/timer.h"
 #include "vio/map/map_point.h"
 #include "vio/map/orb_matcher.h"
 
 namespace dm::vio::lm {
+
+cv::Mat KeyFrame::MatchingImage() const {
+  cv::Mat image(matching_size_, CV_8U);
+  uLongf size = image.total();
+  if (uncompress(image.data, &size, matching_image_.data(), matching_image_.size()) != Z_OK ||
+      size != image.total())
+    throw std::runtime_error("Invalid localization reference image");
+  return image;
+}
 
 FrameId KeyFrame::public_self_inc_id_ = 0;
 std::shared_ptr<ORBextractor> KeyFrame::orb_extractor_ =
@@ -41,6 +52,14 @@ KeyFrame::KeyFrame(const FrameMeta::Ptr& frame_meta, FrameId frame_id, const cv:
   owner_cam_id_ = frame_meta->owner_cam_id;
   frame_meta_ = frame_meta;
   CameraId master_cam_id = this->master_cam_id();
+  const auto image = frame_meta->images.at(master_cam_id).clone();
+  matching_size_ = image.size();
+  uLongf compressed_size = compressBound(image.total());
+  matching_image_.resize(compressed_size);
+  if (compress2(matching_image_.data(), &compressed_size, image.data,
+                image.total(), Z_BEST_SPEED) != Z_OK)
+    throw std::runtime_error("Cannot retain localization reference image");
+  matching_image_.resize(compressed_size);
   VLOG(1) << "Keyframe construct, master id is " << master_cam_id << " kf_id: " << frame_id_;
 
   // extract orb features

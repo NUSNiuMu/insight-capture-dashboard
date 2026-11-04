@@ -3,6 +3,7 @@
 #define VIO_MAP_LOOP_CLOSURE_H_
 
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -40,7 +41,8 @@ class LoopClosure : public vio::VioThread {
 
   void Run();
   bool Process(KeyFrame* current);
-  std::optional<dm::math::Rigid3d> Localize(KeyFrame* query);
+  using MatchReference = std::function<std::vector<MapPoint*>(KeyFrame*)>;
+  std::optional<dm::math::Rigid3d> Localize(KeyFrame* query, const MatchReference& match);
 
   std::optional<dm::math::Rigid3d> OptimizeLoopPose(KeyFrame* query_kf,
                                                     KeyFrame* loop_kf,
@@ -91,6 +93,9 @@ class LoopClosure : public vio::VioThread {
   cv::Mat DrawMapPoints(KeyFrame* kf);
 
   std::optional<dm::math::Rigid3d> SolveLoopPose2(KeyFrame* query_kf, KeyFrame* loop_kf);
+
+  std::optional<dm::math::Rigid3d> EstimatePose(KeyFrame* query,
+      std::vector<MapPoint*>& matched, size_t minimum_inliers);
 
   Evidence evidence_;
   Map* map_;
