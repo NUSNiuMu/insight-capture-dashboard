@@ -4,10 +4,15 @@ import json
 import hashlib
 import os
 from dataclasses import dataclass
+from threading import Lock
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional
 
 from insight_capture.core.bag import read_metadata, is_mcap_bag
+
+
+_review_badges: dict[Path, tuple[bytes, tuple[str, Optional[str]]]] = {}
+_review_badges_lock = Lock()
 
 
 @dataclass(frozen=True)
@@ -49,14 +54,14 @@ class BagLibrary:
     def _discover(root: Path) -> Iterable[Path]:
         if not root.is_dir():
             return
-        for directory, child_names, _file_names in os.walk(root, followlinks=False):
+        for directory, child_names, file_names in os.walk(root, followlinks=False):
             path = Path(directory)
             child_names[:] = [
                 name
                 for name in child_names
                 if not name.startswith(".") and name not in {"_outputs", "_staging", "_distributed", "review"}
             ]
-            if is_mcap_bag(path):
+            if "metadata.yaml" in file_names and is_mcap_bag(path):
                 child_names[:] = []
                 yield path.resolve()
 
@@ -147,6 +152,21 @@ def _result_exists(results_root: Path, category: str, bag_name: str) -> bool:
     return any(candidate.exists() for candidate in candidates)
 
 
+def _review_badge(path: Path) -> tuple[str, Optional[str]]:
+    contents = path.read_bytes()
+    fingerprint = hashlib.sha256(contents).digest()
+    # Retain the badge rather than the manifest's per-frame arrays.
+    with _review_badges_lock:
+        cached = _review_badges.get(path)
+        if cached is not None and cached[0] == fingerprint:
+            return cached[1]
+        manifest = json.loads(contents)
+        result = (("ready", (manifest.get("quality") or {}).get("state"))
+                  if manifest.get("schema_version") == 6 else ("invalid", None))
+        _review_badges[path] = fingerprint, result
+        if len(_review_badges) > 256:
+            del _review_badges[next(iter(_review_badges))]
+        return result
 
 
 def list_rosbag_locations(
@@ -176,12 +196,7 @@ def list_rosbag_locations(
         review_manifest_path = bag_dir / "review" / "manifest.json"
         if review_manifest_path.is_file() and (bag_dir / "review" / "review.mp4").is_file():
             try:
-                review_manifest = json.loads(review_manifest_path.read_text())
-                if review_manifest.get("schema_version") == 6:
-                    review_state = "ready"
-                    review_quality = (review_manifest.get("quality") or {}).get("state")
-                else:
-                    review_state = "invalid"
+                review_state, review_quality = _review_badge(review_manifest_path)
             except (OSError, ValueError, AttributeError):
                 review_state = "invalid"
         elif (bag_dir / ".review.preparing").is_dir():

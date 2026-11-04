@@ -1,5 +1,7 @@
 """Standard rosbag2 recordings with one MCAP data file per take."""
 
+from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, Iterator
 
@@ -8,13 +10,19 @@ import yaml
 MANIFEST_NAME = "recording_manifest.json"
 
 
-def read_metadata(bag: Path) -> dict:
-    try:
-        payload = yaml.safe_load((Path(bag) / "metadata.yaml").read_text()) or {}
-    except (OSError, ValueError, yaml.YAMLError):
-        return {}
+@lru_cache(maxsize=256)
+def _metadata(contents: bytes) -> dict:
+    # Content keys also detect rewrites within one filesystem timestamp tick.
+    payload = yaml.load(contents, Loader=yaml.CSafeLoader) or {}
     info = payload.get("rosbag2_bagfile_information", {})
     return info if isinstance(info, dict) else {}
+
+
+def read_metadata(bag: Path) -> dict:
+    try:
+        return deepcopy(_metadata((Path(bag) / "metadata.yaml").read_bytes()))
+    except (OSError, ValueError, yaml.YAMLError):
+        return {}
 
 
 def single_mcap(bag: Path) -> Path:

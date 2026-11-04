@@ -7,6 +7,10 @@ PageFrame {
     id: page
     property var shell
     property string deleting: ""
+    Connections {
+        target: workspace
+        function onCompleted(key, success) { if (key === "action") page.deleting = "" }
+    }
     heading: "Recordings"
     description: "Review and manage recordings."
     SavedRecordings {
@@ -100,11 +104,11 @@ PageFrame {
                     Ui.Button {
                         objectName: "bag-delete"
                         tone: "danger"
-                        text: "Delete"
+                        text: workspace.busy.action && page.deleting === String(modelData.id || modelData.name) ? "Deleting…" : "Delete"
                         enabled: !dashboard.state.recording && !workspace.busy.action
                         onClicked: {
                             page.deleting = String(modelData.id || modelData.name);
-                            removeDialog.title = "Delete “" + modelData.name + "”？";
+                            removeDialog.title = "Delete “" + modelData.name + "”?";
                             removeDialog.open();
                         }
                     }
@@ -145,5 +149,6 @@ PageFrame {
             text: "Permanently delete this recording?"
         }
         onAccepted: shell.mutate("/api/rosbags/" + encodeURIComponent(page.deleting), {}, "DELETE")
+        onRejected: page.deleting = ""
     }
 }

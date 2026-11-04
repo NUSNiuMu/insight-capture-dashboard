@@ -362,13 +362,18 @@ class RecordingRoutes:
         bag_name = request.match_info.get("bag_name", "").strip()
         if not bag_name or "/" in bag_name or bag_name in (".", ".."):
             return web.json_response({"error": "Invalid bag name."}, status=400)
-        try:
+
+        def remove():
             bag_path = self._bag_library().resolve(bag_name)
+            shutil.rmtree(bag_path)
+            return bag_path
+
+        try:
+            bag_path = await asyncio.to_thread(remove)
         except FileNotFoundError:
             return web.json_response({"error": "Bag not found."}, status=404)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
-        shutil.rmtree(bag_path)
         return web.json_response({"status": "deleted", "bag_name": bag_path.name})
 
     async def _handle_integrity_run(self, request: web.Request) -> web.Response:
