@@ -137,13 +137,11 @@ def build_runtime_services(
         ),
         optimization_manager=OptimizationManager(
             project_root=project_root,
-            pipeline_script=(
+            tools_dir=(
                 project_root.parent
                 / "looper-vio-colmap-handoff"
                 / "scripts"
-                / "run_pipeline_from_rosbag.py"
             ),
-            bag_resolver=bag_library.resolve,
         ),
         take_store=take_store,
         capture_preflight=CapturePreflight(

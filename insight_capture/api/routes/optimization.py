@@ -2,54 +2,51 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from aiohttp import web
 
-from insight_capture.core.config import IMAGE_STREAMS
+from insight_capture.postprocess.optimization.inputs import recording_inputs
 from insight_capture.api.context import DashboardContext
-from insight_capture.api.support import _read_tum_points
+from insight_capture.api.support import _read_tum_points, read_json_body
 
 
 class OptimizationRoutes:
     def __init__(self, context: DashboardContext) -> None:
         self.context = context
 
-    async def _handle_optimization_start(self, request: web.Request) -> web.Response:
-        body = await request.json()
-        bag_name = str(body.get("bag_name", "")).strip()
-        camera_name = str(body.get("camera_name", "")).strip()
-        stream_type = str(body.get("stream_type", "color_compressed")).strip()
+    async def _handle_optimization_inputs(self, request: web.Request) -> web.Response:
+        bag_name = request.query.get("bag_name", "").strip()
         try:
-            bag_label = self.context.bag_library.resolve(bag_name).name
-        except (ValueError, FileNotFoundError) as exc:
-            return web.json_response({"error": str(exc)}, status=404)
-        run_name = str(body.get("run_name", "")).strip() or bag_label
-        if not bag_name:
-            return web.json_response({"error": "bag_name is required"}, status=400)
-        if stream_type not in IMAGE_STREAMS:
-            return web.json_response(
-                {"error": f"Unknown stream_type '{stream_type}'. Valid: {list(IMAGE_STREAMS.keys())}"},
-                status=400,
-            )
-        if camera_name:
-            cam = next((c for c in self.context.node.cameras if c.name == camera_name), None)
-            if cam is None:
-                available = [c.name for c in self.context.node.cameras]
-                return web.json_response(
-                    {"error": f"Camera '{camera_name}' not found. Available: {available}"},
-                    status=400,
-                )
-        else:
-            cam = self.context.node.cameras[0] if self.context.node.cameras else None
-        if cam is None:
-            return web.json_response({"error": "No cameras configured"}, status=400)
-        from insight_capture.core.config import camera_base, image_topic as mk_image_topic
-        vio = f"{camera_base(cam.namespace)}/vio_100hz"
-        img = mk_image_topic(cam.namespace, stream_type)
-        self.context.optimization_manager.start(bag_name, run_name, vio, img)
-        return web.json_response({"status": "running", "run_name": run_name, "camera": cam.name, "stream": stream_type, "image_topic": img})
+            bag = await asyncio.to_thread(self.context.bag_library.resolve, bag_name)
+        except FileNotFoundError as exc:
+            raise web.HTTPNotFound(text="Bag not found.") from exc
+        cameras = await asyncio.to_thread(recording_inputs, bag)
+        return web.json_response({"bag_name": bag_name, "cameras": cameras})
+
+    async def _handle_optimization_start(self, request: web.Request) -> web.Response:
+        body = await read_json_body(request)
+        bag_name = str(body.get("bag_name", "")).strip()
+        try:
+            bag = await asyncio.to_thread(self.context.bag_library.resolve, bag_name)
+        except FileNotFoundError as exc:
+            raise web.HTTPNotFound(text="Bag not found.") from exc
+        cameras = await asyncio.to_thread(recording_inputs, bag)
+        camera = next((c for c in cameras if c["name"] == body.get("camera_name")), None)
+        if camera is None:
+            raise ValueError("Select a camera recorded in this MCAP.")
+        stream = next((s for s in camera["streams"] if s["topic"] == body.get("image_topic")), None)
+        if stream is None:
+            raise ValueError("Select an image stream recorded in this MCAP.")
+        view = stream["topic"].split("/camera/", 1)[1].split("/image_", 1)[0].replace("/", "_")
+        run_name = str(body.get("run_name", "")).strip() or f"{bag.name}__{camera['name']}__{view}"
+        await asyncio.to_thread(self.context.optimization_manager.start, bag, run_name,
+                                camera["vio_topic"], stream["topic"], stream["camera_info_topic"])
+        return web.json_response({"status": "running", "run_name": run_name,
+                                  "camera": camera["name"], "image_topic": stream["topic"]})
 
     async def _handle_optimization_stop(self, _request: web.Request) -> web.Response:
-        self.context.optimization_manager.stop()
+        await asyncio.to_thread(self.context.optimization_manager.stop)
         return web.json_response({"status": "idle"})
 
     async def _handle_optimization_status(self, _request: web.Request) -> web.Response:
@@ -57,15 +54,14 @@ class OptimizationRoutes:
 
     async def _handle_optimization_trajectories(self, request: web.Request) -> web.Response:
         run_name = request.rel_url.query.get("run_name", "").strip()
-        if not run_name:
-            return web.json_response({"error": "run_name required"}, status=400)
+        if not run_name or run_name in {".", ".."} or "/" in run_name:
+            raise ValueError("Run name must be a directory name.")
         project_root = self.context.project_root
-        hz_label = "5"
         vio_path = project_root / "data" / "derived" / run_name / "trajectories" / "vio_100hz.tum"
-        colmap_path = project_root / "runs" / run_name / "viz" / f"color_{hz_label}hz_vs_vio100" / "colmap_sim3.tum"
+        colmap_path = next((project_root / "runs" / run_name).glob("viz/*/colmap_sim3.tum"), None)
         return web.json_response({
             "vio": _read_tum_points(vio_path),
-            "colmap": _read_tum_points(colmap_path),
+            "colmap": _read_tum_points(colmap_path) if colmap_path is not None else [],
         })
 
     async def _handle_optimization_runs(self, _request: web.Request) -> web.Response:

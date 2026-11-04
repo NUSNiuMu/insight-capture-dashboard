@@ -41,7 +41,7 @@ Item {
         if (force)
             workspace.request(key, path);
         else
-            workspace.ensure(key, path, key === "bags" ? 60000 : key === "tasks" || key === "runs" || key === "cameras" ? 15000 : 2000);
+            workspace.ensure(key, path, key === "bags" ? 60000 : key === "tasks" || key === "runs" ? 15000 : 2000);
     }
     function mutate(path, body, method) {
         workspace.request("action", path, method || "POST", body || {});
@@ -62,7 +62,6 @@ Item {
         if (page === "optimization") {
             get("optimization", "/api/optimization/status", force);
             get("runs", "/api/optimization/runs", force);
-            get("cameras", "/api/cameras", force);
         }
         if (page === "recording") {
             get("recording", "/api/recording/status", force);

@@ -6,12 +6,16 @@ import "../ui" as Ui
 PageFrame {
     id: page
     property var shell
+    property var inputs: workspace.data.optimizationInputs || {}
     property var status: workspace.data.optimization || {}
     property var trajectory: workspace.data.trajectories || {}
     property bool running: status.state === "running" || !!workspace.busy.action
     property string loadedRun: ""
     heading: "Optimize"
     description: "Compare VIO with reconstructed trajectories."
+    function loadInputs() {
+        if (bag.selector) workspace.request("optimizationInputs", "/api/optimization/inputs?bag_name=" + encodeURIComponent(bag.selector));
+    }
     function load(name) {
         if (!name)
             return;
@@ -30,6 +34,8 @@ PageFrame {
             }
             BagPicker {
                 id: bag
+                objectName: "optimization-bag"
+                onSelectorChanged: page.loadInputs()
                 Layout.fillWidth: true
             }
             Label {
@@ -37,9 +43,8 @@ PageFrame {
             }
             Ui.ComboBox {
                 id: camera
-                model: ((workspace.data.cameras || {}).cameras || []).map(function(camera) {
-                    return {name: camera.name, label: Ui.Texts.value(camera.label)};
-                })
+                objectName: "optimization-camera"
+                model: page.inputs.bag_name === bag.selector ? (page.inputs.cameras || []) : []
                 textRole: "label"
                 valueRole: "name"
                 Layout.fillWidth: true
@@ -49,12 +54,10 @@ PageFrame {
             }
             Ui.ComboBox {
                 id: stream
-                model: [{label: "Color (compressed)", value: "color_compressed"},
-                    {label: "Color (raw)", value: "color"},
-                    {label: "Left IR", value: "infra1"},
-                    {label: "Right IR", value: "infra2"}]
+                objectName: "optimization-stream"
+                model: camera.currentIndex >= 0 ? camera.model[camera.currentIndex].streams : []
                 textRole: "label"
-                valueRole: "value"
+                valueRole: "topic"
                 Layout.fillWidth: true
             }
             Label {
@@ -71,12 +74,12 @@ PageFrame {
                 objectName: "optimization-start"
                 text: "Run"
                 highlighted: true
-                enabled: !!bag.selector && camera.count > 0 && !page.running && !dashboard.state.recording
+                enabled: !!bag.selector && stream.count > 0 && !workspace.busy.optimizationInputs && !page.running && !dashboard.state.recording
                 onClicked: shell.mutate("/api/optimization/start", {
                         "bag_name": bag.selector,
                         "camera_name": camera.currentValue,
-                        "stream_type": stream.currentValue,
-                        "run_name": runName.text.trim() || bag.selector
+                        "image_topic": stream.currentValue,
+                        "run_name": runName.text.trim()
                     })
             }
             Ui.Button {
@@ -93,8 +96,14 @@ PageFrame {
             }
             Ui.Button {
                 text: "Refresh"
-                onClicked: shell.refresh()
+                onClicked: { shell.refresh(); page.loadInputs() }
             }
+        }
+        Label {
+            text: "No recorded image/VIO inputs with camera parameters."
+            visible: !!bag.selector && page.inputs.bag_name === bag.selector && !workspace.busy.optimizationInputs && camera.count === 0
+            wrapMode: Text.Wrap
+            Layout.fillWidth: true
         }
     }
     Ui.ProgressBar {

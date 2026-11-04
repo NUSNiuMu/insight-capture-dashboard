@@ -14,15 +14,15 @@ class OptimizationManager:
 
     STEP_NAMES = [
         "Extracting VIO",
-        "Extracting color images",
+        "Extracting images",
         "Running COLMAP",
         "Aligning trajectories (Sim3)",
     ]
     _STEP_MARKERS = [
-        "1/3 提取 VIO",
-        "2/3 提取 color 图片",
-        "3/3 运行 COLMAP CLI",
-        "4/5 Sim3 对齐 COLMAP 轨迹",
+        "STEP 1: Extracting VIO",
+        "STEP 2: Extracting images",
+        "STEP 3: Running COLMAP",
+        "STEP 4: Aligning trajectories",
     ]
     _MAX_LOG = 60
 
@@ -39,14 +39,12 @@ class OptimizationManager:
     def __init__(
         self,
         project_root: Path,
-        pipeline_script: Path,
+        tools_dir: Path,
         on_finished: Optional[Callable[[bool], None]] = None,
-        bag_resolver: Optional[Callable[[str], Path]] = None,
     ) -> None:
         self.project_root = project_root.resolve()
-        self.pipeline_script = pipeline_script.resolve()
+        self.tools_dir = tools_dir.resolve()
         self._on_finished = on_finished
-        self._bag_resolver = bag_resolver
         self._lock = threading.Lock()
         self._process: Optional[subprocess.Popen] = None
         self._state: str = "idle"
@@ -69,50 +67,37 @@ class OptimizationManager:
                 "result": dict(self._result),
             }
 
-    @staticmethod
-    def _stream_name(image_topic: str) -> str:
-        known = ("infra1", "infra2", "color", "depth", "fisheye")
-        for part in reversed(image_topic.rstrip("/").split("/")):
-            if part in known:
-                return part
-        return "image"
-
     def start(
         self,
-        bag_name: str,
+        bag_path: Path,
         run_name: str,
         vio_topic: str,
         image_topic_str: str,
+        info_topic: str,
         output_hz: float = 5.0,
-        camera_params: str = "",
     ) -> None:
         with self._lock:
             if self._state == "running":
                 raise RuntimeError("Optimization already running")
-            bag_path = (
-                self._bag_resolver(bag_name).resolve()
-                if self._bag_resolver is not None
-                else self.project_root / "rosbags" / bag_name
-            )
+            bag_path = bag_path.resolve()
             if not bag_path.exists():
-                raise ValueError(f"Bag not found: {bag_name}")
-            hz_label = str(int(output_hz)) if output_hz == int(output_hz) else str(output_hz).replace(".", "p")
-            stream = self._stream_name(image_topic_str)
+                raise ValueError(f"Bag not found: {bag_path}")
+            if Path(run_name).name != run_name or run_name in {".", ".."}:
+                raise ValueError("Run name must be a directory name.")
+            hz_label = f"{output_hz:g}"
             self._result = {
-                "colmap_log": f"/optimization-runs/{run_name}/colmap/{stream}_{hz_label}hz/colmap.log",
+                "colmap_log": f"/optimization-runs/{run_name}/colmap/images_{hz_label}hz/colmap.log",
             }
             cmd = [
                 sys.executable, "-u",  # force unbuffered stdout so step markers arrive immediately
-                str(self.pipeline_script),
+                "-m", "insight_capture.postprocess.optimization.pipeline",
                 "--bag", str(bag_path),
                 "--name", run_name,
                 "--vio-topic", vio_topic,
                 "--image-topic", image_topic_str,
-                "--colmap-runner", "local",
+                "--info-topic", info_topic,
+                "--tools-dir", str(self.tools_dir),
                 "--output-hz", str(output_hz),
-                "--make-plots", "false",
-                "--overwrite", "true",
-                *(["--camera-params", camera_params] if camera_params else []),
             ]
             process = subprocess.Popen(
                 cmd,
@@ -195,19 +180,19 @@ class OptimizationManager:
             return
 
         # Detect COLMAP sub-phase transitions
-        if "$ colmap feature_extractor" in line or "$ nice" in line and "feature_extractor" in line:
+        if line.startswith("$ ") and " feature_extractor " in line:
             self._colmap_phase = "feature"
             self._sub_progress = 0.0
             return
-        if "$ colmap sequential_matcher" in line or "$ nice" in line and "sequential_matcher" in line:
+        if line.startswith("$ ") and " sequential_matcher " in line:
             self._colmap_phase = "matching"
             self._sub_progress = self._COLMAP_MATCH_START
             return
-        if "$ colmap mapper" in line or "$ nice" in line and "colmap mapper" in line:
+        if line.startswith("$ ") and " mapper " in line:
             self._colmap_phase = "mapper"
             self._sub_progress = self._COLMAP_MAPPER_START
             return
-        if "$ colmap model_converter" in line or "COLMAP 重建完成" in line or "完成 COLMAP CLI" in line:
+        if (line.startswith("$ ") and " model_converter " in line) or "COLMAP 重建完成" in line:
             self._colmap_phase = "post"
             self._sub_progress = self._COLMAP_MAPPER_END
             return

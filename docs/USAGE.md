@@ -26,6 +26,12 @@ JPEG 编码仅使用 Jetson NVJPEG，准备回放仅使用硬件 H.264 编码；
 
 使用 `scripts/select_device.sh jetson-nx` 或 `jetson-nx-egohalo`，会同步配置与服务。切换前结束采集，切换后重新校准。配置模板保存在 `config/devices/`，现场配置修改需要按设备持久保存到模板。
 
+## 离线轨迹优化
+
+在 Qt 的 Optimize 页选择已合包的录制、包内相机和图像流，点击 Run。输入列表来自录制，不受当前连接设备配置影响；H.264 使用硬件解码，原始图像与 JPEG/PNG 使用各自的解码方式。内外参取自同一包的 CameraInfo 和 TF，将 VIO 换算到所选相机光心后，以最高 5 Hz 图像运行 COLMAP，并用 Sim3 对齐轨迹。完成后自动显示对比，也可从结果列表加载；原始 MCAP 保持不变。
+
+Optimize 是离线重建与轨迹对比，不改变在线建图或三路校准。缺少相机参数、解码失败或重建失败时显示实际错误。
+
 ## 排查
 
 - Qt 启动提示缺少运行库：安装对应发布包；开发机显式执行 `native_dashboard/build.sh`。

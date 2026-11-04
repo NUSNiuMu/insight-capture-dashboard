@@ -5,7 +5,7 @@
 Workspace::Workspace(QUrl server, QObject *parent) : QObject(parent), m_server(server) {
     m_clock.start();
     for (const char *key : {"tasks","sessions","bags","scoring","scoringStart",
-            "optimization","runs","cameras",
+            "optimization","optimizationInputs","runs",
             "trajectories","recording","topics","directories","settings","voice",
             "volume","health","optLog","action","savedRecordings"})
         m_viewData.insert(QString::fromLatin1(key), QVariant());

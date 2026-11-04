@@ -116,6 +116,7 @@ def create_app(context: DashboardContext) -> web.Application:
         playback._handle_playback_artifact,
     )
     app.router.add_post("/api/trajectory/clear", playback._handle_trajectory_clear)
+    app.router.add_get("/api/optimization/inputs", optimization._handle_optimization_inputs)
     app.router.add_post("/api/optimization/start", optimization._handle_optimization_start)
     app.router.add_post("/api/optimization/stop", optimization._handle_optimization_stop)
     app.router.add_get("/api/optimization/status", optimization._handle_optimization_status)
