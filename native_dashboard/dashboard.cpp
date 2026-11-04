@@ -44,8 +44,8 @@ Dashboard::Dashboard(QUrl server, int fps, QObject *parent) : QObject(parent), m
         m_lastPose = m_clock.elapsed();
         const bool connectionChanged = !m_connected;
         m_connected = true;
-        if (m_message == "正在连接后端")
-            m_message = "后端已连接";
+        if (m_message == "Connecting…")
+            m_message = "Connected";
         if (!playback())
             acceptPose(p);
         if (connectionChanged)
@@ -122,7 +122,7 @@ void Dashboard::request(const QString &path, const QJsonObject *body, std::funct
             m_state["captureAction"] = "";
         auto value = reply->isOpen() ? QJsonDocument::fromJson(reply->readAll()).object() : QJsonObject();
         if (reply->error() != QNetworkReply::NoError) {
-            m_message = value["speech"].toString(value["error"].toString(reply->errorString()));
+            m_message = value["error"].toString(reply->errorString());
             if (captureCommand)
                 m_state["captureError"] = m_message;
             if (path.contains("playback")) {
@@ -165,6 +165,8 @@ void Dashboard::poll() {
                                     {"device", c["device_name"].toString(c["name"].toString())},
                                     {"width", c["width"].toInt()},
                                     {"height", c["height"].toInt()},
+                                    {"row", c["row"].toInt()},
+                                    {"column", c["column"].toInt()},
                                     {"label", c["label"].toString()},
                                     {"endpoint", u},
                                     {"nativeEndpoint", local},
@@ -247,39 +249,30 @@ QVariantMap Dashboard::localizationSummary(const QVariantMap &status, bool image
     };
     const QString waiting = "#84775f", warning = "#aa741b", good = "#417b51", bad = "#b45d51";
     if (!imageOnline)
-        return result("offline", "设备离线", bad);
+        return result("offline", "Device offline", bad);
     if (!vioFresh)
-        return result("waiting_pose", "位姿输入中断", warning);
+        return result("waiting_pose", "Pose input lost", warning);
     if (!status.value("online").toBool())
-        return result("service_offline", head ? "建图服务离线" : "定位服务离线", bad);
+        return result("service_offline", head ? "Mapper offline" : "Localizer offline", bad);
     if (status.value("state") == "error")
-        return result("error", head ? "建图异常" : "定位异常", bad);
-    if (!head && status.contains("camera_info_ready") && !status.value("camera_info_ready").toBool())
-        return result("waiting_calibration", "等待标定", waiting);
-    if (!head && status.contains("extrinsic_ready") && !status.value("extrinsic_ready").toBool())
-        return result("waiting_extrinsic", "等待外参", waiting);
+        return result("error", head ? "Mapping error" : "Localization error", bad);
+    if (!status.value("clock_ready").toBool())
+        return result("waiting_clock", "Synchronizing clock", waiting);
     if (head) {
-        const auto views = status.value("rig").toMap().value("views").toMap();
-        for (const auto &view : views)
-            if (!view.toMap().value("ready").toBool())
-                return result("waiting_calibration", "等待标定", waiting);
         if (status.value("state") == "waiting_for_inputs")
-            return result("waiting_inputs", "等待建图输入", waiting);
-        return result("mapping", "建图中", good);
+            return result("waiting_inputs", "Waiting for mapping input", waiting);
+        if (status.value("state") == "building")
+            return result("building", "Building map", warning);
+        return result("mapping", "Mapping", good);
     }
     const auto mode = status.value("tracking_mode").toString();
-    if (status.value("stationary_constraint").toMap().value("active").toBool())
-        return result("stationary", "静止约束", warning);
-    if (mode == "map_matched" && status.value("accepted").toBool())
-        return result("map_matched", "地图匹配", good);
-    if (mode == "verifying" || status.value("accepted").toBool())
-        return result("verifying", "定位确认中", warning);
+    if (mode == "map_match" && status.value("confirmed").toBool())
+        return result("map_matched", "Map matched", good);
     if (status.value("localized").toBool())
-        return result("vio_only", "VIO 外推", warning);
-    if (!status.value("calibration_keyframe_ready").toBool() &&
-        status.value("map_features").toInt() < status.value("need_map_features", 80).toInt())
-        return result("waiting_map", "等待地图", waiting);
-    return result("unlocalized", "未定位", warning);
+        return result("vio_only", "VIO prediction", warning);
+    if (status.value("reason") == "map_not_ready")
+        return result("waiting_map", "Waiting for map", waiting);
+    return result("unlocalized", "Not localized", warning);
 }
 
 void Dashboard::updateLocalization() {
@@ -303,7 +296,7 @@ void Dashboard::updateLocalization() {
                                  m_lastCameraUpdate >= 0 && now - m_lastCameraUpdate <= 2500;
         auto summary = localizationSummary(status, imageOnline, m_nativeVioFresh.value(device, true).toBool(), head);
         if (head && imageOnline && onlineCounts.value(device).toInt() < it.value().toInt())
-            summary = {{"mode", "partial_images"}, {"label", "部分图像离线"}, {"color", "#aa741b"}};
+            summary = {{"mode", "partial_images"}, {"label", "Some streams offline"}, {"color", "#aa741b"}};
         summaries[device] = summary;
     }
     if (summaries != m_localization) {
@@ -508,7 +501,7 @@ void Dashboard::cacheModel(Pose *pose, const QJsonObject &data) {
             QString error;
             auto bytes = compatibleGlb(reply->readAll(), error);
             if (bytes.isEmpty()) {
-                m_message = "模型转换失败：" + error;
+                m_message = "Model conversion failed: " + error;
                 emit stateChanged();
                 reply->deleteLater();
                 return;
@@ -520,7 +513,7 @@ void Dashboard::cacheModel(Pose *pose, const QJsonObject &data) {
             }
         } else {
             pose->assetKey.clear();
-            m_message = "模型下载失败：" + reply->errorString();
+            m_message = "Model download failed: " + reply->errorString();
             emit stateChanged();
         }
         reply->deleteLater();
@@ -529,7 +522,7 @@ void Dashboard::cacheModel(Pose *pose, const QJsonObject &data) {
 void Dashboard::command(const QString &action, const QString &value) {
     const bool recording = m_state["recording"].toBool();
     if (recording && (action == "reset" || action == "task" || action == "endTask" || action == "playback")) {
-        m_message = "正在录制，暂不能执行该操作";
+        m_message = "Stop recording first.";
         emit stateChanged();
         return;
     }
@@ -538,12 +531,12 @@ void Dashboard::command(const QString &action, const QString &value) {
         return;
     }
     if (playback() && (action == "record" || action == "reset")) {
-        m_message = "请先返回实时采集";
+        m_message = "Return to Live first.";
         emit stateChanged();
         return;
     }
     if (action == "record" && !m_state["task"].toMap().value("active").toBool()) {
-        m_message = "当前未进入采集任务，请先选择任务并点击“进入任务”";
+        m_message = "Select a task first.";
         m_state["captureError"] = m_message;
         emit stateChanged();
         return;
@@ -559,7 +552,7 @@ void Dashboard::command(const QString &action, const QString &value) {
         m_playbackStarting = true;
         post("/api/playback/start", {{"bag_name", value}}, [this](QJsonObject d) {
             m_playbackStarting = false;
-            m_message = "正在准备回放";
+            m_message = "Preparing playback…";
             if (d.contains("manifest_url"))
                 activatePlayback(d);
             emit stateChanged();
@@ -593,11 +586,11 @@ void Dashboard::command(const QString &action, const QString &value) {
             return;
         m_state["captureAction"] = action == "record" ? "starting" : "stopping";
         m_state["captureError"] = "";
-        m_message = action == "record" ? "正在检查设备、校时并启动录制…" : "正在停止两端录制…";
+        m_message = action == "record" ? "Checking devices and clocks…" : "Stopping recording…";
         emit stateChanged();
     }
     post(path, body, [this, action](QJsonObject d) {
-        m_message = d["speech"].toString(d["error"].toString(action == "record" ? "录制已启动" : "操作完成"));
+        m_message = d["error"].toString(action == "record" ? "Recording started" : "Done");
         if (action == "task" || action == "endTask") {
             m_state["task"] = d.toVariantMap();
             m_state["captureError"] = "";
@@ -627,7 +620,7 @@ void Dashboard::activatePlayback(const QJsonObject &status) {
         post("/api/playback/activate", {{"bag_name", m_requestedPlayback}}, [this, manifest](QJsonObject) {
             m_manifest = manifest;
             m_message = manifest["quality"].toObject()["state"] == "warning"
-                            ? "回放就绪，质量检查有警告" : "回放已就绪";
+                            ? "Playback ready · Quality warnings" : "Playback ready";
             m_playbackStarting = false;
             clearTraces();
             m_haveOrigin = false;
@@ -636,6 +629,8 @@ void Dashboard::activatePlayback(const QJsonObject &status) {
                 auto c = v.toObject();
                 list.append(QVariantMap{{"name", c["name"].toString()},
                                         {"label", c["label"].toString()},
+                                        {"row", c["row"].toInt()},
+                                        {"column", c["column"].toInt()},
                                         {"endpoint", m_server},
                                         {"media", m_server.resolved(QUrl(c["video_url"].toString()))}});
             }

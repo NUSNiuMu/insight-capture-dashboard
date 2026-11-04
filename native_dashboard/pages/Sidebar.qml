@@ -10,32 +10,32 @@ Rectangle {
     signal selected(string page)
     property var links: [{
             "page": "sessions",
-            "name": "任务管理",
-            "group": "采集与回放"
+            "name": "Tasks",
+            "group": "Capture"
         }, {
             "page": "spatial",
-            "name": "空间采集",
+            "name": "Spatial",
             "group": ""
         }, {
             "page": "bags",
-            "name": "录制库",
+            "name": "Recordings",
             "group": ""
 
         }, {
             "page": "scoring",
-            "name": "轨迹评分",
-            "group": "数据处理"
+            "name": "Scoring",
+            "group": "Analysis"
         }, {
             "page": "optimization",
-            "name": "轨迹优化",
-            "group": "重建分析"
+            "name": "Optimize",
+            "group": "Reconstruction"
         }, {
             "page": "recording",
-            "name": "话题录制",
-            "group": "设备管理"
+            "name": "Recorder",
+            "group": "Devices"
         }, {
             "page": "settings",
-            "name": "系统设置",
+            "name": "Settings",
             "group": ""
         }]
     color: Ui.Theme.sidebar
@@ -81,7 +81,7 @@ Rectangle {
                     color: Ui.Theme.ink
                 }
                 Label {
-                    text: "采集工作台"
+                    text: "Capture"
                     font.pixelSize: 11
                     color: Ui.Theme.muted
                 }
@@ -94,20 +94,20 @@ Rectangle {
             contentItem: ColumnLayout {
                 spacing: 7
                 Label {
-                    text: "本地工作台"
+                    text: "LOCAL WORKSPACE"
                     font.family: Ui.Theme.monoFont
                     font.pixelSize: 9
                     font.letterSpacing: .7
                     color: Ui.Theme.muted
                 }
                 Label {
-                    text: "原生采集工作台"
+                    text: "Insight Capture"
                     font.pixelSize: 14
                     font.weight: Font.DemiBold
                     color: Ui.Theme.ink
                 }
                 Label {
-                    text: "采集  ·  检查  ·  回放"
+                    text: "Record · Check · Replay"
                     font.pixelSize: 11
                     color: Ui.Theme.muted
                 }
@@ -214,13 +214,13 @@ Rectangle {
                 visible: !sidebar.compact
                 spacing: 4
                 Label {
-                    text: dashboard.connected ? "后端已连接" : "等待后端连接"
+                    text: dashboard.connected ? "Connected" : "Connecting…"
                     font.pixelSize: 12
                     font.weight: Font.DemiBold
                     color: Ui.Theme.secondary
                 }
                 Label {
-                    text: dashboard.state.recording ? "录制进行中" : "本地原生客户端"
+                    text: dashboard.state.recording ? "Recording" : "Native client"
                     font.pixelSize: 11
                     color: dashboard.state.recording ? Ui.Theme.red : Ui.Theme.muted
                 }

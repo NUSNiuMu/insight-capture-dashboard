@@ -14,7 +14,6 @@
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QTimer>
-#include <QTranslator>
 #include <nvbufsurftransform.h>
 
 int main(int argc, char **argv) {
@@ -29,13 +28,8 @@ int main(int argc, char **argv) {
         return 2;
     }
     gst_init(&argc, &argv);
-    QLocale::setDefault(QLocale(QLocale::Chinese, QLocale::China));
+    QLocale::setDefault(QLocale(QLocale::English, QLocale::UnitedStates));
     QGuiApplication app(argc, argv);
-    QTranslator chinese, quickChinese;
-    static_cast<void>(chinese.load(":/i18n/qtbase_zh_CN.qm"));
-    static_cast<void>(quickChinese.load(":/i18n/qtdeclarative_zh_CN.qm"));
-    app.installTranslator(&chinese);
-    app.installTranslator(&quickChinese);
     app.setOrganizationName("Insight");
     app.setApplicationName("NativeDashboard");
     QQuickStyle::setStyle("Basic");

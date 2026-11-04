@@ -17,5 +17,5 @@ Ui.ComboBox {
                 return;
             }
     }
-    displayText: count ? currentText : "暂无录制"
+    displayText: count ? currentText : "No recordings"
 }

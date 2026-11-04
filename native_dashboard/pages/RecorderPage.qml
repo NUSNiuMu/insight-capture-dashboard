@@ -16,8 +16,8 @@ PageFrame {
     property bool locked: !!status.recording || finalizing || !!workspace.busy.action || !!dashboard.state.captureAction
     property bool taskActive: !!(status.task_status || {}).active
     property bool starting: false
-    heading: "话题录制"
-    description: distributed.enabled ? "Ego 四路视频录到头环 TF 卡；Jetson 保存腕部数据。两端保存后即可录下一条，在本地录制库手动回传合包。" : "选择 ROS 话题和存储目录，查看录制与保存状态。完整性检查请前往评分或录制库。"
+    heading: "Recorder"
+    description: distributed.enabled ? "Ego records to SD; Jetson records the wrists. Merge later in Recordings." : "Choose topics and storage, then record."
     function browse(path) {
         workspace.request("directories", "/api/recording/storage/directories" + (path ? "?path=" + encodeURIComponent(path) : ""));
     }
@@ -39,8 +39,8 @@ PageFrame {
         known = topics.slice();
     }
     Ui.Section {
-        eyebrow: "01  录制控制"
-        heading: "录制控制"
+        eyebrow: "01  CAPTURE"
+        heading: "Capture"
         RowLayout {
             Layout.fillWidth: true
             Ui.ComboBox {
@@ -54,14 +54,14 @@ PageFrame {
             }
             Ui.Button {
                 objectName: "recording-enter-task"
-                text: "进入任务"
+                text: "Use task"
                 highlighted: !page.taskActive
                 enabled: !page.locked && captureTask.count > 0 && !dashboard.playback
                 onClicked: shell.mutate("/api/tasks/" + encodeURIComponent(captureTask.currentValue) + "/activate")
             }
         }
         Label {
-            text: page.taskActive ? "当前任务：" + (((page.status.task_status || {}).task || {}).name || "") : "当前未进入采集任务，请先选择任务并点击“进入任务”。"
+            text: page.taskActive ? "Task: " + (((page.status.task_status || {}).task || {}).name || "") : "Select a task first."
             color: page.taskActive ? Ui.Theme.secondary : Ui.Theme.red
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -72,12 +72,12 @@ PageFrame {
                 id: name
                 objectName: "recording-name"
                 Layout.fillWidth: true
-                placeholderText: "可选录制名称"
+                placeholderText: "Recording name (optional)"
                 enabled: !page.locked
             }
             Ui.Button {
                 objectName: "recording-start"
-                text: page.starting ? "正在起录…" : !page.taskActive ? "先进入任务" : "开始录制"
+                text: page.starting ? "Starting…" : !page.taskActive ? "Select a task" : "Record"
                 highlighted: true
                 enabled: !page.locked && page.taskActive && page.selected.length > 0 && !dashboard.playback
                 onClicked: {
@@ -94,38 +94,38 @@ PageFrame {
             Ui.Button {
                 objectName: "recording-stop"
                 tone: "danger"
-                text: "停止录制"
+                text: "Stop"
                 enabled: !!page.status.recording && !workspace.busy.action && !dashboard.state.captureAction
                 onClicked: shell.mutate("/api/recording/stop")
             }
             Ui.Button {
-                text: "刷新"
+                text: "Refresh"
                 onClicked: shell.refresh()
             }
         }
     }
     Ui.Section {
         visible: !!page.distributed.enabled
-        heading: "双端录制与时间同步"
+        heading: "Devices and clocks"
         Label {
-            text: "状态：" + ({idle: "待命", starting: "正在启动两端", recording: "两端录制中", stop_pending: "等待两端保存确认", saved: "两端已保存", copying: "正在校验取回 Ego 数据", merging: "正在按采集时间合并", done: "六路已合并", error: "需要检查"}[page.distributed.phase] || page.distributed.phase || "待命")
+            text: "Status: " + ({idle: "Idle", starting: "Starting devices", recording: "Recording", stop_pending: "Waiting for save", saved: "Saved on both devices", copying: "Retrieving Ego data", merging: "Merging by capture time", done: "Merged", error: "Needs review"}[page.distributed.phase] || page.distributed.phase || "Idle")
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
         Label {
-            text: "共同录制编号：" + (page.distributed.session_id || "起录时生成")
+            text: "Session: " + (page.distributed.session_id || "Assigned on start")
             Layout.fillWidth: true
             wrapMode: Text.WrapAnywhere
             color: Ui.Theme.muted
         }
         Label {
-            text: "Ego TF 卡：" + (page.distributed.ego_path || "/userdata/sdcard/capture") + (page.distributed.remote_saved ? " · 已保存" : "")
+            text: "Ego SD: " + (page.distributed.ego_path || "/userdata/sdcard/capture") + (page.distributed.remote_saved ? " · Saved" : "")
             Layout.fillWidth: true
             wrapMode: Text.WrapAnywhere
             color: Ui.Theme.muted
         }
         Label {
-            text: "Jetson 腕部原件：" + (page.distributed.jetson_path || "起录时生成") + (page.distributed.local_saved ? " · 已保存" : "")
+            text: "Jetson wrist data: " + (page.distributed.jetson_path || "Assigned on start") + (page.distributed.local_saved ? " · Saved" : "")
             Layout.fillWidth: true
             wrapMode: Text.WrapAnywhere
             color: Ui.Theme.muted
@@ -135,25 +135,25 @@ PageFrame {
             delegate: Label {
                 required property string modelData
                 property var clock: ((page.distributed.clock || {}).devices || {})[modelData] || {}
-                text: modelData + " · " + (clock.offset_ms !== undefined ? "时钟偏差 " + Number(clock.offset_ms).toFixed(2) + " ms · 偏差界限 " + Number(clock.offset_bound_ms).toFixed(2) + " ms" : clock.error || "未测量")
+                text: modelData + " · " + (clock.offset_ms !== undefined ? "Clock offset " + Number(clock.offset_ms).toFixed(2) + " ms · Bound " + Number(clock.offset_bound_ms).toFixed(2) + " ms" : Ui.Texts.value(clock.error) || "Not measured")
                 color: clock.ok ? Ui.Theme.secondary : Ui.Theme.red
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
             }
         }
         Label {
-            text: "起录门槛：单台及设备间偏差界限 ≤ " + ((page.distributed.clock || {}).max_clock_bound_ms || 10) + " ms；录制中持续检查。NTP 校时不代表硬件曝光同步。"
+            text: "Clock bound ≤ " + ((page.distributed.clock || {}).max_clock_bound_ms || 10) + " ms. Checked throughout recording; NTP does not synchronize exposure."
             Layout.fillWidth: true
             wrapMode: Text.Wrap
             color: Ui.Theme.muted
         }
         Label {
-            text: (page.distributed.clock || {}).checked_at_epoch_s ? "最近检查：" + new Date(page.distributed.clock.checked_at_epoch_s * 1000).toLocaleTimeString() : "开始录制前自动检查时钟"
+            text: (page.distributed.clock || {}).checked_at_epoch_s ? "Last checked: " + new Date(page.distributed.clock.checked_at_epoch_s * 1000).toLocaleTimeString() : "Clocks are checked before recording."
             color: Ui.Theme.muted
             Layout.fillWidth: true
         }
         Label {
-            text: page.distributed.error || (page.distributed.clock_violations || []).length ? (page.distributed.error || "本次时钟检查存在异常，需复核时间报告") : (page.distributed.quality_issues || []).length ? "本次视频连续性检查存在异常，需复核质量报告" : ""
+            text: page.distributed.error || (page.distributed.clock_violations || []).length ? (Ui.Texts.value(page.distributed.error) || "Clock issue · Review timing report") : (page.distributed.quality_issues || []).length ? "Video gaps · Review quality report" : ""
             visible: text.length > 0
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -161,15 +161,15 @@ PageFrame {
         }
     }
     Ui.Section {
-        heading: "录制状态"
+        heading: "Recording status"
         RowLayout {
             Layout.fillWidth: true
             Ui.Badge {
-                text: page.status.recording ? "录制中" : page.finalizing ? "正在保存" : page.status.merge_state === "error" ? "保存失败" : "待命"
+                text: page.status.recording ? "Recording" : page.finalizing ? "Saving" : page.status.merge_state === "error" ? "Save failed" : "Idle"
                 tone: page.status.recording ? "success" : page.status.merge_state === "error" ? "danger" : page.finalizing ? "accent" : "neutral"
             }
             Label {
-                text: page.status.recording ? (page.distributed.enabled ? "Ego TF 卡与 Jetson 正在独立保存" : "正在采集所选话题") : page.finalizing ? "正在保存或手动合包，请等待完成…" : page.status.merge_state === "saved" ? "两端原始数据已保存，可以开始下一条；合包请前往本地录制库。" : page.status.merge_state === "done" ? "录制已保存" + ((page.status.merge_timings || {}).total_sec !== undefined ? " · 耗时 " + Number(page.status.merge_timings.total_sec).toFixed(1) + " 秒" : "") : "准备开始录制"
+                text: page.status.recording ? (page.distributed.enabled ? "Recording to Ego SD and Jetson" : "Recording selected topics") : page.finalizing ? "Saving or merging…" : page.status.merge_state === "saved" ? "Saved. Ready for the next take. Merge in Recordings." : page.status.merge_state === "done" ? "Recording saved" + ((page.status.merge_timings || {}).total_sec !== undefined ? " · Elapsed " + Number(page.status.merge_timings.total_sec).toFixed(1) + " s" : "") : "Ready to record"
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: Ui.Theme.secondary
@@ -186,7 +186,7 @@ PageFrame {
             font.pixelSize: 13
         }
         Label {
-            text: page.status.merge_error || ""
+            text: Ui.Texts.value(page.status.merge_error)
             visible: text.length > 0
             textFormat: Text.PlainText
             Layout.fillWidth: true
@@ -196,7 +196,7 @@ PageFrame {
         Label {
             property var taskStatus: page.status.task_status || {}
             property var stats: taskStatus.stats || {}
-            text: taskStatus.active ? ((taskStatus.task || {}).name || "当前任务") + " · 已录制 " + (stats.recorded_takes || 0) + " 条 · 下一条 " + (stats.next_take_id || 1) : "暂无活动任务"
+            text: taskStatus.active ? ((taskStatus.task || {}).name || "Current task") + " · Recorded " + (stats.recorded_takes || 0) + " takes · Next " + (stats.next_take_id || 1) : "No active task"
             Layout.fillWidth: true
             textFormat: Text.PlainText
             wrapMode: Text.Wrap
@@ -205,17 +205,17 @@ PageFrame {
         }
     }
     Ui.Section {
-        eyebrow: "02  存储位置"
-        heading: "存储位置"
+        eyebrow: "02  STORAGE"
+        heading: "Storage"
         Layout.fillWidth: true
         ColumnLayout {
             Layout.fillWidth: true
             Label {
-                text: "录制存储目录"
+                text: "Recording folder"
                 font.bold: true
             }
             Label {
-                text: (page.status.storage || {}).active_path || "正在读取…"
+                text: (page.status.storage || {}).active_path || "Loading…"
                 Layout.fillWidth: true
                 wrapMode: Text.WrapAnywhere
                 color: Ui.Theme.ink
@@ -223,24 +223,24 @@ PageFrame {
             }
             Ui.Badge {
                 property var space: page.status.disk_space || {}
-                text: space.free_bytes !== undefined ? "可用 " + (Number(space.free_bytes) / (1024 * 1024 * 1024)).toFixed(1) + " GB · " + (Number(space.free_ratio) * 100).toFixed(0) + "%" : "可用空间未知"
+                text: space.free_bytes !== undefined ? "Free " + (Number(space.free_bytes) / (1024 * 1024 * 1024)).toFixed(1) + " GB · " + (Number(space.free_ratio) * 100).toFixed(0) + "%" : "Free space unknown"
                 tone: space.free_ratio < 0.1 ? "danger" : space.free_ratio < 0.3 ? "accent" : "neutral"
             }
             Label {
-                text: "正在浏览：" + (page.directories.path || "正在读取…")
+                text: "Folder: " + (page.directories.path || "Loading…")
                 Layout.fillWidth: true
                 wrapMode: Text.WrapAnywhere
                 color: Ui.Theme.muted
             }
             RowLayout {
                 Ui.Button {
-                    text: "上一级"
+                    text: "Up"
                     enabled: !!page.directories.parent && !page.locked
                     onClicked: page.browse(page.directories.parent)
                 }
                 Ui.Button {
                     objectName: "storage-select"
-                    text: "使用当前目录"
+                    text: "Use folder"
                     enabled: !!page.directories.selectable && !page.locked
                     onClicked: shell.mutate("/api/recording/storage/select", {
                             "path": page.directories.path
@@ -273,28 +273,28 @@ PageFrame {
     }
     RowLayout {
         Label {
-            text: "录制话题 · 已选 " + page.selected.length + " / " + page.known.length
+            text: "Topics · Selected " + page.selected.length + " / " + page.known.length
             font.bold: true
         }
         Ui.Button {
-            text: "全选"
+            text: "Select all"
             enabled: !page.locked
             onClicked: page.selected = page.known.slice()
         }
         Ui.Button {
-            text: "清空"
+            text: "Clear"
             enabled: !page.locked
             onClicked: page.selected = []
         }
         Ui.Button {
-            text: "恢复默认"
+            text: "Defaults"
             enabled: !page.locked
             onClicked: page.selected = (page.catalog.default_selected_topics || []).slice()
         }
     }
     Repeater {
         model: (page.catalog.cameras || []).concat((page.catalog.other || []).length ? [{
-                    "label": "其他",
+                    "label": "Other",
                     "topics": page.catalog.other
                 }] : [])
         delegate: Ui.Panel {
@@ -305,7 +305,7 @@ PageFrame {
                 anchors.fill: parent
                 Ui.CheckBox {
                     font.weight: Font.DemiBold
-                    text: (group.modelData.label || group.modelData.namespace) + (page.distributed.enabled && group.modelData.namespace === "egohalo" ? "（TF 卡自动录制）" : "")
+                    text: (group.modelData.label || group.modelData.namespace) + (page.distributed.enabled && group.modelData.namespace === "egohalo" ? " (SD recording)" : "")
                     enabled: !page.locked && !(page.distributed.enabled && group.modelData.namespace === "egohalo")
                     checked: (group.modelData.topics || []).length > 0 && (group.modelData.topics || []).every(function (t) {
                             return page.selected.indexOf(t.name) >= 0;

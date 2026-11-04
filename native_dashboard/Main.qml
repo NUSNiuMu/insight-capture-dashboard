@@ -12,7 +12,7 @@ ApplicationWindow {
     id: root
     width: 1600; height: 1000; visible: true
     visibility: startFullScreen ? Window.FullScreen : Window.Windowed
-    title: "Insight · 原生采集台"
+    title: "Insight Capture"
     color: Ui.Theme.paper
     property string currentPage: "spatial"
     property real pageSwitchStartedAt: 0
@@ -37,9 +37,9 @@ ApplicationWindow {
         }
     }
     property bool spatialActive: currentPage === "spatial"
+    property var frameSizes: ({})
     property int previewFps: dashboard.targetFps
     property real sceneFps: view.renderStats.fps
-    property bool multiStreamLayout: !dashboard.playback && cameraGroups().some(function(group) { return group.streams.length > 1 })
     property real cameraChromeHeight: 32 + cameraTitleMetrics.height + cameraStatusMetrics.height
     FontMetrics { id: cameraTitleMetrics; font: root.font }
     FontMetrics { id: cameraStatusMetrics; font.family: root.font.family; font.pixelSize: 11 }
@@ -95,39 +95,41 @@ ApplicationWindow {
             var key=dashboard.playback ? camera.name : (camera.device || camera.name)
             if (positions[key] === undefined) {
                 positions[key]=groups.length
-                groups.push({name:key, streams:[]})
+                groups.push({name:key, row:camera.row, column:camera.column, streams:[]})
             }
             groups[positions[key]].streams.push(camera)
+        }
+        for (var j=0; j<groups.length; ++j) {
+            var group=groups[j]
+            group.columns=Math.min(2, group.streams.length)
+            if (group.columns>1) { group.row=0; group.column=1 }
+            group.rowSpan=groups.length===3 && group.column>0 ? 2 : 1
         }
         return groups
     }
     function cameraGroupWidth(group, height) {
-        var columns = group.streams.length > 1 ? 2 : 1
-        var rows = Math.max(1, Math.ceil(group.streams.length / columns))
-        var imageHeight = Math.max(1, (height - (rows - 1) * cameraDock.rowSpacing) / rows - cameraChromeHeight)
-        var ratios = []
-        for (var i = 0; i < columns; ++i) ratios.push(0)
-        for (var j = 0; j < group.streams.length; ++j) {
-            var stream = group.streams[j]
-            var ratio = stream.width > 0 && stream.height > 0 ? stream.width / stream.height : 1
-            ratios[j % columns] = Math.max(ratios[j % columns], ratio)
+        var rows=cameraGroups().reduce(function(count, item) { return Math.max(count, item.row+item.rowSpan) }, 1)
+        var groupHeight=(height-(rows-1)*cameraDock.rowSpacing)/rows*group.rowSpan+(group.rowSpan-1)*cameraDock.rowSpacing
+        var streamRows=Math.ceil(group.streams.length/group.columns)
+        var imageHeight=Math.max(1, (groupHeight-(streamRows-1)*cameraDock.rowSpacing)/streamRows-cameraChromeHeight)
+        var widths=[]
+        for (var i=0; i<group.columns; ++i) widths.push(0)
+        for (var j=0; j<group.streams.length; ++j) {
+            var stream=group.streams[j]
+            var size=root.frameSizes[stream.name] || stream
+            widths[j%group.columns]=Math.max(widths[j%group.columns], imageHeight*(size.width || 1)/(size.height || 1))
         }
-        return ratios.reduce(function(sum, ratio) { return sum + ratio * imageHeight }, 0) + (columns - 1) * cameraDock.columnSpacing
+        return widths.reduce(function(sum, width) { return sum+width }, 0)+(group.columns-1)*cameraDock.columnSpacing
     }
     function cameraDockWidth(height) {
-        var groups = cameraGroups(), widths = [], singles = 0, multi = 0
-        for (var i = 0; i < groups.length; ++i) {
-            var group = groups[i]
-            if (group.streams.some(function(stream) { return !(stream.width > 0 && stream.height > 0) })) return spatialWorkspace.width * 2 / 3
-            var groupHeight = multiStreamLayout && group.streams.length === 1 ? (height - cameraDock.rowSpacing) / 2 : height
-            var width = cameraGroupWidth(group, groupHeight)
-            widths.push(width)
-            if (group.streams.length === 1) singles = Math.max(singles, width)
-            else multi = Math.max(multi, width)
+        var groups=cameraGroups(), widths=[]
+        for (var i=0; i<groups.length; ++i) {
+            var group=groups[i]
+            var width=(cameraGroupWidth(group, height)-(group.columns-1)*cameraDock.columnSpacing)/group.columns
+            for (var j=0; j<group.columns; ++j) widths[group.column+j]=Math.max(widths[group.column+j] || 0, width)
         }
-        var natural = multiStreamLayout ? singles + multi + cameraDock.columnSpacing : widths.reduce(function(sum, width) { return sum + width }, 0) + Math.max(0, widths.length - 1) * cameraDock.columnSpacing
-        // Keep complete images and give unused horizontal space to the scene.
-        return Math.min(natural, spatialWorkspace.width * 2 / 3)
+        var natural=widths.reduce(function(sum, width) { return sum+width }, 0)+Math.max(0,widths.length-1)*cameraDock.columnSpacing
+        return Math.min(natural, (spatialWorkspace.width-spatialWorkspace.columnSpacing)*2/3)
     }
     Shortcut { sequence: "Escape"; onActivated: root.visibility = Window.Windowed }
     Shortcut { sequence: "F11"; onActivated: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
@@ -135,7 +137,7 @@ ApplicationWindow {
         id: confirmDialog; objectName: "confirm-dialog"; anchors.centerIn: parent; modal: true; width: 400
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: dashboard.command(root.confirmAction, root.confirmValue)
-        Label { text: "操作将应用于当前设备。"; padding: 16 }
+        Label { text: "Apply to the current device."; padding: 16 }
     }
     RowLayout {
         anchors.fill: parent; spacing: 0
@@ -150,22 +152,22 @@ ApplicationWindow {
             Layout.fillWidth: true; Layout.preferredHeight: 56; color: "transparent"
             RowLayout {
                 anchors.fill: parent; anchors.margins: 15; spacing: 18
-                Label { text: "工作台 /"; font.family: Ui.Theme.monoFont; font.pixelSize: 11; font.letterSpacing: 1; color: Ui.Theme.faint }
-                Label { text: root.spatialActive ? "原生采集台" : (pageLoader.titles[root.currentPage] || ""); font.pixelSize: 14; font.weight: Font.DemiBold; color: Ui.Theme.ink }
+                Label { text: "WORKSPACE /"; font.family: Ui.Theme.monoFont; font.pixelSize: 11; font.letterSpacing: 1; color: Ui.Theme.faint }
+                Label { text: root.spatialActive ? "Capture" : (pageLoader.titles[root.currentPage] || ""); font.pixelSize: 14; font.weight: Font.DemiBold; color: Ui.Theme.ink }
                 Rectangle { width: 9; height: 9; radius: 5; color: dashboard.connected ? "#70ac82" : "#c27a6a" }
-                Label { text: dashboard.connected ? "已连接" : "未连接"; font.pixelSize: 12; color: Ui.Theme.muted }
+                Label { text: dashboard.connected ? "Connected" : "Disconnected"; font.pixelSize: 12; color: Ui.Theme.muted }
                 Item { Layout.fillWidth: true }
-                Ui.Badge { text: dashboard.playback ? "回放" : "实时"; tone: "accent"; visible: root.spatialActive }
+                Ui.Badge { text: dashboard.playback ? "Playback" : "Live"; tone: "accent"; visible: root.spatialActive }
                 Ui.ComboBox { visible: root.spatialActive; model: [25,30]; currentIndex: dashboard.targetFps===30?1:0; onActivated: root.previewFps=Number(currentText); implicitWidth: 85 }
-                Label { visible: root.spatialActive; font.family: Ui.Theme.monoFont; font.pixelSize: 11; text: "三维 " + root.sceneFps.toFixed(1) + " 帧/秒"; color: "#776d5a" }
-                Ui.Button { text: "全屏"; onClicked: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
+                Label { visible: root.spatialActive; font.family: Ui.Theme.monoFont; font.pixelSize: 11; text: "3D " + root.sceneFps.toFixed(1) + " FPS"; color: "#776d5a" }
+                Ui.Button { text: "Fullscreen"; onClicked: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
             }
         }
         RowLayout {
             Layout.fillWidth: true
             Layout.preferredHeight: 18; Layout.minimumHeight: 18; Layout.maximumHeight: 18
             BusyIndicator { running: Object.keys(workspace.busy).some(function(k){return workspace.busy[k]}); visible: running; implicitWidth: 18; implicitHeight: 18 }
-            Label { text: Object.keys(workspace.errors).map(function(k){return workspace.errors[k]}).join(" · ") || dashboard.state.captureError || (!root.taskActive && dashboard.connected && !dashboard.playback ? "当前未进入采集任务：请选择任务并点击“进入任务”，再开始录制。" : ""); textFormat: Text.PlainText; color: "#c2453d"; elide: Text.ElideRight; Layout.fillWidth: true; ToolTip.visible: errorMouse.containsMouse; ToolTip.text: text; MouseArea { id: errorMouse; anchors.fill: parent; hoverEnabled: true } }
+            Label { text: Object.keys(workspace.errors).map(function(k){return Ui.Texts.value(workspace.errors[k])}).join(" · ") || Ui.Texts.value(dashboard.state.captureError) || (!root.taskActive && dashboard.connected && !dashboard.playback ? "Select a task to record." : ""); textFormat: Text.PlainText; color: "#c2453d"; elide: Text.ElideRight; Layout.fillWidth: true; ToolTip.visible: errorMouse.containsMouse; ToolTip.text: text; MouseArea { id: errorMouse; anchors.fill: parent; hoverEnabled: true } }
         }
         WorkspacePages {
             id: pageLoader; Layout.fillWidth: true; Layout.fillHeight: true
@@ -185,19 +187,21 @@ ApplicationWindow {
                 Layout.minimumWidth: 0
                 Layout.preferredHeight: -1
                 Layout.fillWidth: false; Layout.fillHeight: true
-                columns: root.multiStreamLayout ? 3 : Math.max(1, cameraRepeater.count)
+                columns: root.cameraGroups().reduce(function(columns, group) { return Math.max(columns, group.column + group.columns) }, 1)
                 rowSpacing: 10; columnSpacing: 12
                 Repeater {
                     id: cameraRepeater; model: root.cameraGroups()
                     delegate: GridLayout {
-                        id: cameraGroup; required property var modelData; required property int index
-                        columns: modelData.streams.length > 1 ? 2 : 1
+                        id: cameraGroup; required property var modelData
+                        columns: modelData.columns
                         rowSpacing: cameraDock.rowSpacing; columnSpacing: cameraDock.columnSpacing
-                        Layout.row: root.multiStreamLayout ? (modelData.streams.length > 1 ? 0 : index) : 0
-                        Layout.column: root.multiStreamLayout ? (modelData.streams.length > 1 ? 1 : 0) : index
-                        Layout.columnSpan: root.multiStreamLayout && modelData.streams.length > 1 ? 2 : 1
-                        Layout.rowSpan: root.multiStreamLayout && modelData.streams.length > 1 ? 2 : 1
-                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: root.cameraGroupWidth(modelData, root.multiStreamLayout && modelData.streams.length === 1 ? (cameraDock.height-cameraDock.rowSpacing)/2 : cameraDock.height); Layout.preferredHeight: modelData.streams.length > 1 ? 2 : 1
+                        Layout.row: modelData.row
+                        Layout.column: modelData.column
+                        Layout.columnSpan: modelData.columns
+                        Layout.rowSpan: modelData.rowSpan
+                        Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0
+                        Layout.preferredWidth: root.cameraGroupWidth(modelData, cameraDock.height)
+                        Layout.preferredHeight: Layout.rowSpan
                         function eachVideo(fn) { for(var j=0;j<streamRepeater.count;++j)fn(streamRepeater.itemAt(j).player) }
                         Repeater {
                             id: streamRepeater; model: cameraGroup.modelData.streams
@@ -205,20 +209,20 @@ ApplicationWindow {
                                 id: cameraCard; required property var modelData
                                 property alias player: video
                                 Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0; Layout.preferredWidth: 1; Layout.preferredHeight: 1; color: Ui.Theme.surface; radius: 12; border.color: Ui.Theme.line
-                                Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: Ui.Texts.value(cameraCard.modelData.label); width: parent.width-110; elide: Text.ElideRight; font.bold: true; color: "#514b3e" }
+                                Label { id: cameraTitle; anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10; text: Ui.Texts.value(cameraCard.modelData.label); width: parent.width-92; elide: Text.ElideRight; font.bold: true; color: "#514b3e" }
                                 Label {
                                     id: cameraStatus
                                     property var localization: dashboard.localization[cameraCard.modelData.device || cameraCard.modelData.name] || {}
                                     anchors.top: cameraTitle.bottom; anchors.left: parent.left; anchors.margins: 10
-                                    text: dashboard.playback ? "录制回放" : (localization.label || "等待定位状态")
+                                    text: dashboard.playback ? "Playback" : (localization.label || "Waiting for pose")
                                     elide: Text.ElideRight; width: parent.width-20; font.pixelSize: 11
                                     color: dashboard.playback ? "#51778e" : (localization.color || "#84775f")
                                 }
-                                Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: "输出 " + video.renderedFps.toFixed(1) + " 帧/秒"; color: "#a27723"; font.bold: true }
+                                Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: video.renderedFps.toFixed(1) + " FPS"; color: "#a27723"; font.bold: true }
                                 Rectangle {
                                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom
                                     anchors.topMargin: 6; anchors.bottomMargin: 6; color: "#17130c"; radius: 8
-                                    Label { anchors.centerIn: parent; text: dashboard.cameraAvailability[cameraCard.modelData.name]===false ? "设备离线 · 等待连接" : "等待视频预览"; color: "#a39885"; font.pixelSize: 12; visible: !dashboard.playback && video.renderedFps<=0 }
+                                    Label { anchors.centerIn: parent; text: dashboard.cameraAvailability[cameraCard.modelData.name]===false ? "Camera offline" : "Waiting for video"; color: "#a39885"; font.pixelSize: 12; visible: !dashboard.playback && video.renderedFps<=0 }
                                 }
                                 NativeVideo {
                                     id: video; active: root.spatialActive; visible: root.spatialActive && !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.topMargin: 6; anchors.bottomMargin: 6
@@ -226,12 +230,17 @@ ApplicationWindow {
                                     sourceOnline: dashboard.playback || dashboard.cameraAvailability[cameraCard.modelData.name] !== false
                                     cameraName: cameraCard.modelData.name; endpoint: cameraCard.modelData.endpoint; nativeEndpoint: cameraCard.modelData.nativeEndpoint || ""; media: cameraCard.modelData.media; targetFps: root.previewFps
                                     onStatsChanged: { if (dashboard.playback) { root.playTime = position; dashboard.setPlaybackTime(position) } }
+                                    onFrameSizeChanged: {
+                                        var sizes=Object.assign({}, root.frameSizes)
+                                        sizes[cameraName]={width:frameSize.width, height:frameSize.height}
+                                        root.frameSizes=sizes
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                Label { visible: cameraRepeater.count===0; text: "等待相机列表…"; color: "#776d5a" }
+                Label { visible: cameraRepeater.count===0; text: "Waiting for cameras…"; color: "#776d5a" }
             }
             Rectangle {
                 id: scenePanel
@@ -243,12 +252,12 @@ ApplicationWindow {
                     anchors.fill: parent; spacing: 0
                     Flow {
                         Layout.fillWidth: true; Layout.margins: 12; spacing: 8
-                        Label { height: 42; verticalAlignment: Text.AlignVCenter; text: "空间视图"; font.bold: true; color: "#514b3e" }
-                        Label { height: 42; verticalAlignment: Text.AlignVCenter; text: "确认地图点 " + (dashboard.state.mapPoints || 0); color: "#84775f" }
+                        Label { height: 42; verticalAlignment: Text.AlignVCenter; text: "3D view"; font.bold: true; color: "#514b3e" }
+                        Label { height: 42; verticalAlignment: Text.AlignVCenter; text: "Map points: " + (dashboard.state.mapPoints || 0); color: "#84775f" }
                         Item { Layout.fillWidth: true }
-                        Ui.CheckBox { text: "保留轨迹"; checked: dashboard.keepTrail; onToggled: dashboard.keepTrail = checked }
-                        Ui.Button { text: "清轨迹"; onClicked: dashboard.command("clear") }
-                        Ui.Button { text: "复位视角"; onClicked: { root.yaw=90-1.2*180/Math.PI;root.pitch=1.1*180/Math.PI-90;root.distance=580;orbit.position=Qt.vector3d(0,90,0) } }
+                        Ui.CheckBox { text: "Keep trails"; checked: dashboard.keepTrail; onToggled: dashboard.keepTrail = checked }
+                        Ui.Button { text: "Clear trails"; onClicked: dashboard.command("clear") }
+                        Ui.Button { text: "Reset view"; onClicked: { root.yaw=90-1.2*180/Math.PI;root.pitch=1.1*180/Math.PI-90;root.distance=580;orbit.position=Qt.vector3d(0,90,0) } }
                     }
                     Item {
                         Layout.fillWidth: true; Layout.fillHeight: true
@@ -314,13 +323,13 @@ ApplicationWindow {
                             onPositionChanged: function(mouse) { if(!pressed)return;var dx=mouse.x-lastX,dy=mouse.y-lastY;if(pressedButtons&Qt.RightButton)orbit.position=Qt.vector3d(orbit.x-dx*.5,orbit.y+dy*.5,orbit.z);else {root.yaw-=dx*.3;root.pitch=Math.max(-89,Math.min(89,root.pitch-dy*.3))}lastX=mouse.x;lastY=mouse.y }
                             onWheel: function(wheel) { root.distance=Math.max(120,Math.min(2400,root.distance*Math.pow(.9,wheel.angleDelta.y/120))) }
                         }
-                        Label { anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 12; text: "左键旋转 · 右键平移 · 滚轮缩放"; font.pixelSize: 11; color: "#9c8f75" }
+                        Label { anchors.left: parent.left; anchors.bottom: parent.bottom; anchors.margins: 12; text: "Drag to orbit · Right-drag to pan · Scroll to zoom"; font.pixelSize: 11; color: "#9c8f75" }
                     }
                     RowLayout {
                         Layout.fillWidth: true; Layout.margins: 10
                         Repeater {
                             model: dashboard.poses
-                            delegate: Ui.CheckBox { required property var modelData; text: Ui.Texts.value(modelData.role) + " · " + modelData.pointCount + " 点"; checked: modelData.trailEnabled; onToggled: modelData.setTrail(checked) }
+                            delegate: Ui.CheckBox { required property var modelData; text: Ui.Texts.value(modelData.role) + " · " + modelData.pointCount + " points"; checked: modelData.trailEnabled; onToggled: modelData.setTrail(checked) }
                         }
                         Item { Layout.fillWidth: true }
                     }
@@ -333,28 +342,28 @@ ApplicationWindow {
             ColumnLayout {
                 id: controls; anchors.fill: parent; anchors.margins: 11; spacing: 8
                 RowLayout {
-                    Label { text: "采集任务"; color: "#776d5a" }
+                    Label { text: "Task"; color: "#776d5a" }
                     Ui.ComboBox { id: task; Layout.preferredWidth: 190; model: dashboard.tasks; textRole: "name"; valueRole: "task_id"; enabled: !root.captureLocked }
-                    Ui.Button { id: activateButton; text: "进入任务"; highlighted: !root.taskActive; enabled: task.count>0&&!dashboard.state.recording&&!dashboard.playback&&!dashboard.state.recordingBusy&&!root.captureAction; onClicked: dashboard.command("task",task.currentValue) }
-                    Ui.Button { text: "结束任务"; enabled: !root.captureLocked && root.taskActive; onClicked: dashboard.command("endTask") }
+                    Ui.Button { id: activateButton; text: "Use task"; highlighted: !root.taskActive; enabled: task.count>0&&!dashboard.state.recording&&!dashboard.playback&&!dashboard.state.recordingBusy&&!root.captureAction; onClicked: dashboard.command("task",task.currentValue) }
+                    Ui.Button { text: "End task"; enabled: !root.captureLocked && root.taskActive; onClicked: dashboard.command("endTask") }
                     Rectangle { width: 1; height: 25; color: "#ddd1b9" }
-                    Ui.Button { id: recordButton; tone: dashboard.state.recording ? "danger" : "primary"; text: root.captureAction === "starting" ? "正在起录…" : root.captureAction === "stopping" ? "正在停止…" : dashboard.state.recording ? "停止录制" : dashboard.state.recordingBusy ? "正在保存…" : !root.taskActive ? "先进入任务" : "开始录制"; highlighted: true; enabled: (dashboard.state.recording||dashboard.connected&&root.taskActive)&&!dashboard.playback&&!dashboard.state.recordingBusy&&!root.captureAction; onClicked: dashboard.command(dashboard.state.recording?"stop":"record") }
-                    Ui.Button { text: "作废最近一条"; tone: "danger"; enabled: !dashboard.state.recording; onClicked: root.confirm("reject","operator_rejected","确认作废最近一条记录？") }
+                    Ui.Button { id: recordButton; tone: dashboard.state.recording ? "danger" : "primary"; text: root.captureAction === "starting" ? "Starting…" : root.captureAction === "stopping" ? "Stopping…" : dashboard.state.recording ? "Stop" : dashboard.state.recordingBusy ? "Saving…" : !root.taskActive ? "Select a task" : "Record"; highlighted: true; enabled: (dashboard.state.recording||dashboard.connected&&root.taskActive)&&!dashboard.playback&&!dashboard.state.recordingBusy&&!root.captureAction; onClicked: dashboard.command(dashboard.state.recording?"stop":"record") }
+                    Ui.Button { text: "Reject last take"; tone: "danger"; enabled: !dashboard.state.recording; onClicked: root.confirm("reject","operator_rejected","Reject the last take?") }
                     Item { Layout.fillWidth: true }
-                    Ui.Button { id: checkButton; text: "采集检查"; onClicked: dashboard.command("check") }
-                    Ui.Button { text: "新建地图"; enabled: !dashboard.state.recording&&!dashboard.playback; onClicked: root.confirm("reset","","确认重置当前地图？") }
+                    Ui.Button { id: checkButton; text: "Check"; onClicked: dashboard.command("check") }
+                    Ui.Button { text: "New map"; enabled: !dashboard.state.recording&&!dashboard.playback; onClicked: root.confirm("reset","","Reset the current map?") }
                 }
                 RowLayout {
-                    Label { text: "录制回放"; color: "#776d5a" }
+                    Label { text: "Playback"; color: "#776d5a" }
                     Ui.ComboBox { id: bag; Layout.fillWidth: true; model: dashboard.bags; textRole: "name"; valueRole: "selector"; enabled: !dashboard.state.recording }
-                    Ui.Button { text: "刷新"; onClicked: dashboard.command("refreshBags") }
-                    Ui.Button { id: loadButton; text: "载入"; enabled: bag.count>0&&!dashboard.state.recording&&!dashboard.playback; onClicked: dashboard.command("playback",bag.currentValue) }
-                    Ui.Button { id: pauseButton; text: root.playPaused ? "继续" : "暂停"; enabled: dashboard.playback; onClicked: { root.playPaused=!root.playPaused;root.allVideos(function(v){v.paused=root.playPaused}) } }
+                    Ui.Button { text: "Refresh"; onClicked: dashboard.command("refreshBags") }
+                    Ui.Button { id: loadButton; text: "Load"; enabled: bag.count>0&&!dashboard.state.recording&&!dashboard.playback; onClicked: dashboard.command("playback",bag.currentValue) }
+                    Ui.Button { id: pauseButton; text: root.playPaused ? "Resume" : "Pause"; enabled: dashboard.playback; onClicked: { root.playPaused=!root.playPaused;root.allVideos(function(v){v.paused=root.playPaused}) } }
                     Ui.Slider { id: timeline; Layout.preferredWidth: 190; from: 0; to: Math.max(1,dashboard.duration); value: root.playTime; enabled: dashboard.playback; onMoved: root.allVideos(function(v){v.seek(timeline.value)}) }
                     Label { text: dashboard.playback ? root.playTime.toFixed(1)+" / "+dashboard.duration.toFixed(1)+" s" : Ui.Texts.value(dashboard.state.playbackState || "idle"); color: "#84775f" }
-                    Ui.Button { id: liveButton; text: "返回实时"; enabled: dashboard.playback; onClicked: { root.playPaused=false;dashboard.command("live") } }
+                    Ui.Button { id: liveButton; text: "Live"; enabled: dashboard.playback; onClicked: { root.playPaused=false;dashboard.command("live") } }
                 }
-                Label { text: root.captureAction === "starting" ? "正在检查设备、校时并启动录制，请稍候…" : root.captureAction === "stopping" ? "正在停止两端录制，请稍候…" : dashboard.state.recording ? "● 录制中  " + ((dashboard.state.distributed || {}).enabled ? "Ego TF 卡 + Jetson · " : "") + (dashboard.state.output || "") : dashboard.state.recordingBusy ? "正在保存或手动合包，请稍候…" : dashboard.message; Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
+                Label { text: root.captureAction === "starting" ? "Checking devices and clocks…" : root.captureAction === "stopping" ? "Stopping recording…" : dashboard.state.recording ? "● Recording  " + ((dashboard.state.distributed || {}).enabled ? "Ego SD + Jetson · " : "") + (dashboard.state.output || "") : dashboard.state.recordingBusy ? "Saving…" : Ui.Texts.value(dashboard.message); Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
             }
         }
     }

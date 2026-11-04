@@ -7,8 +7,8 @@ PageFrame {
     id: page
     property var shell
     property string deleting: ""
-    heading: "录制库"
-    description: "查看录制完整性、评分和回放准备状态。"
+    heading: "Recordings"
+    description: "Review and manage recordings."
     SavedRecordings {
         Layout.fillWidth: true
         shell: page.shell
@@ -16,7 +16,7 @@ PageFrame {
     RowLayout {
         Ui.Button {
             objectName: "bags-all"
-            text: "全部目录"
+            text: "All folders"
             highlighted: !!shell && shell.scope === "all"
             onClicked: {
                 shell.scope = "all";
@@ -25,7 +25,7 @@ PageFrame {
         }
         Ui.Button {
             objectName: "bags-current"
-            text: "当前目录"
+            text: "Current folder"
             highlighted: !!shell && shell.scope === "current"
             onClicked: {
                 shell.scope = "current";
@@ -34,7 +34,7 @@ PageFrame {
         }
         Ui.Button {
             objectName: "bags-refresh"
-            text: "刷新"
+            text: "Refresh"
             enabled: !workspace.busy.bags
             onClicked: shell.refresh()
         }
@@ -46,7 +46,7 @@ PageFrame {
         }
     }
     Label {
-        text: "暂无录制"
+        text: "No recordings"
         visible: ((workspace.data.bags || {}).bags || []).length === 0 && !workspace.busy.bags
     }
     Repeater {
@@ -64,7 +64,7 @@ PageFrame {
                     wrapMode: Text.Wrap
                 }
                 Label {
-                    text: (modelData.relative_path || modelData.root || "") + " · " + Number(modelData.duration_s || 0).toFixed(1) + " 秒 · " + (modelData.size_label || "--") + " · " + (modelData.message_count || 0) + " 条消息 · " + (modelData.topic_count || 0) + " 个话题"
+                    text: (modelData.relative_path || modelData.root || "") + " · " + Number(modelData.duration_s || 0).toFixed(1) + " s · " + (modelData.size_label || "--") + " · " + (modelData.message_count || 0) + " messages · " + (modelData.topic_count || 0) + " topics"
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                 }
@@ -72,26 +72,26 @@ PageFrame {
                     Layout.fillWidth: true
                     spacing: 8
                     Ui.Badge {
-                        text: modelData.integrity === true ? "完整性通过" : modelData.integrity === false ? "不完整" : "未检查"
+                        text: modelData.integrity === true ? "Integrity passed" : modelData.integrity === false ? "Incomplete" : "Unchecked"
                         tone: modelData.integrity === true ? "success" : modelData.integrity === false ? "danger" : "neutral"
                     }
                     Ui.Badge {
-                        text: modelData.scored ? "已评分" : "未评分"
+                        text: modelData.scored ? "Scored" : "Not scored"
                         tone: modelData.scored ? "success" : "neutral"
                     }
                     Ui.Badge {
-                        text: "回放 · " + Ui.Texts.value(modelData.review_state || "pending")
+                        text: "Playback · " + Ui.Texts.value(modelData.review_state || "pending")
                         tone: modelData.review_state === "ready" ? "accent" : "neutral"
                     }
                 }
                 RowLayout {
                     Ui.Button {
-                        text: "准备并回放"
+                        text: "Play"
                         enabled: !dashboard.state.recording
                         onClicked: shell.openSpatial(String(modelData.id || modelData.name))
                     }
                     Ui.Button {
-                        text: "检查完整性"
+                        text: "Check integrity"
                         enabled: !workspace.busy.integrity && !dashboard.state.recording
                         onClicked: workspace.request("integrity", "/api/integrity/run", "POST", {
                                 "bag_name": String(modelData.id || modelData.name)
@@ -100,11 +100,11 @@ PageFrame {
                     Ui.Button {
                         objectName: "bag-delete"
                         tone: "danger"
-                        text: "删除"
+                        text: "Delete"
                         enabled: !dashboard.state.recording && !workspace.busy.action
                         onClicked: {
                             page.deleting = String(modelData.id || modelData.name);
-                            removeDialog.title = "删除 “" + modelData.name + "”？";
+                            removeDialog.title = "Delete “" + modelData.name + "”？";
                             removeDialog.open();
                         }
                     }
@@ -132,17 +132,17 @@ PageFrame {
                 Ui.Button {
                     objectName: "delete-confirm"
                     tone: "danger"
-                    text: "确认删除"
+                    text: "Delete"
                     onClicked: removeDialog.accept()
                 }
                 Ui.Button {
-                    text: "取消"
+                    text: "Cancel"
                     onClicked: removeDialog.reject()
                 }
             }
         }
         Label {
-            text: "永久删除该录制目录，无法撤销。"
+            text: "Permanently delete this recording?"
         }
         onAccepted: shell.mutate("/api/rosbags/" + encodeURIComponent(page.deleting), {}, "DELETE")
     }

@@ -115,7 +115,7 @@ Rectangle {
         anchors.bottom: parent.bottom
         anchors.left: parent.left
         anchors.margins: 12
-        text: "拖动旋转 · 滚轮缩放 · 双击复位"
+        text: "Drag to orbit · Scroll to zoom · Double-click to reset"
         color: "#776d5a"
     }
 }

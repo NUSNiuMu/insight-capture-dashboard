@@ -31,7 +31,7 @@ C.Dialog {
         delegate: Button {
             objectName: dialog.objectName + (C.DialogButtonBox.buttonRole === C.DialogButtonBox.AcceptRole ? "-confirm" : "-cancel")
             tone: C.DialogButtonBox.buttonRole === C.DialogButtonBox.AcceptRole ? "primary" : "neutral"
-            text: C.DialogButtonBox.buttonRole === C.DialogButtonBox.AcceptRole ? "确定" : "取消"
+            text: C.DialogButtonBox.buttonRole === C.DialogButtonBox.AcceptRole ? "OK" : "Cancel"
         }
         background: Rectangle {
             color: "transparent"

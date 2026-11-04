@@ -34,7 +34,7 @@ NativeVideo::NativeVideo(QQuickItem *parent) : QQuickItem(parent) {
             });
     connect(&m_socket, &QWebSocket::disconnected, this, [this] {
         if (!m_stopping && m_media.isEmpty())
-            fail("信令断开，重连中");
+            fail("Signaling lost · Reconnecting");
     });
     connect(this, &QQuickItem::windowChanged, this, [this] { syncWindow(); });
     connect(this, &QQuickItem::visibleChanged, this, &NativeVideo::syncWindow);
@@ -115,7 +115,7 @@ void NativeVideo::setSourceOnline(bool value) {
     emit sourceChanged();
     if (!value && m_media.isEmpty()) {
         stop();
-        m_status = "设备离线，等待连接";
+        m_status = "Camera offline";
         syncWindow();
         emit statsChanged();
     } else
@@ -159,7 +159,11 @@ void NativeVideo::syncWindow() {
         if (caps) {
             GstVideoInfo info;
             if (gst_video_info_from_caps(&info, caps)) {
-                m_displaySize = QSize(info.width, info.height);
+                const QSize frameSize(info.width, info.height);
+                if (frameSize != m_displaySize) {
+                    m_displaySize = frameSize;
+                    emit frameSizeChanged();
+                }
                 size = QSizeF(info.width, info.height).scaled(size, Qt::KeepAspectRatio);
             }
             gst_caps_unref(caps);
@@ -224,7 +228,7 @@ void NativeVideo::start() {
         return;
     m_useNative = m_media.isEmpty() && !m_nativeEndpoint.isEmpty();
     if (m_useNative) {
-        m_status = "正在连接本机视频";
+        m_status = "Connecting video…";
         m_lastProgress = m_clock.elapsed();
         QUrl url = m_nativeEndpoint;
         QUrlQuery query;
@@ -270,7 +274,7 @@ void NativeVideo::start() {
             if (m_decode)
                 gst_object_unref(m_decode);
             m_decode = nullptr;
-            fail(error ? QString::fromUtf8(error->message) : "缺少 WebRTC/NVIDIA 插件");
+            fail(error ? QString::fromUtf8(error->message) : "Missing WebRTC/NVIDIA plugin");
             if (error)
                 g_error_free(error);
             return;
@@ -295,7 +299,7 @@ void NativeVideo::start() {
                 .constData(),
             &error);
         if (!m_pipeline || error) {
-            fail(error ? QString::fromUtf8(error->message) : "回放管线创建失败");
+            fail(error ? QString::fromUtf8(error->message) : "Cannot create playback pipeline");
             if (error)
                 g_error_free(error);
             return;
@@ -328,7 +332,7 @@ void NativeVideo::startPipeline() {
         gst_object_unref(pad);
     }
     if (!m_sink || !GST_IS_VIDEO_OVERLAY(m_sink)) {
-        fail("视频 sink 不支持原生窗口");
+        fail("Video sink does not support native windows");
         return;
     }
     m_bus = gst_element_get_bus(m_pipeline);
@@ -344,11 +348,11 @@ void NativeVideo::startPipeline() {
             return GST_BUS_DROP;
         },
         reinterpret_cast<gpointer>(handle), nullptr);
-    m_status = m_useNative ? "本机直通 · 原生显示" : m_media.isEmpty() ? "正在协商 H.264" : "正在加载回放";
+    m_status = m_useNative ? "Native video" : m_media.isEmpty() ? "Negotiating H.264…" : "Loading playback…";
     m_lastPoll = m_lastProgress = m_clock.elapsed();
     if (gst_element_set_state(m_pipeline, m_paused || (!m_active && !m_media.isEmpty()) ? GST_STATE_PAUSED : GST_STATE_PLAYING) ==
         GST_STATE_CHANGE_FAILURE) {
-        fail("视频管线启动失败");
+        fail("Cannot start video pipeline");
         return;
     }
     m_timer.start(m_active ? 33 : 250);
@@ -391,7 +395,7 @@ void NativeVideo::startNativePipeline(int format, int width, int height) {
     GError *error = nullptr;
     m_pipeline = gst_parse_launch((source + display).constData(), &error);
     if (!m_pipeline || error) {
-        fail(error ? QString::fromUtf8(error->message) : "本机视频管线创建失败");
+        fail(error ? QString::fromUtf8(error->message) : "Cannot create native video pipeline");
         if (error)
             g_error_free(error);
         return;
@@ -417,7 +421,7 @@ void NativeVideo::handleNativeFrame(const QByteArray &message) {
         !width || !height || width > 8192 || height > 8192 ||
         (format == 1 && message.size() - 32 != qint64(width) * height) ||
         (format == 2 && (height % 2 || message.size() - 32 != qint64(width) * height * 3 / 2))) {
-        fail("本机视频数据格式错误");
+        fail("Invalid native video data");
         return;
     }
     if (!m_pipeline)
@@ -462,7 +466,7 @@ void NativeVideo::handleNativeFrame(const QByteArray &message) {
     }
     ++m_nativeReceived;
     if (gst_app_src_push_buffer(GST_APP_SRC(m_appsrc), buffer) != GST_FLOW_OK)
-        fail("本机视频投递失败");
+        fail("Cannot deliver native video");
 }
 void NativeVideo::fail(const QString &message) {
     if (m_stopping)
@@ -488,7 +492,7 @@ void NativeVideo::handleMessage(const QString &text) {
         if (gst_sdp_message_parse_buffer(reinterpret_cast<const guint8 *>(bytes.constData()), bytes.size(),
                                          sdp) != GST_SDP_OK) {
             gst_sdp_message_free(sdp);
-            fail("SDP 解析失败");
+            fail("Invalid SDP");
             return;
         }
         auto *offer = gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, sdp);
@@ -502,7 +506,7 @@ void NativeVideo::handleMessage(const QString &text) {
         g_signal_emit_by_name(m_peer, "add-ice-candidate", data["sdpMLineIndex"].toInt(),
                               candidate.constData());
     } else if (data["type"] == "webrtc_unavailable")
-        fail("服务端 WebRTC 不可用");
+        fail("WebRTC unavailable");
 }
 void NativeVideo::answerCreated(GstPromise *promise, gpointer user) {
     auto *ctx = static_cast<AnswerContext *>(user);
@@ -527,7 +531,7 @@ void NativeVideo::answerCreated(GstPromise *promise, gpointer user) {
                 if (!video || video->m_generation != generation)
                     return;
                 if (sdp.isEmpty())
-                    video->fail("无法生成 WebRTC 应答");
+                    video->fail("Cannot create WebRTC answer");
                 else
                     video->send({{"type", "answer"}, {"sdp", sdp}});
             },
@@ -586,7 +590,7 @@ void NativeVideo::poll() {
         }
         if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_EOS) {
             m_paused = true;
-            m_status = "回放结束";
+            m_status = "Playback ended";
             emit statsChanged();
         }
         gst_message_unref(message);
@@ -613,7 +617,7 @@ void NativeVideo::poll() {
                             : 0;
         if (rendered > m_lastRendered) {
             m_lastProgress = now;
-            m_status = m_useNative ? "本机直通 · 原生显示" : "NVDEC · 原生显示";
+            m_status = m_useNative ? "Native video" : "NVDEC · Native video";
         }
         if (m_active && !m_resumeFresh && rendered > m_resumeBaseline) {
             m_resumeFresh = true;
@@ -626,7 +630,7 @@ void NativeVideo::poll() {
         syncWindow();
         emit statsChanged();
         if (m_active && m_media.isEmpty() && now - m_lastProgress > 12000)
-            fail("视频停帧，重连中");
+            fail("Video stalled · Reconnecting");
     }
 }
 void NativeVideo::setPaused(bool value) {

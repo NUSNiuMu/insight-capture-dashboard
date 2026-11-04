@@ -143,7 +143,7 @@ class Dashboard : public QObject {
     QVariantMap m_state;
     QVariantMap m_cameraAvailability;
     QVariantMap m_localization, m_nativeVioFresh;
-    QString m_message = "正在连接后端", m_requestedPlayback;
+    QString m_message = "Connecting…", m_requestedPlayback;
     QJsonObject m_manifest, m_latestLive;
     QSet<QString> m_pending;
     bool m_spatialActive = true;

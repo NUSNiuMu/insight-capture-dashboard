@@ -12,11 +12,11 @@ PageFrame {
     property bool awaitingResult: false
     property var scoring: workspace.data.scoring || {}
     property bool running: scoring.status === "running" || !!workspace.busy.scoringStart || !!workspace.busy.scoringIntegrity
-    heading: "轨迹评分"
-    description: "先检查图像流完整性，再运行轨迹评分。"
+    heading: "Scoring"
+    description: "Check video integrity and score trajectories."
     Ui.Section {
-        eyebrow: "01  质量评估"
-        heading: "评分输入"
+        eyebrow: "01  QUALITY"
+        heading: "Recording"
         RowLayout {
             Layout.fillWidth: true
             BagPicker {
@@ -26,17 +26,17 @@ PageFrame {
             }
             Ui.TextField {
                 id: topic
-                placeholderText: "可选：指定轨迹话题"
+                placeholderText: "Trajectory topic (optional)"
                 Layout.preferredWidth: 280
                 enabled: !page.running
             }
             Ui.Button {
-                text: "刷新"
+                text: "Refresh"
                 onClicked: shell.refresh()
             }
             Ui.Button {
                 objectName: "scoring-run"
-                text: "检查并评分"
+                text: "Check and score"
                 highlighted: true
                 enabled: !!bag.selector && !page.running && !dashboard.state.recording
                 onClicked: {
@@ -65,10 +65,10 @@ PageFrame {
         error: page.integrityBag === bag.selector ? (workspace.errors.scoringIntegrity || "") : ""
     }
     Ui.Section {
-        heading: "评分结果"
+        heading: "Scores"
         Layout.fillWidth: true
         Label {
-            text: workspace.errors.scoringStart || workspace.errors.scoring || (page.scoring.status === "error" ? page.scoring.error || "评分失败" : page.running ? "正在评分…" : page.awaitingResult ? "正在读取评分结果…" : page.scoring.status === "done" ? "已评分：" + (page.scoring.bag_name || "") : "选择录制并运行检查，结果将显示在这里。")
+            text: workspace.errors.scoringStart || workspace.errors.scoring || (page.scoring.status === "error" ? page.scoring.error || "Scoring failed" : page.running ? "Scoring…" : page.awaitingResult ? "Loading scores…" : page.scoring.status === "done" ? "Scored: " + (page.scoring.bag_name || "") : "Select a recording to score.")
             textFormat: Text.PlainText
             color: workspace.errors.scoringStart || workspace.errors.scoring || page.scoring.status === "error" ? Ui.Theme.red : Ui.Theme.muted
             Layout.fillWidth: true

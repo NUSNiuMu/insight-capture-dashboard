@@ -18,7 +18,7 @@ GridLayout {
             required property var modelData
             Layout.alignment: Qt.AlignTop
             Label {
-                text: card.modelData.topic || "轨迹评分"
+                text: card.modelData.topic || "Scoring"
                 textFormat: Text.PlainText
                 font.family: Ui.Theme.monoFont
                 font.pixelSize: 12
@@ -37,19 +37,19 @@ GridLayout {
                 if (c.error)
                     return out;
                 if (c.base_score !== undefined) {
-                    out.push({label: "基础分", value: number(c.base_score, 2)});
-                    out.push({label: "短暂异常", value: (c.transient_run_count || 0) + " 次 · 扣 " + number(c.transient_penalty || 0, 2) + " 分"});
-                    out.push({label: "持续异常", value: (c.bad_run_count || 0) + " 段 / " + number(c.bad_run_seconds || 0, 2) + " 秒 · 扣 " + number(c.sustained_penalty || 0, 2) + " 分"});
-                    out.push({label: "可用比例", value: number(100 * (c.usable_fraction !== undefined ? c.usable_fraction : 1), 1) + "%"});
+                    out.push({label: "Base score", value: number(c.base_score, 2)});
+                    out.push({label: "Transient issues", value: (c.transient_run_count || 0) + " events · Penalty " + number(c.transient_penalty || 0, 2) + " points"});
+                    out.push({label: "Sustained issues", value: (c.bad_run_count || 0) + " runs / " + number(c.bad_run_seconds || 0, 2) + " s · Penalty " + number(c.sustained_penalty || 0, 2) + " points"});
+                    out.push({label: "Usable", value: number(100 * (c.usable_fraction !== undefined ? c.usable_fraction : 1), 1) + "%"});
                 }
                 if (c.mean_trace !== undefined)
-                    out.push({label: "平均协方差迹", value: trace(c.mean_trace)});
+                    out.push({label: "Mean covariance trace", value: trace(c.mean_trace)});
                 if (c.p50_trace !== undefined)
-                    out.push({label: "协方差迹中位数", value: trace(c.p50_trace)});
-                out.push({label: "协方差迹第90百分位", value: trace(c.p90_trace)});
-                out.push({label: "最大协方差迹", value: trace(c.max_trace)});
+                    out.push({label: "Median covariance trace", value: trace(c.p50_trace)});
+                out.push({label: "P90 covariance trace", value: trace(c.p90_trace)});
+                out.push({label: "Max covariance trace", value: trace(c.max_trace)});
                 if (c.p99_trace !== undefined)
-                    out.push({label: "协方差迹第99百分位", value: trace(c.p99_trace)});
+                    out.push({label: "P99 covariance trace", value: trace(c.p99_trace)});
                 return out;
             }
             RowLayout {
@@ -70,7 +70,7 @@ GridLayout {
             }
             Label {
                 visible: !!card.modelData.error || !!card.modelData.episode_capped
-                text: card.modelData.error || "持续异常超过 1 秒，评分上限为 40 分"
+                text: card.modelData.error || "Sustained issue over 1 s · Score capped at 40"
                 textFormat: Text.PlainText
                 color: Ui.Theme.red
                 Layout.fillWidth: true

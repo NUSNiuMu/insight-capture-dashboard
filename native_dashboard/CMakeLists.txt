@@ -7,10 +7,6 @@ find_package(Qt6 6.2 REQUIRED COMPONENTS Core Gui Quick QuickControls2 Quick3D N
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GST REQUIRED IMPORTED_TARGET gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-webrtc-1.0 gstreamer-sdp-1.0)
 add_executable(insight-native main.cpp workspace.cpp workspace.h dashboard.cpp dashboard.h video.cpp video.h geometry.cpp geometry.h model.cpp model.h resources.qrc)
-find_file(QT_CHINESE_TRANSLATION qtbase_zh_CN.qm PATHS /usr/share/qt6/translations REQUIRED)
-find_file(QT_QUICK_CHINESE_TRANSLATION qtdeclarative_zh_CN.qm PATHS /usr/share/qt6/translations REQUIRED)
-qt_add_resources(insight-native chinese PREFIX "/i18n" BASE /usr/share/qt6/translations
-    FILES "${QT_CHINESE_TRANSLATION}" "${QT_QUICK_CHINESE_TRANSLATION}")
 find_path(JETSON_MM_INCLUDE nvbufsurftransform.h PATHS "${CMAKE_BINARY_DIR}/jetson-headers" /usr/src/jetson_multimedia_api/include REQUIRED)
 target_include_directories(insight-native PRIVATE ${JETSON_MM_INCLUDE})
 target_compile_definitions(insight-native PRIVATE GST_USE_UNSTABLE_API)

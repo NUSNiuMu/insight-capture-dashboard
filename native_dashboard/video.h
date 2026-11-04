@@ -19,6 +19,7 @@ class NativeVideo : public QQuickItem {
     Q_PROPERTY(QUrl nativeEndpoint READ nativeEndpoint WRITE setNativeEndpoint NOTIFY sourceChanged)
     Q_PROPERTY(QUrl media READ media WRITE setMedia NOTIFY sourceChanged)
     Q_PROPERTY(QSize sourceSize READ sourceSize WRITE setSourceSize NOTIFY sourceChanged)
+    Q_PROPERTY(QSize frameSize READ frameSize NOTIFY frameSizeChanged)
     Q_PROPERTY(bool active READ active WRITE setActive NOTIFY sourceChanged)
     Q_PROPERTY(bool sourceOnline READ sourceOnline WRITE setSourceOnline NOTIFY sourceChanged)
     Q_PROPERTY(int targetFps READ targetFps WRITE setTargetFps NOTIFY sourceChanged)
@@ -34,6 +35,7 @@ class NativeVideo : public QQuickItem {
     QUrl nativeEndpoint() const { return m_nativeEndpoint; }
     QUrl media() const { return m_media; }
     QSize sourceSize() const { return m_sourceSize; }
+    QSize frameSize() const { return m_displaySize; }
     bool active() const { return m_active; }
     void setActive(bool value);
     bool sourceOnline() const { return m_sourceOnline; }
@@ -60,6 +62,7 @@ class NativeVideo : public QQuickItem {
   signals:
     void sourceChanged();
     void statsChanged();
+    void frameSizeChanged();
 
   private:
     void syncWindow();
@@ -79,7 +82,7 @@ class NativeVideo : public QQuickItem {
     static void answerCreated(GstPromise *, gpointer);
     static GstPadProbeReturn decodeTiming(GstPad *, GstPadProbeInfo *, gpointer);
     static GstPadProbeReturn sinkTiming(GstPad *, GstPadProbeInfo *, gpointer);
-    QString m_name, m_status = "未连接";
+    QString m_name, m_status = "Disconnected";
     QUrl m_endpoint, m_media, m_nativeEndpoint;
     QSize m_sourceSize, m_displaySize;
     QPointer<QWindow> m_surface;

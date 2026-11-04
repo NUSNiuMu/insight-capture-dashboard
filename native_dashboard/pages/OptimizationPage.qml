@@ -10,8 +10,8 @@ PageFrame {
     property var trajectory: workspace.data.trajectories || {}
     property bool running: status.state === "running" || !!workspace.busy.action
     property string loadedRun: ""
-    heading: "轨迹优化"
-    description: "进行图像重建与相似变换对齐，比较里程计和重建轨迹。"
+    heading: "Optimize"
+    description: "Compare VIO with reconstructed trajectories."
     function load(name) {
         if (!name)
             return;
@@ -19,21 +19,21 @@ PageFrame {
         workspace.request("trajectories", "/api/optimization/trajectories?run_name=" + encodeURIComponent(name));
     }
     Ui.Section {
-        eyebrow: "01  重建输入"
-        heading: "重建输入"
+        eyebrow: "01  INPUT"
+        heading: "Reconstruction"
         GridLayout {
             columns: 2
             Layout.fillWidth: true
             enabled: !page.running
             Label {
-                text: "录制"
+                text: "Recording"
             }
             BagPicker {
                 id: bag
                 Layout.fillWidth: true
             }
             Label {
-                text: "相机"
+                text: "Camera"
             }
             Ui.ComboBox {
                 id: camera
@@ -45,31 +45,31 @@ PageFrame {
                 Layout.fillWidth: true
             }
             Label {
-                text: "图像流"
+                text: "Stream"
             }
             Ui.ComboBox {
                 id: stream
-                model: [{label: "彩色压缩图像", value: "color_compressed"},
-                    {label: "彩色原始图像", value: "color"},
-                    {label: "左目红外图像", value: "infra1"},
-                    {label: "右目红外图像", value: "infra2"}]
+                model: [{label: "Color (compressed)", value: "color_compressed"},
+                    {label: "Color (raw)", value: "color"},
+                    {label: "Left IR", value: "infra1"},
+                    {label: "Right IR", value: "infra2"}]
                 textRole: "label"
                 valueRole: "value"
                 Layout.fillWidth: true
             }
             Label {
-                text: "运行名称"
+                text: "Run name"
             }
             Ui.TextField {
                 id: runName
                 Layout.fillWidth: true
-                placeholderText: "自动生成"
+                placeholderText: "Automatic"
             }
         }
         RowLayout {
             Ui.Button {
                 objectName: "optimization-start"
-                text: "运行优化"
+                text: "Run"
                 highlighted: true
                 enabled: !!bag.selector && camera.count > 0 && !page.running && !dashboard.state.recording
                 onClicked: shell.mutate("/api/optimization/start", {
@@ -82,17 +82,17 @@ PageFrame {
             Ui.Button {
                 objectName: "optimization-stop"
                 tone: "danger"
-                text: "停止"
+                text: "Stop"
                 enabled: page.status.state === "running" && !workspace.busy.action
                 onClicked: shell.mutate("/api/optimization/stop")
             }
             Ui.Button {
-                text: "查看重建日志"
+                text: "View log"
                 enabled: !!(page.status.result || {}).colmap_log
                 onClicked: workspace.request("optLog", page.status.result.colmap_log, "GET", {}, true)
             }
             Ui.Button {
-                text: "刷新"
+                text: "Refresh"
                 onClicked: shell.refresh()
             }
         }
@@ -131,8 +131,8 @@ PageFrame {
         visible: text.length > 0
     }
     Ui.Section {
-        eyebrow: "03  轨迹比较"
-        heading: "轨迹比较"
+        eyebrow: "03  COMPARISON"
+        heading: "Trajectories"
         RowLayout {
             Layout.fillWidth: true
             Ui.ComboBox {
@@ -143,13 +143,13 @@ PageFrame {
             }
             Ui.Button {
                 objectName: "optimization-load"
-                text: "载入轨迹"
+                text: "Load"
                 enabled: saved.count > 0
                 onClicked: page.load(saved.currentText)
             }
         }
         Label {
-            text: "里程计（红色） · 重建轨迹（绿色） · " + page.loadedRun
+            text: "VIO (red) · Reconstruction (green) · " + page.loadedRun
         }
         NativePlot {
             Layout.fillWidth: true

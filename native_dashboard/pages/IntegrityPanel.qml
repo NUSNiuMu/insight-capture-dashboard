@@ -9,7 +9,7 @@ Ui.Section {
     property bool checking: false
     property string error: ""
     property var topics: report && Array.isArray(report.topics) ? report.topics : []
-    heading: "完整性报告"
+    heading: "Integrity report"
     visible: checking || !!error || !!report
 
     function number(value, digits) {
@@ -17,14 +17,14 @@ Ui.Section {
     }
     function detail(topic) {
         if (topic.ok && topic.audit === "latched_static_presence")
-            return "静态话题 · 已记录，不检查帧率";
+            return "Static topic · Recorded";
         if (topic.ok && topic.audit === "source_silent")
-            return "条件或事件话题未产生消息，不判断丢帧";
+            return "Event topic · No messages";
         if (topic.ok && (topic.nominal_hz === null || topic.nominal_hz === undefined))
-            return "仅检查消息存在，不判断丢帧";
+            return "Message presence only";
         if (topic.error)
             return topic.error;
-        return number(topic.avg_hz, 2) + " / " + number(topic.nominal_hz, 0) + " 赫兹 · 丢帧 " + number(topic.loss_pct, 2) + "%";
+        return number(topic.avg_hz, 2) + " / " + number(topic.nominal_hz, 0) + " Hz · Loss " + number(topic.loss_pct, 2) + "%";
     }
     RowLayout {
         Layout.fillWidth: true
@@ -36,12 +36,12 @@ Ui.Section {
         }
         Ui.Badge {
             visible: !panel.checking && !!panel.report && !panel.error
-            text: panel.report && panel.report.ok ? "完整" : "不完整"
+            text: panel.report && panel.report.ok ? "Complete" : "Incomplete"
             tone: panel.report && panel.report.ok ? "success" : "danger"
         }
         Label {
             Layout.fillWidth: true
-            text: panel.checking ? "正在检查录制…" : panel.error ? panel.error : panel.report ? (panel.report.bag || panel.report.bag_name || "") : ""
+            text: panel.checking ? "Checking recording…" : panel.error ? panel.error : panel.report ? (panel.report.bag || panel.report.bag_name || "") : ""
             textFormat: Text.PlainText
             wrapMode: Text.WrapAnywhere
             color: panel.error ? Ui.Theme.red : Ui.Theme.ink
@@ -52,8 +52,8 @@ Ui.Section {
         Layout.fillWidth: true
         visible: !!panel.report && !panel.checking && !panel.error
         text: !panel.report ? "" : panel.report.ok
-              ? (panel.report.scope === "image_streams" ? "已录制图像流" : "已录制话题") + "检查通过" + (panel.report.max_loss_pct !== undefined ? " · 丢帧阈值 " + panel.number(panel.report.max_loss_pct, 2) + "%" : "")
-              : "未通过：" + ((panel.report.failed_topics || []).join("、") || "请查看各话题结果")
+              ? (panel.report.scope === "image_streams" ? "Image streams" : "Topics") + "Passed" + (panel.report.max_loss_pct !== undefined ? " · Loss limit " + panel.number(panel.report.max_loss_pct, 2) + "%" : "")
+              : "Failed: " + ((panel.report.failed_topics || []).join("、") || "See topic results")
         textFormat: Text.PlainText
         wrapMode: Text.WrapAnywhere
         color: Ui.Theme.muted
@@ -66,9 +66,9 @@ Ui.Section {
         RowLayout {
             Layout.fillWidth: true
             Layout.bottomMargin: 8
-            Label { text: "话题"; color: Ui.Theme.muted; Layout.preferredWidth: (panel.width - panel.leftPadding - panel.rightPadding) * 0.38 }
-            Label { text: "结果"; color: Ui.Theme.muted; Layout.preferredWidth: 70 }
-            Label { text: "消息与采集质量"; color: Ui.Theme.muted; Layout.fillWidth: true }
+            Label { text: "Topic"; color: Ui.Theme.muted; Layout.preferredWidth: (panel.width - panel.leftPadding - panel.rightPadding) * 0.38 }
+            Label { text: "Result"; color: Ui.Theme.muted; Layout.preferredWidth: 70 }
+            Label { text: "Messages and quality"; color: Ui.Theme.muted; Layout.fillWidth: true }
         }
         Repeater {
             model: panel.topics
@@ -92,11 +92,11 @@ Ui.Section {
                     }
                     Ui.Badge {
                         Layout.preferredWidth: 70
-                        text: !modelData.ok ? "失败" : modelData.audit === "source_silent" ? "未产生" : modelData.nominal_hz === undefined || modelData.nominal_hz === null ? "已记录" : "通过"
+                        text: !modelData.ok ? "Failed" : modelData.audit === "source_silent" ? "No messages" : modelData.nominal_hz === undefined || modelData.nominal_hz === null ? "Recorded" : "Pass"
                         tone: !modelData.ok ? "danger" : modelData.audit === "source_silent" ? "neutral" : "success"
                     }
                     Label {
-                        text: panel.number(modelData.msgs, 0) + " 条消息 · " + panel.detail(modelData)
+                        text: panel.number(modelData.msgs, 0) + " messages · " + panel.detail(modelData)
                         textFormat: Text.PlainText
                         Layout.fillWidth: true
                         wrapMode: Text.WrapAnywhere

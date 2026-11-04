@@ -6,8 +6,8 @@ import "../ui" as Ui
 PageFrame {
     id: page
     property var shell
-    heading: "任务管理"
-    description: "创建和管理任务，查看采集记录与质量检查。"
+    heading: "Tasks"
+    description: "Manage tasks and takes."
     property var taskData: workspace.data.tasks || {}
     property var sessionData: workspace.data.sessions || {}
     property var selected: taskSelect.currentIndex >= 0 ? (taskData.tasks || [])[taskSelect.currentIndex] : null
@@ -23,8 +23,8 @@ PageFrame {
         editor.open();
     }
     Ui.Section {
-        eyebrow: "01  任务管理"
-        heading: "采集任务"
+        eyebrow: "01  TASK"
+        heading: "Task"
         RowLayout {
             Layout.fillWidth: true
             Ui.ComboBox {
@@ -37,37 +37,37 @@ PageFrame {
             }
             Ui.Button {
                 objectName: "session-enter"
-                text: "进入任务"
+                text: "Use task"
                 enabled: !page.locked && !!page.selected && page.taskData.active_task_id !== page.selected.task_id
                 onClicked: shell.mutate("/api/tasks/" + encodeURIComponent(page.selected.task_id) + "/activate")
             }
             Ui.Button {
                 objectName: "session-new"
                 highlighted: true
-                text: "新建任务"
+                text: "New task"
                 enabled: !page.locked
                 onClicked: page.edit(null)
             }
             Ui.Button {
                 objectName: "session-edit"
-                text: "编辑"
+                text: "Edit"
                 enabled: !page.locked && !!page.selected
                 onClicked: page.edit(page.selected)
             }
             Ui.Button {
                 objectName: "session-end"
-                text: "结束任务"
+                text: "End task"
                 enabled: !page.locked && !!page.taskData.active_task_id
                 onClicked: endDialog.open()
             }
             Ui.Button {
-                text: "刷新"
+                text: "Refresh"
                 onClicked: shell.refresh()
             }
         }
     }
     ResultPanel {
-        heading: "任务说明"
+        heading: "Instructions"
         value: page.selected ? {
             "instruction": page.selected.instruction,
             "recording_subdirectory": page.selected.recording_subdirectory,
@@ -80,43 +80,43 @@ PageFrame {
         columnSpacing: 14
         Layout.fillWidth: true
         Ui.StatCard {
-            label: "已录制"
+            label: "Recorded"
             value: String((page.sessionData.stats || {}).recorded_takes || 0)
-            detail: "当前任务"
+            detail: "Current task"
             Layout.fillWidth: true
         }
         Ui.StatCard {
-            label: "下一条编号"
+            label: "Next take"
             value: String((page.sessionData.stats || {}).next_take_id || 1)
-            detail: "自动递增"
+            detail: "Auto increment"
             Layout.fillWidth: true
         }
         Ui.StatCard {
-            label: "快速检查通过"
+            label: "QC passed"
             value: String((page.sessionData.takes || []).filter(function (t) {
                         return t.operator_valid !== false && (t.quick_qc || {}).state === "pass";
                     }).length)
-            detail: "有效采集"
+            detail: "Valid takes"
             Layout.fillWidth: true
         }
         Ui.StatCard {
-            label: "待复核 / 作废"
+            label: "Review / Rejected"
             value: String((page.sessionData.takes || []).filter(function (t) {
                         return t.operator_valid === false || (t.quick_qc || {}).state === "suspect";
                     }).length)
-            detail: "质量审核"
+            detail: "Quality review"
             Layout.fillWidth: true
         }
     }
     Label {
-        text: "当前任务 · " + ((page.sessionData.session || {}).task_name || "未进入任务")
+        text: "Task · " + ((page.sessionData.session || {}).task_name || "No active task")
         color: Ui.Theme.secondary
         font.pixelSize: 16
         font.weight: Font.DemiBold
         Layout.topMargin: 4
     }
     Label {
-        text: "当前任务暂无录制"
+        text: "No takes yet"
         visible: (page.sessionData.takes || []).length === 0
         color: "#776d5a"
     }
@@ -129,23 +129,23 @@ PageFrame {
                 anchors.fill: parent
                 RowLayout {
                     Label {
-                        text: "第 " + modelData.take_id + "  ·  " + (modelData.bag_name || "等待录制归档")
+                        text: "Take " + modelData.take_id + "  ·  " + (modelData.bag_name || "Waiting for recording")
                         Layout.fillWidth: true
                         font.bold: true
                         wrapMode: Text.Wrap
                     }
                     Ui.Badge {
-                        text: modelData.operator_valid === false ? "已作废" : (modelData.quick_qc || {}).state === "pass" ? "检查通过" : "待检查"
+                        text: modelData.operator_valid === false ? "Rejected" : (modelData.quick_qc || {}).state === "pass" ? "Passed" : "Unchecked"
                         tone: modelData.operator_valid === false ? "danger" : (modelData.quick_qc || {}).state === "pass" ? "success" : "neutral"
                     }
                     Ui.Button {
-                        text: "准备并回放"
+                        text: "Play"
                         enabled: !!modelData.bag_id && !dashboard.state.recording
                         onClicked: shell.openSpatial(modelData.bag_id)
                     }
                 }
                 Label {
-                    text: Ui.Texts.value(modelData.operator_decision || "待审核") + " · " + Ui.Texts.value(modelData.reject_reason || modelData.state || "") + " · " + (modelData.anomaly_timeline || []).length + " 个异常事件"
+                    text: Ui.Texts.value(modelData.operator_decision || "Pending review") + " · " + Ui.Texts.value(modelData.reject_reason || modelData.state || "") + " · " + (modelData.anomaly_timeline || []).length + " anomalies"
                     Layout.fillWidth: true
                     wrapMode: Text.Wrap
                 }
@@ -157,36 +157,36 @@ PageFrame {
         objectName: "end-task-dialog"
         width: 440
         implicitWidth: 440
-        title: "确认结束当前任务？"
+        title: "End the current task?"
         modal: true
         anchors.centerIn: Overlay.overlay
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: shell.mutate("/api/tasks/current/end")
         Label {
-            text: "已经录制的数据将保留。"
+            text: "Recorded data will be retained."
         }
     }
     Ui.Dialog {
         id: editor
         objectName: "task-editor"
-        title: page.editing ? "编辑任务" : "新建任务"
+        title: page.editing ? "Edit task" : "New task"
         modal: true
         width: 480
         anchors.centerIn: Overlay.overlay
         ColumnLayout {
             anchors.fill: parent
             Label {
-                text: "任务标识"
+                text: "Task ID"
             }
             Ui.TextField {
                 id: taskId
                 objectName: "task-id"
                 Layout.fillWidth: true
                 enabled: !page.editing
-                placeholderText: "例如 pick_and_place"
+                placeholderText: "e.g. pick_and_place"
             }
             Label {
-                text: "任务名称"
+                text: "Task name"
             }
             Ui.TextField {
                 id: taskName
@@ -194,21 +194,21 @@ PageFrame {
                 Layout.fillWidth: true
             }
             Label {
-                text: "语音名称"
+                text: "Spoken name"
             }
             Ui.TextField {
                 id: speech
                 Layout.fillWidth: true
             }
             Label {
-                text: "采集配置"
+                text: "Capture profile"
             }
             Ui.TextField {
                 id: profile
                 Layout.fillWidth: true
             }
             Label {
-                text: "操作说明"
+                text: "Instructions"
             }
             Ui.TextArea {
                 id: instruction
@@ -228,7 +228,7 @@ PageFrame {
                 Ui.Button {
                     objectName: "task-save"
                     highlighted: true
-                    text: "保存"
+                    text: "Save"
                     enabled: taskId.text.trim().length > 0 && taskName.text.trim().length > 0 && instruction.text.trim().length > 0 && !workspace.busy.action
                     onClicked: shell.mutate(page.editing ? "/api/tasks/" + encodeURIComponent(page.editing) : "/api/tasks", {
                             "id": taskId.text.trim(),
@@ -239,7 +239,7 @@ PageFrame {
                         }, page.editing ? "PUT" : "POST")
                 }
                 Ui.Button {
-                    text: "取消"
+                    text: "Cancel"
                     onClicked: editor.close()
                 }
             }

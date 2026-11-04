@@ -11,10 +11,10 @@ PageFrame {
     property bool restarting: false
     property int restartTicks: 0
     property int pendingVolume: -1
-    heading: "系统设置"
-    description: "管理定位遮罩、语音提示与采集工作台。"
+    heading: "Settings"
+    description: "Configure masks, audio and services."
     Ui.Button {
-        text: "刷新设置"
+        text: "Refresh"
         onClicked: shell.refresh()
     }
     GridLayout {
@@ -23,9 +23,9 @@ PageFrame {
         rowSpacing: 20
         columnSpacing: 20
         Ui.Section {
-            eyebrow: "定位图像遮罩"
-            heading: "腕部图像遮罩"
-            description: "设置 Insight3 遮罩覆盖比例，范围为 0 至 1（不含 1）。"
+            eyebrow: "LOCALIZATION"
+            heading: "Wrist image mask"
+            description: "Bottom mask ratio: 0 to less than 1."
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignTop
             RowLayout {
@@ -45,7 +45,7 @@ PageFrame {
                 Ui.Button {
                     objectName: "mask-save"
                     highlighted: true
-                    text: "保存"
+                    text: "Save"
                     enabled: mask.acceptableInput && !workspace.busy.action && !dashboard.state.recording
                     onClicked: shell.mutate("/api/settings/insight3-gripper-mask", {
                             "value": Number(mask.text)
@@ -54,12 +54,12 @@ PageFrame {
             }
         }
         Ui.Section {
-            eyebrow: "语音提示"
-            heading: "语音提示"
+            eyebrow: "Audio prompts"
+            heading: "Audio prompts"
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignTop
             Label {
-                text: page.audio.available ? (Ui.Texts.value(page.audio.backend || "") + " · " + (page.audio.playback_label || "")) : Ui.Texts.value(page.audio.error || "语音服务不可用")
+                text: page.audio.available ? (Ui.Texts.value(page.audio.backend || "") + " · " + (page.audio.playback_label || "")) : Ui.Texts.value(page.audio.error || "Voice service unavailable")
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: page.audio.available ? Ui.Theme.muted : Ui.Theme.red
@@ -87,7 +87,7 @@ PageFrame {
                 }
                 Ui.Button {
                     objectName: "voice-sample"
-                    text: "试听"
+                    text: "Test audio"
                     enabled: !!page.audio.available && !workspace.busy.voice
                     onClicked: workspace.request("voice", "/api/settings/voice-sample", "POST")
                 }
@@ -95,18 +95,18 @@ PageFrame {
         }
     }
     Ui.Section {
-        eyebrow: "系统维护"
-        heading: "系统维护"
-        description: "重启会暂时断开相机预览，完成后自动检查连接。"
+        eyebrow: "Maintenance"
+        heading: "Maintenance"
+        description: "Preview reconnects after restart."
         Label {
-            text: page.restarting ? "等待后端重启…" : page.restartTicks >= 30 ? "30 秒内未恢复，请检查后端。" : ""
+            text: page.restarting ? "Restarting backend…" : page.restartTicks >= 30 ? "Backend unavailable after 30 s." : ""
             color: Ui.Theme.red
             visible: text.length > 0
         }
         Ui.Button {
             objectName: "settings-restart"
             tone: "danger"
-            text: "重启后端"
+            text: "Restart backend"
             enabled: !dashboard.state.recording && !page.restarting && !workspace.busy.action
             onClicked: restartDialog.open()
         }
@@ -116,12 +116,12 @@ PageFrame {
         objectName: "restart-dialog"
         width: 440
         implicitWidth: 440
-        title: "确认重启后端？"
+        title: "Restart the backend?"
         modal: true
         anchors.centerIn: Overlay.overlay
         standardButtons: Dialog.Ok | Dialog.Cancel
         Label {
-            text: "相机预览会暂时断开。"
+            text: "Preview will disconnect briefly."
         }
         onAccepted: {
             page.restarting = true;

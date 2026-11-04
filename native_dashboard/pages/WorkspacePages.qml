@@ -30,12 +30,12 @@ Item {
             "file": "SettingsPage.qml"
         }]
     property var titles: ({
-            "sessions": "任务管理",
-            "bags": "录制库",
-            "scoring": "轨迹评分",
-            "optimization": "轨迹优化",
-            "recording": "话题录制",
-            "settings": "系统设置"
+            "sessions": "Tasks",
+            "bags": "Recordings",
+            "scoring": "Scoring",
+            "optimization": "Optimize",
+            "recording": "Recorder",
+            "settings": "Settings"
         })
     function get(key, path, force) {
         if (force)
@@ -141,7 +141,7 @@ Item {
     }
     Label {
         anchors.centerIn: parent
-        text: "正在打开页面…"
+        text: "Opening…"
         color: "#7a7060"
         visible: pages.visible && !!pages.page && !pages.cacheStats[pages.page]
     }
