@@ -18,7 +18,7 @@
 - 三台设备分别保留自己的 VIO 坐标，不能作为刚性三相机架处理。原始观测为 `C = map_from_imu @ inverse(odom_from_imu)`；腕部相对观测为 `inverse(head_raw_C) @ wrist_raw_C`。输出头部中心为 `head_filtered_C @ head_odom_from_imu @ head_imu_from_center`，腕部中心为 `head_filtered_C @ wrist_relative_filtered_C @ wrist_odom_from_imu @ wrist_imu_from_center`，两个腕部的相对位置仍可独立变化。
 - 使用 CameraInfo 的校正投影矩阵与 TF 外参，头部右目由校正基线构造。RGB 评估通过其独立外参换算，不能把 RGB 光心当成双目中心。
 
-ROS 层发布原有三路位姿、状态、地标描述子云与标定参考图，保留手机的开始校准和录制接口。三路在共同的 30 Hz 网格采样，Pose 与 TF 使用同一时间戳；使用经原有 NTP 校验的设备 UTC，不以接收延迟估计时钟偏移。没有新视觉匹配时，状态明确标识运动由 VIO 推算。
+ROS 层发布原有三路位姿、状态、地标描述子云与标定参考图，保留手机的开始校准和录制接口。三路在共同的 30 Hz 网格采样，Pose 与 TF 使用同一时间戳；使用初始 100 个高频 VIO 样本的接收差最小值，建立并冻结设备时间到 ROS 时间的映射，兼容 Insight9 的启动计时和腕部设备的 UTC；后续传输抖动不修改该偏移。录制前 NTP 校验仍独立执行，时钟映射不代表硬件曝光同步。没有新视觉匹配时，状态明确标识运动由 VIO 推算。
 
 ## 构建与验证
 

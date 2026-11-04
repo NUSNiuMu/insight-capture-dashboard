@@ -21,14 +21,20 @@ T = TypeVar("T")
 
 
 class SourceClock:
-    """Warm up a source whose UTC clock is checked by recording preflight."""
+    """Freeze the device-to-ROS offset from the initial receive-delay minimum.
+
+    This maps device uptime and UTC clocks onto one timeline; it does not
+    estimate exposure synchronization. Later transport jitter cannot move it.
+    """
 
     def __init__(self):
-        self.offset_ns = 0
+        self.offset_ns = None
         self.samples = 0
 
     def observe(self, source_ns: int, received_ns: int):
         if self.samples < 100:
+            offset = received_ns - source_ns
+            self.offset_ns = offset if self.offset_ns is None else min(self.offset_ns, offset)
             self.samples += 1
 
     @property

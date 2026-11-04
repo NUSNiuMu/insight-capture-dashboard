@@ -623,7 +623,7 @@ class LooperNode(Node):
                 payload["map_revision"] = state.map_revision
                 payload["source_clock_offset_ns"] = state.clock.offset_ns
                 payload["clock_ready"] = state.clock.ready
-                payload["clock_method"] = "device_utc_ntp_checked"
+                payload["clock_method"] = "initial_receive_delay_minimum"
                 if name != self.head:
                     age = time.monotonic() - state.last_match if state.last_match else None
                     payload["match_age_sec"] = age
