@@ -1,6 +1,6 @@
-import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261104-functional-fixes";
-import { CaptureManagement } from "./management.js?v=20261104-functional-fixes";
-import { cameraLabel, deviceLabel, errorText, issueText } from "./presentation.js?v=20261104-functional-fixes";
+import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261104-functional-fixes-2";
+import { CaptureManagement } from "./management.js?v=20261104-functional-fixes-2";
+import { cameraLabel, deviceLabel, errorText, issueText } from "./presentation.js?v=20261104-functional-fixes-2";
 
 const el = id => document.getElementById(id);
 const labels = { idle: "Ready", starting: "Starting", recording: "Recording", saving: "Saving", saved: "Saved", error: "Error", playback: "Desktop playback" };
@@ -135,20 +135,28 @@ el("calibrate").onclick = async () => {
   } catch (error) { el("calibration-message").textContent = error.message; }
   finally { pending = false; render(); }
 };
+function refreshPreview() {
+  if (!previewEnabled || document.hidden || snapshot?.state === "playback") {
+    preview.stop();
+    if (snapshot?.state === "playback") el("preview-status").textContent = "Preview paused for desktop playback.";
+    return;
+  }
+  preview.start(el("preview-camera").value);
+}
 el("preview-toggle").onclick = () => {
   previewEnabled = !previewEnabled;
   el("preview-panel").hidden = !previewEnabled;
   el("preview-toggle").textContent = previewEnabled ? "Hide preview" : "Show preview";
-  if (previewEnabled) preview.start(el("preview-camera").value); else preview.stop();
+  refreshPreview();
 };
-el("preview-camera").onchange = () => { if (previewEnabled) preview.start(el("preview-camera").value); };
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) preview.stop(); else if (previewEnabled) preview.start(el("preview-camera").value);
-});
+el("preview-camera").onchange = refreshPreview;
+document.addEventListener("visibilitychange", refreshPreview);
 window.addEventListener("pagehide", () => preview.stop());
 poll(() => `/api/mobile/status${previewEnabled && !document.hidden ? "?preview=1" : ""}`, value => {
+  const wasPlaying = snapshot?.state === "playback";
   if (value) snapshot = value;
   online = value !== null;
   render();
+  if (previewEnabled && online && wasPlaying !== (snapshot.state === "playback")) refreshPreview();
 });
 poll(() => "/api/mapping", value => { mapping = value; renderCalibration(); });

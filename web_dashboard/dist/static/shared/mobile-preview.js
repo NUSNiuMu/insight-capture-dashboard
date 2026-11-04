@@ -17,9 +17,10 @@ export class MobilePreview {
     this.stop();
     const generation = this.generation;
     const current = () => generation === this.generation;
-    const fail = (message = "Video disconnected. Close and reopen preview.") => {
+    const fail = (message = "Video disconnected. Reconnecting…") => {
       if (!current()) return;
       this.stop(); this.label.textContent = message;
+      this.timer = setTimeout(() => this.start(name), 1500);
     };
     this.label.textContent = "Connecting video…";
     try {
@@ -43,7 +44,7 @@ export class MobilePreview {
         cameraName: name, port: camera.webrtc_port, fps: 15, isCurrent: current,
         onTrack: event => {
           this.video.srcObject = event.streams[0]; this.video.hidden = false;
-          this.video.play().catch(() => fail("Could not play video. Close and reopen preview."));
+          this.video.play().catch(() => fail("Could not play video. Reconnecting…"));
         },
         onError: () => fail(),
       });
@@ -55,7 +56,7 @@ export class MobilePreview {
           progress = this.video.currentTime; lastFrame = performance.now();
           this.label.textContent = "Live · up to 15 fps";
         }
-        if (performance.now() - lastFrame > 10000) return fail("Video stopped. Close and reopen preview.");
+        if (performance.now() - lastFrame > 10000) return fail("Video stopped. Reconnecting…");
         this.timer = setTimeout(watch, 1000);
       };
       watch();

@@ -1,4 +1,4 @@
-import { errorText } from "./presentation.js?v=20261104-functional-fixes";
+import { errorText } from "./presentation.js?v=20261104-functional-fixes-2";
 
 const el = id => document.getElementById(id);
 const phaseLabels = { saved: "Saved · transfer pending", copying: "Transferring", merging: "Merging", done: "Ready", error: "Transfer failed · originals kept" };
