@@ -164,7 +164,6 @@ services:
     ipc: host
     runtime: nvidia
     environment:
-      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:

@@ -46,14 +46,7 @@ class RecordingBridge:
             self.owner._recording_writer_by_topic = {}
             audit = self.owner._finalize_image_header_audit()
             self.owner._recording_header_audit = {}
-        return {
-            "dropped": 0,
-            "dropped_by_topic": {},
-            "queue_high_watermark": 0,
-            "pending_topics": [],
-            "subscription_errors": {},
-            "image_header_audit": audit,
-        }
+        return {"image_header_audit": audit}
 
     def _finalize_image_header_audit(self) -> Dict[str, object]:
         """Return the in-flight image continuity report without reading the bag."""
@@ -75,7 +68,6 @@ class RecordingBridge:
                 "missing": int(stat["missing"]),
                 "gap_events": int(stat["gap_events"]),
                 "worst_gap_ms": round(int(stat["worst_gap_ns"]) / 1e6, 3),
-                "writer_queue_dropped": 0,
                 "ok": count > 1 and int(stat["missing"]) == 0,
             }
         return {

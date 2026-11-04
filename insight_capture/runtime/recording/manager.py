@@ -50,7 +50,6 @@ class RecordingManager:
         start_image_recording: Optional[Callable[[Dict[str, str]], None]] = None,
         stop_image_recording: Optional[Callable[[], Dict[str, object]]] = None,
         drain_image_recording: Optional[Callable[[], None]] = None,
-        recording_rmw_implementation: str = "rmw_cyclonedds_cpp",
         storage_status: Optional[Dict[str, object]] = None,
         storage_resolver: Optional[Callable[[], tuple[Path, Dict[str, object]]]] = None,
         storage_browse_roots: Optional[Sequence[Path]] = None,
@@ -60,7 +59,6 @@ class RecordingManager:
         self.rosbag_root = rosbag_root.resolve()
         self.rosbag_root.mkdir(parents=True, exist_ok=True)
         self.max_cache_size = int(max_cache_size)
-        self.recording_rmw_implementation = str(recording_rmw_implementation or "")
         self.storage_status = dict(storage_status or {
             "active_path": str(self.rosbag_root), "using_fallback": False
         })
@@ -371,10 +369,6 @@ class RecordingManager:
         env = os.environ.copy()
         env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
         env["ROS2CLI_NO_DAEMON"] = "1"
-        # Use the Dashboard's default RMW for the temporary probes. The native
-        # recorder may deliberately use a different implementation that is
-        # installed only inside the release container.
-        env.pop("RMW_IMPLEMENTATION", None)
 
         def probe(topic: str) -> tuple[str, Dict[str, object]]:
             started = time.monotonic()
@@ -470,8 +464,6 @@ class RecordingManager:
 
             env = os.environ.copy()
             env["ROS_DOMAIN_ID"] = str(self.ros_domain_id)
-            if self.recording_rmw_implementation:
-                env["RMW_IMPLEMENTATION"] = self.recording_rmw_implementation
             processes: Dict[str, subprocess.Popen] = {}
             stdout_threads: List[threading.Thread] = []
             control_fds: Dict[str, int] = {}
@@ -538,11 +530,8 @@ class RecordingManager:
                     encoding="utf-8",
                 )
             ready_finished = time.perf_counter()
-            # CycloneDDS discovers each camera participant in a burst. Wait
-            # until every selected dashboard stream has a subscription;
-            # those streams prove that each active camera participant and
-            # its accompanying IMU/VIO topics were discovered. A short
-            # quiet tail lets the remainder of the same burst finish.
+            # Let image subscriptions and the rest of each DDS discovery burst settle.
+            # Discovery alone does not prove that payload was recorded.
             settle_deadline = time.monotonic() + 20.0
             while time.monotonic() < settle_deadline:
                 if self._all_recorder_topics_subscribed.is_set():
@@ -601,7 +590,7 @@ class RecordingManager:
                 "version": 3,
                 "format": "rosbag2",
                 "storage_id": "mcap",
-                "rmw_implementation": self.recording_rmw_implementation,
+                "rmw_implementation": env.get("RMW_IMPLEMENTATION"),
                 "bag_name": name,
                 "task_set_id": safe_subdirectory or None,
                 "recording_mode": self.recording_mode,
@@ -700,24 +689,13 @@ class RecordingManager:
         if image_writer_active and self._stop_image_recording is not None:
             try:
                 result = self._stop_image_recording()
-                dropped = int(result.get("dropped", 0)) if result else 0
-                if dropped:
-                    image_writer_error = f"writer queues dropped {dropped} message(s)"
-                    self._output_lines.append(f"[writer] WARNING: dropped {dropped} message(s) (writer queue full)")
-                if result:
-                    pending_topics = list(result.get("pending_topics") or [])
-                    if pending_topics:
-                        self._output_lines.append(
-                            f"[writer] {len(pending_topics)} selected topic(s) remained source-silent"
-                        )
                 self._image_header_audit = result.get("image_header_audit") if result else None
                 if self._image_header_audit:
                     audit_topics = self._image_header_audit.get("topics", {})
                     verdict = "PASS" if self._image_header_audit.get("ok") else "GAPS"
                     details = ", ".join(
                         f"{topic}: {item.get('frames', 0)} frames, "
-                        f"{item.get('missing', 0)} missing, "
-                        f"{item.get('writer_queue_dropped', 0)} writer drops"
+                        f"{item.get('missing', 0)} missing"
                         for topic, item in sorted(audit_topics.items())
                     )
                     self._output_lines.append(

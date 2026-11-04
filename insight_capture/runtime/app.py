@@ -113,6 +113,8 @@ def main() -> None:
     os.environ.setdefault("ROS_DOMAIN_ID", str(settings.ros_domain_id))
     configure_ros_network(settings.raw_config)
     rclpy.init(args=None)
+    # Child ROS processes must use the middleware selected by this backend.
+    os.environ["RMW_IMPLEMENTATION"] = rclpy.get_rmw_implementation_identifier()
     node = PoseBridgeNode(
         settings.config_path,
         post_processing_config_path=settings.runtime_config_path,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import deque
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -85,60 +86,65 @@ class McapRecordingTest(unittest.TestCase):
             )
 
     def test_native_recorder_receives_every_topic_on_one_output(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            calls = []
+        for rmw in ("rmw_fastrtps_cpp", "rmw_cyclonedds_cpp"):
+            with self.subTest(rmw=rmw):
+                with tempfile.TemporaryDirectory() as directory:
+                    calls = []
 
-            def start_writer(topic_paths: dict[str, str]) -> None:
-                calls.append(topic_paths)
+                    def start_writer(topic_paths: dict[str, str]) -> None:
+                        calls.append(topic_paths)
 
-            manager = RecordingManager(
-                {}, 20, Path(directory), 1024, ["/camera", "/imu"],
-                image_topics=["/camera"],
-                start_image_recording=start_writer,
-                stop_image_recording=lambda: {},
-            )
-            process = mock.Mock(stdout=io.StringIO(
-                "Waiting for recording: Press SPACE to start.\n"
-                "Subscribed to topic '/camera'\n"
-                "All requested topics are subscribed. Stopping discovery...\n"
-                "Resuming recording.\n"
-            ))
-            process.poll.return_value = None
-            with mock.patch(
-                "insight_capture.runtime.recording.manager.subprocess.Popen", return_value=process
-            ) as popen, mock.patch("insight_capture.runtime.recording.manager.os.write"):
-                result = manager.start(
-                    bag_name="single", output_subdirectory="cup_stacking"
-                )
+                    manager = RecordingManager(
+                        {}, 20, Path(directory), 1024, ["/camera", "/imu"],
+                        image_topics=["/camera"],
+                        start_image_recording=start_writer,
+                        stop_image_recording=lambda: {},
+                    )
+                    process = mock.Mock(stdout=io.StringIO(
+                        "Waiting for recording: Press SPACE to start.\n"
+                        "Subscribed to topic '/camera'\n"
+                        "All requested topics are subscribed. Stopping discovery...\n"
+                        "Resuming recording.\n"
+                    ))
+                    process.poll.return_value = None
+                    with mock.patch(
+                        "insight_capture.runtime.recording.manager.subprocess.Popen", return_value=process
+                    ) as popen, mock.patch("insight_capture.runtime.recording.manager.os.write"), mock.patch.dict(
+                        os.environ, {"RMW_IMPLEMENTATION": rmw, "CYCLONEDDS_URI": "file:///custom.xml"}
+                    ):
+                        result = manager.start(
+                            bag_name="single", output_subdirectory="cup_stacking"
+                        )
 
-            self.assertEqual(set(calls[0]), {"/camera"})
-            self.assertEqual(len(set(calls[0].values())), 1)
-            popen.assert_called_once()
-            command = popen.call_args.args[0]
-            self.assertEqual(command[command.index("--output") + 1], calls[0]["/camera"])
-            self.assertIn("/camera", command)
-            self.assertIn("/imu", command)
-            self.assertIn("--start-paused", command)
-            self.assertEqual(
-                result["output_path"],
-                str(Path(directory) / "cup_stacking" / "single"),
-            )
-            target = Path(command[command.index("--output") + 1])
-            self.assertEqual(
-                json.loads((target / ".recording_target.json").read_text()),
-                {"output_subdirectory": "cup_stacking"},
-            )
-            self.assertEqual(
-                popen.call_args.kwargs["env"]["RMW_IMPLEMENTATION"],
-                "rmw_cyclonedds_cpp",
-            )
-            timings = result["start_timings"]
-            self.assertGreaterEqual(timings["total_sec"], 0.0)
-            self.assertLessEqual(
-                timings["resume_requested_offset_sec"],
-                timings["resume_confirmed_offset_sec"],
-            )
-            self.assertIn("dds_subscription_settle_sec", timings)
+                    self.assertEqual(set(calls[0]), {"/camera"})
+                    self.assertEqual(len(set(calls[0].values())), 1)
+                    popen.assert_called_once()
+                    command = popen.call_args.args[0]
+                    self.assertEqual(command[command.index("--output") + 1], calls[0]["/camera"])
+                    self.assertIn("/camera", command)
+                    self.assertIn("/imu", command)
+                    self.assertIn("--start-paused", command)
+                    self.assertEqual(
+                        result["output_path"],
+                        str(Path(directory) / "cup_stacking" / "single"),
+                    )
+                    target = Path(command[command.index("--output") + 1])
+                    self.assertEqual(
+                        json.loads((target / ".recording_target.json").read_text()),
+                        {"output_subdirectory": "cup_stacking"},
+                    )
+                    self.assertEqual(
+                        popen.call_args.kwargs["env"]["RMW_IMPLEMENTATION"],
+                        rmw,
+                    )
+                    self.assertEqual(popen.call_args.kwargs["env"]["CYCLONEDDS_URI"], "file:///custom.xml")
+                    timings = result["start_timings"]
+                    self.assertGreaterEqual(timings["total_sec"], 0.0)
+                    self.assertLessEqual(
+                        timings["resume_requested_offset_sec"],
+                        timings["resume_confirmed_offset_sec"],
+                    )
+                    self.assertIn("dds_subscription_settle_sec", timings)
 
     def test_recording_waits_for_writer_finalization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

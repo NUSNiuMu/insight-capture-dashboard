@@ -83,27 +83,26 @@ class VioCalibrationRecordingTest(unittest.TestCase):
         )
         self.assertIn("未校正图像", preflight.speech(report))
 
-    def test_payload_probe_uses_dashboard_rmw_instead_of_recorder_override(self):
+    def test_payload_probe_inherits_dashboard_rmw(self):
         manager = RecordingManager(
             {},
             20,
             ROOT,
             1024,
             [],
-            recording_rmw_implementation="rmw_cyclonedds_cpp",
         )
         completed = SimpleNamespace(returncode=0, stderr="")
         with (
             mock.patch.dict(
                 os.environ,
-                {"RMW_IMPLEMENTATION": "rmw_cyclonedds_cpp"},
+                {"RMW_IMPLEMENTATION": "rmw_fastrtps_cpp"},
             ),
             mock.patch("subprocess.run", return_value=completed) as run,
         ):
             report = manager.probe_topic_payloads(["/camera/image_raw"])
 
         self.assertTrue(report["ok"])
-        self.assertNotIn("RMW_IMPLEMENTATION", run.call_args.kwargs["env"])
+        self.assertEqual(run.call_args.kwargs["env"]["RMW_IMPLEMENTATION"], "rmw_fastrtps_cpp")
 
 
 if __name__ == "__main__":

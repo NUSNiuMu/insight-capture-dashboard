@@ -149,12 +149,6 @@ def build_recording_manager(
         start_image_recording=node.start_image_recording,
         stop_image_recording=node.stop_image_recording,
         drain_image_recording=node.drain_image_recording,
-        recording_rmw_implementation=str(
-            runtime_config.get(
-                "recording_rmw_implementation",
-                "rmw_cyclonedds_cpp",
-            )
-        ),
         storage_status=settings.storage_status,
         storage_resolver=lambda: resolve_recording_root(
             settings.configured_rosbag_root,

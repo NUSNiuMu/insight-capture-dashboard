@@ -11,7 +11,6 @@ DEFAULT_POST_PROCESSING_CONFIG = {
     "rosbag_dir": "rosbags",
     "results_dir": "outputs/results",
     "max_cache_size": 1073741824,
-    "recording_rmw_implementation": "rmw_cyclonedds_cpp",
     "record_topics": [],
     "capture_session": {
         "operator": "unknown",
