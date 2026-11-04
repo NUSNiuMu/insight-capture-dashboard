@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 FROM ros:humble-ros-base-jammy
 # Both mirrors default to mainland-China hosts (where this is deployed);
 # override at build time for other networks, e.g.

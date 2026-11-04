@@ -3,7 +3,6 @@ services:
     build:
       context: ../..
       dockerfile: deploy/aruco/Dockerfile
-      network: host
     network_mode: host
     init: true
     stop_signal: SIGINT
