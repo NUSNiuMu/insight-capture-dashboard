@@ -1,6 +1,6 @@
 # 架构
 
-Qt 桌面与手机页面共用采集后端；Dashboard 镜像负责 ROS 接入、MCAP 录制、预览、回放、评分、语音与离线 COLMAP。原生 C++ LooperVIO 建图定位和 TensorRT SuperGlue 匹配各使用独立运行镜像。
+Qt 桌面与手机页面共用采集后端；Dashboard 镜像负责 ROS 接入、MCAP 录制、预览、回放、评分与离线 COLMAP。原生 C++ LooperVIO 建图定位和 TensorRT SuperGlue 匹配各使用独立运行镜像。
 
 图像订阅优先保留录制与输入审计，只有观看者存在时才处理 Native/WebRTC 预览。JPEG 编码和派生回放编码仅使用 Jetson 硬件，不维护并行备用 JPEG。
 
