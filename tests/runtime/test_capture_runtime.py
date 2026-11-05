@@ -91,6 +91,10 @@ class CaptureRuntimeTest(unittest.TestCase):
                 pose_lock=threading.Lock(),
                 trace_generation=1,
                 latest_pose_sample={"cam": None},
+                local_vio_samples={"cam": {
+                    "name": "cam", "position": [1., 2., 3.], "stamp_ns": 42,
+                    "generation": 3, "received": time.monotonic(),
+                }},
                 last_pose_received_time={"cam": 0.0},
                 pose_timeout_sec=2.0,
                 raw_traces={"cam": deque()},
@@ -105,6 +109,11 @@ class CaptureRuntimeTest(unittest.TestCase):
 
             self.assertEqual(payload["poses"][0]["avatar_model"], pose.avatar_model)
             self.assertEqual(payload["poses"][0]["avatar_scale"], 3.0)
+            self.assertFalse(payload["poses"][0]["visible"])
+            self.assertEqual(payload["poses"][0]["trace_update"]["points"], [])
+            self.assertEqual(payload["local_vio"][0]["coordinate_frame"], "local_vio")
+            self.assertEqual(payload["local_vio"][0]["position"], [1., 2., 3.])
+            self.assertTrue(payload["local_vio"][0]["available"])
             self.assertIn(
                 "/asset?path=assets%2Fmodels%2Fhand.glb",
                 builder.model_asset_url(pose.avatar_model),

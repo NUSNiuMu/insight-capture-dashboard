@@ -68,6 +68,7 @@ void Dashboard::setSpatialActive(bool value) {
     if (m_spatialActive == value) return;
     m_spatialActive = value;
     if (value) refreshBags();
+    if (value) emit localVioChanged();
     if (value) for (auto *p : m_poseOrder) {
         if (p->geometryDirty && p->trailEnabled) {
             p->geometry->setPoints(m_keep ? p->kept : p->points);
@@ -336,6 +337,8 @@ void Dashboard::refreshBags() {
     });
 }
 void Dashboard::clearTraces() {
+    m_localVio.clear();
+    emit localVioChanged();
     for (auto *p : m_poseOrder) {
         p->points.clear();
         p->kept.clear();
@@ -486,9 +489,44 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
                 m_poseTrace.removeFirst();
         }
     }
+    acceptLocalVio(payload["local_vio"].toArray(), capacity);
     if (needSnapshot && !playback()) {
         m_poseSocket.abort();
         m_reconnect.start(250);
+    }
+}
+void Dashboard::acceptLocalVio(const QJsonArray &samples, int capacity) {
+    bool visibilityChanged = false;
+    for (auto value : samples) {
+        const auto sample = value.toObject();
+        const auto name = sample["name"].toString();
+        auto track = m_localVio.value(name).toMap();
+        auto points = track.value("points").toList();
+        const auto generation = sample["generation"].toInteger();
+        const auto stamp = sample["stamp_ns"].toInteger();
+        if (track.value("generation", -1).toLongLong() != generation) {
+            points.clear();
+            track["stamp_ns"] = qlonglong(-1);
+        }
+        if (sample["available"].toBool() && stamp != track.value("stamp_ns").toLongLong()) {
+            // Device-local coordinates stay separate from the common-map origin.
+            const auto position = basis(vector(sample["position"].toArray()));
+            points.append(QVariant(QVariantList{position.x(), position.y(), position.z()}));
+            while (points.size() > capacity) points.removeFirst();
+        }
+        auto *global = m_poseByName.value(name);
+        const bool show = global && !global->visible && !points.isEmpty();
+        visibilityChanged |= track.value("show").toBool() != show;
+        track["points"] = points;
+        track["available"] = sample["available"].toBool();
+        track["show"] = show;
+        track["generation"] = qlonglong(generation);
+        track["stamp_ns"] = qlonglong(stamp);
+        m_localVio[name] = track;
+    }
+    if (m_spatialActive && (visibilityChanged || m_clock.elapsed() - m_lastLocalVioNotify >= 100)) {
+        m_lastLocalVioNotify = m_clock.elapsed();
+        emit localVioChanged();
     }
 }
 void Dashboard::cacheModel(Pose *pose, const QJsonObject &data) {
@@ -745,7 +783,7 @@ QVariantMap Dashboard::diagnostics() const {
                                 {"geometry_updates", qulonglong(p->geometry->revision())},
                                 {"model", p->modelSource.toString()}});
     return {{"connected", m_connected}, {"spatial_active", m_spatialActive}, {"poses", data}, {"pose_trace", m_poseTrace},
-            {"localization", m_localization},
+            {"localization", m_localization}, {"local_vio", m_localVio},
             {"playback", playback()}, {"message", m_message}};
 }
 void Dashboard::shutdown() {

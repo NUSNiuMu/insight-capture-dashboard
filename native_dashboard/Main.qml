@@ -337,6 +337,37 @@ ApplicationWindow {
                         }
                         Item { Layout.fillWidth: true }
                     }
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.margins: 10; spacing: 10
+                        visible: !dashboard.playback && Object.keys(dashboard.localVio).some(function(name) { return dashboard.localVio[name].show })
+                        Repeater {
+                            model: dashboard.poses
+                            delegate: ColumnLayout {
+                                required property var modelData
+                                property var track: dashboard.localVio[modelData.name] || ({})
+                                visible: !!track.show
+                                Layout.fillWidth: true; Layout.preferredWidth: 1
+                                Label {
+                                    text: Ui.Texts.value(modelData.role) + " · Local VIO · Unaligned" + (!dashboard.connected || !track.available ? " · Input lost" : "")
+                                    Layout.fillWidth: true; elide: Text.ElideRight; color: "#aa741b"; font.pixelSize: 12
+                                    ToolTip.visible: localHover.hovered
+                                    ToolTip.text: "Independent device frame. Relative positions between devices are not aligned."
+                                    HoverHandler { id: localHover }
+                                }
+                                NativePlot {
+                                    Layout.fillWidth: true; Layout.preferredHeight: 170
+                                    lines: [{points: track.points || [], color: "#aa741b"}, {points: (track.points || []).slice(-1), color: "#aa741b", joints: true}]
+                                    referenceBounds: {
+                                        var points = track.points || []
+                                        if (!points.length) return null
+                                        var lo = points[0].slice(), hi = points[0].slice()
+                                        points.forEach(function(p) { for (var i=0;i<3;++i) { lo[i]=Math.min(lo[i],p[i]);hi[i]=Math.max(hi[i],p[i]) } })
+                                        return {min:lo.map(function(v) {return v-.1}), max:hi.map(function(v) {return v+.1})}
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

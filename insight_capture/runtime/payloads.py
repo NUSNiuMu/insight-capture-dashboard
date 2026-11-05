@@ -111,12 +111,21 @@ class PayloadBuilder:
                         "received_ns": int(self.owner.last_pose_received_time[pose.name] * 1e9),
                     }
                 poses.append(entry)
+            # Raw SDK motion is visualization data in each device's own frame.
+            # It never replaces the common-map poses above or any ROS output.
+            local_vio = [
+                {"name": name, "coordinate_frame": "local_vio", "position": sample["position"],
+                 "stamp_ns": sample["stamp_ns"], "generation": sample["generation"],
+                 "available": now - sample["received"] <= self.owner.pose_timeout_sec}
+                for name, sample in self.owner.local_vio_samples.items() if sample
+            ]
         return {
             "type": "pose_update",
             "display_fps_limit": self.owner.display_fps_limit,
             "trace_capacity": self.owner.max_points,
             "trace_generation": trace_generation,
             "poses": poses,
+            "local_vio": local_vio,
         }
 
     def build_camera_payload(self) -> Dict[str, object]:

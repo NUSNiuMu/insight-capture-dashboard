@@ -2,6 +2,7 @@
 
 import http.client
 import json
+from math import isfinite
 import os
 import secrets
 import subprocess
@@ -167,6 +168,10 @@ class PoseBridgeNode(Node):
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
         self.last_pose_source_stamp = {}
+        self.local_vio_samples = {
+            pose.name: {} for pose in self.poses
+            if pose.teleop_role in {"left_hand", "right_hand"}
+        }
         pose_topics = {pose.name: pose.topic for pose in self.poses}
         self._native_vio_pose_names = {
             camera.device_name or camera.name
@@ -429,13 +434,28 @@ class PoseBridgeNode(Node):
 
     def _make_camera_liveness_callback(self, camera_name: str):
         names = [camera_name] if isinstance(camera_name, str) else camera_name
-        def callback(_msg: PoseStamped) -> None:
+        device = next(camera.device_name or camera.name for camera in self.cameras if camera.name == names[0])
+        def callback(msg: PoseStamped) -> None:
             if not self._playback_mode:
                 received = time.monotonic()
                 for name in names:
                     self.camera_liveness_times[name] = received
+                if device in self.local_vio_samples:
+                    p = msg.pose.position
+                    self._record_local_vio(device, (p.x, p.y, p.z), self._stamp_to_ns(msg.header.stamp), received)
 
         return callback
+
+    def _record_local_vio(self, name, position, stamp_ns, received):
+        if not all(isfinite(value) for value in position):
+            return
+        with self.pose_lock:
+            previous = self.local_vio_samples[name]
+            self.local_vio_samples[name] = {
+                "name": name, "position": list(position), "stamp_ns": stamp_ns,
+                "received": received,
+                "generation": previous.get("generation", 0) + int(stamp_ns < previous.get("stamp_ns", 0)),
+            }
 
     def start_image_recording(self, topic_output_paths: Dict[str, str]) -> None:
         if any(topic + "/h264" in topic_output_paths for topic in self.recording_h264_inputs):
@@ -547,6 +567,8 @@ class PoseBridgeNode(Node):
             for camera in self.cameras:
                 if camera.device_name == pose_name:
                     self.camera_liveness_times[camera.name] = received
+            if pose_name in self.local_vio_samples:
+                self._record_local_vio(pose_name, pose_sample.position, source_stamp_ns, received)
         with self.pose_lock:
             self.latest_pose_sample[pose_name] = pose_sample
             self.last_pose_received_time[pose_name] = received

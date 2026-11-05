@@ -83,6 +83,7 @@ class Dashboard : public QObject {
     Q_PROPERTY(int targetFps READ targetFps CONSTANT)
     Q_PROPERTY(QVariantMap cameraAvailability READ cameraAvailability NOTIFY availabilityChanged)
     Q_PROPERTY(QVariantMap localization READ localization NOTIFY localizationChanged)
+    Q_PROPERTY(QVariantMap localVio READ localVio NOTIFY localVioChanged)
   public:
     Dashboard(QUrl server, int fps, QObject *parent = nullptr);
     QVariantList cameras() const { return m_cameras; }
@@ -98,6 +99,7 @@ class Dashboard : public QObject {
     int targetFps() const { return m_fps; }
     QVariantMap cameraAvailability() const { return m_cameraAvailability; }
     QVariantMap localization() const { return m_localization; }
+    QVariantMap localVio() const { return m_localVio; }
     void start();
     void setKeepTrail(bool value);
     Q_INVOKABLE void setSpatialActive(bool value);
@@ -114,6 +116,7 @@ class Dashboard : public QObject {
     void stateChanged();
     void availabilityChanged();
     void localizationChanged();
+    void localVioChanged();
 
   private:
     void fetch(const QString &path, std::function<void(QJsonObject)> done);
@@ -125,6 +128,7 @@ class Dashboard : public QObject {
     void refreshBags();
     void connectPose();
     void acceptPose(const QJsonObject &payload);
+    void acceptLocalVio(const QJsonArray &samples, int capacity);
     void cacheModel(Pose *pose, const QJsonObject &data);
     void clearTraces();
     void goLive();
@@ -143,6 +147,8 @@ class Dashboard : public QObject {
     QVariantMap m_state;
     QVariantMap m_cameraAvailability;
     QVariantMap m_localization, m_nativeVioFresh;
+    QVariantMap m_localVio;
+    qint64 m_lastLocalVioNotify = -1000;
     QString m_message = "Connecting…", m_transportError, m_requestedPlayback;
     QJsonObject m_manifest, m_latestLive;
     QSet<QString> m_pending;
