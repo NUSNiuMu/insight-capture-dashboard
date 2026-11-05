@@ -26,17 +26,35 @@ Json Engine::Initialize(const Json& config) {
   pending_queries_.clear();
   last_map_stamp_=0;
   map_revision_=0;
+  configured_cameras_.clear();
   std::vector<dm::common::ImageUndistortion> intrinsics;
   std::vector<dm::math::Rigid3d> extrinsics;
   for (const auto& camera : config.at("cameras")) {
     dm::common::ImageUndistortion intrinsic;
     intrinsic.Init(camera.at("width"),camera.at("height"),camera.at("intrinsics").get<std::vector<double>>(),std::vector<double>(4,0),dm::vio::CameraModel::PINHOLE);
     intrinsics.push_back(intrinsic); extrinsics.push_back(Transform(camera.at("imu_from_camera")));
+    configured_cameras_.insert(intrinsics.size()-1);
   }
   KeyFrame::InitCameraParameters(intrinsics,extrinsics);
   mapping_=std::make_unique<LocalMapping>();
   loops_=std::make_unique<LoopClosure>(mapping_->map(),mapping_.get());
   return Stats();
+}
+Json Engine::ConfigureCamera(const Json& config) {
+  const int id=config.at("camera_id");
+  if (!mapping_ || id<2 || id>3) throw std::runtime_error("invalid wrist camera configuration");
+  const auto& camera=config.at("camera");
+  dm::common::ImageUndistortion intrinsic;
+  intrinsic.Init(camera.at("width"),camera.at("height"),camera.at("intrinsics").get<std::vector<double>>(),
+                 std::vector<double>(4,0),dm::vio::CameraModel::PINHOLE);
+  auto previous=queries_.find(id);
+  if(previous!=queries_.end()) previous->second.anchor->localization_anchor_=false;
+  queries_.erase(id);
+  pending_queries_.erase(id);
+  for(const auto& entry:queries_) entry.second.anchor->localization_anchor_=true;
+  KeyFrame::SetCameraParameters(id,intrinsic,Transform(camera.at("imu_from_camera")));
+  configured_cameras_.insert(id);
+  return {{"configured",true}};
 }
 Json Engine::Map(const Json& request, const std::vector<cv::Mat>& images) {
   if (!mapping_ || images.size()!=5) throw std::runtime_error("mapping expects stereo images and matched features");
@@ -103,7 +121,8 @@ Json Engine::Localize(const Json& request, const std::vector<cv::Mat>& arrays) {
   if (!Stats().at("localization_ready").get<bool>())
     return {{"localized",false},{"reason","map_not_ready"},{"map_revision",map_revision_}};
   int camera_id=request.at("camera_id");
-  if(camera_id<2 || camera_id>3) throw std::runtime_error("invalid wrist camera id");
+  if(camera_id<2 || camera_id>3 || !configured_cameras_.count(camera_id))
+    throw std::runtime_error("wrist camera is not configured");
   auto frame=std::make_shared<FrameMeta>(request.at("stamp_ns").get<uint64_t>(), request.at("stamp_ns").get<uint64_t>());
   frame->odo_pose=Transform(request.at("odom_from_imu")); frame->SetPose(frame->odo_pose);
   frame->images[camera_id]=image; frame->is_master={{camera_id,true}};

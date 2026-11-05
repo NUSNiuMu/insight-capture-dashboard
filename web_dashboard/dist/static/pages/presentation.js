@@ -33,7 +33,7 @@ export function issueText(issue) {
 export function errorText(message) {
   const messages = {
     recording_busy: "Wait for recording or saving to finish before calibrating.",
-    calibration_cameras_not_ready: "Calibration needs video and VIO from all three devices.",
+    calibration_cameras_not_ready: "Calibration needs video and VIO from the head device.",
     calibration_service_not_ready: "Mapping service is not ready.",
     "Failed to fetch": "Cannot reach Jetson. Check your Wi-Fi connection.",
     "请先结束录制或等待当前后处理完成": "Stop recording and wait for the current transfer to finish.",

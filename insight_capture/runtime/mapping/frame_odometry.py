@@ -19,6 +19,12 @@ class FrameOdometry:
     def add_imu(self, stamp, acceleration):
         self.imu.append((stamp, float(np.linalg.norm(acceleration))))
 
+    def reset_motion(self):
+        """Discard velocity across a transport gap, retaining the coordinate offset."""
+        self.last = self.velocity = None
+        self.interval = self.acceleration = 0.
+        self.imu.clear()
+
     def update(self, sample):
         if self.last is not None and sample.stamp_ns <= self.last.stamp_ns:
             return None

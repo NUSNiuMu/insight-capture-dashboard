@@ -71,6 +71,7 @@ int main(int argc, char** argv) {
         try {
           auto command = request.at("command").get<std::string>(); insight::Json result;
           if (command == "initialize") result = engine.Initialize(request);
+          else if (command == "camera") result = engine.ConfigureCamera(request);
           else if (command == "map") result = engine.Map(request, images);
           else if (command == "localize") result = engine.Localize(request, images);
           else if (command == "accept") result = engine.Accept(request);

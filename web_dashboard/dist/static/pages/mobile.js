@@ -1,6 +1,6 @@
 import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261104-functional-fixes-2";
-import { CaptureManagement } from "./management.js?v=20261105-stream-recovery";
-import { cameraLabel, deviceLabel, errorText, issueText } from "./presentation.js?v=20261104-functional-fixes-2";
+import { CaptureManagement } from "./management.js?v=20261105-decoupled-mapping";
+import { cameraLabel, deviceLabel, errorText, issueText } from "./presentation.js?v=20261105-decoupled-mapping";
 
 const el = id => document.getElementById(id);
 const labels = { idle: "Ready", starting: "Starting", recording: "Recording", saving: "Saving", saved: "Saved", error: "Error", playback: "Desktop playback" };
@@ -81,10 +81,11 @@ function render() {
   management.update(s, pending || !online);
 }
 function renderCalibration() {
+  const headDevice = devices.find(device => device.role === "head");
   el("calibrate").disabled = !online || !mapping || pending
     || ["starting", "saving"].includes(snapshot?.state)
     || (snapshot?.recording && snapshot.recording_mode !== "capture")
-    || !devices.length || !devices.every(({name}) => snapshot?.preflight?.camera_health?.[name]?.ready);
+    || !headDevice || !snapshot?.preflight?.camera_health?.[headDevice.name]?.ready;
   const statuses = mapping?.statuses || {};
   const head = statuses.insight9 || {};
   const points = Number(mapping?.map_point_count || 0);
@@ -131,7 +132,7 @@ el("calibrate").onclick = async () => {
   try {
     const result = await api("/api/mapping/reset", { method: "POST" });
     mapping = result.mapping;
-    el("calibration-message").textContent = "Mapping started. Point all devices at the same textured area.";
+    el("calibration-message").textContent = "Head mapping started. Wrists join when ready. Point devices at a shared textured area.";
   } catch (error) { el("calibration-message").textContent = error.message; }
   finally { pending = false; render(); }
 };

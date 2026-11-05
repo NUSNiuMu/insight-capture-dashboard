@@ -64,9 +64,11 @@ class CameraState:
     correction: object = None
     info: object = None
     center: object = None
+    geometry_id: object = None
     next_image: int = 0
     clock: SourceClock = field(default_factory=SourceClock)
     latest_source_ns: int = 0
+    reset_source_ns: int = 0
     last_vio_received_ns: int = 0
     last_raw_source_ns: int = 0
     last_raw_received_ns: int = 0
@@ -110,8 +112,6 @@ class LooperNode(Node):
         self.tf_buffer = Buffer()
         self.tf_broadcaster = TransformBroadcaster(self)
         self.static_tf = StaticTransformBroadcaster(self)
-        self.geometry_id = None
-        self.static_transforms = {}
         self.ready = False
         self.generation = 0
         self.session_id = uuid.uuid4().hex
@@ -186,53 +186,38 @@ class LooperNode(Node):
                                      (t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w))
 
     def on_static_tf(self, message):
-        prefixes = tuple(name + "_" for name in self.names)
         with self.lock:
             for tf in message.transforms:
                 self.tf_buffer.set_transform_static(tf, "camera_inputs")
-                if not tf.child_frame_id.startswith(prefixes):
-                    continue
-                t, q = tf.transform.translation, tf.transform.rotation
-                value = (tf.header.frame_id, t.x, t.y, t.z, q.x, q.y, q.z, q.w)
-                if self.static_transforms.get(tf.child_frame_id) != value:
-                    self.static_transforms[tf.child_frame_id] = value
-                    self.geometry_id = None
 
-    def configure(self):
-        infos = [self.cameras[self.head].info, self.right_info,
-                 self.cameras["insight3_a"].info, self.cameras["insight3_b"].info]
-        names = (self.head + "/left", self.head + "/right", *self.names[1:])
-        missing = [name + "/CameraInfo" for name, info in zip(names, infos)
+    def configure(self, name):
+        state = self.cameras[name]
+        inputs = self.inputs[name]
+        infos = [state.info, self.right_info] if name == self.head else [state.info]
+        eyes = ("left", "right") if name == self.head else ("left",)
+        missing = [f"{name}/{eye}/CameraInfo" for eye, info in zip(eyes, infos)
                    if info is None or not info.header.frame_id or info.width <= 0 or info.height <= 0
                    or not np.isfinite([*info.p, *info.r]).all() or info.p[0] <= 0 or info.p[5] <= 0]
         if missing:
-            self.wait_for_inputs(missing)
+            self.wait_for_inputs(name, missing)
             return False
-        with self.lock:
-            identity = (tuple((info.width, info.height, tuple(info.p), tuple(info.r), info.header.frame_id)
-                              for info in infos), tuple(sorted(self.static_transforms.items())))
-        if identity == self.geometry_id:
-            return True
-        required = [(self.inputs[name]["imu_frame"], frame)
-                    for name in self.names for frame in (
-                        self.cameras[name].info.header.frame_id,
-                        self.inputs[name]["center_left_frame"],
-                        self.inputs[name]["center_right_frame"])]
-        required.append((self.inputs[self.head]["imu_frame"], self.right_info.header.frame_id))
+        imu = inputs["imu_frame"]
+        required = [(imu, frame) for frame in (
+            *(info.header.frame_id for info in infos),
+            inputs["center_left_frame"], inputs["center_right_frame"])]
         missing = [f"TF:{target}<-{source}" for target, source in dict.fromkeys(required)
                    if not self.tf_buffer.can_transform(target, source, Time())]
         if missing:
-            self.wait_for_inputs(missing)
+            self.wait_for_inputs(name, missing)
+            return False
+        if name != self.head and not self.ready:
+            self.wait_for_inputs(name, [self.head + "/geometry"])
             return False
         models = []
-        centers = {}
-        for i, (name, info) in enumerate(zip((self.head, self.head, *self.names[1:]), infos)):
-            inputs = self.inputs[name]
-            imu = inputs["imu_frame"]
-            left_info = self.cameras[name].info
-            extrinsic = self.lookup(imu, left_info.header.frame_id)
+        for i, info in enumerate(infos):
+            extrinsic = self.lookup(imu, infos[0].header.frame_id)
             rectified = np.eye(4)
-            rectified[:3, :3] = np.asarray(left_info.r).reshape(3, 3).T
+            rectified[:3, :3] = np.asarray(infos[0].r).reshape(3, 3).T
             extrinsic = extrinsic @ rectified
             P = np.asarray(info.p).reshape(3, 4)
             K = P[:, :3]
@@ -243,26 +228,41 @@ class LooperNode(Node):
             models.append({"width": info.width, "height": info.height,
                            "intrinsics": [K[0, 0], K[1, 1], K[0, 2], K[1, 2]],
                            "imu_from_camera": extrinsic.tolist()})
-            left = self.lookup(imu, inputs["center_left_frame"])
-            right = self.lookup(imu, inputs["center_right_frame"])
-            center = left.copy()
-            center[:3, 3] = (left[:3, 3] + right[:3, 3]) / 2
-            centers[name] = center
-        if identity != self.geometry_id:
+        left = self.lookup(imu, inputs["center_left_frame"])
+        right = self.lookup(imu, inputs["center_right_frame"])
+        center = left.copy()
+        center[:3, 3] = (left[:3, 3] + right[:3, 3]) / 2
+        identity = tuple((model["width"], model["height"], *np.round(model["intrinsics"], 10),
+                          *np.round(model["imu_from_camera"], 10).ravel()) for model in models)
+        identity += (tuple(np.round(center, 10).ravel()),)
+        if identity != state.geometry_id:
             with self.processing, self.lock:
-                self.clear()
-                self.backend.request("initialize", cameras=models)
-                for name, center in centers.items():
-                    self.cameras[name].center = center
-                self.geometry_id = identity
-                self.ready = True
-            self.get_logger().info("LooperVIO geometry initialized from live CameraInfo and TF")
+                if name == self.head:
+                    self.clear()
+                    self.backend.request("initialize", cameras=models)
+                    for wrist in self.names[1:]:
+                        self.cameras[wrist].geometry_id = None
+                        self.cameras[wrist].center = None
+                    self.ready = True
+                else:
+                    if state.geometry_id is not None:
+                        state.tracking_epoch += 1
+                        state.correction = None
+                        state.fusion = PoseCorrectionFilter()
+                        state.last_match = 0.
+                    self.backend.request("camera", camera_id=self.names.index(name) + 1, camera=models[0])
+                state.center = center
+                state.geometry_id = identity
+            self.events.changed("geometry", name, "ready", "CameraInfo and required TF configured")
         return True
 
-    def wait_for_inputs(self, missing):
+    def wait_for_inputs(self, name, missing):
         with self.lock:
-            self.stats = {**self.stats, "state": "waiting_for_inputs", "missing_inputs": missing}
-        self.events.changed("mapping", self.head, "waiting_for_inputs", "; ".join(missing), level="warning")
+            diagnostics = {"state": "waiting_for_inputs", "missing_inputs": missing}
+            self.cameras[name].diagnostics = diagnostics
+            if name == self.head:
+                self.stats = {**self.stats, **diagnostics}
+        self.events.changed("geometry", name, "waiting_for_inputs", "; ".join(missing), level="warning")
 
     def clear(self):
         self.generation += 1
@@ -276,6 +276,7 @@ class LooperNode(Node):
         self.last_pose_tick = None
         self.pose_corrections.clear()
         for state in self.cameras.values():
+            state.reset_source_ns = state.latest_source_ns
             state.correction = None
             state.fusion = PoseCorrectionFilter()
             state.next_image = 0
@@ -316,12 +317,9 @@ class LooperNode(Node):
 
     def on_tracking(self, name, tracking):
         with self.lock:
-            state = self.cameras[name]
-            previous = state.tracking
-            state.tracking = tracking
-            invalidated = previous in {"TRACKING", "TRACKING_STATIC"} and tracking not in {"TRACKING", "TRACKING_STATIC"}
-        if invalidated:
-            self.invalidate_camera(name)
+            self.cameras[name].tracking = tracking
+        self.events.changed("sdk_tracking", name, tracking,
+                            level="info" if tracking in {"TRACKING", "TRACKING_STATIC"} else "warning")
 
     def invalidate_camera(self, name):
         with self.lock:
@@ -334,6 +332,7 @@ class LooperNode(Node):
             state.odometry = FrameOdometry()
             state.clock = SourceClock()
             state.latest_source_ns = state.last_vio_received_ns = 0
+            state.reset_source_ns = 0
             state.last_raw_source_ns = state.last_raw_received_ns = 0
             state.last_match = 0.
             state.diagnostics = {"state": "waiting_for_vio", "geometric_match": False}
@@ -344,17 +343,35 @@ class LooperNode(Node):
         source = stamp_ns(message.header.stamp)
         state = self.cameras[name]
         received = self.get_clock().now().nanoseconds
-        if state.last_raw_received_ns and (
-                not 0 < received - state.last_raw_received_ns <= 2_000_000_000
-                or source < state.last_raw_source_ns
-                or abs((source - state.last_raw_source_ns)
-                       - (received - state.last_raw_received_ns)) > 2_000_000_000):
-            self.get_logger().warning(f"{name}: VIO time discontinuity; invalidating localization")
-            self.invalidate_camera(name)
+        if state.last_raw_received_ns:
+            source_delta = source - state.last_raw_source_ns
+            received_delta = received - state.last_raw_received_ns
+            if source_delta < 0:
+                self.get_logger().warning(f"{name}: SDK source clock restarted; invalidating localization")
+                self.invalidate_camera(name)
+            elif abs(source_delta - received_delta) > 2_000_000_000:
+                with self.lock:
+                    state.clock = SourceClock()
+                    state.buffer.clear()
+                    state.odometry.reset_motion()
+                    state.last_pose_tick = None
+                    state.latest_source_ns = state.last_vio_received_ns = 0
+                    state.next_image = 0
+                    state.tracking_epoch += 1
+                self.events.changed("source_clock", name, "resynchronizing",
+                                    "Clock offset changed; retaining map and localization", level="warning")
+            elif received_delta > 2_000_000_000:
+                with self.lock:
+                    state.odometry.reset_motion()
+                self.events.changed("source_clock", name, "resumed",
+                                    "Transport gap ended with continuous SDK time")
         with self.lock:
+            clock_was_ready = state.clock.ready
             state.clock.observe(source, received)
             state.last_raw_source_ns = source
             state.last_raw_received_ns = received
+        if not clock_was_ready and state.clock.ready:
+            self.events.changed("source_clock", name, "ready", "Initial VIO clock samples collected")
 
     def on_imu(self, name, message):
         a = message.linear_acceleration
@@ -362,6 +379,8 @@ class LooperNode(Node):
             self.cameras[name].odometry.add_imu(stamp_ns(message.header.stamp), [a.x, a.y, a.z])
 
     def on_frame_pose(self, name, header, pose):
+        if self.cameras[name].tracking not in {"TRACKING", "TRACKING_STATIC"}:
+            return
         p, q = pose.position, pose.orientation
         sample = PoseSample(stamp_ns(header.stamp), np.array([p.x, p.y, p.z]),
                             np.array([q.x, q.y, q.z, q.w]))
@@ -432,7 +451,6 @@ class LooperNode(Node):
                     stamp = tick * 1_000_000_000 // 30
                     if stamp > latest:
                         break
-                    state.last_pose_tick = tick
                     correction = corrections.get(name)
                     if correction is None or correction[0] != state.tracking_epoch:
                         continue
@@ -447,6 +465,7 @@ class LooperNode(Node):
                     q = Rotation.from_matrix(transform[:3, :3]).as_quat()
                     output.pose.orientation.x, output.pose.orientation.y, output.pose.orientation.z, output.pose.orientation.w = map(float, q)
                     self.pose_publishers[name].publish(output)
+                    state.last_pose_tick = tick
                     tf = TransformStamped(header=output.header, child_frame_id=self.frames[name])
                     tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = map(float, transform[:3, 3])
                     tf.transform.rotation = output.pose.orientation
@@ -458,7 +477,7 @@ class LooperNode(Node):
         with self.processing:
             if (item.generation != self.generation
                     or item.tracking_epoch != self.cameras[item.view].tracking_epoch
-                    or item.stamp_ns + self.cameras[item.view].clock.offset_ns < self.last_reset_wall_ns):
+                    or item.stamp_ns < self.cameras[item.view].reset_source_ns):
                 return None
             return self.backend.request(command, **metadata)
 
@@ -551,11 +570,12 @@ class LooperNode(Node):
 
     def prepare(self, item):
         try:
-            configured = self.configure()
+            configured = self.configure(item.view)
         except TransformException as exc:
-            self.wait_for_inputs([str(exc)])
+            self.wait_for_inputs(item.view, [str(exc)])
             return
-        if not configured or item.generation != self.generation:
+        if (not configured or item.generation != self.generation
+                or item.tracking_epoch != self.cameras[item.view].tracking_epoch):
             return
         state = self.cameras[item.view]
         infos = (state.info, self.right_info)
@@ -565,7 +585,7 @@ class LooperNode(Node):
                 f"frame_id:{image.header.frame_id}!={info.header.frame_id}"
                 for image, info in zip(item.images, infos) if image.header.frame_id != info.header.frame_id]}
             if item.view == self.head:
-                self.wait_for_inputs(state.diagnostics["missing_inputs"])
+                self.wait_for_inputs(item.view, state.diagnostics["missing_inputs"])
             return
         deadline = time.monotonic() + .1
         pose = state.buffer.lookup(item.stamp_ns)

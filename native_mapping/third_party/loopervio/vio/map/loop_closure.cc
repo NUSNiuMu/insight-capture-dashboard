@@ -175,20 +175,28 @@ std::optional<dm::math::Rigid3d> LoopClosure::Localize(KeyFrame* query, const Ma
     auto refined = OptimizeLoopPose(query, candidate.kf, *initial, kLocalizationMinInliers);
     if (!refined) continue;
     evidence_.reference=candidate.kf;
+    evidence_.verified_references=1;
     const auto camera_pose=*refined*KeyFrame::Extrinsic(query->master_cam_id());
-    for(const auto& previous:hypotheses) {
+    for(auto& previous:hypotheses) {
       const auto other=previous.first*KeyFrame::Extrinsic(query->master_cam_id());
-      if((camera_pose.translation()-other.translation()).norm()>.01 ||
-         camera_pose.rotation().angularDistance(other.rotation())>M_PI/180.) continue;
-      if(previous.second.rms_px<evidence_.rms_px) {
-        evidence_=previous.second; refined=previous.first;
+      if((camera_pose.translation()-other.translation()).norm()<=.01 &&
+         camera_pose.rotation().angularDistance(other.rotation())<=M_PI/180.) {
+        ++evidence_.verified_references;
+        ++previous.second.verified_references;
       }
-      evidence_.verified_references=2;
-      return refined;
     }
     hypotheses.emplace_back(*refined,evidence_);
+    if(evidence_.verified_references>=2) break;
   }
-  return std::nullopt;
+  if(hypotheses.empty()) return std::nullopt;
+  auto best=std::max_element(hypotheses.begin(),hypotheses.end(),[](const auto& a,const auto& b) {
+    if((a.second.verified_references>=2)!=(b.second.verified_references>=2))
+      return a.second.verified_references<b.second.verified_references;
+    return a.second.inliers<b.second.inliers ||
+      (a.second.inliers==b.second.inliers && a.second.rms_px>b.second.rms_px);
+  });
+  evidence_=best->second;
+  return best->first;
 }
 
 std::optional<dm::math::Rigid3d> LoopClosure::SolveLoopPose(KeyFrame* query_kf,

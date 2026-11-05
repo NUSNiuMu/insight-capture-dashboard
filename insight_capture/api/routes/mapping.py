@@ -56,6 +56,8 @@ class MappingRoutes:
             self.context.node,
             stale_sec,
         )
+        head = next(pose.name for pose in self.context.node.poses if pose.teleop_role == "head")
+        unavailable = [item for item in unavailable if item["camera"] == head]
         if unavailable:
             return web.json_response(
                 {

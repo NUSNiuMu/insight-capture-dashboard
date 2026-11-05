@@ -266,6 +266,9 @@ QVariantMap Dashboard::localizationSummary(const QVariantMap &status, bool vioFr
         return result("waiting_frame_pose", "Waiting for frame pose", waiting);
     if (status.value("state") == "waiting_for_inputs")
         return result("waiting_inputs", "Waiting for mapping input", waiting);
+    const auto tracking = status.value("tracking_status").toString();
+    if (tracking != "TRACKING" && tracking != "TRACKING_STATIC")
+        return result("waiting_tracking", "SDK tracking lost", warning);
     if (!status.value("clock_ready").toBool())
         return result("waiting_clock", "Synchronizing clock", waiting);
     if (head) {

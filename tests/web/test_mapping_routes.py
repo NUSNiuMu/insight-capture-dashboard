@@ -25,6 +25,8 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
         ]
         return SimpleNamespace(
             cameras=cameras,
+            poses=[SimpleNamespace(name=name, teleop_role=role) for name, role in (
+                ("insight3_a", "right_hand"), ("insight3_b", "left_hand"), ("insight9_a", "head"))],
             camera_stale_timeout_sec=2.0,
             camera_input_lock=threading.Lock(),
             camera_input_times={
@@ -41,7 +43,7 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def test_reset_checks_all_camera_images_and_vio_before_calibration(self):
+    async def test_reset_requires_head_inputs_and_reports_head_failure(self):
         node = self._node(
             stale_images=("insight9_a",),
             stale_vio=("insight3_b", "insight9_a"),
@@ -57,14 +59,24 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["error"], "calibration_cameras_not_ready")
         self.assertEqual(
             body["speech"],
-            "无法开始校准：左手相机没有VIO数据；头部相机没有图像和VIO数据。请检查相机连接。",
+            "无法开始校准：头部相机没有图像和VIO数据。请检查相机连接。",
         )
         self.assertEqual(
             [item["camera"] for item in body["unavailable_cameras"]],
-            ["insight3_b", "insight9_a"],
+            ["insight9_a"],
         )
         self.assertTrue(body["camera_health"]["insight3_a"]["ready"])
         node.reset_mapping.assert_not_called()
+
+    async def test_absent_wrists_do_not_block_head_mapping(self):
+        node = self._node(stale_images=("insight3_a", "insight3_b"),
+                          stale_vio=("insight3_a", "insight3_b"))
+        routes = MappingRoutes(SimpleNamespace(
+            node=node, recording_manager=mock.Mock(status=mock.Mock(return_value={}))
+        ))
+        response = await routes._handle_reset(None)
+        self.assertEqual(response.status, 200)
+        node.reset_mapping.assert_called_once_with()
 
     async def test_reset_starts_when_all_camera_inputs_are_fresh(self):
         node = self._node()

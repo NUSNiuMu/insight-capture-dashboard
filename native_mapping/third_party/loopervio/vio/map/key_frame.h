@@ -351,6 +351,17 @@ class KeyFrame {
     camera_extrinsics_ = extrinsics;
   }
 
+  static void SetCameraParameters(CameraId id, const dm::common::ImageUndistortion& intrinsic,
+                                  const dm::math::Rigid3d& extrinsic) {
+    std::lock_guard<std::shared_mutex> lg(params_mutex_);
+    if (image_intrinsics_.size() <= id) {
+      image_intrinsics_.resize(id + 1);
+      camera_extrinsics_.resize(id + 1);
+    }
+    image_intrinsics_.at(id) = intrinsic;
+    camera_extrinsics_.at(id) = extrinsic;
+  }
+
   static void UpdateCameraIntrinsics(const std::vector<dm::common::ImageUndistortion>& intrinsics) {
     std::lock_guard<std::shared_mutex> lg(params_mutex_);
     for (size_t i = 0; i < intrinsics.size(); ++i) {

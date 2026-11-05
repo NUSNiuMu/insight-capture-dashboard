@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <map>
+#include <set>
 #include <nlohmann/json.hpp>
 #include <opencv2/core.hpp>
 #include "vio/map/local_mapping.h"
@@ -11,6 +12,7 @@ using Json = nlohmann::json;
 class Engine {
  public:
   Json Initialize(const Json& config);
+  Json ConfigureCamera(const Json& config);
   Json Map(const Json& request, const std::vector<cv::Mat>& images);
   Json Localize(const Json& request, const std::vector<cv::Mat>& arrays);
   Json Accept(const Json& request);
@@ -20,6 +22,7 @@ class Engine {
  private:
   std::unique_ptr<dm::vio::lm::LocalMapping> mapping_;
   std::unique_ptr<dm::vio::lm::LoopClosure> loops_;
+  std::set<int> configured_cameras_;
   uint64_t last_map_stamp_ = 0;
   uint64_t map_revision_ = 0;
   struct Query {
