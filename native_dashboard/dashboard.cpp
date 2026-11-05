@@ -678,7 +678,7 @@ void Dashboard::activatePlayback(const QJsonObject &status) {
 void Dashboard::goLive() {
     const bool requested = !m_requestedPlayback.isEmpty();
     m_requestedPlayback.clear();
-    if (playback() || m_playbackStarting || requested || m_state["playbackState"] == "preparing")
+    if (playback() || m_playbackStarting || requested || m_state["playbackState"] == "preparing" || m_state["playbackState"] == "playing")
         post("/api/playback/stop", {}, [this](QJsonObject) {
             m_manifest = {};
             m_playbackStarting = false;
