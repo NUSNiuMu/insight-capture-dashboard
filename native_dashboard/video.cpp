@@ -115,7 +115,7 @@ void NativeVideo::setSourceOnline(bool value) {
     emit sourceChanged();
     if (!value && m_media.isEmpty()) {
         stop();
-        m_status = "Camera offline";
+        m_status = "No image input";
         syncWindow();
         emit statsChanged();
     } else

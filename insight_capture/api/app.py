@@ -5,6 +5,7 @@ from aiohttp import web
 from .context import DashboardContext
 from .middleware import create_json_error_middleware, create_static_cache_middleware
 from .routes.cameras import CameraRoutes
+from .routes.diagnostics import DiagnosticRoutes
 from .routes.mapping import MappingRoutes
 from .routes.mobile import MobileCaptureRoutes
 from .routes.native import NativePreviewRoutes
@@ -29,6 +30,7 @@ def create_app(context: DashboardContext) -> web.Application:
     )
     websocket = PoseWebSocketService(context)
     cameras = CameraRoutes(context)
+    diagnostics = DiagnosticRoutes(context)
     native_preview = NativePreviewRoutes(context)
     mapping = MappingRoutes(context)
     recording = RecordingRoutes(context)
@@ -49,6 +51,7 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/ws/native", native_preview._handle_stream)
     app.router.add_get("/healthz", handle_health)
     app.router.add_get("/api/cameras", cameras._handle_camera_snapshot)
+    app.router.add_get("/api/diagnostics", diagnostics.snapshot)
     app.router.add_post(
         "/api/cameras/{camera_name}/browser-stats",
         cameras._handle_browser_stats,

@@ -12,6 +12,19 @@ export class CaptureManagement {
     this.panel = el("management");
     this.panel.ontoggle = () => { if (this.panel.open) this.refresh(); };
     el("management-refresh").onclick = () => this.refresh();
+    el("save-diagnostics").onclick = async () => {
+      try {
+        const snapshot = await this.api("/api/diagnostics");
+        snapshot.client = { user_agent: navigator.userAgent };
+        const url = URL.createObjectURL(new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "insight-diagnostics.json";
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        el("management-message").textContent = "Diagnostics saved.";
+      } catch (error) { this.showError(error); }
+    };
     el("task-activate").onclick = () => this.run(() => this.post(`/api/tasks/${encodeURIComponent(el("task-select").value)}/activate`));
     el("task-end").onclick = () => this.run(() => this.post("/api/tasks/current/end"));
     el("task-create").onsubmit = event => {

@@ -11,6 +11,7 @@ from pathlib import Path
 import queue
 import threading
 import time
+import traceback
 import uuid
 from types import SimpleNamespace
 
@@ -25,14 +26,16 @@ from sensor_msgs.msg import CameraInfo, Image, Imu, PointCloud2, PointField
 from std_msgs.msg import String, Header
 from std_srvs.srv import Empty
 from tf2_msgs.msg import TFMessage
-from tf2_ros import Buffer, TransformBroadcaster, TransformListener, StaticTransformBroadcaster
+from tf2_ros import Buffer, TransformBroadcaster, StaticTransformBroadcaster, TransformException
 
 from .geometry import PoseSample, matrix_from_pose, matrix_from_transform
 from .looper_backend import LooperBackend
 from .looper_features import stereo_arrays, query_arrays
 from .pose_correction_filter import PoseCorrectionFilter
 from .frame_odometry import FrameOdometry
-from .superglue_backend import IpcSuperGlueBackend
+from .superglue_backend import IpcSuperGlueBackend, InferenceUnavailable
+from insight_capture.runtime.diagnostics import DiagnosticEvents
+from insight_capture.runtime.ros_inputs import CameraInputs
 from .rig import LatestViewQueue
 from .synchronization import PoseBuffer, SourceClock, StereoPairSynchronizer, select_timestamp
 from insight_capture.core.paths import runtime_config_path
@@ -78,6 +81,7 @@ class CameraState:
 class LooperNode(Node):
     def __init__(self, args):
         super().__init__("insight_looper_mapping")
+        self.events = DiagnosticEvents(self.get_logger())
         config = json.loads(args.config.read_text())
         self.runtime_config = args.runtime_config
         load_gripper_mask_height_ratio(self.runtime_config)
@@ -104,13 +108,11 @@ class LooperNode(Node):
         self.stop = threading.Event()
         self.sync = StereoPairSynchronizer(tolerance_ns=2_000_000)
         self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.static_tf = StaticTransformBroadcaster(self)
         self.geometry_id = None
         self.static_transforms = {}
         self.ready = False
-        self.failed = False
         self.generation = 0
         self.session_id = uuid.uuid4().hex
         self.last_reset_wall_ns = 0
@@ -122,7 +124,8 @@ class LooperNode(Node):
         self.status_publishers = {}
         geometry_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                                  reliability=ReliabilityPolicy.RELIABLE)
-        self.create_subscription(TFMessage, "/tf_static", self.on_static_tf,
+        self.camera_inputs = CameraInputs(self)
+        self.camera_inputs.create_subscription(TFMessage, "/tf_static", self.on_static_tf,
                                  QoSProfile(depth=100, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.feature_publisher = self.create_publisher(PointCloud2, "/insight9_sparse_map/features", geometry_qos)
         base = "/insight9_sparse_map/calibration_keyframe"
@@ -146,25 +149,25 @@ class LooperNode(Node):
             self.pose_publishers[name] = self.create_publisher(PoseStamped, base + "/pose", 1)
             self.status_publishers[name] = self.create_publisher(String, base + "/status", 1)
             inputs = self.inputs[name]
-            self.create_subscription(CameraInfo, inputs["left_info_topic"],
+            self.camera_inputs.create_subscription(CameraInfo, inputs["left_info_topic"],
                                      lambda m, n=name: setattr(self.cameras[n], "info", m), qos_profile_sensor_data)
-            self.create_subscription(PoseStamped, inputs["vio_topic"],
+            self.camera_inputs.create_subscription(PoseStamped, inputs["vio_topic"],
                                      lambda m, n=name: self.on_vio(n, m), qos_profile_sensor_data)
-            self.create_subscription(Imu, f"/{name}/camera/imu",
+            self.camera_inputs.create_subscription(Imu, f"/{name}/camera/imu",
                                      lambda m, n=name: self.on_imu(n, m), qos_profile_sensor_data)
             if name == self.head:
-                self.create_subscription(PoseStamped, f"/{name}/camera/vio_image",
+                self.camera_inputs.create_subscription(PoseStamped, f"/{name}/camera/vio_image",
                     lambda m, n=name: self.on_frame_pose(n, m.header, m.pose), qos_profile_sensor_data)
             else:
-                self.create_subscription(PoseWithCovarianceStamped, f"/{name}/camera/vio_image_cov",
+                self.camera_inputs.create_subscription(PoseWithCovarianceStamped, f"/{name}/camera/vio_image_cov",
                     lambda m, n=name: self.on_frame_pose(n, m.header, m.pose.pose), qos_profile_sensor_data)
-            self.create_subscription(String, f"/{name}/camera/vio_status",
+            self.camera_inputs.create_subscription(String, f"/{name}/camera/vio_status",
                                      lambda m, n=name: self.on_tracking(n, m.data), 1)
-            self.create_subscription(Image, inputs["left_image_topic"],
+            self.camera_inputs.create_subscription(Image, inputs["left_image_topic"],
                                      lambda m, n=name: self.on_image(n, 0, m), qos_profile_sensor_data)
-        self.create_subscription(CameraInfo, self.inputs[self.head]["right_info_topic"],
+        self.camera_inputs.create_subscription(CameraInfo, self.inputs[self.head]["right_info_topic"],
                                  lambda m: setattr(self, "right_info", m), qos_profile_sensor_data)
-        self.create_subscription(Image, self.inputs[self.head]["right_image_topic"],
+        self.camera_inputs.create_subscription(Image, self.inputs[self.head]["right_image_topic"],
                                  lambda m: self.on_image(self.head, 1, m), qos_profile_sensor_data)
         self.create_service(Empty, "/insight_global/reset", self.reset_map)
         self.create_timer(.5, self.publish_status)
@@ -175,6 +178,7 @@ class LooperNode(Node):
                                        name="looper-owner", daemon=True)
         self.extractor.start()
         self.worker.start()
+        self.camera_inputs.start()
 
     def lookup(self, target, source):
         t = self.tf_buffer.lookup_transform(target, source, Time()).transform
@@ -185,6 +189,7 @@ class LooperNode(Node):
         prefixes = tuple(name + "_" for name in self.names)
         with self.lock:
             for tf in message.transforms:
+                self.tf_buffer.set_transform_static(tf, "camera_inputs")
                 if not tf.child_frame_id.startswith(prefixes):
                     continue
                 t, q = tf.transform.translation, tf.transform.rotation
@@ -196,7 +201,12 @@ class LooperNode(Node):
     def configure(self):
         infos = [self.cameras[self.head].info, self.right_info,
                  self.cameras["insight3_a"].info, self.cameras["insight3_b"].info]
-        if any(info is None for info in infos):
+        names = (self.head + "/left", self.head + "/right", *self.names[1:])
+        missing = [name + "/CameraInfo" for name, info in zip(names, infos)
+                   if info is None or not info.header.frame_id or info.width <= 0 or info.height <= 0
+                   or not np.isfinite([*info.p, *info.r]).all() or info.p[0] <= 0 or info.p[5] <= 0]
+        if missing:
+            self.wait_for_inputs(missing)
             return False
         with self.lock:
             identity = (tuple((info.width, info.height, tuple(info.p), tuple(info.r), info.header.frame_id)
@@ -209,7 +219,10 @@ class LooperNode(Node):
                         self.inputs[name]["center_left_frame"],
                         self.inputs[name]["center_right_frame"])]
         required.append((self.inputs[self.head]["imu_frame"], self.right_info.header.frame_id))
-        if not all(self.tf_buffer.can_transform(target, source, Time()) for target, source in required):
+        missing = [f"TF:{target}<-{source}" for target, source in dict.fromkeys(required)
+                   if not self.tf_buffer.can_transform(target, source, Time())]
+        if missing:
+            self.wait_for_inputs(missing)
             return False
         models = []
         centers = {}
@@ -246,8 +259,12 @@ class LooperNode(Node):
             self.get_logger().info("LooperVIO geometry initialized from live CameraInfo and TF")
         return True
 
+    def wait_for_inputs(self, missing):
+        with self.lock:
+            self.stats = {**self.stats, "state": "waiting_for_inputs", "missing_inputs": missing}
+        self.events.changed("mapping", self.head, "waiting_for_inputs", "; ".join(missing), level="warning")
+
     def clear(self):
-        self.failed = False
         self.generation += 1
         self.last_reset_wall_ns = self.get_clock().now().nanoseconds
         self.last_map_source_ns = 0
@@ -533,19 +550,32 @@ class LooperNode(Node):
             return item.view == self.head or confirmed
 
     def prepare(self, item):
-        if not self.configure() or item.generation != self.generation:
+        try:
+            configured = self.configure()
+        except TransformException as exc:
+            self.wait_for_inputs([str(exc)])
+            return
+        if not configured or item.generation != self.generation:
             return
         state = self.cameras[item.view]
         infos = (state.info, self.right_info)
         if any(image.header.frame_id != info.header.frame_id
                for image, info in zip(item.images, infos)):
+            state.diagnostics = {"state": "waiting_for_inputs", "missing_inputs": [
+                f"frame_id:{image.header.frame_id}!={info.header.frame_id}"
+                for image, info in zip(item.images, infos) if image.header.frame_id != info.header.frame_id]}
+            if item.view == self.head:
+                self.wait_for_inputs(state.diagnostics["missing_inputs"])
             return
         deadline = time.monotonic() + .1
         pose = state.buffer.lookup(item.stamp_ns)
         while pose is None and time.monotonic() < deadline and not self.stop.wait(.005):
             pose = state.buffer.lookup(item.stamp_ns)
         if pose is None:
-            state.diagnostics = {"state": "waiting_for_frame_pose"}
+            state.diagnostics = {"state": "waiting_for_frame_pose", "missing_inputs": [
+                f"{item.view}/vio_image"], "image_stamp_ns": item.stamp_ns}
+            if item.view == self.head:
+                self.stats = {**self.stats, **state.diagnostics}
             return
         item.gray = [gray(m) for m in item.images]
         item.odom = matrix_from_pose(pose)
@@ -556,6 +586,7 @@ class LooperNode(Node):
             item.mask_ratio = load_gripper_mask_height_ratio(self.runtime_config)
             item.arrays = query_arrays(features.keypoints, features.descriptors,
                                        item.gray[0].shape[0], item.mask_ratio)
+        self.events.changed("inference", item.view, "available")
         self.prepared.put_nowait(item)
 
     def process(self, item):
@@ -589,22 +620,25 @@ class LooperNode(Node):
                 item = pending.get(timeout=.25)
                 if item is None:
                     break
-                if self.failed or item.generation != self.generation:
+                if item.generation != self.generation:
                     continue
                 callback(item)
             except queue.Empty:
                 continue
-            except OSError as exc:
-                self.get_logger().error(f"Mapping transport failed: {exc}")
-                self.stop.set()
-                rclpy.try_shutdown()
+            except InferenceUnavailable as exc:
+                with self.lock:
+                    state = self.cameras[item.view]
+                    state.diagnostics = {"state": "waiting_for_inference", "error": str(exc)}
+                    self.stats = {**self.stats, **state.diagnostics}
+                self.events.changed("inference", item.view, "unavailable", str(exc), level="warning")
             except Exception as exc:
                 with self.lock:
-                    self.failed = True
-                    for camera in self.cameras.values():
-                        camera.correction = None
                     self.stats = {**self.stats, "state": "error", "error": str(exc)}
-                self.get_logger().error(str(exc), throttle_duration_sec=5)
+                self.get_logger().error(f"Localization stopped: {type(exc).__name__}: {exc}\n"
+                                        + traceback.format_exc())
+                self.publish_status()
+                self.stop.set()
+                rclpy.try_shutdown()
 
     def publish_status(self):
         with self.lock:
@@ -633,6 +667,7 @@ class LooperNode(Node):
 
     def destroy_node(self):
         self.stop.set()
+        self.camera_inputs.close()
         self.work.put_nowait(None)
         self.prepared.put_nowait(None)
         self.extractor.join(timeout=30)

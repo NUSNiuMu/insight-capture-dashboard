@@ -8,6 +8,7 @@ import struct
 import threading
 
 import numpy as np
+from .superglue_backend import InferenceUnavailable
 
 
 class LooperBackend:
@@ -48,6 +49,8 @@ class LooperBackend:
                 dtype = np.dtype(spec["dtype"])
                 arrays.append(np.frombuffer(self._read(rows * cols * dtype.itemsize), dtype=dtype).reshape(rows, cols))
         if not result["ok"]:
+            if result.get("error_code") == "inference_unavailable":
+                raise InferenceUnavailable(result["error"])
             raise RuntimeError(result["error"])
         if arrays:
             result["arrays"] = arrays

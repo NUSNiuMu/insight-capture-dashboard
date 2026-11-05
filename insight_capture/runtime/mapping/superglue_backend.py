@@ -12,7 +12,8 @@ import numpy as np
 from insight_capture.runtime.mapping.superglue_ipc import receive_message, send_message
 
 
-
+class InferenceUnavailable(RuntimeError):
+    """The shared inference service could not complete this frame."""
 
 @dataclass(frozen=True)
 class StereoMatches:
@@ -56,7 +57,7 @@ class IpcSuperGlueBackend:
             send_message(connection, metadata, payloads)
             return receive_message(connection)
         except OSError as exc:
-            raise RuntimeError(
+            raise InferenceUnavailable(
                 f"cannot reach SuperGlue inference socket {self._socket_path}: {exc}"
             ) from exc
         finally:
@@ -79,7 +80,7 @@ class IpcSuperGlueBackend:
             (image.tobytes(),),
         )
         if not metadata.get("ok"):
-            raise RuntimeError(
+            raise InferenceUnavailable(
                 f"SuperPoint worker failed: {metadata.get('error', 'unknown')}"
             )
         if len(payloads) != 3:
@@ -121,7 +122,7 @@ class IpcSuperGlueBackend:
             (left.tobytes(), right.tobytes()),
         )
         if not metadata.get("ok"):
-            raise RuntimeError(f"SuperGlue worker failed: {metadata.get('error', 'unknown')}")
+            raise InferenceUnavailable(f"SuperGlue worker failed: {metadata.get('error', 'unknown')}")
         if len(payloads) != 4:
             raise RuntimeError("invalid match response from SuperGlue worker")
         count = int(metadata["matches"])

@@ -80,6 +80,15 @@ class MappingStream:
                     except (TypeError, ValueError):
                         pass
                 self._last_received[name] = time.monotonic()
+            events = getattr(self.owner, "events", None)
+            if events is not None:
+                state = str(status.get("state", "unavailable"))
+                detail = str(status.get("error") or status.get("reason")
+                             or "; ".join(status.get("missing_inputs", [])))
+                events.changed("localization", name, state, detail,
+                    level="error" if state == "error" else "info",
+                    localized=status.get("localized", False),
+                    missing_inputs=status.get("missing_inputs", []))
 
         return callback
 

@@ -31,6 +31,7 @@ services:
       # on a China-based host, which reads as "wrong" until you remember
       # the offset. tzdata is already in the image (see Dockerfile).
       - TZ=Asia/Shanghai
+      - INSIGHT_VERSION=${INSIGHT_VERSION:-development}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
       - INSIGHT_ROSBAG_DIR=/mnt/insight-recordings

@@ -158,6 +158,7 @@ ApplicationWindow {
                 Label { text: dashboard.connected ? "Connected" : "Disconnected"; font.pixelSize: 12; color: Ui.Theme.muted }
                 Item { Layout.fillWidth: true }
                 Ui.Badge { text: dashboard.playback ? "Playback" : "Live"; tone: "accent"; visible: root.spatialActive }
+                Ui.Button { objectName: "copy-diagnostics"; text: "Copy diagnostics"; onClicked: dashboard.copyDiagnostics(root.videoDiagnostics()) }
                 Ui.ComboBox { visible: root.spatialActive; model: [25,30]; currentIndex: dashboard.targetFps===30?1:0; onActivated: root.previewFps=Number(currentText); implicitWidth: 85 }
                 Label { visible: root.spatialActive; font.family: Ui.Theme.monoFont; font.pixelSize: 11; text: "3D " + root.sceneFps.toFixed(1) + " FPS"; color: "#776d5a" }
                 Ui.Button { text: "Fullscreen"; onClicked: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
@@ -214,15 +215,18 @@ ApplicationWindow {
                                     id: cameraStatus
                                     property var localization: dashboard.localization[cameraCard.modelData.device || cameraCard.modelData.name] || {}
                                     anchors.top: cameraTitle.bottom; anchors.left: parent.left; anchors.margins: 10
-                                    text: dashboard.playback ? "Playback" : (localization.label || "Waiting for pose")
+                                    text: dashboard.playback ? "Playback" : "Image: " + (dashboard.cameraAvailability[cameraCard.modelData.name] === true ? "Receiving" : "No input") + " · " + (localization.label || "Waiting for pose")
                                     elide: Text.ElideRight; width: parent.width-20; font.pixelSize: 11
                                     color: dashboard.playback ? "#51778e" : (localization.color || "#84775f")
+                                    ToolTip.visible: statusHover.hovered
+                                    ToolTip.text: localization.detail || text
+                                    HoverHandler { id: statusHover }
                                 }
                                 Label { anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; text: video.renderedFps.toFixed(1) + " FPS"; color: "#a27723"; font.bold: true }
                                 Rectangle {
                                     anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom
                                     anchors.topMargin: 6; anchors.bottomMargin: 6; color: "#17130c"; radius: 8
-                                    Label { anchors.centerIn: parent; text: dashboard.cameraAvailability[cameraCard.modelData.name]===false ? "Camera offline" : "Waiting for video"; color: "#a39885"; font.pixelSize: 12; visible: !dashboard.playback && video.renderedFps<=0 }
+                                    Label { anchors.centerIn: parent; width: parent.width-20; text: video.status; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; color: "#a39885"; font.pixelSize: 12; visible: !dashboard.playback && video.renderedFps<=0 }
                                 }
                                 NativeVideo {
                                     id: video; active: root.spatialActive; visible: root.spatialActive && !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.topMargin: 6; anchors.bottomMargin: 6

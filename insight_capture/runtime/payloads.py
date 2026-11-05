@@ -8,6 +8,7 @@ from typing import Dict, Optional
 from urllib.parse import quote
 
 from insight_capture.core.localization_settings import load_gripper_mask_height_ratio
+from insight_capture.runtime.diagnostics import input_snapshot
 
 import numpy as np
 
@@ -120,6 +121,7 @@ class PayloadBuilder:
 
     def build_camera_payload(self) -> Dict[str, object]:
         now = time.monotonic()
+        inputs = input_snapshot(self.owner, now)
         cameras = []
         with self.owner._webrtc_metrics_lock:
             main_metrics = {
@@ -139,23 +141,12 @@ class PayloadBuilder:
         with self.owner.camera_frame_lock:
             for camera in self.owner.cameras:
                 frame = self.owner.latest_camera_frames.get(camera.name)
-                with self.owner.camera_input_lock:
-                    input_times = list(
-                        self.owner.camera_input_times.get(camera.name, [])
-                    )
-                input_fps = observed_frame_rate(input_times, now)
+                evidence = inputs[camera.name]
+                input_fps = evidence["input_fps"]
                 frame_times = list(self.owner.camera_frame_times.get(camera.name, []))
                 fps = observed_frame_rate(frame_times, now)
-                input_age = None if not input_times else now - input_times[-1]
-                stale = input_age is None or input_age > self.owner.camera_stale_timeout_sec
-                liveness_seen = float(
-                    getattr(self.owner, "camera_liveness_times", {}).get(
-                        camera.name, 0.0
-                    )
-                )
-                liveness_age = (
-                    None if liveness_seen <= 0.0 else max(0.0, now - liveness_seen)
-                )
+                stale = evidence["image_state"] != "receiving"
+                liveness_age = evidence["native_vio_age_sec"]
                 browser = browser_stats.get(camera.name, {})
                 browser_age_sec = now - float(
                     browser.pop("updated_monotonic", 0.0)
@@ -167,6 +158,7 @@ class PayloadBuilder:
                 cameras.append(
                     {
                         "name": camera.name,
+                        **evidence,
                         "native_preview_available": (
                             getattr(self.owner, "native_preview", None) is not None
                             and camera.topic_type in ("image", "h264")
@@ -181,8 +173,6 @@ class PayloadBuilder:
                         "topic": camera.topic,
                         "visible": not stale,
                         "stale": stale,
-                        "input_age_sec": input_age,
-                        "native_vio_age_sec": liveness_age,
                         "native_vio_fresh": (
                             liveness_age is not None
                             and liveness_age <= self.owner.camera_stale_timeout_sec

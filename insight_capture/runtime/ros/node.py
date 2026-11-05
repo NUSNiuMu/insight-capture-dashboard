@@ -55,6 +55,7 @@ from insight_capture.runtime.mapping.stream import MappingStream
 from insight_capture.runtime.payloads import PayloadBuilder
 from insight_capture.runtime.recording.header_audit import RecordingBridge
 from insight_capture.runtime.watchdog import ParticipantWatchdog
+from insight_capture.runtime.diagnostics import DiagnosticEvents
 
 
 def make_qos(depth: int = 10) -> QoSProfile:
@@ -91,6 +92,7 @@ class PoseBridgeNode(Node):
         if rclpy is None:
             raise RuntimeError("rclpy is required to run the web dashboard backend")
         super().__init__("insight_multi_camera_dashboard_web")
+        self.events = DiagnosticEvents(self.get_logger())
         self._participant_watchdog = ParticipantWatchdog(self)
         self._recording_bridge = RecordingBridge(self)
         self._image_pipeline = ImagePipeline(self)
@@ -245,14 +247,14 @@ class PoseBridgeNode(Node):
         threading.Thread(target=self._webrtc_healthz_loop, daemon=True, name="webrtc_healthz").start()
         self.create_timer(10.0, self._log_perf_summary, callback_group=self.ros_callback_group)
         self._mapping_stream.start()
+        from insight_capture.runtime.ros_inputs import CameraInputs
+        self.camera_inputs = CameraInputs(self)
         self._create_tf_static_relay()
         self._create_pose_subscriptions()
         self._create_dashboard_image_subscriptions()
-        self._participant_watchdog.enable_discovery_recovery(
-            rclpy.get_rmw_implementation_identifier()
-        )
+        self.camera_inputs.start()
         threading.Thread(
-            target=self._stale_participant_watchdog_loop,
+            target=self._participant_watchdog.run,
             daemon=True,
             name="stale_dds_watchdog",
         ).start()
@@ -270,7 +272,7 @@ class PoseBridgeNode(Node):
         self._tf_static_publisher = self.create_publisher(TFMessage, "/tf_static", qos)
         # Preserve the independent latched samples delivered by all rig writers.
         qos.depth = 100
-        subscription = self.create_subscription(
+        self.camera_inputs.create_subscription(
             TFMessage,
             "/tf_static",
             self._cache_tf_static,
@@ -278,7 +280,6 @@ class PoseBridgeNode(Node):
             callback_group=self.ros_callback_group,
             event_callbacks=self.subscription_event_callbacks,
         )
-        self.dashboard_subscriptions.append(subscription)
 
     def _cache_tf_static(self, message: object) -> None:
         with self._tf_static_lock:
@@ -327,7 +328,7 @@ class PoseBridgeNode(Node):
                 continue
             liveness_topics.setdefault(native_vio_topic, []).append(camera.name)
         for native_vio_topic, camera_names in liveness_topics.items():
-            liveness_sub = self.create_subscription(
+            self.camera_inputs.create_subscription(
                 PoseStamped,
                 native_vio_topic,
                 self._make_camera_liveness_callback(camera_names),
@@ -335,7 +336,6 @@ class PoseBridgeNode(Node):
                 callback_group=self.ros_callback_group,
                 event_callbacks=self.subscription_event_callbacks,
             )
-            self.dashboard_subscriptions.append(liveness_sub)
             self.get_logger().info(
                 f"Camera liveness: {', '.join(camera_names)} <- {native_vio_topic}"
             )
@@ -350,7 +350,7 @@ class PoseBridgeNode(Node):
                 if camera.topic_type == "h264" else self.ros_callback_group
             )
             msg_type = CompressedImage if camera.topic_type in ("compressed", "h264") else RosImage
-            sub = self.create_subscription(
+            self.camera_inputs.create_subscription(
                 msg_type,
                 camera.topic,
                 self._make_dashboard_image_callback(camera.name, camera.topic_type),
@@ -359,11 +359,10 @@ class PoseBridgeNode(Node):
                 raw=camera.topic_type == "h264",
                 event_callbacks=self.subscription_event_callbacks,
             )
-            self.dashboard_subscriptions.append(sub)
             # Playback shadow: PlaybackManager remaps `ros2 bag play` onto
             # /bagplay/... so replayed frames never share a topic with a
             # still-connected live camera (see _make_dashboard_image_callback).
-            playback_sub = self.create_subscription(
+            self.camera_inputs.create_subscription(
                 msg_type,
                 playback_topic(camera.topic),
                 self._make_dashboard_image_callback(
@@ -374,7 +373,6 @@ class PoseBridgeNode(Node):
                 raw=camera.topic_type == "h264",
                 event_callbacks=self.subscription_event_callbacks,
             )
-            self.dashboard_subscriptions.append(playback_sub)
             if camera.topic_type == "h264":
                 continue
             threading.Thread(
@@ -391,12 +389,12 @@ class PoseBridgeNode(Node):
 
         for topic in self.recording_h264_inputs:
             encoded_topic = topic + "/h264"
-            self.dashboard_subscriptions.append(self.create_subscription(
+            self.camera_inputs.create_subscription(
                 CompressedImage, encoded_topic,
                 lambda message, topic=encoded_topic: audit_encoded(message, topic),
                 image_qos, callback_group=self.ros_callback_group,
                 event_callbacks=self.subscription_event_callbacks,
-            ))
+            )
 
     def _log_perf_summary(self) -> None:
         snapshot = perf_tracker.snapshot_and_reset()
@@ -404,21 +402,8 @@ class PoseBridgeNode(Node):
             return
         self.get_logger().info(perf_tracker.format_summary(snapshot))
 
-    def _any_ros_data_received(self) -> bool:
-        return self._participant_watchdog._any_ros_data_received()
-
-
-    @staticmethod
-    def _camera_link_up() -> bool:
-        return ParticipantWatchdog._camera_link_up()
-
-
     def _recording_active(self) -> bool:
-        return self._participant_watchdog._recording_active()
-
-
-    def _stale_participant_watchdog_loop(self) -> None:
-        self._participant_watchdog._stale_participant_watchdog_loop()
+        return self.recording_manager is not None and self.recording_manager.is_recording()
 
 
     def _make_pose_callback(self, pose_name: str, is_live: bool = True):
@@ -525,6 +510,7 @@ class PoseBridgeNode(Node):
         """Stop node-owned network and media resources before ROS destruction."""
 
         self._participant_watchdog.close()
+        self.camera_inputs.close()
         self._preview_manager.close()
         self.stop_webrtc_worker()
 

@@ -104,6 +104,7 @@ class Dashboard : public QObject {
     Q_INVOKABLE void command(const QString &action, const QString &value = QString());
     Q_INVOKABLE void setPlaybackTime(double seconds);
     Q_INVOKABLE QVariantMap diagnostics() const;
+    Q_INVOKABLE void copyDiagnostics(const QVariantList &videos);
     void shutdown();
   signals:
     void tasksChanged();
@@ -120,8 +121,7 @@ class Dashboard : public QObject {
     void request(const QString &path, const QJsonObject *body, std::function<void(QJsonObject)> done);
     void poll();
     void updateLocalization();
-    static QVariantMap localizationSummary(const QVariantMap &status, bool imageOnline,
-                                           bool vioFresh, bool head);
+    static QVariantMap localizationSummary(const QVariantMap &status, bool vioFresh, bool head);
     void refreshBags();
     void connectPose();
     void acceptPose(const QJsonObject &payload);

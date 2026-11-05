@@ -1,6 +1,8 @@
 #include "dashboard.h"
 #include <chrono>
 #include "model.h"
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QEventLoop>
@@ -247,25 +249,26 @@ void Dashboard::poll() {
     }
 }
 
-QVariantMap Dashboard::localizationSummary(const QVariantMap &status, bool imageOnline,
-                                          bool vioFresh, bool head) {
+QVariantMap Dashboard::localizationSummary(const QVariantMap &status, bool vioFresh, bool head) {
     auto result = [](const QString &mode, const QString &label, const QString &color) {
         return QVariantMap{{"mode", mode}, {"label", label}, {"color", color}};
     };
     const QString waiting = "#84775f", warning = "#aa741b", good = "#417b51", bad = "#b45d51";
-    if (!imageOnline)
-        return result("offline", "Device offline", bad);
     if (!vioFresh)
         return result("waiting_pose", "Pose input lost", warning);
     if (!status.value("online").toBool())
         return result("service_offline", head ? "Mapper offline" : "Localizer offline", bad);
     if (status.value("state") == "error")
         return result("error", head ? "Mapping error" : "Localization error", bad);
+    if (status.value("state") == "waiting_for_inference")
+        return result("waiting_inference", "Inference unavailable", warning);
+    if (status.value("state") == "waiting_for_frame_pose")
+        return result("waiting_frame_pose", "Waiting for frame pose", waiting);
+    if (status.value("state") == "waiting_for_inputs")
+        return result("waiting_inputs", "Waiting for mapping input", waiting);
     if (!status.value("clock_ready").toBool())
         return result("waiting_clock", "Synchronizing clock", waiting);
     if (head) {
-        if (status.value("state") == "waiting_for_inputs")
-            return result("waiting_inputs", "Waiting for mapping input", waiting);
         if (status.value("state") == "building")
             return result("building", "Building map", warning);
         return result("mapping", "Mapping", good);
@@ -281,13 +284,11 @@ QVariantMap Dashboard::localizationSummary(const QVariantMap &status, bool image
 }
 
 void Dashboard::updateLocalization() {
-    QVariantMap counts, onlineCounts, summaries;
+    QVariantMap counts, summaries;
     for (const auto &value : m_liveCameras) {
         const auto camera = value.toMap();
         const auto device = camera.value("device", camera.value("name")).toString();
         counts[device] = counts.value(device).toInt() + 1;
-        if (m_cameraAvailability.value(camera.value("name").toString()).toBool())
-            onlineCounts[device] = onlineCounts.value(device).toInt() + 1;
     }
     const auto statuses = m_state.value("mapping").toMap();
     const auto now = m_clock.elapsed();
@@ -297,11 +298,11 @@ void Dashboard::updateLocalization() {
         auto status = statuses.value(head ? "insight9" : device).toMap();
         if (m_lastMappingUpdate < 0 || now - m_lastMappingUpdate > 2500)
             status["online"] = false;
-        const bool imageOnline = onlineCounts.value(device).toInt() > 0 &&
-                                 m_lastCameraUpdate >= 0 && now - m_lastCameraUpdate <= 2500;
-        auto summary = localizationSummary(status, imageOnline, m_nativeVioFresh.value(device, true).toBool(), head);
-        if (head && imageOnline && onlineCounts.value(device).toInt() < it.value().toInt())
-            summary = {{"mode", "partial_images"}, {"label", "Some streams offline"}, {"color", "#aa741b"}};
+        auto summary = localizationSummary(status, m_nativeVioFresh.value(device, false).toBool(), head);
+        auto missing = status.value("missing_inputs").toStringList();
+        summary["detail"] = status.value("error").toString();
+        if (summary["detail"].toString().isEmpty())
+            summary["detail"] = missing.isEmpty() ? status.value("reason").toString() : missing.join("\n");
         summaries[device] = summary;
     }
     if (summaries != m_localization) {
@@ -522,6 +523,16 @@ void Dashboard::cacheModel(Pose *pose, const QJsonObject &data) {
             emit stateChanged();
         }
         reply->deleteLater();
+    });
+}
+void Dashboard::copyDiagnostics(const QVariantList &videos) {
+    fetch("/api/diagnostics", [this, videos](QJsonObject data) {
+        data["qt"] = QJsonObject::fromVariantMap(diagnostics());
+        data["videos"] = QJsonArray::fromVariantList(videos);
+        QGuiApplication::clipboard()->setText(QString::fromUtf8(
+            QJsonDocument(data).toJson(QJsonDocument::Indented)));
+        m_message = "Diagnostics copied";
+        emit stateChanged();
     });
 }
 void Dashboard::command(const QString &action, const QString &value) {

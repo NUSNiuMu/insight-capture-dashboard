@@ -15,7 +15,7 @@ void Transfer(int fd, void* data, size_t size, bool writing) {
   auto p = static_cast<char*>(data);
   while (size) {
     auto n = writing ? send(fd, p, size, MSG_NOSIGNAL) : recv(fd, p, size, 0);
-    if (n <= 0) throw std::runtime_error("SuperGlue inference connection failed");
+    if (n <= 0) throw InferenceUnavailable("SuperGlue inference connection failed");
     p += n;
     size -= n;
   }
@@ -34,7 +34,7 @@ std::vector<dm::vio::lm::MapPoint*> MatchReference(
   if (left.type() != CV_8UC1 || left.size() != right.size())
     throw std::runtime_error("SuperGlue localization requires same-sized grayscale images");
   int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (fd < 0) throw std::runtime_error("Cannot create SuperGlue inference connection");
+  if (fd < 0) throw InferenceUnavailable("Cannot create SuperGlue inference connection");
   struct Connection { int fd; ~Connection() { close(fd); } } connection{fd};
   timeval timeout{30, 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
@@ -43,7 +43,7 @@ std::vector<dm::vio::lm::MapPoint*> MatchReference(
   address.sun_family = AF_UNIX;
   std::strcpy(address.sun_path, "/run/superglue/matcher.sock");
   if (connect(fd, reinterpret_cast<sockaddr*>(&address), sizeof(address)))
-    throw std::runtime_error("Cannot reach SuperGlue inference socket");
+    throw InferenceUnavailable("Cannot reach SuperGlue inference socket");
   nlohmann::json metadata = {{"command", "match"}, {"height", left.rows},
     {"width", left.cols}, {"payload_sizes", {left.total(), right.total()}}};
   auto text = metadata.dump();
@@ -58,7 +58,7 @@ std::vector<dm::vio::lm::MapPoint*> MatchReference(
   text.resize(length);
   Transfer(fd, text.data(), length, false);
   metadata = nlohmann::json::parse(text);
-  if (!metadata.at("ok").get<bool>()) throw std::runtime_error(metadata.at("error").get<std::string>());
+  if (!metadata.at("ok").get<bool>()) throw InferenceUnavailable(metadata.at("error").get<std::string>());
   const size_t count = metadata.at("matches");
   const size_t dim = metadata.at("descriptor_dim");
   std::vector<size_t> sizes = metadata.at("payload_sizes");

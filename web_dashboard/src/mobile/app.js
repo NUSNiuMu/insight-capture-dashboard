@@ -1,5 +1,5 @@
 import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261104-functional-fixes-2";
-import { CaptureManagement } from "./management.js?v=20261104-functional-fixes-2";
+import { CaptureManagement } from "./management.js?v=20261105-stream-recovery";
 import { cameraLabel, deviceLabel, errorText, issueText } from "./presentation.js?v=20261104-functional-fixes-2";
 
 const el = id => document.getElementById(id);

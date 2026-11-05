@@ -62,13 +62,14 @@ class CaptureRuntimeTest(unittest.TestCase):
         calls = []
         node = SimpleNamespace(
             _participant_watchdog=SimpleNamespace(close=lambda: calls.append("watchdog")),
+            camera_inputs=SimpleNamespace(close=lambda: calls.append("inputs")),
             _preview_manager=SimpleNamespace(close=lambda: calls.append("preview")),
             stop_webrtc_worker=lambda: calls.append("webrtc"),
         )
 
         PoseBridgeNode.close(node)
 
-        self.assertEqual(calls, ["watchdog", "preview", "webrtc"])
+        self.assertEqual(calls, ["watchdog", "inputs", "preview", "webrtc"])
 
     def test_pose_payload_keeps_configured_3d_model(self):
         with tempfile.TemporaryDirectory() as temporary:

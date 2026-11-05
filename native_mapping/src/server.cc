@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "superglue.h"
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -80,6 +81,8 @@ int main(int argc, char** argv) {
           }
           else throw std::runtime_error("unknown command");
           result["ok"] = true; Reply(client, result);
+        } catch (const insight::InferenceUnavailable& error) {
+          Reply(client, {{"ok",false},{"error_code","inference_unavailable"},{"error",error.what()}});
         } catch (const std::exception& error) { Reply(client, {{"ok",false},{"error",error.what()}}); }
       }
     } catch (const std::exception&) { close(client); }
