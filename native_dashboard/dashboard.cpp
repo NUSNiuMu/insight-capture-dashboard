@@ -67,6 +67,7 @@ Dashboard::Dashboard(QUrl server, int fps, QObject *parent) : QObject(parent), m
 void Dashboard::setSpatialActive(bool value) {
     if (m_spatialActive == value) return;
     m_spatialActive = value;
+    if (value) refreshBags();
     if (value) for (auto *p : m_poseOrder) {
         if (p->geometryDirty && p->trailEnabled) {
             p->geometry->setPoints(m_keep ? p->kept : p->points);
