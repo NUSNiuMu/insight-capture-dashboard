@@ -805,6 +805,9 @@ input[type="range"] {
 .segment-track button.current {
   filter: brightness(1.3);
 }
+.segment-track button.selected {
+  box-shadow: inset 0 0 0 2px #e7eef8;
+}
 .segment-track button.active {
   outline: 2px solid var(--cyan);
   outline-offset: -2px;
@@ -821,9 +824,23 @@ input[type="range"] {
 .track-label {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   font-size: 10px;
   color: var(--muted);
   margin: 5px 0 9px;
+}
+.track-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.track-tools button {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-color: var(--line);
+}
+.track-tools button:disabled {
+  opacity: 0.5;
 }
 .validity-track {
   height: 12px;
@@ -931,9 +948,13 @@ input[type="range"] {
 .segment-row.current {
   background: #1c2e45;
 }
-.segment-row.current small::after {
+.segment-row.current small:not(.subtask)::after {
   content: " · 播放位置";
   color: var(--cyan);
+}
+.segment-row.selected {
+  background: #22344d;
+  box-shadow: inset 3px 0 0 #e7eef8;
 }
 .segment-row.active {
   background: #24405c;
@@ -1017,6 +1038,34 @@ input[type="range"] {
   background: var(--green);
   transition: width 0.2s;
 }
+.action-table-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.action-table-bar button {
+  font-size: 11px;
+  padding: 3px 8px;
+  flex: none;
+}
+.segment-form > select {
+  font-size: 12px;
+}
+.segment-row .off-table {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--amber);
+  border-radius: 4px;
+  color: var(--amber);
+  font-size: 10px;
+  vertical-align: 1px;
+}
 .fill-all {
   justify-self: start;
   font-size: 11px;
@@ -1055,6 +1104,10 @@ input[type="range"] {
 }
 .segment-row small {
   font-size: 10px;
+}
+.segment-row small.subtask {
+  display: block;
+  margin-top: 2px;
 }
 .segment-row .quiet {
   font-size: 11px;

@@ -275,10 +275,19 @@ def export_runs(grid, good, segments):
         )
         for run in np.split(selected, np.flatnonzero(np.diff(selected) != 1) + 1):
             if len(run) >= 3:
-                runs.append(
-                    (run, segment["task"].strip(), segment.get("hands", "both"))
-                )
+                runs.append((run, segment_label(segment)))
     return runs
+
+
+def segment_label(segment):
+    """Episode labels of a segment: free-form text plus optional action-table ids."""
+    return {
+        "task": segment["task"].strip(),
+        "hands": segment.get("hands", "both"),
+        "subtask": segment.get("subtask", "").strip(),
+        "task_id": segment.get("task_id", "").strip(),
+        "subtask_id": segment.get("subtask_id", "").strip(),
+    }
 
 
 def validate_segments(segments, duration):
@@ -296,6 +305,10 @@ def validate_segments(segments, duration):
             raise ValueError("任务文本不能为空")
         if item.get("hands", "both") not in ("left", "right", "both"):
             raise ValueError("参与手臂须为 left、right 或 both")
+        if not isinstance(item.get("subtask", ""), str):
+            raise ValueError("子任务须为文本，可留空")
+        if not all(isinstance(item.get(k, ""), str) for k in ("task_id", "subtask_id")):
+            raise ValueError("task_id / subtask_id 须为文本，可留空")
         previous = end
 
 
@@ -399,6 +412,9 @@ def suggest_pause_segments(
                 "end_s": math.floor(min(float(grid[last]) + 1.0 / fps, limit) * 1000)
                 / 1000,
                 "task": "",
+                "subtask": "",
+                "task_id": "",
+                "subtask_id": "",
                 "hands": "both",
             }
         )
@@ -467,7 +483,7 @@ def export(path):
     destination = path / "lerobot"
     if destination.exists():
         raise ValueError("lerobot 已存在；请先移走旧导出目录后重试")
-    tasks = list(dict.fromkeys(task for _, task, _ in runs))
+    tasks = list(dict.fromkeys(label["task"] for _, label in runs))
     features = {
         key: {
             "dtype": "float32",
@@ -488,7 +504,7 @@ def export(path):
         root = Path(temporary) / "lerobot"
         writers, columns, episodes, offset = {}, {key: [] for key in features}, [], 0
         try:
-            for episode, (run, task, hands) in enumerate(runs):
+            for episode, (run, label) in enumerate(runs):
                 indices, following = run[:-1], run[1:]
                 length = len(indices)
                 values = {
@@ -499,7 +515,7 @@ def export(path):
                     "frame_index": np.arange(length),
                     "episode_index": np.full(length, episode),
                     "index": np.arange(offset, offset + length),
-                    "task_index": np.full(length, tasks.index(task)),
+                    "task_index": np.full(length, tasks.index(label["task"])),
                     "valid.frame": np.ones(length, dtype=bool),
                 }
                 for key, value in values.items():
@@ -507,8 +523,11 @@ def export(path):
                 row = {
                     "episode_index": episode,
                     "length": length,
-                    "tasks": [task],
-                    "participating_hands": hands,
+                    "tasks": [label["task"]],
+                    "participating_hands": label["hands"],
+                    "subtask": label["subtask"],
+                    "task_id": label["task_id"],
+                    "subtask_id": label["subtask_id"],
                     "dataset_from_index": offset,
                     "dataset_to_index": offset + length,
                     "data/chunk_index": 0,
@@ -1036,7 +1055,7 @@ def export_to_dataset(path, output_root):
             if tasks_path.is_file()
             else []
         )
-        session_tasks = list(dict.fromkeys(task for _, task, _ in runs))
+        session_tasks = list(dict.fromkeys(label["task"] for _, label in runs))
         all_tasks = existing_tasks + [
             task for task in session_tasks if task not in existing_tasks
         ]
@@ -1066,7 +1085,7 @@ def export_to_dataset(path, output_root):
         ):
             build_root = Path(temporary)
             try:
-                for local_episode, (run, task, hands) in enumerate(runs):
+                for local_episode, (run, label) in enumerate(runs):
                     indices, following = run[:-1], run[1:]
                     length = len(indices)
                     episode = episode_offset + local_episode
@@ -1080,7 +1099,7 @@ def export_to_dataset(path, output_root):
                         "index": np.arange(
                             frame_offset + offset, frame_offset + offset + length
                         ),
-                        "task_index": np.full(length, task_index_of[task]),
+                        "task_index": np.full(length, task_index_of[label["task"]]),
                         "valid.frame": np.ones(length, dtype=bool),
                     }
                     for key, value in values.items():
@@ -1088,8 +1107,11 @@ def export_to_dataset(path, output_root):
                     row = {
                         "episode_index": episode,
                         "length": length,
-                        "tasks": [task],
-                        "participating_hands": hands,
+                        "tasks": [label["task"]],
+                        "participating_hands": label["hands"],
+                        "subtask": label["subtask"],
+                        "task_id": label["task_id"],
+                        "subtask_id": label["subtask_id"],
                         "dataset_from_index": frame_offset + offset,
                         "dataset_to_index": frame_offset + offset + length,
                         "source_start_s": float(grid[run[0]]),
@@ -1181,6 +1203,11 @@ def export_to_dataset(path, output_root):
                 episodes_file += 1
             else:
                 previous_episodes = previous_table.to_pylist()
+        # from_pylist takes its columns from the first row, so episodes
+        # appended before subtask / action-table ids existed need them too.
+        for row in previous_episodes:
+            for key in ("subtask", "task_id", "subtask_id"):
+                row.setdefault(key, "")
         for row in episodes:
             row["meta/episodes/chunk_index"] = 0
             row["meta/episodes/file_index"] = episodes_file

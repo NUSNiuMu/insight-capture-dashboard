@@ -273,9 +273,25 @@
               aria-label="已标注片段"
             ></div>
             <div class="track-label">
-              <span>动作片段</span
+              <span class="track-tools"
+                >动作片段<button
+                  id="splitPart"
+                  type="button"
+                  class="quiet"
+                  title="在播放位置把所在片段切成两段：前段保留原属性，后段为空白待填写"
+                >
+                  分隔</button
+                ><button
+                  id="mergeParts"
+                  type="button"
+                  class="quiet"
+                  title="把 Ctrl / Shift 点击多选的相邻片段合并为一段，保留最前一段的属性"
+                >
+                  合并
+                </button></span
               ><span
-                >点击片段定位并编辑 · <i class="unfilled-dot"></i>虚线为未填写任务</span
+                >点击片段定位并编辑 · Ctrl / Shift 点击多选 ·
+                <i class="unfilled-dot"></i>虚线为未填写任务</span
               >
             </div>
             <div
@@ -359,14 +375,38 @@
                   </div></label
                 >
               </div>
-              <label for="task">任务文本</label
+              <div class="action-table-bar">
+                <span id="actionTableInfo">未导入动作表</span
+                ><button
+                  id="importActions"
+                  type="button"
+                  class="quiet"
+                  title="JSON：{version, tasks:[{id, text, zh, subtasks:[{id, text, zh}]}]}；CSV 表头：task_id,task,task_zh,subtask_id,subtask,subtask_zh"
+                >
+                  导入动作表</button
+                ><input
+                  id="actionFile"
+                  type="file"
+                  accept=".json,.csv,application/json,text/csv"
+                  hidden
+                />
+              </div>
+              <label for="task">任务文本 task</label
+              ><select id="taskId" aria-label="从动作表选择 task" hidden></select
               ><input
                 id="task"
                 name="task"
                 autocomplete="off"
                 placeholder="例如：左手拿起杯子，交给右手…"
                 required
-              /><button id="fillAll" type="button" class="quiet fill-all" hidden></button><label for="hands">参与手臂</label
+              /><button id="fillAll" type="button" class="quiet fill-all" hidden></button><label for="subtask">子任务文本 subtask（可留空）</label
+              ><select id="subtaskId" aria-label="从动作表选择 subtask" hidden></select
+              ><input
+                id="subtask"
+                name="subtask"
+                autocomplete="off"
+                placeholder="例如：抓取杯子"
+              /><label for="hands">参与手臂</label
               ><select id="hands" name="hands">
                 <option value="both">双手</option>
                 <option value="left">左手</option>

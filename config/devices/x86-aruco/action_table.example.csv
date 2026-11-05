@@ -1,0 +1,7 @@
+task_id,task,task_zh,subtask_id,subtask,subtask_zh
+move_cup_right,Move the cup to the right,把杯子移到右边,grasp_cup,Grasp the cup,抓取杯子
+move_cup_right,,,carry_cup,Carry the cup to the right,搬到右侧
+move_cup_right,,,release_cup,Release the cup,放下杯子
+stack_cups,Stack the cups,叠杯子,grasp_cup,Grasp a cup,抓取杯子
+stack_cups,,,place_on_cup,Place it on the other cup,放到另一个杯子上
+wipe_table,Wipe the table,擦桌子,,,

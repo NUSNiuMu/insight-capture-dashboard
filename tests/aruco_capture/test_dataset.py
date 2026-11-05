@@ -2,7 +2,11 @@ import unittest
 
 import numpy as np
 
-from insight_capture.aruco_capture.dataset import suggest_pause_segments
+from insight_capture.aruco_capture.dataset import (
+    export_runs,
+    suggest_pause_segments,
+    validate_segments,
+)
 
 IDENTITY_6D = np.array([1.0, 0.0, 0.0, 0.0, 1.0, 0.0], dtype=np.float32)
 
@@ -83,6 +87,41 @@ class SuggestPauseSegmentsTests(unittest.TestCase):
         grid, state, good = _build(20, [[0.0, 0.0, 0.0]])
 
         self.assertEqual(suggest_pause_segments(grid, state, good, 20), [])
+
+
+class SegmentSubtaskTests(unittest.TestCase):
+    def test_subtask_is_optional_text(self):
+        validate_segments([{"start_s": 0, "end_s": 1, "task": "叠杯子"}], 2)
+        validate_segments(
+            [{"start_s": 0, "end_s": 1, "task": "叠杯子", "subtask": ""}], 2
+        )
+        with self.assertRaises(ValueError):
+            validate_segments(
+                [{"start_s": 0, "end_s": 1, "task": "叠杯子", "subtask": 3}], 2
+            )
+
+    def test_export_runs_carry_subtask(self):
+        grid = np.arange(20) / 10
+        runs = export_runs(
+            grid,
+            np.ones(20, dtype=bool),
+            [
+                {"start_s": 0, "end_s": 1, "task": " 叠杯子 ", "subtask": " 抓取 "},
+                {"start_s": 1, "end_s": 2, "task": "叠杯子", "hands": "left"},
+            ],
+        )
+        self.assertEqual([(r[1]["task"], r[1]["hands"], r[1]["subtask"]) for r in runs], [
+            ("叠杯子", "both", "抓取"),
+            ("叠杯子", "left", ""),
+        ])
+
+    def test_action_table_ids_are_optional_text(self):
+        segment = {"start_s": 0, "end_s": 1, "task": "Stack the cups", "task_id": "stack_cups", "subtask_id": ""}
+        validate_segments([segment], 2)
+        with self.assertRaises(ValueError):
+            validate_segments([{**segment, "task_id": 3}], 2)
+        runs = export_runs(np.arange(20) / 10, np.ones(20, dtype=bool), [segment])
+        self.assertEqual((runs[0][1]["task_id"], runs[0][1]["subtask_id"]), ("stack_cups", ""))
 
 
 if __name__ == "__main__":

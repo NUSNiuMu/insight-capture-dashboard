@@ -1,0 +1,35 @@
+{
+  "version": "cup-demo-v1",
+  "tasks": [
+    {
+      "id": "move_cup_right",
+      "text": "Move the cup to the right",
+      "zh": "把杯子移到右边",
+      "description": "Pick a cup up on the left side of the table and put it down on the right side.",
+      "subtasks": [
+        {"id": "grasp_cup", "text": "Grasp the cup", "zh": "抓取杯子"},
+        {"id": "carry_cup", "text": "Carry the cup to the right", "zh": "搬到右侧"},
+        {"id": "release_cup", "text": "Release the cup", "zh": "放下杯子"}
+      ]
+    },
+    {
+      "id": "stack_cups",
+      "text": "Stack the cups",
+      "zh": "叠杯子",
+      "subtasks": [
+        {"id": "grasp_cup", "text": "Grasp a cup", "zh": "抓取杯子"},
+        {"id": "place_on_cup", "text": "Place it on the other cup", "zh": "放到另一个杯子上"}
+      ]
+    },
+    {
+      "id": "handover_cup",
+      "text": "Hand the cup over from the left gripper to the right gripper",
+      "zh": "左手把杯子交给右手",
+      "subtasks": [
+        {"id": "grasp_cup", "text": "Grasp the cup with the left gripper", "zh": "左手抓取杯子"},
+        {"id": "handover", "text": "Pass the cup to the right gripper", "zh": "交接"},
+        {"id": "release_cup", "text": "Release the cup", "zh": "放下杯子"}
+      ]
+    }
+  ]
+}

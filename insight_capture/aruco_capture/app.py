@@ -11,6 +11,7 @@ from pathlib import Path
 
 from aiohttp import web
 
+from . import action_table
 from .capture import Capture, write_json
 from .dataset import (
     align,
@@ -248,6 +249,19 @@ def create_app(capture):
             write_json(path / "segments.json", values)
         return web.json_response(json.loads((path / "segments.json").read_text()))
 
+    async def actions(request):
+        if request.method == "POST":
+            body = await request.json()
+            filename = str(body.get("filename") or "")
+            content = body.get("content")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("动作表文件为空")
+            table = action_table.parse(content, filename)
+            return web.json_response(
+                await asyncio.to_thread(action_table.save, capture.root, table, filename)
+            )
+        return web.json_response(await asyncio.to_thread(action_table.load, capture.root))
+
     async def auto_segments(request):
         path = session(request)
 
@@ -454,6 +468,8 @@ def create_app(capture):
             web.post("/api/start", start),
             web.post("/api/stop", stop),
             web.get("/api/sessions", sessions),
+            web.get("/api/action-table", actions),
+            web.post("/api/action-table", actions),
             web.get("/api/preview/{stream}", preview),
             web.get("/api/sessions/{name}/frame/{stream}", frame),
             web.get("/api/sessions/{name}/segments", segments),

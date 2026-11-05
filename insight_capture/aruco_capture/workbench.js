@@ -34,6 +34,10 @@ let mode = "capture",
   parts = [],
   dirty = false,
   editing = -1,
+  // Segments picked for merging on the timeline, held by object so they
+  // survive re-sorting; `anchor` is where a Shift-click range starts.
+  selection = new Set(),
+  anchor = null,
   playing = false,
   currentTime = 0,
   frameBusy = false,
@@ -55,7 +59,9 @@ let mode = "capture",
   datasetDetailName = "",
   poseInfo = null,
   poseTimer = null,
-  poseFilterTimer = null;
+  poseFilterTimer = null,
+  // Shared task/subtask vocabulary; segments keep its ids next to free text.
+  actionTable = { version: "", tasks: [] };
 const scene = new Trajectory($("scene"), $("sceneEmpty"));
 const devicePanel = new DevicePanel(api);
 const el = (tag, text, cls) => {
@@ -126,12 +132,15 @@ function updateControls() {
     actionBusy || exportBusy || !status || status?.reconfiguring;
   $("stop").disabled = actionBusy;
   $("play").disabled = !review;
-  for (const id of ["prevFrame", "nextFrame", "qc", "save", "add", "autoSegment"])
+  for (const id of ["prevFrame", "nextFrame", "qc", "save", "add", "autoSegment", "splitPart"])
     $(id).disabled = !review || reviewBusy;
   $("sessions").disabled = reviewBusy || exportBusy;
-  for (const id of ["from", "to", "task", "hands"]) $(id).disabled = reviewBusy;
+  for (const id of ["from", "to", "task", "taskId", "subtask", "hands"])
+    $(id).disabled = reviewBusy;
+  $("subtaskId").disabled = reviewBusy || !tableTask($("taskId").value);
   for (const id of ["poseSource", "poseFilter", "poseRecompute"])
     $(id).disabled = !review || reviewBusy || !!poseInfo?.job?.running;
+  updateMerge();
   updateSessionNav();
   updateBatchExport();
 }
@@ -666,7 +675,15 @@ function installReview(data) {
   review = data;
   lastRenderedFrame = "";
   editorDirty = false;
-  parts = data.segments.map((p) => ({ ...p, hands: p.hands || "both" }));
+  parts = data.segments.map((p) => ({
+    ...p,
+    subtask: p.subtask || "",
+    task_id: p.task_id || "",
+    subtask_id: p.subtask_id || "",
+    hands: p.hands || "both",
+  }));
+  selection = new Set();
+  anchor = null;
   review.rows = data.samples.map((row) => ({
     t: row[0],
     arms: {
@@ -912,6 +929,9 @@ function editPart(i) {
   $("from").value = p.start_s;
   $("to").value = p.end_s;
   $("task").value = p.task;
+  $("subtask").value = p.subtask || "";
+  fillTaskOptions(p.task_id || "");
+  fillSubtaskOptions(p.subtask_id || "");
   $("hands").value = p.hands || "both";
   $("editorTitle").textContent = "编辑动作片段";
   $("add").textContent = "更新片段";
@@ -951,11 +971,38 @@ function highlightParts() {
     const i = Number(node.dataset.index),
       p = parts[i];
     node.classList.toggle("active", i === editing);
+    node.classList.toggle("selected", selection.has(p));
     node.classList.toggle(
       "current",
       !!p && currentTime >= p.start_s && currentTime < p.end_s,
     );
   }
+  updateMerge();
+}
+function updateMerge() {
+  const picked = selectedParts().length;
+  $("mergeParts").disabled = !review || reviewBusy || picked < 2;
+  $("mergeParts").textContent = picked >= 2 ? `合并 ${picked} 段` : "合并";
+}
+function selectedParts() {
+  return parts.filter((p) => selection.has(p));
+}
+// Plain click opens the segment in the editor; Ctrl/Cmd toggles it in the
+// merge selection and Shift selects the range from the last clicked one.
+function pickPart(i, e) {
+  const p = parts[i];
+  if (e.ctrlKey || e.metaKey) {
+    if (!selection.delete(p)) selection.add(p);
+    anchor = p;
+  } else if (e.shiftKey && parts.includes(anchor)) {
+    const a = parts.indexOf(anchor);
+    selection = new Set(parts.slice(Math.min(a, i), Math.max(a, i) + 1));
+  } else {
+    selection = new Set([p]);
+    anchor = p;
+    editPart(i);
+  }
+  highlightParts();
 }
 function renderGuide() {
   $("segmentGuide").hidden = !review;
@@ -995,7 +1042,9 @@ function renderGuide() {
 function renderParts() {
   $("segments").replaceChildren();
   $("segmentTrack").replaceChildren();
-  $("segmentCount").textContent = `${parts.length} 个片段`;
+  const outside = parts.filter(offTable).length;
+  $("segmentCount").textContent =
+    `${parts.length} 个片段` + (outside ? ` · ${outside} 段未关联动作表` : "");
   if (!parts.length)
     $("segments").append(
       el("div", "拖动时间轴，设置起止点，添加第一个动作片段。", "empty-state"),
@@ -1006,14 +1055,31 @@ function renderParts() {
     row.dataset.index = i;
     row.classList.toggle("unfilled", unfilled(p));
     b.type = "button";
+    const heading = el("p", p.task || "未填写任务");
+    if (offTable(p)) {
+      const tag = el("span", "表外", "off-table");
+      tag.title = p.task_id
+        ? `task_id ${p.task_id} 不在当前动作表中`
+        : "未关联动作表中的 task";
+      heading.append(tag);
+    }
     b.append(
-      el("p", p.task || "未填写任务"),
+      heading,
       el(
         "small",
         `#${i + 1} · ${seconds(p.start_s)} — ${seconds(p.end_s)} · ${title(p.hands || "both")}`,
       ),
     );
-    b.onclick = () => editPart(i);
+    if (p.subtask) b.append(el("small", "subtask：" + p.subtask, "subtask"));
+    if (p.task_id)
+      b.append(
+        el(
+          "small",
+          "动作表：" + p.task_id + (p.subtask_id ? " / " + p.subtask_id : ""),
+          "subtask",
+        ),
+      );
+    b.onclick = (e) => pickPart(i, e);
     const remove = el("button", "移除", "quiet");
     remove.type = "button";
     remove.onclick = () => {
@@ -1040,8 +1106,8 @@ function renderParts() {
       block.style.left = (p.start_s / review.duration_s) * 100 + "%";
       block.style.width =
         ((p.end_s - p.start_s) / review.duration_s) * 100 + "%";
-      block.title = `#${i + 1} ${p.task || "未填写任务"}：${seconds(p.start_s)} 至 ${seconds(p.end_s)}`;
-      block.onclick = () => editPart(i);
+      block.title = `#${i + 1} ${p.task || "未填写任务"}${p.subtask ? " / " + p.subtask : ""}：${seconds(p.start_s)} 至 ${seconds(p.end_s)}`;
+      block.onclick = (e) => pickPart(i, e);
       $("segmentTrack").append(block);
     }
   });
@@ -1490,7 +1556,9 @@ $("markEnd").onclick = () => {
   editorDirty = true;
 };
 $("cancelEdit").onclick = resetEditor;
-$("segmentForm").addEventListener("input", () => {
+$("segmentForm").addEventListener("input", (e) => {
+  // Picking an action-table file is not an edit of the open segment.
+  if (e.target === $("actionFile")) return;
   editorDirty = true;
 });
 // Validate the editor and write it into `parts`; returns the stored part, or
@@ -1501,6 +1569,9 @@ function commitEditor() {
     start_s: Number($("from").value),
     end_s: Number($("to").value),
     task: $("task").value.trim(),
+    subtask: $("subtask").value.trim(),
+    task_id: $("taskId").value,
+    subtask_id: $("subtaskId").value,
     hands: $("hands").value,
   };
   const others = parts.filter((_, i) => i !== editing);
@@ -1544,7 +1615,8 @@ $("nextUnfilled").onclick = () => {
   focusUnfilled(from);
 };
 $("fillAll").onclick = () => {
-  const task = $("task").value.trim();
+  const task = $("task").value.trim(),
+    taskId = $("taskId").value;
   if (!task) {
     $("formError").textContent = "请先在上面填写任务文本";
     $("task").focus();
@@ -1556,6 +1628,7 @@ $("fillAll").onclick = () => {
   for (const p of parts)
     if (unfilled(p)) {
       p.task = task;
+      p.task_id = taskId;
       count++;
     }
   setDirty(true);
@@ -1574,6 +1647,212 @@ $("fillAll").onclick = () => {
     notice("已撤销批量填写");
   };
   $("message").append(undo);
+};
+// Restore `previous` (a copy of parts taken before an edit) from the notice.
+function offerUndo(label, previous) {
+  const undo = el("button", label, "quiet");
+  undo.type = "button";
+  undo.onclick = () => {
+    parts = previous;
+    selection = new Set();
+    setDirty(true);
+    resetEditor();
+    renderParts();
+    notice("已" + label);
+  };
+  $("message").append(undo);
+}
+$("splitPart").onclick = () => {
+  if (!review || reviewBusy) return;
+  if (editorDirty) {
+    notice("请先添加或更新正在编辑的片段，再分隔", true);
+    return;
+  }
+  const t = Number(currentTime.toFixed(3)),
+    frame = 1 / review.fps,
+    i = parts.findIndex(
+      (p) => t - p.start_s >= frame && p.end_s - t >= frame,
+    );
+  if (i < 0) {
+    notice("请把播放位置移到要分隔的片段内部（离起止点至少 1 帧）", true);
+    return;
+  }
+  const previous = parts.map((p) => ({ ...p })),
+    p = parts[i];
+  parts.splice(
+    i,
+    1,
+    { ...p, end_s: t },
+    {
+      start_s: t,
+      end_s: p.end_s,
+      task: "",
+      subtask: "",
+      task_id: "",
+      subtask_id: "",
+      hands: "both",
+    },
+  );
+  selection = new Set();
+  setDirty(true);
+  resetEditor();
+  renderParts();
+  editPart(i + 1);
+  notice(
+    `已在 ${seconds(t)} 把第 ${i + 1} 段分成两段：前段保留原属性，后段待填写，保存后生效。`,
+  );
+  offerUndo("撤销分隔", previous);
+};
+$("mergeParts").onclick = () => {
+  if (!review || reviewBusy) return;
+  if (editorDirty) {
+    notice("请先添加或更新正在编辑的片段，再合并", true);
+    return;
+  }
+  const picked = selectedParts();
+  if (picked.length < 2) return;
+  const first = parts.indexOf(picked[0]),
+    last = parts.indexOf(picked[picked.length - 1]);
+  if (last - first + 1 !== picked.length) {
+    notice("只能合并相邻的片段：中间不能隔着未选中的片段", true);
+    return;
+  }
+  const previous = parts.map((p) => ({ ...p }));
+  parts.splice(first, picked.length, {
+    ...parts[first],
+    end_s: parts[last].end_s,
+  });
+  selection = new Set();
+  setDirty(true);
+  resetEditor();
+  renderParts();
+  notice(
+    `已把第 ${first + 1}–${last + 1} 段合并为一段，保留第 ${first + 1} 段的属性，保存后生效。`,
+  );
+  offerUndo("撤销合并", previous);
+};
+function tableTask(id) {
+  return id ? actionTable.tasks.find((t) => t.id === id) : undefined;
+}
+// Filled segments with no task id, or one the current table no longer has.
+function offTable(p) {
+  return actionTable.tasks.length > 0 && !unfilled(p) && !tableTask(p.task_id);
+}
+function entryLabel(x) {
+  return (x.zh ? `${x.zh} · ` : "") + x.text;
+}
+// Rebuild a select from `entries`, keeping `value` selectable even when the
+// table no longer has it so editing an old segment does not drop its id.
+function fillSelect(select, entries, value, blank) {
+  select.replaceChildren(el("option", blank));
+  select.firstChild.value = "";
+  for (const x of entries) {
+    const option = el("option", entryLabel(x));
+    option.value = x.id;
+    option.title = [x.id, x.description].filter(Boolean).join("：");
+    select.append(option);
+  }
+  if (value && !entries.some((x) => x.id === value)) {
+    const option = el("option", `${value}（当前动作表中已无）`);
+    option.value = value;
+    select.append(option);
+  }
+  select.value = value;
+  select.hidden = !actionTable.tasks.length && !value;
+}
+function fillTaskOptions(value = $("taskId").value) {
+  fillSelect(
+    $("taskId"),
+    actionTable.tasks,
+    value,
+    "— 从动作表选择 task（不选则为表外动作）—",
+  );
+}
+function fillSubtaskOptions(value = $("subtaskId").value) {
+  const task = tableTask($("taskId").value);
+  fillSelect(
+    $("subtaskId"),
+    task?.subtasks || [],
+    value,
+    task ? "— 从动作表选择 subtask（可不选）—" : "— 先选择 task —",
+  );
+  $("subtaskId").disabled = reviewBusy || !task;
+}
+function renderActionTable() {
+  const tasks = actionTable.tasks,
+    subtasks = tasks.reduce((n, t) => n + t.subtasks.length, 0);
+  $("actionTableInfo").textContent = tasks.length
+    ? `动作表 ${actionTable.version} · ${tasks.length} 个 task · ${subtasks} 个 subtask`
+    : "未导入动作表，task / subtask 手动填写";
+  $("actionTableInfo").title = actionTable.imported_at
+    ? `导入于 ${actionTable.imported_at}，来源 ${actionTable.source || "未知"}`
+    : "";
+  fillTaskOptions();
+  fillSubtaskOptions();
+  renderParts();
+}
+// Picking an entry writes its canonical text, unless the box already holds
+// wording of the annotator's own, which is kept for language variety.
+function prefill(input, entry, canonical) {
+  const text = input.value.trim();
+  if (entry && (!text || canonical.includes(text))) input.value = entry.text;
+}
+$("taskId").onchange = () => {
+  const task = tableTask($("taskId").value),
+    allSubtasks = actionTable.tasks.flatMap((t) => t.subtasks);
+  prefill($("task"), task, actionTable.tasks.map((t) => t.text));
+  if (!task?.subtasks.some((x) => x.id === $("subtaskId").value)) {
+    // The old subtask belonged to another task; drop its canonical text too.
+    if (allSubtasks.some((x) => x.text === $("subtask").value.trim()))
+      $("subtask").value = "";
+    fillSubtaskOptions("");
+  } else {
+    fillSubtaskOptions();
+    // Same subtask id, but this task may word it differently.
+    prefill(
+      $("subtask"),
+      task.subtasks.find((x) => x.id === $("subtaskId").value),
+      allSubtasks.map((x) => x.text),
+    );
+  }
+  editorDirty = true;
+};
+$("subtaskId").onchange = () => {
+  const task = tableTask($("taskId").value);
+  prefill(
+    $("subtask"),
+    task?.subtasks.find((x) => x.id === $("subtaskId").value),
+    actionTable.tasks.flatMap((t) => t.subtasks.map((x) => x.text)),
+  );
+  editorDirty = true;
+};
+$("importActions").onclick = () => $("actionFile").click();
+$("actionFile").onchange = async () => {
+  const file = $("actionFile").files[0];
+  $("actionFile").value = "";
+  if (!file) return;
+  try {
+    const bytes = await file.arrayBuffer();
+    let content;
+    try {
+      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      // CSV saved from Excel on a Chinese Windows is GBK, not UTF-8.
+      content = new TextDecoder("gb18030").decode(bytes);
+    }
+    actionTable = await api("/api/action-table", "POST", {
+      filename: file.name,
+      content,
+    });
+    renderActionTable();
+    const outside = parts.filter(offTable).length;
+    notice(
+      `已导入动作表 ${actionTable.version}（${actionTable.tasks.length} 个 task），所有录制共用` +
+        (outside ? `；当前录制有 ${outside} 段未关联动作表` : ""),
+    );
+  } catch (e) {
+    notice("导入动作表失败：" + e.message, true);
+  }
 };
 bind("save", async () => {
   if (editorDirty) throw Error("请先添加或更新正在编辑的片段，再保存全部标注");
@@ -1757,6 +2036,12 @@ pollStatus();
 pollLive();
 renderReplay();
 requestAnimationFrame(tick);
+api("/api/action-table")
+  .then((table) => {
+    actionTable = table;
+    renderActionTable();
+  })
+  .catch((e) => notice("动作表加载失败：" + e.message, true));
 refresh()
   .then(() => {
     const session = new URL(location).searchParams.get("session");
