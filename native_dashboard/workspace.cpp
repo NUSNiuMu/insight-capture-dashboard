@@ -47,6 +47,7 @@ void Workspace::request(const QString &key, const QString &path, const QString &
     req.setAttribute(QNetworkRequest::CacheLoadControlAttribute, QNetworkRequest::AlwaysNetwork);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::SameOriginRedirectPolicy);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    if (textResponse) req.setRawHeader("Range", "bytes=-65536");
     auto *reply = method == "GET" ? m_http.get(req) :
         m_http.sendCustomRequest(req, method.toUtf8(), QJsonDocument::fromVariant(body).toJson(QJsonDocument::Compact));
     connect(reply, &QNetworkReply::finished, this, [this, key, path, method, started, epoch, keyEpoch, reply, textResponse] {

@@ -132,6 +132,11 @@ PageFrame {
             color: "#776d5a"
         }
     }
+    Label {
+        text: "Recent log · last 64 KiB"
+        visible: !!workspace.data.optLog
+        color: Ui.Theme.muted
+    }
     ScrollView {
         Layout.fillWidth: true
         Layout.preferredHeight: 240
@@ -140,7 +145,7 @@ PageFrame {
         TextArea {
             text: workspace.data.optLog || ""
             textFormat: Text.PlainText
-            wrapMode: TextEdit.Wrap
+            wrapMode: TextEdit.NoWrap
             readOnly: true
             selectByMouse: true
             font.family: Ui.Theme.monoFont
