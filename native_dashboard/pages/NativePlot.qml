@@ -115,6 +115,9 @@ Rectangle {
         anchors.bottom: parent.bottom
         anchors.left: parent.left
         anchors.margins: 12
+        width: parent.width - 24
+        elide: Text.ElideRight
+        font.pixelSize: 11
         text: "Drag to orbit · Scroll to zoom · Double-click to reset"
         color: "#776d5a"
     }

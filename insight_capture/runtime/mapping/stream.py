@@ -128,4 +128,5 @@ class MappingStream:
             future.result()
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+        self.owner.clear_traces()
         return {"ok": True, "mapping": self.snapshot()}
