@@ -404,7 +404,9 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         const auto previousGeneration = p->generation;
         const auto previousFirstSeq = p->firstSeq;
         const auto local = localSamples.value(name);
-        const bool useLocal = !playback() && !d["visible"].toBool() && !local.isEmpty();
+        const auto mapping = m_state.value("mapping").toMap().value(name).toMap();
+        const bool useLocal = !playback() && !mapping.value("localized").toBool()
+                              && !d["visible"].toBool() && !local.isEmpty();
         const QString frame = useLocal ? "local_vio" : "map";
         const bool frameChanged = frame != p->coordinateFrame;
         p->coordinateFrame = frame;
