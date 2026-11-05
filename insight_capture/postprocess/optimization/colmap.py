@@ -28,6 +28,7 @@ class OptimizationManager:
 
     # Regexes for fine-grained COLMAP sub-progress
     _RE_FEATURE = re.compile(r'Processed file \[(\d+)/(\d+)\]')
+    _RE_REGISTER = re.compile(r'Registering image #\d+ \((\d+)\)')
     _RE_MATCH   = re.compile(r'Matching image \[(\d+)/(\d+)\]')
     # COLMAP phases map to extraction, matching, mapper, and post-processing.
     _COLMAP_FEATURE_END  = 0.45
@@ -50,6 +51,7 @@ class OptimizationManager:
         self._state: str = "idle"
         self._step: int = 0
         self._sub_progress: float = 0.0   # 0.0–1.0 within current step
+        self._image_count: int = 0
         self._colmap_phase: str = ""       # "feature" | "matching" | "mapper" | "post"
         self._run_name: str = ""
         self._log: List[str] = []
@@ -118,6 +120,7 @@ class OptimizationManager:
             self._step = 0
             self._sub_progress = 0.0
             self._colmap_phase = ""
+            self._image_count = 0
             self._run_name = run_name
             self._log = []
         threading.Thread(
@@ -202,6 +205,7 @@ class OptimizationManager:
             if m:
                 n, total = int(m.group(1)), int(m.group(2))
                 if total > 0:
+                    self._image_count = total
                     self._sub_progress = (n / total) * self._COLMAP_FEATURE_END
 
         elif self._colmap_phase == "matching":
@@ -213,9 +217,11 @@ class OptimizationManager:
                     self._sub_progress = self._COLMAP_MATCH_START + (n / total) * span
 
         elif self._colmap_phase == "mapper":
-            # Mapper progress is hard to quantify; nudge forward on every output line
-            # so the bar visually moves, capped just below the mapper end boundary.
-            nudge = 0.0005
-            ceiling = self._COLMAP_MAPPER_END - nudge
-            if self._sub_progress < ceiling:
-                self._sub_progress = min(ceiling, self._sub_progress + nudge)
+            match = self._RE_REGISTER.search(line)
+            if match and self._image_count:
+                registered = min(int(match.group(1)), self._image_count)
+                span = self._COLMAP_MAPPER_END - self._COLMAP_MAPPER_START
+                self._sub_progress = max(
+                    self._sub_progress,
+                    self._COLMAP_MAPPER_START + span * registered / self._image_count,
+                )
