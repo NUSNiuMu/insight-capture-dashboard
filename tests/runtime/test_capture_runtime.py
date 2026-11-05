@@ -93,6 +93,7 @@ class CaptureRuntimeTest(unittest.TestCase):
                 latest_pose_sample={"cam": None},
                 local_vio_samples={"cam": {
                     "name": "cam", "position": [1., 2., 3.], "stamp_ns": 42,
+                    "quaternion_xyzw": [0., 0., 0., 1.],
                     "generation": 3, "received": time.monotonic(),
                 }},
                 last_pose_received_time={"cam": 0.0},

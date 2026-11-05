@@ -289,7 +289,7 @@ ApplicationWindow {
                                 id: poseRepeater; model: dashboard.poses
                                 delegate: Node {
                                     id: poseRoot; required property var modelData
-                                    function diagnostics() { return {name:modelData.name, status:avatar.status, error:avatar.errorString, boundsMin:[avatar.bounds.minimum.x,avatar.bounds.minimum.y,avatar.bounds.minimum.z], boundsMax:[avatar.bounds.maximum.x,avatar.bounds.maximum.y,avatar.bounds.maximum.z], position:[modelData.displayPosition.x,modelData.displayPosition.y,modelData.displayPosition.z], sourcePosition:[modelData.position.x,modelData.position.y,modelData.position.z], scale:modelData.modelScale, rotation:[modelData.displayRotation.x,modelData.displayRotation.y,modelData.displayRotation.z,modelData.displayRotation.scalar], sourceRotation:[modelData.rotation.x,modelData.rotation.y,modelData.rotation.z,modelData.rotation.scalar], modelRotation:[modelData.modelRotation.x,modelData.modelRotation.y,modelData.modelRotation.z,modelData.modelRotation.scalar]} }
+                                    function diagnostics() { return {name:modelData.name, coordinateFrame:modelData.coordinateFrame, status:avatar.status, error:avatar.errorString, boundsMin:[avatar.bounds.minimum.x,avatar.bounds.minimum.y,avatar.bounds.minimum.z], boundsMax:[avatar.bounds.maximum.x,avatar.bounds.maximum.y,avatar.bounds.maximum.z], position:[modelData.displayPosition.x,modelData.displayPosition.y,modelData.displayPosition.z], sourcePosition:[modelData.position.x,modelData.position.y,modelData.position.z], scale:modelData.modelScale, rotation:[modelData.displayRotation.x,modelData.displayRotation.y,modelData.displayRotation.z,modelData.displayRotation.scalar], sourceRotation:[modelData.rotation.x,modelData.rotation.y,modelData.rotation.z,modelData.rotation.scalar], modelRotation:[modelData.modelRotation.x,modelData.modelRotation.y,modelData.modelRotation.z,modelData.modelRotation.scalar]} }
                                     Model {
                                         geometry: poseRoot.modelData.trail
                                         visible: poseRoot.modelData.trailEnabled && poseRoot.modelData.pointCount > 1
@@ -299,7 +299,7 @@ ApplicationWindow {
                                             vertexShader: "qrc:/trail.vert"
                                             fragmentShader: "qrc:/trail.frag"
                                             // Unshaded output uses display RGB, without QColor's linear conversion.
-                                            property vector4d trailColor: Qt.vector4d(poseRoot.modelData.color.r,
+                                            property vector4d trailColor: poseRoot.modelData.coordinateFrame === "local_vio" ? Qt.vector4d(.67,.45,.1,1) : Qt.vector4d(poseRoot.modelData.color.r,
                                                 poseRoot.modelData.color.g, poseRoot.modelData.color.b, 1)
                                             property real lineWidth: poseRoot.modelData.role === "head" ? 6 : 5
                                             property vector2d viewportSize: Qt.vector2d(view.width, view.height)
@@ -333,40 +333,15 @@ ApplicationWindow {
                         Layout.fillWidth: true; Layout.margins: 10
                         Repeater {
                             model: dashboard.poses
-                            delegate: Ui.CheckBox { required property var modelData; text: Ui.Texts.value(modelData.role) + " · " + modelData.pointCount + " points" + (dashboard.playback && !modelData.visible && modelData.pointCount > 0 ? " · Pose gap" : ""); checked: modelData.trailEnabled; onToggled: modelData.setTrail(checked) }
+                            delegate: Ui.CheckBox { required property var modelData; text: Ui.Texts.value(modelData.role) + " · " + (modelData.coordinateFrame === "local_vio" ? "Local VIO" : modelData.pointCount + " points") + (dashboard.playback && !modelData.visible && modelData.pointCount > 0 ? " · Pose gap" : ""); checked: modelData.trailEnabled; onToggled: modelData.setTrail(checked) }
                         }
                         Item { Layout.fillWidth: true }
                     }
-                    RowLayout {
-                        Layout.fillWidth: true; Layout.margins: 10; spacing: 10
-                        visible: !dashboard.playback && Object.keys(dashboard.localVio).some(function(name) { return dashboard.localVio[name].show })
-                        Repeater {
-                            model: dashboard.poses
-                            delegate: ColumnLayout {
-                                required property var modelData
-                                property var track: dashboard.localVio[modelData.name] || ({})
-                                visible: !!track.show
-                                Layout.fillWidth: true; Layout.preferredWidth: 1
-                                Label {
-                                    text: Ui.Texts.value(modelData.role) + " · Local VIO · Unaligned" + (!dashboard.connected || !track.available ? " · Input lost" : "")
-                                    Layout.fillWidth: true; elide: Text.ElideRight; color: "#aa741b"; font.pixelSize: 12
-                                    ToolTip.visible: localHover.hovered
-                                    ToolTip.text: "Independent device frame. Relative positions between devices are not aligned."
-                                    HoverHandler { id: localHover }
-                                }
-                                NativePlot {
-                                    Layout.fillWidth: true; Layout.preferredHeight: 170
-                                    lines: [{points: track.points || [], color: "#aa741b"}, {points: (track.points || []).slice(-1), color: "#aa741b", joints: true}]
-                                    referenceBounds: {
-                                        var points = track.points || []
-                                        if (!points.length) return null
-                                        var lo = points[0].slice(), hi = points[0].slice()
-                                        points.forEach(function(p) { for (var i=0;i<3;++i) { lo[i]=Math.min(lo[i],p[i]);hi[i]=Math.max(hi[i],p[i]) } })
-                                        return {min:lo.map(function(v) {return v-.1}), max:hi.map(function(v) {return v+.1})}
-                                    }
-                                }
-                            }
-                        }
+                    Label {
+                        visible: !dashboard.playback && dashboard.poses.some(function(p) { return p.coordinateFrame === "local_vio" })
+                        Layout.fillWidth: true; Layout.margins: 10; wrapMode: Text.Wrap
+                        text: "Local VIO · Unaligned: device positions are not in the same frame."
+                        font.pixelSize: 11; color: "#aa741b"
                     }
                 }
             }

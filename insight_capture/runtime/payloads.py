@@ -115,6 +115,7 @@ class PayloadBuilder:
             # It never replaces the common-map poses above or any ROS output.
             local_vio = [
                 {"name": name, "coordinate_frame": "local_vio", "position": sample["position"],
+                 "quaternion_xyzw": sample["quaternion_xyzw"],
                  "stamp_ns": sample["stamp_ns"], "generation": sample["generation"],
                  "available": now - sample["received"] <= self.owner.pose_timeout_sec}
                 for name, sample in self.owner.local_vio_samples.items() if sample

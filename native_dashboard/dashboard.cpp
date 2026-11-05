@@ -68,7 +68,6 @@ void Dashboard::setSpatialActive(bool value) {
     if (m_spatialActive == value) return;
     m_spatialActive = value;
     if (value) refreshBags();
-    if (value) emit localVioChanged();
     if (value) for (auto *p : m_poseOrder) {
         if (p->geometryDirty && p->trailEnabled) {
             p->geometry->setPoints(m_keep ? p->kept : p->points);
@@ -337,13 +336,12 @@ void Dashboard::refreshBags() {
     });
 }
 void Dashboard::clearTraces() {
-    m_localVio.clear();
-    emit localVioChanged();
     for (auto *p : m_poseOrder) {
         p->points.clear();
         p->kept.clear();
         p->generation = -1;
         p->lastSeq = 0;
+        p->lastLocalStamp = -1;
         p->firstSeq = 1;
         p->geometry->setPoints({});
         p->geometryDirty = false;
@@ -363,6 +361,12 @@ void Dashboard::setKeepTrail(bool value) {
 }
 void Dashboard::acceptPose(const QJsonObject &payload) {
     const auto array = payload["poses"].toArray();
+    int capacity = qMax(2, payload["trace_capacity"].toInt(300));
+    QHash<QString, QJsonObject> localSamples;
+    for (auto value : payload["local_vio"].toArray()) {
+        const auto sample = value.toObject();
+        localSamples.insert(sample["name"].toString(), sample);
+    }
     if (!m_haveOrigin) {
         for (auto v : array) {
             auto p = v.toObject();
@@ -373,7 +377,6 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
             }
         }
     }
-    int capacity = qMax(2, payload["trace_capacity"].toInt(300));
     bool needSnapshot = false;
     for (auto value : array) {
         auto d = value.toObject();
@@ -400,9 +403,23 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         const auto previousSeq = p->lastSeq;
         const auto previousGeneration = p->generation;
         const auto previousFirstSeq = p->firstSeq;
-        p->visible = d["visible"].toBool();
-        p->position = mapPoint(d["position"].toArray());
-        auto q = d["quaternion_xyzw"].toArray();
+        const auto local = localSamples.value(name);
+        const bool useLocal = !playback() && !d["visible"].toBool() && !local.isEmpty();
+        const QString frame = useLocal ? "local_vio" : "map";
+        const bool frameChanged = frame != p->coordinateFrame;
+        p->coordinateFrame = frame;
+        if (frameChanged) {
+            p->points.clear();
+            p->geometry->setPoints({});
+            p->generation = -1;
+            p->lastSeq = 0;
+            p->lastLocalStamp = -1;
+        }
+        p->visible = d["visible"].toBool() || (useLocal && local["available"].toBool());
+        p->position = useLocal ? basis(vector(local["position"].toArray())) * 100
+                               : mapPoint(d["position"].toArray());
+        auto q = useLocal ? local["quaternion_xyzw"].toArray()
+                          : d["quaternion_xyzw"].toArray();
         auto b = basisRotation();
         p->rotation = (b * QQuaternion(q[3].toDouble(1), q[0].toDouble(), q[1].toDouble(), q[2].toDouble()) *
                        b.conjugated())
@@ -419,7 +436,23 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
         auto points = trace.isEmpty() ? d["trace"].toArray() : trace["points"].toArray();
         const bool snapshot = trace.isEmpty() || trace["mode"] == "snapshot";
         const auto previousPoints = snapshot ? p->points : QVector<QVector3D>();
-        if (trace.isEmpty() || trace["mode"] == "snapshot") {
+        if (useLocal) {
+            const auto generation = local["generation"].toInteger();
+            if (p->generation != generation) {
+                p->points.clear();
+                p->lastSeq = 0;
+                p->lastLocalStamp = -1;
+            }
+            const auto stamp = local["stamp_ns"].toInteger();
+            if (local["available"].toBool() && stamp != p->lastLocalStamp) {
+                p->points.append(p->position);
+                p->lastSeq++;
+                p->lastLocalStamp = stamp;
+            }
+            while (p->points.size() > capacity) p->points.removeFirst();
+            p->generation = generation;
+            p->firstSeq = p->lastSeq - p->points.size() + 1;
+        } else if (trace.isEmpty() || trace["mode"] == "snapshot") {
             p->points.clear();
             for (int i = qMax(0, int(points.size()) - capacity); i < points.size(); ++i)
                 p->points.append(mapPoint(points[i].toArray()));
@@ -444,7 +477,8 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
                 p->firstSeq += remove;
             }
         }
-        bool keptChanged = false;
+        bool keptChanged = frameChanged || previousGeneration != p->generation;
+        if (keptChanged) p->kept.clear();
         if (m_keep && p->visible && (p->kept.isEmpty() || (p->kept.last() - p->position).length() > .1f)) {
             p->kept.append(p->position);
             // Bound display history while retaining the full path's extent.
@@ -462,7 +496,7 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
                                   previousFirstSeq != p->firstSeq || keptChanged ||
                                   (snapshot && previousPoints != p->points);
         p->displayFilter.update(p->position, p->rotation, m_clock.elapsed(),
-            playback() || !previousVisible || !p->visible || previousGeneration != p->generation);
+            playback() || frameChanged || !previousVisible || !p->visible || previousGeneration != p->generation);
         p->geometryDirty |= (m_keep ? keptChanged : traceChanged) || previousVisible != p->visible;
         // Consume every trace delta while hidden, but defer scene notifications and geometry.
         if (!m_spatialActive) continue;
@@ -471,7 +505,7 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
             p->lastGeometry = m_clock.elapsed();
             p->geometryDirty = false;
         }
-        if (previousVisible != p->visible || previousPosition != p->position || previousRotation != p->rotation ||
+        if (frameChanged || previousVisible != p->visible || previousPosition != p->position || previousRotation != p->rotation ||
             previousDisplayPosition != p->displayPosition() || previousDisplayRotation != p->displayRotation())
             emit p->poseChanged();
         if (previousOffset != p->modelOffset || previousModelRotation != p->modelRotation || previousScale != p->modelScale)
@@ -489,44 +523,9 @@ void Dashboard::acceptPose(const QJsonObject &payload) {
                 m_poseTrace.removeFirst();
         }
     }
-    acceptLocalVio(payload["local_vio"].toArray(), capacity);
     if (needSnapshot && !playback()) {
         m_poseSocket.abort();
         m_reconnect.start(250);
-    }
-}
-void Dashboard::acceptLocalVio(const QJsonArray &samples, int capacity) {
-    bool visibilityChanged = false;
-    for (auto value : samples) {
-        const auto sample = value.toObject();
-        const auto name = sample["name"].toString();
-        auto track = m_localVio.value(name).toMap();
-        auto points = track.value("points").toList();
-        const auto generation = sample["generation"].toInteger();
-        const auto stamp = sample["stamp_ns"].toInteger();
-        if (track.value("generation", -1).toLongLong() != generation) {
-            points.clear();
-            track["stamp_ns"] = qlonglong(-1);
-        }
-        if (sample["available"].toBool() && stamp != track.value("stamp_ns").toLongLong()) {
-            // Device-local coordinates stay separate from the common-map origin.
-            const auto position = basis(vector(sample["position"].toArray()));
-            points.append(QVariant(QVariantList{position.x(), position.y(), position.z()}));
-            while (points.size() > capacity) points.removeFirst();
-        }
-        auto *global = m_poseByName.value(name);
-        const bool show = global && !global->visible && !points.isEmpty();
-        visibilityChanged |= track.value("show").toBool() != show;
-        track["points"] = points;
-        track["available"] = sample["available"].toBool();
-        track["show"] = show;
-        track["generation"] = qlonglong(generation);
-        track["stamp_ns"] = qlonglong(stamp);
-        m_localVio[name] = track;
-    }
-    if (m_spatialActive && (visibilityChanged || m_clock.elapsed() - m_lastLocalVioNotify >= 100)) {
-        m_lastLocalVioNotify = m_clock.elapsed();
-        emit localVioChanged();
     }
 }
 void Dashboard::cacheModel(Pose *pose, const QJsonObject &data) {
@@ -776,6 +775,7 @@ QVariantMap Dashboard::diagnostics() const {
     for (auto *p : m_poseOrder)
         data.append(QVariantMap{{"name", p->name},
                                 {"visible", p->visible},
+                                {"coordinate_frame", p->coordinateFrame},
                                 {"points", p->points.size()},
                                 {"kept_points", p->kept.size()},
                                 {"trace_seq", p->lastSeq},
@@ -783,7 +783,7 @@ QVariantMap Dashboard::diagnostics() const {
                                 {"geometry_updates", qulonglong(p->geometry->revision())},
                                 {"model", p->modelSource.toString()}});
     return {{"connected", m_connected}, {"spatial_active", m_spatialActive}, {"poses", data}, {"pose_trace", m_poseTrace},
-            {"localization", m_localization}, {"local_vio", m_localVio},
+            {"localization", m_localization},
             {"playback", playback()}, {"message", m_message}};
 }
 void Dashboard::shutdown() {

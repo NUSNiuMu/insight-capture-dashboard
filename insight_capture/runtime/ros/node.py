@@ -442,17 +442,20 @@ class PoseBridgeNode(Node):
                     self.camera_liveness_times[name] = received
                 if device in self.local_vio_samples:
                     p = msg.pose.position
-                    self._record_local_vio(device, (p.x, p.y, p.z), self._stamp_to_ns(msg.header.stamp), received)
+                    q = msg.pose.orientation
+                    self._record_local_vio(device, (p.x, p.y, p.z), (q.x, q.y, q.z, q.w),
+                                           self._stamp_to_ns(msg.header.stamp), received)
 
         return callback
 
-    def _record_local_vio(self, name, position, stamp_ns, received):
-        if not all(isfinite(value) for value in position):
+    def _record_local_vio(self, name, position, quaternion, stamp_ns, received):
+        if not all(isfinite(value) for value in (*position, *quaternion)):
             return
         with self.pose_lock:
             previous = self.local_vio_samples[name]
             self.local_vio_samples[name] = {
                 "name": name, "position": list(position), "stamp_ns": stamp_ns,
+                "quaternion_xyzw": list(quaternion),
                 "received": received,
                 "generation": previous.get("generation", 0) + int(stamp_ns < previous.get("stamp_ns", 0)),
             }
@@ -568,7 +571,8 @@ class PoseBridgeNode(Node):
                 if camera.device_name == pose_name:
                     self.camera_liveness_times[camera.name] = received
             if pose_name in self.local_vio_samples:
-                self._record_local_vio(pose_name, pose_sample.position, source_stamp_ns, received)
+                self._record_local_vio(pose_name, pose_sample.position, pose_sample.orientation_xyzw,
+                                       source_stamp_ns, received)
         with self.pose_lock:
             self.latest_pose_sample[pose_name] = pose_sample
             self.last_pose_received_time[pose_name] = received
