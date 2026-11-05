@@ -85,6 +85,8 @@ class MappingStream:
                 state = str(status.get("state", "unavailable"))
                 detail = str(status.get("error") or status.get("reason")
                              or "; ".join(status.get("missing_inputs", [])))
+                if state == "tracking" and detail == "map_revision":
+                    detail = ""
                 events.changed("localization", name, state, detail,
                     level="error" if state == "error" else "info",
                     localized=status.get("localized", False),

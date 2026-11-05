@@ -365,7 +365,7 @@ ApplicationWindow {
                     Ui.Button { id: pauseButton; text: root.playPaused ? "Resume" : "Pause"; enabled: dashboard.playback; onClicked: { root.playPaused=!root.playPaused;root.allVideos(function(v){v.paused=root.playPaused}) } }
                     Ui.Slider { id: timeline; Layout.preferredWidth: 190; from: 0; to: Math.max(1,dashboard.duration); value: root.playTime; enabled: dashboard.playback; onMoved: root.allVideos(function(v){v.seek(timeline.value)}) }
                     Label { text: dashboard.playback ? root.playTime.toFixed(1)+" / "+dashboard.duration.toFixed(1)+" s" : Ui.Texts.value(dashboard.state.playbackState || "idle"); color: "#84775f" }
-                    Ui.Button { id: liveButton; text: "Live"; enabled: dashboard.playback; onClicked: { root.playPaused=false;dashboard.command("live") } }
+                    Ui.Button { id: liveButton; text: "Live"; enabled: dashboard.playback || dashboard.state.playbackState === "preparing"; onClicked: { root.playPaused=false;dashboard.command("live") } }
                 }
                 Label { text: root.captureAction === "starting" ? "Checking devices and clocks…" : root.captureAction === "stopping" ? "Stopping recording…" : dashboard.state.recording ? "● Recording  " + ((dashboard.state.distributed || {}).enabled ? "Ego SD + Jetson · " : "") + (dashboard.state.output || "") : dashboard.state.recordingBusy ? "Saving…" : Ui.Texts.value(dashboard.message); Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
             }

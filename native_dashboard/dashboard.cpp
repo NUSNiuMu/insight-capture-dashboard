@@ -676,11 +676,13 @@ void Dashboard::activatePlayback(const QJsonObject &status) {
     });
 }
 void Dashboard::goLive() {
+    const bool requested = !m_requestedPlayback.isEmpty();
     m_requestedPlayback.clear();
-    if (playback() || m_playbackStarting)
+    if (playback() || m_playbackStarting || requested || m_state["playbackState"] == "preparing")
         post("/api/playback/stop", {}, [this](QJsonObject) {
             m_manifest = {};
             m_playbackStarting = false;
+            m_message = "Live";
             m_haveOrigin = false;
             clearTraces();
             m_cameras = m_liveCameras;
