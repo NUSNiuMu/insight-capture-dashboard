@@ -1,4 +1,4 @@
-> 历史工程记录。当前功能以 README 和 PROJECT_STRUCTURE 为准；导出、固定检测位、骨架叠加及 OpenClaw 等已于 2026-11-02 移除。
+> 历史工程记录。当前功能以 README 和 PROJECT_STRUCTURE 为准；导出、固定检测位、骨架叠加及 OpenClaw 等已于 2026-11-02 移除；离线语音于 2026-11-05 移除。
 
 # Engineering Notes
 

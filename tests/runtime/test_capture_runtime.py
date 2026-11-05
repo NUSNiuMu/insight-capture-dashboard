@@ -11,7 +11,7 @@ from types import SimpleNamespace
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from insight_capture.runtime.anomaly import ActiveQcMonitor, VoiceAlertQueue
+from insight_capture.runtime.anomaly import ActiveQcMonitor
 from insight_capture.media.image_pipeline import ImagePipeline
 from insight_capture.runtime.preflight import CapturePreflight
 from insight_capture.runtime.recording.header_audit import RecordingBridge
@@ -48,7 +48,7 @@ class _Manager:
 
 def _take_store(root):
     catalog = CaptureTaskCatalog(
-        [CaptureTask("fold", "Fold", "Fold", "Fold", "capture", ())],
+        [CaptureTask("fold", "Fold", "Fold", "capture")],
         default_task_id="fold",
     )
     return SessionTakeStore(root, task_catalog=catalog)
@@ -232,7 +232,7 @@ class CaptureRuntimeTest(unittest.TestCase):
             ).evaluate()
             self.assertTrue(report["ok"], report)
             self.assertIn("storage_fallback", {item["code"] for item in report["warnings"]})
-            self.assertIn("备用存储", CapturePreflight.speech(report))
+            self.assertIn("备用存储", CapturePreflight.message(report))
             strict_report = CapturePreflight(
                 node,
                 manager,
@@ -270,10 +270,8 @@ class CaptureRuntimeTest(unittest.TestCase):
                 CaptureTask(
                     task_id="cup_stacking",
                     name="Cup stacking",
-                    speech_name="叠杯子",
                     instruction="Stack the cups",
                     capture_profile="dual_arm_umi",
-                    voice_aliases=("叠杯子",),
                 )
             ],
             default_task_id="cup_stacking",
@@ -310,7 +308,7 @@ class CaptureRuntimeTest(unittest.TestCase):
             self.assertEqual(task_set["stats"]["recorded_takes"], 1)
 
 
-    def test_sustained_camera_fault_records_anomaly_and_voice_alert(self):
+    def test_sustained_camera_fault_records_anomaly(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             store = _take_store(root)
@@ -334,15 +332,13 @@ class CaptureRuntimeTest(unittest.TestCase):
                     snapshot_image_header_audit=lambda: {"topics": {}}
                 ),
             )
-            alerts = VoiceAlertQueue()
             monitor = ActiveQcMonitor(
-                node, manager, store, alerts,
+                node, manager, store,
                 {"sustain_sec": 0.5, "minimum_free_gb": 0},
             )
             monitor.poll()
             monitor._pending_since["camera_stale:a"] = now - 1.0
             monitor.poll()
-            self.assertEqual(alerts.since(0)[0]["code"], "camera_stale:a")
             timeline = store.current()["anomaly_timeline"]
             self.assertEqual(timeline[0]["code"], "camera_stale:a")
             self.assertTrue(timeline[0]["affects_quality"])
@@ -387,16 +383,14 @@ class CaptureRuntimeTest(unittest.TestCase):
                     snapshot_image_header_audit=lambda: manager.image_header_audit
                 ),
             )
-            alerts = VoiceAlertQueue()
             monitor = ActiveQcMonitor(
-                node, manager, store, alerts,
+                node, manager, store,
                 {"sustain_sec": 0.5, "minimum_free_gb": 0},
             )
 
             monitor.poll()
             monitor.poll()
 
-            self.assertEqual(alerts.since(0), [])
             self.assertEqual(store.current()["anomaly_timeline"], [])
             manager.recording = False
             completed = store.complete_current(manager.status())
@@ -430,9 +424,8 @@ class CaptureRuntimeTest(unittest.TestCase):
                     snapshot_image_header_audit=lambda: audit
                 ),
             )
-            alerts = VoiceAlertQueue()
             monitor = ActiveQcMonitor(
-                node, manager, store, alerts,
+                node, manager, store,
                 {"sustain_sec": 0.5, "minimum_free_gb": 0},
             )
 
@@ -440,7 +433,6 @@ class CaptureRuntimeTest(unittest.TestCase):
             monitor._pending_since["frame_loss:/cam/a"] = now - 1.0
             monitor.poll()
 
-            self.assertEqual(alerts.since(0), [])
             self.assertEqual(store.current()["anomaly_timeline"], [])
 
     def test_vio_calibration_qc_ignores_missing_rectified_dashboard_streams(self):
@@ -468,7 +460,6 @@ class CaptureRuntimeTest(unittest.TestCase):
                     snapshot_image_header_audit=lambda: {"topics": {}}
                 ),
             )
-            alerts = VoiceAlertQueue()
             store = SimpleNamespace(
                 add_anomaly=lambda _item: (_ for _ in ()).throw(
                     AssertionError("rectified stream must not create an anomaly")
@@ -478,7 +469,6 @@ class CaptureRuntimeTest(unittest.TestCase):
                 node,
                 manager,
                 store,
-                alerts,
                 {"sustain_sec": 0.5, "minimum_free_gb": 0},
             )
             monitor._pending_since["camera_stale:insight3_a"] = 1.0
@@ -486,7 +476,6 @@ class CaptureRuntimeTest(unittest.TestCase):
 
             monitor.poll()
 
-            self.assertEqual(alerts.since(0), [])
             self.assertNotIn("camera_stale:insight3_a", monitor._pending_since)
             self.assertNotIn("localization:insight3_b", monitor._active)
 
@@ -518,9 +507,8 @@ class CaptureRuntimeTest(unittest.TestCase):
                     snapshot_image_header_audit=lambda: {"topics": {}}
                 ),
             )
-            alerts = VoiceAlertQueue()
             monitor = ActiveQcMonitor(
-                node, manager, store, alerts,
+                node, manager, store,
                 {"sustain_sec": 0.5, "minimum_free_gb": 0},
             )
             monitor.poll()
@@ -531,7 +519,6 @@ class CaptureRuntimeTest(unittest.TestCase):
             self.assertEqual(warning["code"], "storage_fallback")
             self.assertEqual(warning["severity"], "warning")
             self.assertFalse(warning["affects_quality"])
-            self.assertEqual(alerts.since(0)[0]["severity"], "warning")
             completed = store.complete_current(manager.status())
             self.assertEqual(completed["quick_qc"]["state"], "pass")
 

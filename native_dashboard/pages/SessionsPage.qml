@@ -17,7 +17,6 @@ PageFrame {
         editing = task ? task.task_id : "";
         taskId.text = editing;
         taskName.text = task ? task.name : "";
-        speech.text = task ? task.speech_name || "" : "";
         instruction.text = task ? task.instruction || "" : "";
         profile.text = task ? task.capture_profile || "dual_arm_umi" : "dual_arm_umi";
         editor.open();
@@ -194,13 +193,6 @@ PageFrame {
                 Layout.fillWidth: true
             }
             Label {
-                text: "Spoken name"
-            }
-            Ui.TextField {
-                id: speech
-                Layout.fillWidth: true
-            }
-            Label {
                 text: "Capture profile"
             }
             Ui.TextField {
@@ -233,7 +225,6 @@ PageFrame {
                     onClicked: shell.mutate(page.editing ? "/api/tasks/" + encodeURIComponent(page.editing) : "/api/tasks", {
                             "id": taskId.text.trim(),
                             "name": taskName.text.trim(),
-                            "speech_name": speech.text.trim(),
                             "capture_profile": profile.text.trim(),
                             "instruction": instruction.text.trim()
                         }, page.editing ? "PUT" : "POST")

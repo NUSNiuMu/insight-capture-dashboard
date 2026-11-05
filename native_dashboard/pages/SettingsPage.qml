@@ -7,12 +7,10 @@ PageFrame {
     id: page
     property var shell
     property var settings: workspace.data.settings || {}
-    property var audio: settings.voice_audio || {}
     property bool restarting: false
     property int restartTicks: 0
-    property int pendingVolume: -1
     heading: "Settings"
-    description: "Configure masks, audio and services."
+    description: "Configure masks and services."
     Ui.Button {
         text: "Refresh"
         onClicked: shell.refresh()
@@ -53,46 +51,6 @@ PageFrame {
                 }
             }
         }
-        Ui.Section {
-            eyebrow: "Audio prompts"
-            heading: "Audio prompts"
-            Layout.fillWidth: true
-            Layout.alignment: Qt.AlignTop
-            Label {
-                text: page.audio.available ? (Ui.Texts.value(page.audio.backend || "") + " · " + (page.audio.playback_label || "")) : Ui.Texts.value(page.audio.error || "Voice service unavailable")
-                Layout.fillWidth: true
-                wrapMode: Text.Wrap
-                color: page.audio.available ? Ui.Theme.muted : Ui.Theme.red
-                font.pixelSize: 13
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                Ui.Slider {
-                    id: volume
-                    objectName: "voice-volume"
-                    Layout.fillWidth: true
-                    from: 0
-                    to: 100
-                    value: Number(page.audio.volume_percent || 0)
-                    enabled: !!page.audio.available
-                    onMoved: {
-                        page.pendingVolume = Math.round(value);
-                        voiceTimer.restart();
-                    }
-                }
-                Label {
-                    text: Math.round(volume.value) + "%"
-                    font.family: Ui.Theme.monoFont
-                    color: Ui.Theme.teal
-                }
-                Ui.Button {
-                    objectName: "voice-sample"
-                    text: "Test audio"
-                    enabled: !!page.audio.available && !workspace.busy.voice
-                    onClicked: workspace.request("voice", "/api/settings/voice-sample", "POST")
-                }
-            }
-        }
     }
     Ui.Section {
         eyebrow: "Maintenance"
@@ -130,23 +88,6 @@ PageFrame {
         }
     }
     Timer {
-        id: voiceTimer
-        interval: 200
-        onTriggered: {
-            if (workspace.busy.volume) {
-                restart();
-                return;
-            }
-            if (page.pendingVolume < 0)
-                return;
-            var v = page.pendingVolume;
-            page.pendingVolume = -1;
-            workspace.request("volume", "/api/settings/voice-volume", "POST", {
-                    "volume_percent": v
-                });
-        }
-    }
-    Timer {
         interval: 1000
         repeat: true
         running: page.restarting
@@ -164,10 +105,6 @@ PageFrame {
                 page.restarting = false;
                 shell.refresh();
             }
-            if (key === "volume" && page.pendingVolume >= 0)
-                voiceTimer.restart();
-            else if ((key === "voice" || key === "volume") && success)
-                workspace.request("settings", "/api/settings");
         }
     }
 }

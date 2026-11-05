@@ -1,4 +1,4 @@
-"""Headless capture preflight, system status, and voice-alert routes."""
+"""Headless capture preflight and system status routes."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ class RuntimeRoutes:
 
     async def _handle_preflight(self, _request: web.Request) -> web.Response:
         report = await asyncio.to_thread(self.context.capture_preflight.evaluate)
-        report["speech"] = self.context.capture_preflight.speech(report)
+        report["message"] = self.context.capture_preflight.message(report)
         return web.json_response(report, status=200 if report["ok"] else 422)
 
     async def _handle_system_status(self, _request: web.Request) -> web.Response:
@@ -22,21 +22,9 @@ class RuntimeRoutes:
         return web.json_response({
             "type": "system_status",
             "ready": bool(report.get("ok")),
-            "speech": self.context.capture_preflight.speech(report),
+            "message": self.context.capture_preflight.message(report),
             "preflight": report,
             "recording": self.context.recording_manager.status(),
             "session": self.context.take_store.snapshot(),
             "runtime": self.context.node.preview_status(),
-        })
-
-    async def _handle_voice_alerts(self, request: web.Request) -> web.Response:
-        try:
-            cursor = max(0, int(request.query.get("cursor", "0")))
-        except ValueError:
-            raise ValueError("cursor must be an integer")
-        alerts = self.context.voice_alerts.since(cursor)
-        return web.json_response({
-            "type": "voice_alerts",
-            "alerts": alerts,
-            "cursor": alerts[-1]["id"] if alerts else cursor,
         })

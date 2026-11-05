@@ -40,7 +40,6 @@ class SessionTakeStore:
         self.task_id = ""
         self.task = "unspecified"
         self.task_instruction = ""
-        self.task_speech_name = ""
         self.capture_profile = ""
         self.operator = "unknown"
         self.session_id = ""
@@ -54,7 +53,6 @@ class SessionTakeStore:
         self.task_id = task.task_id
         self.task = task.name
         self.task_instruction = task.instruction
-        self.task_speech_name = task.speech_name
         self.capture_profile = task.capture_profile
         self.session_id = session_id
         self.root = self.sessions_root / session_id
@@ -167,7 +165,6 @@ class SessionTakeStore:
             if self.task_id == task.task_id:
                 self.task = task.name
                 self.task_instruction = task.instruction
-                self.task_speech_name = task.speech_name
                 self.capture_profile = task.capture_profile
                 self._write_session()
                 self._write_active_state()
@@ -481,7 +478,6 @@ class SessionTakeStore:
             task = {
                 "task_id": self.task_id,
                 "name": self.task,
-                "speech_name": self.task_speech_name,
                 "instruction": self.task_instruction,
                 "capture_profile": self.capture_profile,
                 "recording_subdirectory": self.recording_subdirectory(),

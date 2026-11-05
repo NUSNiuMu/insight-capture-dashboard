@@ -4,7 +4,7 @@ import unittest
 from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -18,7 +18,8 @@ class MappingStreamResetTest(unittest.TestCase):
                                    SimpleNamespace(Request=object))
         self.request_patch.start()
         self.addCleanup(self.request_patch.stop)
-        self.stream = MappingStream(object())
+        self.owner = SimpleNamespace(clear_traces=Mock())
+        self.stream = MappingStream(self.owner)
 
     def test_waits_for_one_reset_response(self):
         future = Future()
@@ -33,6 +34,7 @@ class MappingStreamResetTest(unittest.TestCase):
         self.assertTrue(self.stream.request_reset()['ok'])
         self.assertTrue(future.done())
         self.assertEqual(len(calls), 1)
+        self.owner.clear_traces.assert_called_once_with()
 
     def test_timeout_does_not_claim_success(self):
         self.stream._reset_client = SimpleNamespace(service_is_ready=lambda: True,

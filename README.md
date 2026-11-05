@@ -63,7 +63,7 @@ node web_dashboard/build.js
 
 后端运行镜像不携带 Firefox、Chromium、Playwright 或 Qt 构建工具；COLMAP、CUDA 和媒体库仍供现有功能使用。原生建图镜像单独携带可执行文件、Ceres 和必要 OpenCV 库，不继承 Dashboard 或离线模型。Qt 程序和运行库随部署包交付，镜像升级也会同步宿主机 Qt 产物。
 
-[部署与升级](docs/DEPLOYMENT.md) 说明首次安装、镜像更新与离线使用。[离线语音](docs/DATA_COLLECTOR_VOICE_MANUAL.html) 与 [硬件手册](docs/CAPTURE_BACKPACK_HARDWARE_MANUAL.pdf) 提供其他操作说明。
+[部署与升级](docs/DEPLOYMENT.md) 说明首次安装、镜像更新与离线使用。[硬件手册](docs/CAPTURE_BACKPACK_HARDWARE_MANUAL.pdf) 提供硬件操作说明。
 
 ## 主要代码
 

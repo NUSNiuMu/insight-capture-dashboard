@@ -12,7 +12,6 @@ class ProjectStructureTest(unittest.TestCase):
             "check_bag.py",
             "reboot_cameras.sh",
             "run_dashboard.sh",
-            "run_voice.sh",
             "select_device.sh",
             "merge_distributed_recording.py",
             "sync_camera_restart.py",
@@ -72,7 +71,6 @@ class ProjectStructureTest(unittest.TestCase):
             optimization_manager=dependency,
             take_store=dependency,
             capture_preflight=dependency,
-            voice_alerts=dependency,
             active_qc=dependency,
             playback_configuration=lambda: ([], []),
         )

@@ -5,13 +5,8 @@
     {
       "id": "cup_stacking",
       "name": "Cup stacking",
-      "speech_name": "叠杯子",
       "instruction": "Stack the cups",
-      "capture_profile": "dual_arm_umi",
-      "voice_aliases": [
-        "叠杯子",
-        "杯子堆叠"
-      ]
+      "capture_profile": "dual_arm_umi"
     }
   ]
 }

@@ -56,7 +56,6 @@ Ui.Panel {
             "results": "Results",
             "result": "Result",
             "storage": "Storage",
-            "voice_audio": "Audio",
             "capture_profile": "Capture profile",
             "root": "Root",
             "path": "Path",
@@ -87,7 +86,7 @@ Ui.Panel {
         for (var k in v) {
             if (["log_tail", "positions", "quaternions_xyzw", "trace", "p", "h", "vio", "colmap", "data", "manifest", "frames", "timestamps"].indexOf(k) >= 0 && typeof v[k] === "object")
                 continue;
-            if (k.endsWith("_url") || k === "colmap_log" || k === "speech")
+            if (k.endsWith("_url") || k === "colmap_log")
                 continue;
             rows(v[k], prefix ? prefix + " · " + (labels[k] || k) : (labels[k] || k), out, depth + 1);
         }

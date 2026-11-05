@@ -49,10 +49,8 @@ def _catalog() -> CaptureTaskCatalog:
             CaptureTask(
                 task_id="cup_stacking",
                 name="Cup stacking",
-                speech_name="叠杯子",
                 instruction="Stack the cups",
                 capture_profile="dual_arm_umi",
-                voice_aliases=("叠杯子",),
             )
         ],
         default_task_id="cup_stacking",
@@ -79,7 +77,7 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload["task"]["name"], "Cup stacking")
             self.assertEqual(payload["stats"]["recorded_takes"], 1)
             self.assertEqual(payload["stats"]["next_take_id"], 2)
-            self.assertIn("已录制1条", payload["speech"])
+            self.assertIn("已录制1条", payload["message"])
 
     async def test_task_change_is_rejected_while_recording(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -98,7 +96,7 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
             response = await routes._handle_activate(request)
 
             self.assertEqual(response.status, 409)
-            self.assertIn("不能修改任务", json.loads(response.text)["speech"])
+            self.assertIn("不能修改任务", json.loads(response.text)["message"])
 
     async def test_recording_is_routed_into_active_task_set_folder(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -121,7 +119,7 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
                 side_effect=direct,
             ):
                 response = await routes._start_with_preflight(
-                    topics=["/camera"], bag_name=None, automation=False
+                    topics=["/camera"], bag_name=None
                 )
             payload = json.loads(response.text)
 
@@ -155,10 +153,8 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
                     {
                         "id": "fold_towel",
                         "name": "Fold towel",
-                        "speech_name": "叠毛巾",
                         "instruction": "Fold the towel in half",
                         "capture_profile": "dual_arm_umi",
-                        "voice_aliases": ["叠毛巾", "折毛巾"],
                     }
                 )
             )
@@ -175,7 +171,6 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(task_path.is_file())
             persisted = json.loads(task_path.read_text(encoding="utf-8"))
             self.assertEqual(persisted["instruction"], "Fold once")
-            self.assertEqual(persisted["voice_aliases"], ["叠毛巾", "折毛巾"])
             config_path = root / "capture_tasks.json"
             config_path.write_text(
                 json.dumps(
@@ -206,7 +201,7 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
             )
 
             response = await routes._start_with_preflight(
-                topics=["/camera"], bag_name=None, automation=False
+                topics=["/camera"], bag_name=None
             )
 
             self.assertEqual(response.status, 409)

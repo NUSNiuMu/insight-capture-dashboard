@@ -72,7 +72,7 @@ class CapturePreflight:
                 self.node, self.camera_stale_sec, now=now
             )
             for camera in unavailable:
-                name = self._CAMERA_SPEECH_NAMES.get(camera["camera"], camera["camera"])
+                name = self._CAMERA_DISPLAY_NAMES.get(camera["camera"], camera["camera"])
                 missing = "和".join(
                     {"image": "图像", "vio": "VIO", "configuration": "配置"}[item]
                     for item in camera["missing"]
@@ -204,14 +204,14 @@ class CapturePreflight:
             },
         }
 
-    _CAMERA_SPEECH_NAMES = {
+    _CAMERA_DISPLAY_NAMES = {
         "insight3_a": "右手相机",
         "insight3_b": "左手相机",
         "insight9_a": "头部相机",
     }
 
     @classmethod
-    def speech(cls, report: Dict) -> str:
+    def message(cls, report: Dict) -> str:
         failures = report.get("failures") or []
         if not failures:
             storage = report.get("storage") or {}
@@ -227,10 +227,10 @@ class CapturePreflight:
             if item.get("code") == "camera_stale"
         ]
         if stale_cameras:
-            names = "、".join(cls._CAMERA_SPEECH_NAMES.get(name, name) for name in stale_cameras)
+            names = "、".join(cls._CAMERA_DISPLAY_NAMES.get(name, name) for name in stale_cameras)
             return f"{names}未连接，请检查相机。"
         codes = {str(item.get("code")) for item in failures}
         if codes & {"mapping_not_ready", "localization_not_ready"}:
-            return "目前没有校准，请说开始校准。"
+            return "目前没有校准，请点击开始校准。"
         messages = [str(item.get("message") or "未知异常") for item in failures[:3]]
         return "无法开始录制，" + "；".join(messages) + "。"

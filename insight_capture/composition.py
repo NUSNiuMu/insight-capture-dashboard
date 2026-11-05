@@ -8,7 +8,7 @@ from typing import Any, Callable, Mapping, TypedDict
 
 from insight_capture.postprocess.bags import BagLibrary, PreparedPlaybackManager
 from insight_capture.postprocess.optimization import OptimizationManager
-from insight_capture.runtime.anomaly import ActiveQcMonitor, VoiceAlertQueue
+from insight_capture.runtime.anomaly import ActiveQcMonitor
 from insight_capture.runtime.preflight import CapturePreflight
 from insight_capture.runtime.recording import RecordingManager
 from insight_capture.runtime.take import SessionTakeStore
@@ -23,7 +23,6 @@ class DashboardDependencies(TypedDict):
     optimization_manager: OptimizationManager
     take_store: SessionTakeStore
     capture_preflight: CapturePreflight
-    voice_alerts: VoiceAlertQueue
     active_qc: ActiveQcMonitor
     playback_configuration: Callable[
         [], tuple[list[dict[str, object]], list[dict[str, object]]]
@@ -41,7 +40,6 @@ class RuntimeServices:
     optimization_manager: OptimizationManager
     take_store: SessionTakeStore
     capture_preflight: CapturePreflight
-    voice_alerts: VoiceAlertQueue
     active_qc: ActiveQcMonitor
 
     def playback_configuration(
@@ -90,7 +88,6 @@ class RuntimeServices:
             "optimization_manager": self.optimization_manager,
             "take_store": self.take_store,
             "capture_preflight": self.capture_preflight,
-            "voice_alerts": self.voice_alerts,
             "active_qc": self.active_qc,
             "playback_configuration": self.playback_configuration,
         }
@@ -121,7 +118,6 @@ def build_runtime_services(
         recording_manager.storage_browse_roots,
         lambda: recording_manager.rosbag_root,
     )
-    voice_alerts = VoiceAlertQueue()
     services = RuntimeServices(
         node=node,
         bag_library=bag_library,
@@ -149,12 +145,10 @@ def build_runtime_services(
             recording_manager,
             runtime_config.get("preflight"),
         ),
-        voice_alerts=voice_alerts,
         active_qc=ActiveQcMonitor(
             node,
             recording_manager,
             take_store,
-            voice_alerts,
             runtime_config.get("active_qc"),
         ),
     )

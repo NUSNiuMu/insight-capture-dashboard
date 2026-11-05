@@ -28,7 +28,6 @@ QtObject {
     })
     function value(raw) {
         var text = raw === undefined || raw === null ? "" : String(raw);
-        if (text.indexOf("voice service is unavailable") === 0) return "Voice service unavailable. Check the service and models.";
         return names[text.toLowerCase()] || text.replace(/Infrared/g, "IR");
     }
 }

@@ -8,18 +8,18 @@ from ..context import DashboardContext
 from insight_capture.runtime.camera_health import evaluate_calibration_cameras
 
 
-_CAMERA_SPEECH_NAMES = {
+_CAMERA_DISPLAY_NAMES = {
     "insight3_a": "右手相机",
     "insight3_b": "左手相机",
     "insight9_a": "头部相机",
 }
 
 
-def _camera_failure_speech(unavailable: list[dict]) -> str:
+def _camera_failure_message(unavailable: list[dict]) -> str:
     details = []
     for item in unavailable:
         camera_name = str(item.get("camera"))
-        name = _CAMERA_SPEECH_NAMES.get(camera_name, camera_name)
+        name = _CAMERA_DISPLAY_NAMES.get(camera_name, camera_name)
         missing = set(item.get("missing") or [])
         if "configuration" in missing:
             details.append(f"{name}未配置")
@@ -45,7 +45,7 @@ class MappingRoutes:
                 or recording.get("merge_state") in {"finalizing", "merging"}
                 or (recording.get("distributed") or {}).get("phase") == "starting"):
             return web.json_response(
-                {"error": "recording_busy", "speech": "当前采集或保存期间不能重新校准，请先停止并等待保存完成。"},
+                {"error": "recording_busy", "message": "当前采集或保存期间不能重新校准，请先停止并等待保存完成。"},
                 status=409,
             )
         stale_sec = max(
@@ -63,7 +63,7 @@ class MappingRoutes:
                 {
                     "ok": False,
                     "error": "calibration_cameras_not_ready",
-                    "speech": _camera_failure_speech(unavailable),
+                    "message": _camera_failure_message(unavailable),
                     "camera_health": health,
                     "unavailable_cameras": unavailable,
                 },
@@ -71,5 +71,5 @@ class MappingRoutes:
             )
         payload = await asyncio.to_thread(self.context.node.reset_mapping)
         if not payload["ok"]:
-            payload["speech"] = "校准服务未就绪，请检查建图和重定位服务。"
+            payload["message"] = "校准服务未就绪，请检查建图和重定位服务。"
         return web.json_response(payload, status=200 if payload["ok"] else 503)

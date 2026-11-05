@@ -139,7 +139,7 @@ class MobileCaptureRoutes:
         try:
             if action == "start":
                 response = await self.recording._start_with_preflight(
-                    topics=None, bag_name=None, automation=False, relaxed_preflight=True
+                    topics=None, bag_name=None, relaxed_preflight=True
                 )
             else:
                 response = await self.recording.stop_recording(

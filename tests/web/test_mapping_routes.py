@@ -58,7 +58,7 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 409)
         self.assertEqual(body["error"], "calibration_cameras_not_ready")
         self.assertEqual(
-            body["speech"],
+            body["message"],
             "无法开始校准：头部相机没有图像和VIO数据。请检查相机连接。",
         )
         self.assertEqual(
@@ -90,7 +90,7 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(json.loads(response.text)["ok"])
         node.reset_mapping.assert_called_once_with()
 
-    async def test_reset_unavailable_returns_actionable_speech(self):
+    async def test_reset_unavailable_returns_actionable_message(self):
         payload = {
             "ok": False,
             "requested": [],
@@ -106,7 +106,7 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
         body = json.loads(response.text)
 
         self.assertEqual(response.status, 503)
-        self.assertIn("校准服务未就绪", body["speech"])
+        self.assertIn("校准服务未就绪", body["message"])
 
 
 if __name__ == "__main__":

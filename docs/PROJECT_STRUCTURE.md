@@ -7,7 +7,6 @@
 - `insight_capture/media/`：图像解码、Jetson 编解码、Qt 直通及手机 WebRTC。
 - `insight_capture/postprocess/`：录制库、手动同步回放、完整性/轨迹评分与离线 COLMAP。
 - `insight_capture/core/bag.py`：每条录制一个标准 MCAP，内部多 Chunk；不读取旧组合包、SQLite 或多文件分包。
-- `insight_capture/voice/`：本地唤醒、固定指令、识别与播报，不接入外部助手。
 - `native_mapping/`：唯一在线 C++ 建图/定位核心；其测试和 SuperGlue 推理构建工具保留。
 - `config/devices/`：仅 Insight9 与 EgoHalo 两套配置。
 - `tools/diagnostics/`：启动同步支持与回放诊断工具；通用设备维护 CLI 和系统医生已删除。

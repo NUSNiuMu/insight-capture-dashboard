@@ -23,13 +23,12 @@ sync_host_runtime() {
     local container temporary
     temporary="$(mktemp -d "${SCRIPT_DIR}/.update.XXXXXX")"
     container="$(docker create "${image}")"
-    cleanup_voice_sync() {
+    cleanup_host_sync() {
         docker rm "${container}" >/dev/null 2>&1 || true
         rm -rf "${temporary}"
     }
-    trap cleanup_voice_sync EXIT
+    trap cleanup_host_sync EXIT
 
-    docker cp "${container}:/workspaces/insight_capture/insight_capture/voice" "${temporary}/voice"
     docker cp "${container}:/workspaces/insight_capture/insight_capture/__init__.py" "${temporary}/insight_capture_init.py"
     docker cp "${container}:/workspaces/insight_capture/deploy" "${temporary}/deploy"
     docker cp "${container}:/workspaces/insight_capture/scripts" "${temporary}/scripts"
@@ -41,8 +40,18 @@ sync_host_runtime() {
     mkdir -p "${HOST_RUNTIME_ROOT}/insight_capture" "${HOST_RUNTIME_ROOT}/scripts" \
         "${HOST_RUNTIME_ROOT}/deploy" "${HOST_RUNTIME_ROOT}/tools/diagnostics" \
         "${SCRIPT_DIR}/config" "${SCRIPT_DIR}/native_dashboard" "${SCRIPT_DIR}/.native-build"
+    local retired_voice_unit="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user/insight-voice-control.service"
+    if [[ -f "${retired_voice_unit}" ]]; then
+        systemctl --user disable --now insight-voice-control.service \
+            || log "WARNING: could not stop the retired voice service; check the user service manager."
+        rm -f "${retired_voice_unit}"
+        systemctl --user daemon-reload \
+            || log "WARNING: could not reload the user service manager."
+    fi
     rm -rf "${HOST_RUNTIME_ROOT}/insight_capture/voice"
-    mv "${temporary}/voice" "${HOST_RUNTIME_ROOT}/insight_capture/voice"
+    rm -f "${HOST_RUNTIME_ROOT}/scripts/run_voice.sh" \
+        "${HOST_RUNTIME_ROOT}/deploy/install_voice_control_service.sh" \
+        "${HOST_RUNTIME_ROOT}/deploy/systemd/insight-voice-control.service.in"
     install -m 0644 "${temporary}/insight_capture_init.py" "${HOST_RUNTIME_ROOT}/insight_capture/__init__.py"
     cp -a "${temporary}/deploy/." "${HOST_RUNTIME_ROOT}/deploy/"
     cp -a "${temporary}/scripts/." "${HOST_RUNTIME_ROOT}/scripts/"
@@ -62,7 +71,7 @@ sync_host_runtime() {
     mv "${SCRIPT_DIR}/.native-build/.insight-native.next" "${SCRIPT_DIR}/.native-build/insight-native"
 
     trap - EXIT
-    cleanup_voice_sync
+    cleanup_host_sync
 }
 
 force=false
@@ -79,7 +88,6 @@ done
 
 cd "${SCRIPT_DIR}"
 HOST_RUNTIME_ROOT="${SCRIPT_DIR}"
-VOICE_INSTALLER="${SCRIPT_DIR}/deploy/install_voice_control_service.sh"
 command -v docker >/dev/null || die "docker is not installed"
 docker compose version >/dev/null 2>&1 || die "docker compose (v2 plugin) is not available"
 
@@ -163,10 +171,6 @@ until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
     fi
     sleep 2
 done
-
-if [[ -x "${VOICE_INSTALLER}" ]]; then
-    "${VOICE_INSTALLER}" --if-ready || log "WARNING: optional voice service was not updated; other services remain installed."
-fi
 
 log "Removing superseded Release images and installation packages ..."
 python3 "${SCRIPT_DIR}/deploy/cleanup_release.py" "${SCRIPT_DIR}" "${version}" \

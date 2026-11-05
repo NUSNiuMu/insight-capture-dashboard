@@ -27,7 +27,6 @@ dev = [
 
 [project.scripts]
 insight-capture = "insight_capture.runtime.app:main"
-insight-voice = "insight_capture.voice.service:main"
 insight-check-bag = "insight_capture.postprocess.bags.integrity:main"
 
 [tool.setuptools.packages.find]
@@ -45,7 +44,6 @@ extend-exclude = ["data", "gesture", "outputs", "release", "rosbags", "runs"]
 select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
-"insight_capture/voice/service.py" = ["E402", "F811"]
 "tests/**/*.py" = ["E402"]
 "tools/diagnostics/build_review_bundles.py" = ["E402"]
 "tools/mapping_validation/superglue/prepare_tensorrt.py" = ["E402"]

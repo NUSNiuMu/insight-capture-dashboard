@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from insight_capture.runtime.anomaly import ActiveQcMonitor, VoiceAlertQueue
+from insight_capture.runtime.anomaly import ActiveQcMonitor
 from insight_capture.runtime.preflight import CapturePreflight
 from insight_capture.runtime.take import SessionTakeStore
 from insight_capture.postprocess.bags import BagLibrary, PreparedPlaybackManager
@@ -27,7 +27,6 @@ class DashboardContext:
     optimization_manager: OptimizationManager
     take_store: SessionTakeStore
     capture_preflight: CapturePreflight
-    voice_alerts: VoiceAlertQueue
     active_qc: ActiveQcMonitor
     playback_configuration: Callable[
         [], tuple[list[dict[str, object]], list[dict[str, object]]]

@@ -17,34 +17,28 @@ TASK_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 class CaptureTask:
     task_id: str
     name: str
-    speech_name: str
     instruction: str
     capture_profile: str
-    voice_aliases: tuple[str, ...]
 
     def as_dict(self) -> Dict[str, object]:
         return {
             "task_id": self.task_id,
             "name": self.name,
-            "speech_name": self.speech_name,
             "instruction": self.instruction,
             "capture_profile": self.capture_profile,
-            "voice_aliases": list(self.voice_aliases),
         }
 
     def as_config_dict(self) -> Dict[str, object]:
         return {
             "id": self.task_id,
             "name": self.name,
-            "speech_name": self.speech_name,
             "instruction": self.instruction,
             "capture_profile": self.capture_profile,
-            "voice_aliases": list(self.voice_aliases),
         }
 
 
 class CaptureTaskCatalog:
-    """Read the small tracked registry used by UI, API, and voice workflows."""
+    """Read the small tracked registry used by UI and API workflows."""
 
     def __init__(
         self,
@@ -105,19 +99,11 @@ class CaptureTaskCatalog:
         instruction = str(raw.get("instruction") or "").strip()
         if not name or not instruction:
             raise ValueError("Capture tasks require name and instruction")
-        raw_aliases = raw.get("voice_aliases", [])
-        if not isinstance(raw_aliases, (list, tuple)):
-            raise ValueError("voice_aliases must be a list")
-        aliases = tuple(
-            str(alias).strip() for alias in raw_aliases if str(alias).strip()
-        )
         return CaptureTask(
             task_id=task_id,
             name=name,
-            speech_name=str(raw.get("speech_name") or name).strip(),
             instruction=instruction,
             capture_profile=str(raw.get("capture_profile") or "").strip(),
-            voice_aliases=aliases,
         )
 
     def _persist(self, task: CaptureTask) -> None:

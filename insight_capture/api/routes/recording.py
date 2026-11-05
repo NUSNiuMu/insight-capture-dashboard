@@ -6,7 +6,6 @@ import asyncio
 import json
 import shutil
 import time
-from pathlib import Path
 
 from aiohttp import web
 
@@ -93,7 +92,6 @@ class RecordingRoutes:
         return await self._start_with_preflight(
             topics=topics,
             bag_name=bag_name,
-            automation=False,
             relaxed_preflight=(
                 payload.get("native_relaxed_preflight") is True or native_request
             ),
@@ -138,7 +136,6 @@ class RecordingRoutes:
         *,
         topics,
         bag_name,
-        automation: bool,
         preflight_mode: str = "capture",
         track_take: bool = True,
         relaxed_preflight: bool = False,
@@ -152,7 +149,7 @@ class RecordingRoutes:
             return web.json_response(
                 {
                     "error": "No capture task is active.",
-                    "speech": "当前没有数采任务，请先说开始任务叠杯子。",
+                    "message": "当前没有数采任务，请先选择并启用数采任务。",
                 },
                 status=409,
             )
@@ -166,9 +163,9 @@ class RecordingRoutes:
                 require_global_pose=not relaxed_preflight,
             )
             if not report.get("ok"):
-                speech = preflight_service.speech(report)
+                message = preflight_service.message(report)
                 return web.json_response(
-                    {"error": "Recording preflight failed.", "speech": speech, "preflight": report},
+                    {"error": "Recording preflight failed.", "message": message, "preflight": report},
                     status=422,
                 )
         else:
@@ -181,7 +178,7 @@ class RecordingRoutes:
                 return web.json_response(
                     {
                         "error": "Raw stereo payload check is unavailable.",
-                        "speech": "无法检查未校正双目图像，请检查数采服务。",
+                        "message": "无法检查未校正双目图像，请检查数采服务。",
                     },
                     status=500,
                 )
@@ -194,7 +191,7 @@ class RecordingRoutes:
                 return web.json_response(
                     {
                         "error": "Raw stereo image payloads are missing.",
-                        "speech": "未校正双目图像没有数据，无法开始校准录制。",
+                        "message": "未校正双目图像没有数据，无法开始校准录制。",
                         "preflight": report,
                     },
                     status=422,
@@ -202,7 +199,7 @@ class RecordingRoutes:
         try:
             take = (
                 take_store.reserve_take(
-                    bag_name, trigger="voice" if automation else "web"
+                    bag_name, trigger="web"
                 )
                 if track_take and take_store is not None
                 else None
@@ -214,17 +211,15 @@ class RecordingRoutes:
             return web.json_response(
                 {
                     "error": str(exc),
-                    "speech": (
+                    "message": (
                         "当前已有一条正在处理中。"
                         if task_active
-                        else "当前没有数采任务，请先说开始任务叠杯子。"
+                        else "当前没有数采任务，请先选择并启用数采任务。"
                     ),
                 },
                 status=409,
             )
         actual_name = take["bag_name"] if take is not None else bag_name
-        if automation and not actual_name:
-            actual_name = time.strftime("looper_record_%Y%m%d_%H%M%S")
         try:
             start_arguments = {"topics": topics, "bag_name": actual_name}
             if hasattr(self.context.recording_manager, "distributed_preflight"):
@@ -246,34 +241,13 @@ class RecordingRoutes:
             raise
         return web.json_response({
             **status,
-            "automation": "voice" if automation else None,
-            "trigger": "voice" if automation else "web",
+            "trigger": "web",
             "recording_mode": preflight_mode,
             "preflight": report,
             "take": take,
         })
 
-    async def _handle_automation_recording_start(
-        self, _request: web.Request
-    ) -> web.Response:
-        """Start a default-topic recording owned by the local automation agent."""
-        current = self.context.recording_manager.status()
-        if current.get("recording"):
-            return web.json_response(
-                {
-                    "error": "Recording is already active.",
-                    "recording": True,
-                    "output_path": current.get("output_path"),
-                },
-                status=409,
-            )
-        return await self._start_with_preflight(
-            topics=None,
-            bag_name=None,
-            automation=True,
-        )
-
-    async def _handle_automation_vio_calibration_start(
+    async def _handle_vio_calibration_start(
         self, _request: web.Request
     ) -> web.Response:
         """Start the fixed 17-topic raw stereo VIO calibration recording."""
@@ -291,47 +265,9 @@ class RecordingRoutes:
         return await self._start_with_preflight(
             topics=build_vio_calibration_topics(),
             bag_name=time.strftime("vio_calibration_%Y%m%d_%H%M%S"),
-            automation=True,
             preflight_mode="vio_calibration",
             track_take=False,
         )
-
-    async def _handle_automation_recording_stop(
-        self, _request: web.Request
-    ) -> web.Response:
-        """Stop only recordings created through the automation start route."""
-        current = self.context.recording_manager.status()
-        if not current.get("recording"):
-            return web.json_response({"automation": "voice", **current})
-        output_path = str(current.get("output_path") or "")
-        take_store = getattr(self.context, "take_store", None)
-        current_take = take_store.current() if take_store is not None else None
-        calibration_owned = current.get("recording_mode") == "vio_calibration"
-        voice_owned = (
-            isinstance(current_take, dict)
-            and current_take.get("trigger") == "voice"
-            and Path(str(current_take.get("bag_path") or "")).name == Path(output_path).name
-        )
-        if (
-            not calibration_owned
-            and not voice_owned
-            and not Path(output_path).name.startswith("looper_record_")
-        ):
-            return web.json_response(
-                {
-                    "error": "A manual recording is active; voice stop refused.",
-                    "recording": True,
-                    "output_path": output_path,
-                },
-                status=409,
-            )
-        status = self.context.recording_manager.stop()
-        take = (
-            take_store.complete_current(status)
-            if take_store is not None and not calibration_owned
-            else None
-        )
-        return web.json_response({"automation": "voice", "trigger": "voice", **status, "take": take})
 
     async def _handle_rosbag_list(self, request: web.Request) -> web.Response:
         scope = str(request.query.get("scope", "all")).strip().lower()

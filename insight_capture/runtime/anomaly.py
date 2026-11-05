@@ -1,47 +1,21 @@
-"""Sustained live-QC monitoring and voice alert delivery."""
+"""Sustained live-QC monitoring."""
 
 from __future__ import annotations
 
 import shutil
 import threading
 import time
-from collections import deque
 from typing import Dict, Optional
-
-
-class VoiceAlertQueue:
-    def __init__(self, maxlen: int = 100) -> None:
-        self._items = deque(maxlen=maxlen)
-        self._next_id = 1
-        self._lock = threading.Lock()
-
-    def publish(self, text: str, *, code: str, severity: str = "critical") -> Dict:
-        with self._lock:
-            item = {
-                "id": self._next_id,
-                "epoch_s": time.time(),
-                "code": code,
-                "severity": severity,
-                "text": text,
-            }
-            self._next_id += 1
-            self._items.append(item)
-            return dict(item)
-
-    def since(self, cursor: int) -> list[Dict]:
-        with self._lock:
-            return [dict(item) for item in self._items if int(item["id"]) > int(cursor)]
 
 
 class ActiveQcMonitor:
     """Record only sustained faults; raw capture continues for forensics."""
 
-    def __init__(self, node, recording_manager, take_store, alerts: VoiceAlertQueue, config: Optional[Dict] = None) -> None:
+    def __init__(self, node, recording_manager, take_store, config: Optional[Dict] = None) -> None:
         settings = dict(config or {})
         self.node = node
         self.recording_manager = recording_manager
         self.take_store = take_store
-        self.alerts = alerts
         self.sustain_sec = max(0.5, float(settings.get("sustain_sec", 3.0)))
         self.camera_stale_sec = max(0.5, float(settings.get("camera_stale_sec", 2.0)))
         self.minimum_free_gb = max(0.0, float(settings.get("minimum_free_gb", 2.0)))
@@ -108,7 +82,6 @@ class ActiveQcMonitor:
             "details": details,
         }
         self.take_store.add_anomaly(anomaly)
-        self.alerts.publish(text, code=code, severity=severity)
 
     def poll(self) -> None:
         if not self.recording_manager.is_recording():

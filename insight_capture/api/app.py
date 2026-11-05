@@ -75,7 +75,6 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_post("/api/tasks/{task_id}/activate", tasks._handle_activate)
     app.router.add_put("/api/tasks/{task_id}", tasks._handle_update)
     app.router.add_post("/api/takes/current/reject", takes._handle_reject_current)
-    app.router.add_get("/api/voice/alerts", runtime._handle_voice_alerts)
     app.router.add_get("/api/recording/topics", recording._handle_recording_topics)
     app.router.add_get(
         "/api/recording/storage/directories",
@@ -90,16 +89,8 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/postprocessing/recordings", recording._handle_saved_recordings)
     app.router.add_post("/api/postprocessing/merge", recording._handle_saved_recording_merge)
     app.router.add_post(
-        "/api/automation/recording/start",
-        recording._handle_automation_recording_start,
-    )
-    app.router.add_post(
-        "/api/automation/recording/vio-calibration/start",
-        recording._handle_automation_vio_calibration_start,
-    )
-    app.router.add_post(
-        "/api/automation/recording/stop",
-        recording._handle_automation_recording_stop,
+        "/api/recording/vio-calibration/start",
+        recording._handle_vio_calibration_start,
     )
     app.router.add_get("/api/rosbags", recording._handle_rosbag_list)
     app.router.add_delete("/api/rosbags/{bag_name}", recording._handle_rosbag_delete)
@@ -131,14 +122,6 @@ def create_app(context: DashboardContext) -> web.Application:
         settings._handle_settings_insight3_gripper_mask,
     )
     app.router.add_post("/api/settings/restart-backend", settings._handle_settings_restart)
-    app.router.add_post(
-        "/api/settings/voice-volume",
-        settings._handle_settings_voice_volume,
-    )
-    app.router.add_post(
-        "/api/settings/voice-sample",
-        settings._handle_settings_voice_sample,
-    )
     app.router.add_get("/asset", static._handle_asset)
 
     if context.web_root and context.web_root.exists():

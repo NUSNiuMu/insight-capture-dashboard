@@ -81,7 +81,7 @@ class VioCalibrationRecordingTest(unittest.TestCase):
         self.assertNotIn(
             "camera_stale", {item["code"] for item in report["failures"]}
         )
-        self.assertIn("未校正图像", preflight.speech(report))
+        self.assertIn("未校正图像", preflight.message(report))
 
     def test_payload_probe_inherits_dashboard_rmw(self):
         manager = RecordingManager(

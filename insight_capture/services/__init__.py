@@ -1,4 +1,4 @@
-"""Application services shared by HTTP and voice adapters."""
+"""Application services shared by HTTP adapters."""
 
 from .scoring import ScoringManager
 

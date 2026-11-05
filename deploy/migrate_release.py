@@ -96,8 +96,8 @@ def migrate(root: Path, templates: Path) -> dict:
     task_id = str(active.get("task_id") or "")
     if task_id:
         if not any(t.get("id", t.get("task_id")) == task_id for t in tasks.get("tasks", [])):
-            tasks.setdefault("tasks", []).append(dict(id=task_id, name=task_id, speech_name=task_id,
-                instruction=f"Capture {task_id}", capture_profile="capture", voice_aliases=[]))
+            tasks.setdefault("tasks", []).append(dict(id=task_id, name=task_id,
+                instruction=f"Capture {task_id}", capture_profile="capture"))
         previous = str(active.get("session_id") or task_id)
         if previous != task_id and Path(previous).name == previous:
             source, destination = sessions / previous, sessions / task_id
@@ -116,6 +116,15 @@ def migrate(root: Path, templates: Path) -> dict:
                 write(destination / "session.json", metadata)
             active["session_id"] = task_id
             write(sessions / "active_session.json", active)
+    for task in tasks.get("tasks", []):
+        task.pop("speech_name", None)
+        task.pop("voice_aliases", None)
+    for path in sessions.glob("*/task.json"):
+        task = read(path, {})
+        if "speech_name" in task or "voice_aliases" in task:
+            task.pop("speech_name", None)
+            task.pop("voice_aliases", None)
+            write(path, task)
     write(config / "capture_tasks.json", tasks)
     marker = config / ".device"
     if not marker.exists() or marker.read_text().strip() != profile:

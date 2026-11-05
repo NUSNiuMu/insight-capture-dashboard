@@ -18,10 +18,10 @@ class TakeRoutes:
         except RuntimeError:
             return web.json_response({
                 "type": "take_decision", "ok": False,
-                "speech": "当前没有可作废的记录。",
+                "message": "当前没有可作废的记录。",
             }, status=409)
         return web.json_response({
             "type": "take_decision", "ok": True,
-            "speech": f"第{take['take_id']}条已标记作废，原始数据已保留。",
+            "message": f"第{take['take_id']}条已标记作废，原始数据已保留。",
             "take": take,
         })
