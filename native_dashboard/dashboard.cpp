@@ -125,6 +125,8 @@ void Dashboard::request(const QString &path, const QJsonObject *body, std::funct
         auto value = reply->isOpen() ? QJsonDocument::fromJson(reply->readAll()).object() : QJsonObject();
         if (reply->error() != QNetworkReply::NoError) {
             m_message = value["error"].toString(reply->errorString());
+            m_transportError = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).isNull()
+                ? m_message : QString();
             if (captureCommand)
                 m_state["captureError"] = m_message;
             if (path.contains("playback")) {
@@ -134,6 +136,11 @@ void Dashboard::request(const QString &path, const QJsonObject *body, std::funct
             }
             emit stateChanged();
         } else {
+            if (!m_transportError.isEmpty() && m_message == m_transportError) {
+                m_message.clear();
+                emit stateChanged();
+            }
+            m_transportError.clear();
             if (done)
                 done(value);
             if (captureCommand)
