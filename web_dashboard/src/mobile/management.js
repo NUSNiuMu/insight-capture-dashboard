@@ -38,7 +38,7 @@ export class CaptureManagement {
       });
     };
     this.timer = setInterval(() => {
-      if (this.panel.open && !document.hidden && !this.busy) this.refreshRecordings().catch(error => this.showError(error));
+      if (this.panel.open && !document.hidden && !this.busy) this.refreshRecordings().catch(error => { el("recordings-error").textContent = error.message; });
     }, 5000);
     window.addEventListener("pagehide", () => clearInterval(this.timer));
   }
@@ -68,7 +68,7 @@ export class CaptureManagement {
     finally { this.busy = false; }
   }
   async refresh() {
-    try { await this.load(); }
+    try { await this.load(); el("management-message").textContent = ""; }
     catch (error) { this.showError(error); }
   }
   async load() {
@@ -80,6 +80,7 @@ export class CaptureManagement {
   }
   async refreshRecordings() {
     this.status = await this.api("/api/postprocessing/recordings");
+    el("recordings-error").textContent = "";
     const list = el("saved-recordings");
     list.replaceChildren();
     if (!this.status.enabled || !this.status.recordings.length) {
