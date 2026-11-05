@@ -26,6 +26,28 @@ QC 为核心；采后才打开本机 Firefox/Kiosk 或 Web Dashboard 查看三�
 
 独立的 **x86 ArUco 最小数采版**（Insight9 VIO + cube 定位、普通 RGB、串口夹爪、手动标注与 LeRobot v3）见 [部署与使用说明](docs/X86_ARUCO_CAPTURE.md)。
 
+### ArUco 数采的预标注推理服务
+
+ArUco 数采工作台的自动预标注依赖一个单独运行在 GPU 机器上的推理服务（Qwen2.5-VL-7B，约 17 GB 显存，目前放在 4090 那台 `10.198.1.220`）。服务不启动时不做预标注，照常手动标注。
+
+```bash
+# GPU 机器上：首次复制配置，按本机修改模型目录 MODEL 和 Python 解释器 PYTHON
+cp deploy/vlm/vlm.env.example deploy/vlm/.env
+
+deploy/vlm/vlm_service.sh start     # 后台启动，等到 /health 就绪后返回
+deploy/vlm/vlm_service.sh status    # 进程与健康检查
+deploy/vlm/vlm_service.sh logs      # 跟踪日志（~/.local/state/insight-vlm-service/service.log）
+deploy/vlm/vlm_service.sh restart   # 更新代码后重启
+deploy/vlm/vlm_service.sh stop
+deploy/vlm/vlm_service.sh run       # 前台运行（调试或交给 systemd）
+
+# 采集机上：指向推理服务后重建采集容器
+echo ARUCO_ANNOTATION_URL=http://10.198.1.220:8780 > deploy/aruco/.env
+docker compose -f deploy/aruco/compose.yml up -d
+```
+
+预标注的流程、草稿格式和前端确认方式见 [部署与使用说明](docs/X86_ARUCO_CAPTURE.md) 的“采集与标注”一节。
+
 ## 快速开始
 
 ### 方式一：docker compose（推荐，持久化服务）

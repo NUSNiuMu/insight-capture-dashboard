@@ -177,7 +177,7 @@
             </div>
             <div id="poseTools" class="pose-tools" hidden>
               <label
-                title="回放、自动分段与导出都使用这里选择的轨迹，两者始终一致"
+                title="回放、静止分段与导出都使用这里选择的轨迹，两者始终一致"
                 >轨迹来源
                 <select id="poseSource">
                   <option value="live">实时录制</option>
@@ -314,7 +314,7 @@
               </div>
               <div id="segmentGuide" class="segment-guide" hidden>
                 <ol id="guideSteps" class="guide-steps">
-                  <li title="点「自动分段（静止检测）」生成草稿，或拖动时间轴、用「设为当前」设置起止后添加">
+                  <li title="点「静止分段」或「预标注」生成草稿，或拖动时间轴、用「设为当前」设置起止后添加">
                     生成片段
                   </li>
                   <li title="点列表中的片段或时间轴上的色块，播放核对内容">
@@ -391,6 +391,20 @@
                   hidden
                 />
               </div>
+              <div class="action-table-bar draft-bar">
+                <span id="draftInfo">预标注：检查推理服务…</span
+                ><span class="draft-actions"
+                  ><button
+                    id="loadDraft"
+                    type="button"
+                    class="quiet"
+                    title="用预标注草稿替换当前片段列表（不保存，核对后点「保存全部标注」）"
+                    hidden
+                  >
+                    载入草稿</button
+                  ></span
+                >
+              </div>
               <label for="task">任务文本 task</label
               ><select id="taskId" aria-label="从动作表选择 task" hidden></select
               ><input
@@ -414,8 +428,21 @@
               </select>
               <p id="formError" class="error-text" role="alert"></p>
               <div class="form-actions">
-                <button id="autoSegment" type="button" class="primary">
-                  自动分段（静止检测）</button
+                <button
+                  id="autoSegment"
+                  type="button"
+                  class="primary"
+                  title="按双臂静止检测切出片段草稿，任务待填写"
+                >
+                  静止分段</button
+                ><button
+                  id="runDraft"
+                  type="button"
+                  class="primary"
+                  title="用推理服务生成这条录制的预标注草稿"
+                  hidden
+                >
+                  预标注</button
                 ><button id="add" type="submit" class="primary">添加片段</button
                 ><button id="cancelEdit" type="button" class="quiet" hidden>
                   取消编辑</button

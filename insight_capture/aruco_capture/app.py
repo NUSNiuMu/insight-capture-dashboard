@@ -11,7 +11,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import action_table
+from . import action_table, preannotate
 from .capture import Capture, write_json
 from .dataset import (
     align,
@@ -30,11 +30,15 @@ from .pose import camera_view
 from .pose_track import pose_settings, recompute, update_pose_settings
 
 
-def create_app(capture):
+def create_app(capture, annotation_url=""):
     # Sessions being exported or recomputed; recording waits for them too,
     # since both saturate the CPU.
     busy = set()
     pose_jobs, pose_tasks = {}, set()
+    # Pre-annotation runs one session at a time (one GPU behind the service)
+    # and never blocks recording: it is mostly waiting on the service.
+    draft_jobs, draft_tasks = {}, set()
+    draft_lock = asyncio.Lock()
 
     @web.middleware
     async def errors(request, handler):
@@ -176,7 +180,77 @@ def create_app(capture):
         )
 
     async def stop(request):
-        return web.json_response({"stopped": await asyncio.to_thread(capture.stop)})
+        name = await asyncio.to_thread(capture.stop)
+        if name and annotation_url:
+            # Probe in the background so stopping never waits on the network.
+            task = asyncio.get_running_loop().create_task(
+                start_draft(session_path(name), required=False)
+            )
+            draft_tasks.add(task)
+            task.add_done_callback(draft_tasks.discard)
+        return web.json_response({"stopped": name})
+
+    async def start_draft(path, required):
+        """Queue pre-annotation if the service answers; otherwise skip (or refuse)."""
+        if draft_jobs.get(path.name, {}).get("running"):
+            if required:
+                raise ValueError("这条录制正在预标注，请稍候")
+            return draft_jobs[path.name]
+        health = await asyncio.to_thread(preannotate.probe, annotation_url)
+        if health is None:
+            if required:
+                raise ValueError(
+                    "推理服务未配置或无法连接，不能预标注"
+                    + (f"（{annotation_url}）" if annotation_url else "")
+                )
+            print(f"pre-annotation skipped for {path.name}: service unavailable", flush=True)
+            return None
+        job = draft_jobs[path.name] = {
+            "running": True, "queued": True, "done": 0, "total": 0,
+            "error": None, "model": health.get("model", ""),
+        }
+
+        def progress(done, total):
+            job.update(done=done, total=total)
+
+        async def run():
+            try:
+                async with draft_lock:
+                    job["queued"] = False
+                    table = await asyncio.to_thread(action_table.load, capture.root)
+                    await asyncio.to_thread(
+                        preannotate.run, path, annotation_url, table, job["model"], progress
+                    )
+            except Exception as exc:  # reported to the page, not raised
+                job["error"] = str(exc) or type(exc).__name__
+            finally:
+                job["running"] = False
+
+        task = asyncio.get_running_loop().create_task(run())
+        draft_tasks.add(task)
+        task.add_done_callback(draft_tasks.discard)
+        return job
+
+    def draft_state(path):
+        file = path / preannotate.DRAFT
+        return {
+            "draft": json.loads(file.read_text()) if file.is_file() else None,
+            "job": draft_jobs.get(path.name),
+        }
+
+    async def draft(request):
+        path = session(request)
+        if request.method == "POST":
+            if path.name == capture.active:
+                raise ValueError("录制结束后才能预标注")
+            await start_draft(path, required=True)
+        return web.json_response(await asyncio.to_thread(draft_state, path))
+
+    async def annotation_service(request):
+        health = await asyncio.to_thread(preannotate.probe, annotation_url)
+        return web.json_response(
+            {"configured": bool(annotation_url), "url": annotation_url, "health": health}
+        )
 
     async def sessions(request):
         exported_index = await asyncio.to_thread(
@@ -195,6 +269,7 @@ def create_app(capture):
                     "streams": ["head"]
                     + [x["name"] for x in value["config"].get("rgb", [])],
                     "annotated": bool(segments),
+                    "drafted": (path.parent / preannotate.DRAFT).is_file(),
                     "exported_to": exported_index.get(path.parent.name, []),
                 }
             )
@@ -385,6 +460,8 @@ def create_app(capture):
             raise ValueError("正在录制这条记录，请先停止录制")
         if path.name in busy:
             raise ValueError("这条录制正在导出或离线重算，请等待完成")
+        if draft_jobs.get(path.name, {}).get("running"):
+            raise ValueError("这条录制正在预标注，请等待完成")
         await asyncio.to_thread(shutil.rmtree, path)
         return web.json_response({"deleted": path.name})
 
@@ -470,6 +547,9 @@ def create_app(capture):
             web.get("/api/sessions", sessions),
             web.get("/api/action-table", actions),
             web.post("/api/action-table", actions),
+            web.get("/api/annotation/service", annotation_service),
+            web.get("/api/sessions/{name}/draft", draft),
+            web.post("/api/sessions/{name}/draft", draft),
             web.get("/api/preview/{stream}", preview),
             web.get("/api/sessions/{name}/frame/{stream}", frame),
             web.get("/api/sessions/{name}/segments", segments),
@@ -499,6 +579,11 @@ def main():
     parser.add_argument("--output", default="outputs/aruco-capture")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8770)
+    parser.add_argument(
+        "--annotation-url",
+        default=os.environ.get("ARUCO_ANNOTATION_URL", ""),
+        help="预标注推理服务地址，如 http://10.198.1.220:8780；留空则不预标注",
+    )
     args = parser.parse_args()
     config = json.loads(args.config.read_text())
     os.environ["ROS_DOMAIN_ID"] = str(config["ros_domain_id"])
@@ -507,7 +592,11 @@ def main():
 
     ros_layer, watchdog_stop, watchdog = start_ros_layer(capture)
     try:
-        web.run_app(create_app(capture), host=args.host, port=args.port)
+        web.run_app(
+            create_app(capture, args.annotation_url.strip()),
+            host=args.host,
+            port=args.port,
+        )
     finally:
         import rclpy
 

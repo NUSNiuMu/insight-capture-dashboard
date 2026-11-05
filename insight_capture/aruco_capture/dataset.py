@@ -322,6 +322,38 @@ def _rotation_matrix_from_6d(row01):
     return np.array([row0, row1, np.cross(row0, row1)])
 
 
+def arm_stationary(
+    state,
+    fps,
+    offset,
+    linear_m_s=DEFAULT_IDLE_LINEAR_SPEED_M_S,
+    angular_deg_s=DEFAULT_IDLE_ANGULAR_SPEED_DEG_S,
+    gripper_m_s=DEFAULT_IDLE_GRIPPER_SPEED_M_S,
+):
+    """Per frame interval, whether the arm whose state starts at `offset` is still."""
+    position = state[:, offset : offset + 3].astype(np.float64)
+    rotation = np.stack(
+        [_rotation_matrix_from_6d(row) for row in state[:, offset + 3 : offset + 9]]
+    )
+    opening = state[:, offset + 9].astype(np.float64)
+    linear_speed = np.linalg.norm(np.diff(position, axis=0), axis=1) * fps
+    angular_speed = (
+        np.array(
+            [
+                rotation_distance_deg(rotation[i], rotation[i + 1])
+                for i in range(len(state) - 1)
+            ]
+        )
+        * fps
+    )
+    gripper_speed = np.abs(np.diff(opening)) * fps
+    return (
+        (linear_speed <= linear_m_s)
+        & (angular_speed <= angular_deg_s)
+        & (gripper_speed <= gripper_m_s)
+    )
+
+
 def suggest_pause_segments(
     grid,
     state,
@@ -348,28 +380,16 @@ def suggest_pause_segments(
     frame_count = len(grid)
     if frame_count < 2:
         return []
-    stationary = np.ones(frame_count - 1, dtype=bool)
-    stationary &= good[:-1] & good[1:]
+    stationary = good[:-1] & good[1:]
     for offset in (0, 10):
-        position = state[:, offset : offset + 3].astype(np.float64)
-        rotation = np.stack(
-            [_rotation_matrix_from_6d(row) for row in state[:, offset + 3 : offset + 9]]
+        stationary &= arm_stationary(
+            state,
+            fps,
+            offset,
+            idle_linear_speed_m_s,
+            idle_angular_speed_deg_s,
+            idle_gripper_speed_m_s,
         )
-        opening = state[:, offset + 9].astype(np.float64)
-        linear_speed = np.linalg.norm(np.diff(position, axis=0), axis=1) * fps
-        angular_speed = (
-            np.array(
-                [
-                    rotation_distance_deg(rotation[i], rotation[i + 1])
-                    for i in range(frame_count - 1)
-                ]
-            )
-            * fps
-        )
-        gripper_speed = np.abs(np.diff(opening)) * fps
-        stationary &= linear_speed <= idle_linear_speed_m_s
-        stationary &= angular_speed <= idle_angular_speed_deg_s
-        stationary &= gripper_speed <= idle_gripper_speed_m_s
 
     maximum_gap_intervals = int(math.floor(idle_gap_tolerance_s * fps))
     moving_padded = np.concatenate(([False], ~stationary, [False])).astype(np.int8)

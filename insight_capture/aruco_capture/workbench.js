@@ -61,7 +61,11 @@ let mode = "capture",
   poseTimer = null,
   poseFilterTimer = null,
   // Shared task/subtask vocabulary; segments keep its ids next to free text.
-  actionTable = { version: "", tasks: [] };
+  actionTable = { version: "", tasks: [] },
+  // Pre-annotation service status and the open session's draft / job.
+  service = null,
+  draftInfo = null,
+  draftTimer = null;
 const scene = new Trajectory($("scene"), $("sceneEmpty"));
 const devicePanel = new DevicePanel(api);
 const el = (tag, text, cls) => {
@@ -141,6 +145,7 @@ function updateControls() {
   for (const id of ["poseSource", "poseFilter", "poseRecompute"])
     $(id).disabled = !review || reviewBusy || !!poseInfo?.job?.running;
   updateMerge();
+  renderDraft();
   updateSessionNav();
   updateBatchExport();
 }
@@ -637,6 +642,9 @@ async function selectSession(name) {
   currentTime = 0;
   clearTimeout(poseTimer);
   poseTimer = null;
+  clearTimeout(draftTimer);
+  draftTimer = null;
+  draftInfo = null;
   renderPose(null);
   scene.setData([]);
   scene.cursor(null);
@@ -659,6 +667,8 @@ async function selectSession(name) {
     const data = await api(base() + "/review");
     if (selectedName !== token) return;
     installReview(data);
+    loadService();
+    loadDraft(name, true);
     $("sessionMeta").textContent =
       `${seconds(data.duration_s, 1)} · ${data.streams.length} 路视频 · ${data.fps} Hz`;
     notice("");
@@ -759,7 +769,7 @@ async function pollPose(name) {
   if (finished && !pose.job.error && !dirty && !editorDirty) {
     try {
       await reloadReview();
-      notice("离线重算完成，已切换为离线轨迹；回放、自动分段与导出都使用此轨迹");
+      notice("离线重算完成，已切换为离线轨迹；回放、静止分段与导出都使用此轨迹");
     } catch (e) {
       notice(e.message, true);
     }
@@ -1021,7 +1031,7 @@ function renderGuide() {
   const current = parts[editing];
   $("guideText").textContent =
     step === 1
-      ? "点「自动分段（静止检测）」生成片段草稿，或拖动时间轴、用「设为当前」设置起止后添加"
+      ? "点「静止分段」或「预标注」生成片段草稿，或拖动时间轴、用「设为当前」设置起止后添加"
       : step === 2
         ? `已填写 ${total - missing} / ${total} 段，还有 ${missing} 段未填写任务（虚线标出）`
         : step === 3
@@ -1043,8 +1053,11 @@ function renderParts() {
   $("segments").replaceChildren();
   $("segmentTrack").replaceChildren();
   const outside = parts.filter(offTable).length;
+  const flagged = parts.filter((p) => p.flags?.length).length;
   $("segmentCount").textContent =
-    `${parts.length} 个片段` + (outside ? ` · ${outside} 段未关联动作表` : "");
+    `${parts.length} 个片段` +
+    (flagged ? ` · ${flagged} 段存疑` : "") +
+    (outside ? ` · ${outside} 段未关联动作表` : "");
   if (!parts.length)
     $("segments").append(
       el("div", "拖动时间轴，设置起止点，添加第一个动作片段。", "empty-state"),
@@ -1063,6 +1076,11 @@ function renderParts() {
         : "未关联动作表中的 task";
       heading.append(tag);
     }
+    if (p.flags?.length) {
+      const tag = el("span", "存疑", "off-table flagged");
+      tag.title = p.flags.join("\n");
+      heading.append(tag);
+    }
     b.append(
       heading,
       el(
@@ -1071,6 +1089,7 @@ function renderParts() {
       ),
     );
     if (p.subtask) b.append(el("small", "subtask：" + p.subtask, "subtask"));
+    if (p.note) b.append(el("small", "模型：" + p.note, "note"));
     if (p.task_id)
       b.append(
         el(
@@ -1854,6 +1873,118 @@ $("actionFile").onchange = async () => {
     notice("导入动作表失败：" + e.message, true);
   }
 };
+// Pre-annotation: the service status, this session's draft and its job.
+async function loadService() {
+  try {
+    service = await api("/api/annotation/service");
+  } catch {
+    service = null;
+  }
+  renderDraft();
+}
+function renderDraft() {
+  const job = draftInfo?.job,
+    draft = draftInfo?.draft,
+    running = !!job?.running,
+    configured = !!service?.configured,
+    up = !!service?.health;
+  let text;
+  if (!review) text = "预标注：选择录制后显示";
+  else if (running)
+    text = job.queued
+      ? "预标注排队中…"
+      : `预标注中 ${job.done} / ${job.total || "…"} 段`;
+  else if (job?.error) text = "预标注失败：" + job.error;
+  else if (draft) {
+    const flagged = draft.segments.filter((s) => s.flags?.length).length;
+    text =
+      `预标注草稿 ${draft.segments.length} 段` +
+      (flagged ? ` · ${flagged} 段存疑` : "") +
+      ` · ${draft.model || "模型未知"} · ` +
+      new Date(draft.created_unix_ns / 1e6).toLocaleString("zh-CN", {
+        hour12: false,
+      });
+  } else if (!service) text = "预标注：检查推理服务…";
+  else if (!configured) text = "未配置推理服务，不做预标注";
+  else if (!up) text = "推理服务未启动，录制停止后不会预标注";
+  else text = "这条录制还没有预标注草稿";
+  $("draftInfo").textContent = text;
+  $("draftInfo").title = service?.url ? "推理服务 " + service.url : "";
+  $("loadDraft").hidden = !draft || running;
+  $("loadDraft").disabled = reviewBusy;
+  $("runDraft").hidden = !configured;
+  $("runDraft").disabled = !review || reviewBusy || running || !up;
+  $("runDraft").textContent = draft ? "重新预标注" : "预标注";
+  $("runDraft").title = up
+    ? `用推理服务（${service.health.model}）重新生成这条录制的预标注草稿`
+    : `推理服务未启动或连不上：${service?.url || ""}`;
+}
+// `apply`: install the draft when the session has no segments yet.
+async function loadDraft(name, apply) {
+  clearTimeout(draftTimer);
+  draftTimer = null;
+  let state;
+  try {
+    state = await api(base() + "/draft");
+  } catch {
+    return;
+  }
+  if (name !== selectedName) return;
+  const finished = !!draftInfo?.job?.running && !state.job?.running;
+  draftInfo = state;
+  renderDraft();
+  if (state.job?.running) {
+    draftTimer = setTimeout(() => loadDraft(name, false), 2000);
+    return;
+  }
+  if (finished && state.job.error) {
+    notice("预标注失败：" + state.job.error, true);
+    return;
+  }
+  if (!state.draft || !(apply || finished)) return;
+  if (!parts.length && !dirty && !editorDirty) applyDraft(true);
+  else if (finished) notice("预标注完成，可点「载入草稿」替换当前片段");
+}
+function applyDraft(auto) {
+  const draft = draftInfo?.draft;
+  if (!draft) return;
+  const previous = parts.map((p) => ({ ...p }));
+  parts = draft.segments.map((s) => ({
+    start_s: s.start_s,
+    end_s: s.end_s,
+    task: s.task || "",
+    subtask: s.subtask || "",
+    task_id: s.task_id || "",
+    subtask_id: s.subtask_id || "",
+    hands: s.hands || "both",
+    note: s.description || "",
+    flags: s.flags || [],
+  }));
+  selection = new Set();
+  setDirty(true);
+  resetEditor();
+  renderParts();
+  const flagged = parts.filter((p) => p.flags.length).length;
+  notice(
+    `${auto ? "已自动载入" : "已载入"}预标注草稿 ${parts.length} 段` +
+      (flagged ? `，其中 ${flagged} 段存疑（红色标记）` : "") +
+      "。逐段核对，打开并「更新片段」即视为确认；全部核对后点「保存全部标注」才生效。",
+  );
+  offerUndo("撤销载入草稿", previous);
+}
+$("loadDraft").onclick = () => {
+  if (editorDirty) {
+    notice("请先添加或更新正在编辑的片段，再载入草稿", true);
+    return;
+  }
+  applyDraft(false);
+};
+bind("runDraft", async () => {
+  draftInfo = await api(base() + "/draft", "POST");
+  renderDraft();
+  notice("已开始预标注，完成后可载入草稿");
+  draftTimer = setTimeout(() => loadDraft(selectedName, false), 1500);
+});
 bind("save", async () => {
   if (editorDirty) throw Error("请先添加或更新正在编辑的片段，再保存全部标注");
   const missing = parts.filter(unfilled).length;
@@ -1864,7 +1995,11 @@ bind("save", async () => {
   reviewBusy = true;
   updateControls();
   try {
-    await api(base() + "/segments", "POST", parts);
+    await api(
+      base() + "/segments",
+      "POST",
+      parts.map(({ note, flags, ...p }) => p),
+    );
     const t = currentTime;
     const data = await api(base() + "/review");
     installReview(data);
@@ -1877,7 +2012,7 @@ bind("save", async () => {
 });
 bind("autoSegment", async () => {
   if (!review) throw Error("请先选择一条已停止的录制");
-  if (editorDirty) throw Error("请先添加或更新正在编辑的片段，再自动分段");
+  if (editorDirty) throw Error("请先添加或更新正在编辑的片段，再静止分段");
   reviewBusy = true;
   updateControls();
   let suggestions;
@@ -1899,14 +2034,14 @@ bind("autoSegment", async () => {
       ? `已按双臂静止检测生成 ${suggestions.length} 个片段草稿，并打开第 1 段：输入任务后按回车依次填写，全部填完再保存。`
       : "没有检测到可用片段：录制中可能缺少连续有效的位姿，请手动添加。",
   );
-  const undo = el("button", "撤销自动分段", "quiet");
+  const undo = el("button", "撤销静止分段", "quiet");
   undo.type = "button";
   undo.onclick = () => {
     parts = previous;
     setDirty(true);
     resetEditor();
     renderParts();
-    notice("已撤销自动分段");
+    notice("已撤销静止分段");
   };
   $("message").append(undo);
 });

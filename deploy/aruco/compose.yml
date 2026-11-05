@@ -10,6 +10,9 @@ services:
     environment:
       RMW_IMPLEMENTATION: rmw_fastrtps_cpp
       ARUCO_DEVICE_ROOT: /host-dev
+      # Pre-annotation service (insight_capture.vlm_service), e.g. http://10.198.1.220:8780;
+      # set it in deploy/aruco/.env. Empty: recordings are not pre-annotated.
+      ARUCO_ANNOTATION_URL: ${ARUCO_ANNOTATION_URL:-}
     device_cgroup_rules:
       - "c 81:* rw"
       - "c 188:* rw"

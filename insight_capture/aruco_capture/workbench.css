@@ -918,6 +918,10 @@ input[type="range"] {
 .form-actions button {
   font-size: 12px;
 }
+/* Saving commits everything, so it sits apart at the far right. */
+.form-actions #save {
+  margin-left: auto;
+}
 .error-text {
   color: var(--red);
   font-size: 12px;
@@ -948,7 +952,7 @@ input[type="range"] {
 .segment-row.current {
   background: #1c2e45;
 }
-.segment-row.current small:not(.subtask)::after {
+.segment-row.current small:not(.subtask):not(.note)::after {
   content: " · 播放位置";
   color: var(--cyan);
 }
@@ -1056,6 +1060,20 @@ input[type="range"] {
 }
 .segment-form > select {
   font-size: 12px;
+}
+.draft-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.segment-row .off-table.flagged {
+  border-color: var(--red);
+  color: var(--red);
+}
+.segment-row small.note {
+  display: block;
+  margin-top: 2px;
+  font-style: italic;
 }
 .segment-row .off-table {
   margin-left: 6px;
