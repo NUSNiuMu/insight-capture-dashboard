@@ -175,12 +175,14 @@ Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、
    - CSV：表头 `task_id,task,task_zh,subtask_id,subtask,subtask_zh`，每行一个 subtask，同一 `task_id` 的后续行可省略 task 文本；`subtask_id` 为空的行只声明 task。UTF-8 或 Excel 中文系统另存的 GBK 编码都可读。
 
    导入后，task 和 subtask 输入框上方各出现一个下拉框：选中动作表条目时，文本框为空或仍是某条标准说法则预填所选条目的标准说法；已改写成自己措辞的文本保留不动。文本可以自由改写（同一动作用不同表达，用于训练语言理解），下拉框记录的是标准 id。subtask 下拉只列所选 task 下的条目。不选 task 即为表外动作，只填文本也能保存，但片段列表会标“表外”并统计“N 段未关联动作表”；片段引用的 id 已不在当前表中时同样标“表外”，下拉框保留该 id 并注明“当前动作表中已无”。“把此任务文本也填到其余未填写片段”会一并带上所选 task id。对应接口 `GET /api/action-table`、`POST /api/action-table`（请求体 `{"filename", "content"}`）。
-   预标注（可选）：在有 GPU 的机器上单独运行推理服务 `insight_capture.vlm_service`（Qwen2.5-VL-7B，bf16 约占 17 GB 显存，216 的 RTX 3080 10 GB 放不下，放在 4090 那台），采集服务通过 `ARUCO_ANNOTATION_URL` 指向它：
+   预标注（可选）：在有 GPU 的机器上单独运行推理服务 `insight_capture.vlm_service`（默认 Qwen3.8-27B-FP8，约 30 GB 显存，放在 4090 48 GB 那台；也兼容 Qwen2.5-VL-7B，约 17 GB。216 的 RTX 3080 10 GB 都放不下），采集服务通过 `ARUCO_ANNOTATION_URL` 指向它：
 
    ```bash
-   # GPU 机器上：首次复制配置并按本机修改 MODEL / PYTHON（Python 环境需 torch CUDA、transformers>=4.49、opencv-python、numpy）
+   # GPU 机器上，首次：建环境（固定版本见 deploy/vlm/requirements.txt）并取 FP8 内核，下载权重，复制配置后按本机修改 MODEL / PYTHON
+   deploy/vlm/setup_env.sh --fetch-kernel
+   uvx modelscope download --model Qwen/Qwen3.8-27B-FP8 --local_dir ~/Workspace/Qwen3.8-27B-FP8
    cp deploy/vlm/vlm.env.example deploy/vlm/.env
-   deploy/vlm/vlm_service.sh start    # 后台启动，等到 /health 就绪；另有 stop / restart / status / logs / run
+   deploy/vlm/vlm_service.sh start    # 后台启动，加载并预热后返回；另有 stop / restart / status / logs / run
    # 采集机上：写入 deploy/aruco/.env 后重建容器
    echo ARUCO_ANNOTATION_URL=http://10.198.1.220:8780 > deploy/aruco/.env
    docker compose -f deploy/aruco/compose.yml up -d
@@ -189,7 +191,7 @@ Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、
    - **服务地址**：回放页预标注栏的“服务设置”可直接修改推理服务地址（主机与端口，如 `10.198.1.220:8780`，可省略 `http://`），点“保存并测试”立即生效并显示能否连上，保存在 `outputs/aruco-capture/_annotation.json`；页面上保存过之后以它为准，`ARUCO_ANNOTATION_URL` 只作为从未设置时的默认值。清空地址即停用预标注。推理服务自身的监听端口由 GPU 机器上 `deploy/vlm/.env` 的 `PORT` 决定，两边需一致。
    - **只在服务可用时运行**：每次停止录制后，后台用几秒超时探测一次服务的 `/health`；没配置地址或连不上就直接跳过（日志一行 `pre-annotation skipped`），不重试、不影响录制和保存，照常手动标注。服务后来才启动的录制，可在回放页点编辑区底部的“预标注”补跑。预标注一次只跑一条（排队），不阻塞开始下一次录制。
    - **内容**：片段边界沿用“静止分段”（双臂线速度、角速度、开合速度同时静止才切）；参与手臂按位姿判断——某只手处于运动状态的时间不到另一只手的 30% 记为单手，否则双手；task / subtask 文本与动作表 id 由模型按观察相机画面（每段约 2 帧/秒，最多 24 帧）生成，导入了动作表时模型只能从表中选 id，并被要求用自己的英文措辞写出具体物体与方向。模型写成中文的文本会被丢弃，id 缺失但文本与标准说法一致时自动补上 id。
-   - **草稿**：结果写入录制目录的 `segments_draft.json`（每段另带模型的中文描述 `description` 和存疑原因 `flags`），从不覆盖 `segments.json`。存疑包括：模型输出无法解析、未能匹配动作表、id 不在表中、文本为中文、片段短于 1.5 秒、推理请求失败等。在 4090 上一条 2 分钟、18 段的录制约 40 秒。
+   - **草稿**：结果写入录制目录的 `segments_draft.json`（每段另带模型的中文描述 `description` 和存疑原因 `flags`），从不覆盖 `segments.json`。存疑包括：模型输出无法解析、未能匹配动作表、id 不在表中、文本为中文、片段短于 1.5 秒、推理请求失败等。同一条 2 分钟、18 段的录制在 4090 上：Qwen3.8-27B-FP8 约 110 秒（每段约 6 秒），Qwen2.5-VL-7B 约 40 秒；换用 Qwen3.8 是因为 7B 常把夹爪上的标记方块当成被操作的物体、改写多半照抄标准说法，Qwen3.8 会如实留空无操作的片段并写出具体物体与方向。服务启动时先用合成画面推理一次做预热（首次在一台机器上编译 GPU 内核约 1.5 分钟，之后有缓存），预热完 `/health` 才应答。Qwen3 系列关闭思考模式，模型被要求 task / subtask 都写成以动词开头的英文祈使句。
    - **前端确认**：编辑区的预标注栏显示服务与草稿状态；“预标注 / 重新预标注”按钮与“静止分段”“添加片段”并排在编辑区底部，“保存全部标注”单独靠右。打开一条还没有任何标注的录制时自动载入草稿（未保存，可撤销）；已有标注时可点“载入草稿”替换。草稿片段在列表中显示“模型：…”描述，存疑片段带红色“存疑”标签（悬停看原因）；打开片段并“更新片段”即视为确认、清除存疑标记。保存时只写人工确认的字段，导出流程不变。
    - 接口：`GET /api/annotation/service`（服务配置与健康状态）、`POST /api/annotation/service`（请求体 `{"url"}`，修改地址）、`GET /api/sessions/<录制名>/draft`（草稿与任务进度）、`POST /api/sessions/<录制名>/draft`（手动预标注，服务不可用时报错）。推理服务本身：`GET /health`、`POST /v1/label`。
 

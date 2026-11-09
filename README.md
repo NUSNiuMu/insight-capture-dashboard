@@ -28,13 +28,18 @@ QC 为核心；采后才打开本机 Firefox/Kiosk 或 Web Dashboard 查看三�
 
 ### ArUco 数采的预标注推理服务
 
-ArUco 数采工作台的自动预标注依赖一个单独运行在 GPU 机器上的推理服务（Qwen2.5-VL-7B，约 17 GB 显存，目前放在 4090 那台 `10.198.1.220`）。服务不启动时不做预标注，照常手动标注。
+ArUco 数采工作台的自动预标注依赖一个单独运行在 GPU 机器上的推理服务。默认模型 Qwen3.8-27B-FP8（约 30 GB 显存，需 RTX 4090 48 GB 这一级；权重可从 ModelScope `Qwen/Qwen3.8-27B-FP8` 下载），也兼容 Qwen2.5-VL-7B（约 17 GB）。目前放在 4090 那台 `10.198.1.220`。服务不启动时不做预标注，照常手动标注。
 
 ```bash
-# GPU 机器上：首次复制配置，按本机修改模型目录 MODEL 和 Python 解释器 PYTHON
+# GPU 机器上，首次：建 Python 环境（uv + 固定版本，见 deploy/vlm/requirements.txt），
+# --fetch-kernel 顺带下载 FP8 模型所需的计算内核（经 hf-mirror，只需一次）
+deploy/vlm/setup_env.sh --fetch-kernel
+# 下载权重（约 31 GB）
+uvx modelscope download --model Qwen/Qwen3.8-27B-FP8 --local_dir ~/Workspace/Qwen3.8-27B-FP8
+# 复制配置，按本机修改模型目录 MODEL 和 Python 解释器 PYTHON
 cp deploy/vlm/vlm.env.example deploy/vlm/.env
 
-deploy/vlm/vlm_service.sh start     # 后台启动，等到 /health 就绪后返回
+deploy/vlm/vlm_service.sh start     # 后台启动，加载并预热完成后返回（Qwen3.8 约 1–2 分钟）
 deploy/vlm/vlm_service.sh status    # 进程与健康检查
 deploy/vlm/vlm_service.sh logs      # 跟踪日志（~/.local/state/insight-vlm-service/service.log）
 deploy/vlm/vlm_service.sh restart   # 更新代码后重启

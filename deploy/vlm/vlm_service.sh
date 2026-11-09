@@ -2,7 +2,7 @@
 # Pre-annotation inference service (insight_capture.vlm_service) for the aruco workbench.
 # Runs on a GPU machine; Qwen2.5-VL-7B needs ~17 GB VRAM.
 #
-#   deploy/vlm/vlm_service.sh start     # start in the background, wait until /health answers
+#   deploy/vlm/vlm_service.sh start     # start in the background, wait until loaded + warmed up
 #   deploy/vlm/vlm_service.sh stop
 #   deploy/vlm/vlm_service.sh restart
 #   deploy/vlm/vlm_service.sh status
@@ -50,14 +50,14 @@ case "${1:-}" in
     nohup setsid "${cmd[@]}" >>"$log_file" 2>&1 &
     echo $! >"$pid_file"
     echo "启动中（pid $!），日志 $log_file"
-    for _ in $(seq 1 180); do
+    for _ in $(seq 1 600); do
       if curl -fsS -m 2 "$health" >/dev/null 2>&1; then
         echo "已就绪：http://$HOST:$PORT  $(curl -fsS -m 2 "$health")"; exit 0
       fi
       running || { echo "启动失败，日志末尾：" >&2; tail -n 20 "$log_file" >&2; rm -f "$pid_file"; exit 1; }
       sleep 1
     done
-    echo "3 分钟内未就绪，请查看日志 $log_file" >&2; exit 1
+    echo "10 分钟内未就绪，请查看日志 $log_file" >&2; exit 1
     ;;
   stop)
     if ! running; then echo "未在运行"; rm -f "$pid_file"; exit 0; fi
