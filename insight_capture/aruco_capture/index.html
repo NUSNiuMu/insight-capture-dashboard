@@ -402,8 +402,25 @@
                     hidden
                   >
                     载入草稿</button
-                  ></span
+                  ><button
+                    id="serviceSettings"
+                    type="button"
+                    class="quiet"
+                    title="设置推理服务地址（主机与端口）"
+                  >
+                    服务设置
+                  </button></span
                 >
+              </div>
+              <div id="serviceForm" class="service-form" hidden>
+                <input
+                  id="serviceUrl"
+                  autocomplete="off"
+                  aria-label="推理服务地址"
+                  placeholder="http://10.198.1.220:8780（留空则不预标注）"
+                /><button id="saveService" type="button" class="quiet">
+                  保存并测试
+                </button>
               </div>
               <label for="task">任务文本 task</label
               ><select id="taskId" aria-label="从动作表选择 task" hidden></select

@@ -39,6 +39,8 @@ def create_app(capture, annotation_url=""):
     # and never blocks recording: it is mostly waiting on the service.
     draft_jobs, draft_tasks = {}, set()
     draft_lock = asyncio.Lock()
+    # Settable from the page; the env/CLI value is only the first default.
+    service = {"url": preannotate.load_url(capture.root, annotation_url)}
 
     @web.middleware
     async def errors(request, handler):
@@ -181,7 +183,7 @@ def create_app(capture, annotation_url=""):
 
     async def stop(request):
         name = await asyncio.to_thread(capture.stop)
-        if name and annotation_url:
+        if name and service["url"]:
             # Probe in the background so stopping never waits on the network.
             task = asyncio.get_running_loop().create_task(
                 start_draft(session_path(name), required=False)
@@ -196,12 +198,13 @@ def create_app(capture, annotation_url=""):
             if required:
                 raise ValueError("这条录制正在预标注，请稍候")
             return draft_jobs[path.name]
-        health = await asyncio.to_thread(preannotate.probe, annotation_url)
+        url = service["url"]
+        health = await asyncio.to_thread(preannotate.probe, url)
         if health is None:
             if required:
                 raise ValueError(
                     "推理服务未配置或无法连接，不能预标注"
-                    + (f"（{annotation_url}）" if annotation_url else "")
+                    + (f"（{url}）" if url else "")
                 )
             print(f"pre-annotation skipped for {path.name}: service unavailable", flush=True)
             return None
@@ -219,7 +222,7 @@ def create_app(capture, annotation_url=""):
                     job["queued"] = False
                     table = await asyncio.to_thread(action_table.load, capture.root)
                     await asyncio.to_thread(
-                        preannotate.run, path, annotation_url, table, job["model"], progress
+                        preannotate.run, path, url, table, job["model"], progress
                     )
             except Exception as exc:  # reported to the page, not raised
                 job["error"] = str(exc) or type(exc).__name__
@@ -247,10 +250,14 @@ def create_app(capture, annotation_url=""):
         return web.json_response(await asyncio.to_thread(draft_state, path))
 
     async def annotation_service(request):
-        health = await asyncio.to_thread(preannotate.probe, annotation_url)
-        return web.json_response(
-            {"configured": bool(annotation_url), "url": annotation_url, "health": health}
-        )
+        if request.method == "POST":
+            body = await request.json()
+            service["url"] = await asyncio.to_thread(
+                preannotate.save_url, capture.root, body.get("url", "")
+            )
+        url = service["url"]
+        health = await asyncio.to_thread(preannotate.probe, url)
+        return web.json_response({"configured": bool(url), "url": url, "health": health})
 
     async def sessions(request):
         exported_index = await asyncio.to_thread(
@@ -548,6 +555,7 @@ def create_app(capture, annotation_url=""):
             web.get("/api/action-table", actions),
             web.post("/api/action-table", actions),
             web.get("/api/annotation/service", annotation_service),
+            web.post("/api/annotation/service", annotation_service),
             web.get("/api/sessions/{name}/draft", draft),
             web.post("/api/sessions/{name}/draft", draft),
             web.get("/api/preview/{stream}", preview),

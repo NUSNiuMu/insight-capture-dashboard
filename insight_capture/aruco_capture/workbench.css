@@ -1061,6 +1061,19 @@ input[type="range"] {
 .segment-form > select {
   font-size: 12px;
 }
+.service-form {
+  display: flex;
+  gap: 6px;
+}
+.service-form input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+.service-form button {
+  font-size: 11px;
+  flex: none;
+}
 .draft-actions {
   display: flex;
   gap: 6px;

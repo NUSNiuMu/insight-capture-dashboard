@@ -2,7 +2,17 @@ import unittest
 
 import numpy as np
 
-from insight_capture.aruco_capture.preannotate import probe, sample_times, segment_hands
+import tempfile
+from pathlib import Path
+
+from insight_capture.aruco_capture.preannotate import (
+    load_url,
+    normalize_url,
+    probe,
+    sample_times,
+    save_url,
+    segment_hands,
+)
 from insight_capture.vlm_service.prompt import build_prompt, parse_answer
 
 TABLE = {
@@ -79,6 +89,25 @@ class HandsTests(unittest.TestCase):
     def test_probe_without_service(self):
         self.assertIsNone(probe(""))
         self.assertIsNone(probe("http://127.0.0.1:9", timeout=0.5))
+
+
+class ServiceUrlTests(unittest.TestCase):
+    def test_normalize(self):
+        self.assertEqual(normalize_url(" 10.198.1.220:8780/ "), "http://10.198.1.220:8780")
+        self.assertEqual(normalize_url("https://gpu.local"), "https://gpu.local")
+        self.assertEqual(normalize_url(""), "")
+        for bad in ("ftp://x:1", "http://:8780", "http://x:99999", "http://x:80?a=1"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                normalize_url(bad)
+
+    def test_saved_url_overrides_default(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            self.assertEqual(load_url(root, "127.0.0.1:8780"), "http://127.0.0.1:8780")
+            save_url(root, "10.0.0.5:9000")
+            self.assertEqual(load_url(root, "127.0.0.1:8780"), "http://10.0.0.5:9000")
+            save_url(root, "")  # cleared on the page: disabled, not back to the default
+            self.assertEqual(load_url(root, "127.0.0.1:8780"), "")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from contextlib import closing
 import json
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import cv2
@@ -28,6 +29,43 @@ HANDS_RATIO = 0.3
 SAMPLE_FPS = 2.0
 MAX_FRAMES = 24
 FRAME_MAX_SIDE = 672
+
+
+SETTINGS = "_annotation.json"
+
+
+def normalize_url(value):
+    """Canonical service URL, '' to disable; accepts a bare host:port."""
+    value = str(value or "").strip().rstrip("/")
+    if not value:
+        return ""
+    if "://" not in value:
+        value = "http://" + value
+    parts = urllib.parse.urlsplit(value)
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+        valid = False
+    else:
+        valid = parts.scheme in ("http", "https") and bool(parts.hostname)
+    if not valid or parts.query or parts.fragment:
+        raise ValueError("推理服务地址格式应为 http://主机:端口，例如 http://10.198.1.220:8780")
+    return f"{parts.scheme}://{parts.hostname}" + (f":{port}" if port else "") + parts.path
+
+
+def load_url(root, default=""):
+    """The URL saved from the page, else `default` (ARUCO_ANNOTATION_URL)."""
+    path = root / SETTINGS
+    if path.is_file():
+        return normalize_url(json.loads(path.read_text()).get("url", ""))
+    return normalize_url(default)
+
+
+def save_url(root, url):
+    url = normalize_url(url)
+    write_json(root / SETTINGS, {"url": url})
+    return url
 
 
 def probe(url, timeout=3.0):

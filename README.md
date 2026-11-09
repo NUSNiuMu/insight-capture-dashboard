@@ -41,10 +41,12 @@ deploy/vlm/vlm_service.sh restart   # 更新代码后重启
 deploy/vlm/vlm_service.sh stop
 deploy/vlm/vlm_service.sh run       # 前台运行（调试或交给 systemd）
 
-# 采集机上：指向推理服务后重建采集容器
+# 采集机上：设置默认的推理服务地址后重建采集容器
 echo ARUCO_ANNOTATION_URL=http://10.198.1.220:8780 > deploy/aruco/.env
 docker compose -f deploy/aruco/compose.yml up -d
 ```
+
+推理服务地址（主机和端口）也可以在回放页预标注栏的“服务设置”里直接修改，保存后立即生效，并优先于 `ARUCO_ANNOTATION_URL`。改服务监听端口时，同时修改 GPU 机器上 `deploy/vlm/.env` 的 `PORT`，然后执行 `deploy/vlm/vlm_service.sh restart`。
 
 预标注的流程、草稿格式和前端确认方式见 [部署与使用说明](docs/X86_ARUCO_CAPTURE.md) 的“采集与标注”一节。
 

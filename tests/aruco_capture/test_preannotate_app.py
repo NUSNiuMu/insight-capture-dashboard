@@ -79,5 +79,25 @@ class StopTriggersPreannotationTests(unittest.TestCase):
         self.assertIsNone(state["draft"])
 
 
+class ServiceSettingTests(unittest.TestCase):
+    def test_set_from_page(self):
+        async def go(capture):
+            async with TestClient(TestServer(create_app(capture, "http://127.0.0.1:9"))) as client:
+                first = await (await client.get("/api/annotation/service")).json()
+                changed = await (
+                    await client.post("/api/annotation/service", json={"url": "127.0.0.1:1"})
+                ).json()
+                bad = await client.post("/api/annotation/service", json={"url": "ftp://x"})
+                return first, changed, bad.status
+
+        with tempfile.TemporaryDirectory() as root:
+            first, changed, bad = asyncio.run(go(fake_capture(root, "s1")))
+            saved = json.loads((Path(root) / "_annotation.json").read_text())
+        self.assertEqual(first["url"], "http://127.0.0.1:9")
+        self.assertEqual(changed, {"configured": True, "url": "http://127.0.0.1:1", "health": None})
+        self.assertEqual(saved, {"url": "http://127.0.0.1:1"})
+        self.assertEqual(bad, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

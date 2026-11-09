@@ -1576,8 +1576,9 @@ $("markEnd").onclick = () => {
 };
 $("cancelEdit").onclick = resetEditor;
 $("segmentForm").addEventListener("input", (e) => {
-  // Picking an action-table file is not an edit of the open segment.
-  if (e.target === $("actionFile")) return;
+  // Picking an action-table file or typing the service address is not an
+  // edit of the open segment.
+  if (e.target === $("actionFile") || e.target === $("serviceUrl")) return;
   editorDirty = true;
 });
 // Validate the editor and write it into `parts`; returns the stored part, or
@@ -1905,8 +1906,8 @@ function renderDraft() {
         hour12: false,
       });
   } else if (!service) text = "预标注：检查推理服务…";
-  else if (!configured) text = "未配置推理服务，不做预标注";
-  else if (!up) text = "推理服务未启动，录制停止后不会预标注";
+  else if (!configured) text = "未配置推理服务，不做预标注（点「服务设置」填写地址）";
+  else if (!up) text = `推理服务 ${service.url} 连不上，录制停止后不会预标注`;
   else text = "这条录制还没有预标注草稿";
   $("draftInfo").textContent = text;
   $("draftInfo").title = service?.url ? "推理服务 " + service.url : "";
@@ -1972,6 +1973,35 @@ function applyDraft(auto) {
   );
   offerUndo("撤销载入草稿", previous);
 }
+$("serviceSettings").onclick = () => {
+  const open = $("serviceForm").hidden;
+  $("serviceForm").hidden = !open;
+  if (open) {
+    $("serviceUrl").value = service?.url || "";
+    $("serviceUrl").focus();
+  }
+};
+$("serviceUrl").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault(); // would submit the segment form
+  $("saveService").click();
+});
+bind("saveService", async () => {
+  service = await api("/api/annotation/service", "POST", {
+    url: $("serviceUrl").value,
+  });
+  $("serviceUrl").value = service.url;
+  renderDraft();
+  if (!service.url) notice("已清空推理服务地址：之后的录制不再预标注");
+  else if (service.health) {
+    $("serviceForm").hidden = true;
+    notice(`已连接推理服务 ${service.url}（${service.health.model}）`);
+  } else
+    notice(
+      `已保存 ${service.url}，但目前连不上；服务启动后，新的录制会自动预标注`,
+      true,
+    );
+});
 $("loadDraft").onclick = () => {
   if (editorDirty) {
     notice("请先添加或更新正在编辑的片段，再载入草稿", true);
