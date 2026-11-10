@@ -1,14 +1,18 @@
-"""Qwen vision-language segment-labelling service for aruco pre-annotation.
+"""Qwen vision-language pre-annotation service for the aruco workbench.
 
 Works with Qwen2.5-VL (transformers 4.49+) and the natively multimodal
 Qwen3.5 / 3.6 / 3.8 models (transformers 5.8+). Run it on the GPU machine:
     python -m insight_capture.vlm_service.server --model /path/to/weights
 Qwen2.5-VL-7B needs ~17 GB VRAM in bf16, Qwen3.8-27B-FP8 ~30 GB.
 
-GET  /health    -> {"status": "ok", "model": ..., "busy": bool}; only answers once the model is loaded
-POST /v1/label  {"frames": [base64 JPEG...], "fps": float, "hands": "left|right|both",
-                 "action_table": {...} | null}
-             -> {"task_id", "subtask_id", "task", "subtask", "description", "flags", "raw"}
+GET  /health       -> {"status": "ok", "model": ..., "busy": bool}; only answers once the model is loaded
+POST /v1/task      {"frames": [base64 JPEG...], "fps": float, "action_table": {...} | null}
+                -> {"task_id", "task", "description", "flags", "raw"}
+                   which task the whole recording performs
+POST /v1/segments  {"frames": [...], "fps": float, "action_table": {...} | null,
+                    "task_id": str, "task": str}
+                -> {"segments": [{"start", "end", "subtask_id", "subtask", "flags"}], "flags", "raw"}
+                   timed subtasks in one stretch of motion; times are seconds from its first frame
 """
 
 import argparse
@@ -22,7 +26,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .prompt import build_prompt, parse_answer
+from .prompt import (
+    build_segment_prompt,
+    build_task_prompt,
+    parse_segments_answer,
+    parse_task_answer,
+)
 
 
 def prepare(frames, max_side, factor):
@@ -47,14 +56,13 @@ def prepare(frames, max_side, factor):
 
 
 class Model:
-    def __init__(self, path, max_side, max_new_tokens=320):
+    def __init__(self, path, max_side):
         import torch
         from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
 
         self.torch = torch
         self.name = Path(path).name
         self.max_side = max_side
-        self.max_new_tokens = max_new_tokens
         self.family = AutoConfig.from_pretrained(path).model_type
         self.processor = AutoProcessor.from_pretrained(path)
         video = getattr(self.processor, "video_processor", None) or self.processor.image_processor
@@ -94,23 +102,20 @@ class Model:
         }
 
     def warmup(self):
-        """One full-size request on synthetic frames, so kernels are compiled."""
+        """Full-size requests on synthetic frames, so kernels are compiled."""
         image = np.full((720, 1280, 3), 128, np.uint8)
         cv2.rectangle(image, (500, 300), (780, 520), (40, 90, 160), -1)
         frame = base64.b64encode(cv2.imencode(".jpg", image)[1].tobytes()).decode()
-        self.label({"frames": [frame] * 8, "fps": 2.0, "hands": "both"})
+        self.task({"frames": [frame] * 8, "fps": 1.0})
+        self.segments({"frames": [frame] * 16, "fps": 4.0, "task": "Move the box"})
 
-    def label(self, request):
-        frames = request.get("frames")
+    def generate(self, frames, fps, prompt, max_new_tokens):
         if not isinstance(frames, list) or len(frames) < 2:
             raise ValueError("至少需要 2 帧图像")
         video = prepare(frames, self.max_side, self.factor)
-        fps = float(request.get("fps") or 2.0)
-        table = request.get("action_table") or None
-        prompt = build_prompt(len(frames) / fps, request.get("hands"), table)
         messages = [{"role": "user", "content": [{"type": "video"}, {"type": "text", "text": prompt}]}]
-        # Thinking models answer straight away: labels are short JSON, and
-        # reasoning would multiply the time per segment.
+        # Thinking models answer straight away: the answers are JSON, and
+        # reasoning would multiply the time per request.
         text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
@@ -119,13 +124,25 @@ class Model:
                 text=[text], videos=[video], return_tensors="pt", **self.video_kwargs(video, fps)
             ).to("cuda")
             with self.torch.inference_mode():
-                output = self.model.generate(
-                    **inputs, max_new_tokens=self.max_new_tokens, do_sample=False
-                )
-        answer = self.processor.batch_decode(
+                output = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        return self.processor.batch_decode(
             output[:, inputs.input_ids.shape[1]:], skip_special_tokens=True
         )[0].strip()
-        return {**parse_answer(answer, table), "raw": answer}
+
+    def task(self, request):
+        frames, fps = request.get("frames"), float(request.get("fps") or 1.0)
+        table = request.get("action_table") or None
+        answer = self.generate(frames, fps, build_task_prompt(len(frames or []) / fps, table), 400)
+        return {**parse_task_answer(answer, table), "raw": answer}
+
+    def segments(self, request):
+        frames, fps = request.get("frames"), float(request.get("fps") or 4.0)
+        table = request.get("action_table") or {}
+        task = next((t for t in table.get("tasks", []) if t["id"] == request.get("task_id")), None)
+        duration = len(frames or []) / fps
+        prompt = build_segment_prompt(duration, task, str(request.get("task") or ""))
+        answer = self.generate(frames, fps, prompt, 2048)
+        return {**parse_segments_answer(answer, duration, task), "raw": answer}
 
 
 def serve(model, host, port):
@@ -144,12 +161,13 @@ def serve(model, host, port):
             self.reply(200, {"status": "ok", "model": model.name, "busy": model.lock.locked()})
 
         def do_POST(self):
-            if self.path != "/v1/label":
+            handler = {"/v1/task": model.task, "/v1/segments": model.segments}.get(self.path)
+            if handler is None:
                 return self.reply(404, {"error": "not found"})
             started = time.monotonic()
             try:
                 request = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
-                result = model.label(request)
+                result = handler(request)
             except (ValueError, KeyError, TypeError) as exc:
                 return self.reply(400, {"error": str(exc)})
             except Exception as exc:  # keep serving after e.g. CUDA OOM
@@ -170,7 +188,7 @@ def main():
     parser.add_argument("--model", required=True, help="Qwen 视觉模型权重目录（Qwen2.5-VL 或 Qwen3.5 / 3.6 / 3.8）")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8780)
-    parser.add_argument("--max-side", type=int, default=672, help="送入模型前帧的最长边（像素）")
+    parser.add_argument("--max-side", type=int, default=448, help="送入模型前帧的最长边（像素）")
     parser.add_argument("--no-warmup", action="store_true", help="启动时不做预热推理")
     args = parser.parse_args()
     started = time.monotonic()

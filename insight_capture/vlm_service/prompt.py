@@ -1,9 +1,15 @@
-"""Prompt and answer parsing for segment labelling; no model dependencies."""
+"""Prompts and answer parsing for VLM pre-annotation; no model dependencies.
+
+Two requests per recording: `task` names what the whole recording performs
+(from the action table when there is one), `segments` splits one stretch of
+motion into timed subtasks of that task. Both answers are validated here so
+a bad reply turns into flags for the annotator instead of wrong labels.
+"""
 
 import json
 import re
 
-CJK = re.compile(r"[\u3400-\u9fff]")
+CJK = re.compile(r"[㐀-鿿]")
 
 CONTEXT = (
     "这是第一人称视角的机器人示教数据采集视频。画面中有两个手持夹爪（UMI 采集器），"
@@ -11,74 +17,98 @@ CONTEXT = (
     "不是被操作的物体。画面左侧是左夹爪，右侧是右夹爪；夹爪可能被人手拿起操作，也可能静止放在桌上。"
     "人手有时会直接摆放物体以复位场景。"
 )
-HANDS_TEXT = {
-    "left": "位姿数据显示本片段主要是左夹爪在动",
-    "right": "位姿数据显示本片段主要是右夹爪在动",
-    "both": "位姿数据显示本片段两个夹爪都在动",
-}
+IMPERATIVE = "以动词开头的英文祈使句，写出画面里具体的物体、所用夹爪或方向，不要写成描述句"
 
 
-def _table_text(table):
-    lines = []
-    for task in table["tasks"]:
-        name = task["text"] + (f"（{task['zh']}）" if task.get("zh") else "")
-        note = f" —— {task['description']}" if task.get("description") else ""
-        lines.append(f"- task `{task['id']}`: {name}{note}")
-        for sub in task.get("subtasks", []):
-            sub_name = sub["text"] + (f"（{sub['zh']}）" if sub.get("zh") else "")
-            lines.append(f"  - subtask `{sub['id']}`: {sub_name}")
-    return "\n".join(lines)
-
-
-def build_prompt(duration_s, hands=None, table=None):
-    head = CONTEXT + f"下面是其中一个 {duration_s:.1f} 秒的片段"
-    head += f"（{HANDS_TEXT[hands]}）。" if hands in HANDS_TEXT else "。"
-    if table and table.get("tasks"):
-        return (
-            head
-            + "\n动作表如下，task_id 和 subtask_id 只能从中选择：\n"
-            + _table_text(table)
-            + "\n\n请只根据这个片段的画面，输出一个 JSON 对象，不要输出其他内容：\n"
-            '{"task_id": "最符合本片段的 task id；都不符合则为空字符串", '
-            '"subtask_id": "所选 task 下最符合本片段的 subtask id；静止、无有效操作或无法判断则为空字符串", '
-            '"task": "用你自己的英文措辞写这个任务，含义与所选 task 一致，但写出画面里具体的物体、颜色、所用夹爪或方向，不要照抄动作表的说法；必须是以动词开头的英文祈使句", '
-            '"subtask": "同样用自己的英文措辞写本片段正在执行的步骤，必须是以动词开头的英文祈使句（如 Grasp the beige cup with the left gripper），不要写成描述句；静止或无有效操作则为空字符串", '
-            '"description": "用中文一句话描述本片段发生了什么"}'
-        )
-    return (
-        head
-        + "请只根据这个片段的画面，输出一个 JSON 对象，不要输出其他内容：\n"
-        '{"task": "本片段所属的总体任务，英文祈使句，简短，写出具体物体，如 Move the paper cup to the right", '
-        '"subtask": "本片段内正在执行的具体步骤，英文祈使句，简短；若本片段只是静止或无有效操作则为空字符串", '
-        '"description": "用中文一句话描述本片段发生了什么"}'
+def _subtasks_text(task):
+    return "\n".join(
+        f"  - subtask `{s['id']}`: {s['text']}" + (f"（{s['zh']}）" if s.get("zh") else "")
+        for s in task.get("subtasks", [])
     )
 
 
-def parse_answer(answer, table=None):
-    """Turn the model's reply into a label; `flags` lists what a human should check."""
-    flags = []
+def _task_text(task):
+    line = f"- task `{task['id']}`: {task['text']}" + (f"（{task['zh']}）" if task.get("zh") else "")
+    return line + (f" —— {task['description']}" if task.get("description") else "")
+
+
+def build_task_prompt(duration_s, table=None):
+    head = CONTEXT + f"下面是一条录制中所有动作部分拼起来的画面（约 {duration_s:.0f} 秒，复位现场的停顿已去掉）。"
+    if table and table.get("tasks"):
+        listing = "\n".join(_task_text(t) + "\n" + _subtasks_text(t) for t in table["tasks"])
+        return (
+            head + "\n动作表如下，task_id 只能从中选择：\n" + listing
+            + "\n\n请判断这条录制在执行哪个 task，输出一个 JSON 对象，不要输出其他内容：\n"
+            '{"task_id": "最符合的 task id；都不符合则为空字符串", '
+            f'"task": "用你自己的英文措辞写这个任务，含义与所选 task 一致但不要照抄动作表；{IMPERATIVE}", '
+            '"description": "用中文一句话概括录制里做了什么"}'
+        )
+    return (
+        head + "请判断这条录制在执行什么任务，输出一个 JSON 对象，不要输出其他内容：\n"
+        f'{{"task": "整条录制的任务，{IMPERATIVE}", "description": "用中文一句话概括录制里做了什么"}}'
+    )
+
+
+def build_segment_prompt(duration_s, task=None, task_text=""):
+    head = CONTEXT + f"下面是录制中连续动作的一段，共 {duration_s:.1f} 秒，画面里标注了从 0 开始的时间戳。"
+    if task and task.get("subtasks"):
+        body = (
+            f"这段在执行这个 task：\n{_task_text(task)}\n{_subtasks_text(task)}\n\n"
+            "这些 subtask 通常按上面列出的顺序依次执行，并可能整组重复多次；这一段可以从组内任意一步开始。"
+            "请把这一段切分成动作片段，每个片段只包含一个 subtask，subtask_id 只能从上面选择。"
+        )
+        item = (
+            '{"start": 开始秒数, "end": 结束秒数, "subtask_id": "subtask id", '
+            f'"subtask": "用你自己的英文措辞写这一步，{IMPERATIVE}"}}'
+        )
+    else:
+        body = (
+            (f"整条录制的任务是：{task_text}\n" if task_text else "")
+            + "请把这一段切分成动作片段，每个片段只包含一个动作步骤。"
+        )
+        item = f'{{"start": 开始秒数, "end": 结束秒数, "subtask": "这一步，{IMPERATIVE}"}}'
+    return (
+        head + body
+        + "片段从动作开始的时刻到动作完成的时刻，时间精确到 0.5 秒；动作之间的停顿不算在片段内，"
+        "没有动作的时间不要输出片段。输出一个 JSON 对象，不要输出其他内容：\n"
+        f'{{"segments": [{item}, ...]}}'
+    )
+
+
+def _json_object(answer):
     match = re.search(r"\{.*\}", answer, re.S)
     try:
-        parsed = json.loads(match.group(0)) if match else None
+        value = json.loads(match.group(0)) if match else None
     except json.JSONDecodeError:
-        parsed = None
-    if not isinstance(parsed, dict):
-        return {
-            "task_id": "", "subtask_id": "", "task": "", "subtask": "",
-            "description": "", "flags": ["模型输出无法解析"],
-        }
+        return None
+    return value if isinstance(value, dict) else None
 
-    def text(key):
-        value = parsed.get(key, "")
-        return value.strip() if isinstance(value, str) else ""
 
-    label = {key: text(key) for key in ("task_id", "subtask_id", "task", "subtask", "description")}
-    # Training text is English; Chinese here is the model ignoring the
-    # prompt or a placeholder such as「未知任务」, so it is not kept.
-    for key in ("task", "subtask"):
-        if CJK.search(label[key]):
-            flags.append(f"模型把 {key} 写成了中文，已丢弃")
-            label[key] = ""
+def _english(value, key, flags):
+    """Training text is English; Chinese (or a placeholder such as「未知任务」)
+    means the model ignored the prompt, so it is dropped with a flag."""
+    value = value.strip() if isinstance(value, str) else ""
+    if CJK.search(value):
+        flags.append(f"模型把 {key} 写成了中文，已丢弃")
+        return ""
+    return value
+
+
+def _by_text(entries, text):
+    key = text.strip().rstrip(".").lower()
+    return next((x for x in entries if key and x["text"].strip().rstrip(".").lower() == key), None)
+
+
+def parse_task_answer(answer, table=None):
+    parsed = _json_object(answer)
+    if parsed is None:
+        return {"task_id": "", "task": "", "description": "", "flags": ["模型输出无法解析"]}
+    flags = []
+    label = {
+        "task_id": str(parsed.get("task_id") or "").strip(),
+        "task": _english(parsed.get("task"), "task", flags),
+        "description": str(parsed.get("description") or "").strip(),
+    }
     tasks = {t["id"]: t for t in (table or {}).get("tasks", [])}
     if tasks:
         task = tasks.get(label["task_id"])
@@ -88,31 +118,58 @@ def parse_answer(answer, table=None):
         if task is None:
             flags.append(
                 f"模型给出的 task_id {label['task_id']} 不在动作表中"
-                if label["task_id"]
-                else "模型未能匹配动作表中的 task"
+                if label["task_id"] else "模型未能匹配动作表中的 task"
             )
-            label["task_id"] = label["subtask_id"] = ""
+            label["task_id"] = ""
         else:
             label["task_id"] = task["id"]
-            subtasks = {x["id"]: x for x in task.get("subtasks", [])}
-            sub = subtasks.get(label["subtask_id"])
-            if sub is None and label["subtask_id"]:
-                flags.append(f"subtask_id {label['subtask_id']} 不属于 task {task['id']}")
-            elif sub is None:
-                sub = _by_text(subtasks.values(), label["subtask"])
-            label["subtask_id"] = sub["id"] if sub else ""
-            # Fall back to the canonical wording when the model wrote none.
             label["task"] = label["task"] or task["text"]
-            if sub:
-                label["subtask"] = label["subtask"] or sub["text"]
     else:
-        label["task_id"] = label["subtask_id"] = ""
+        label["task_id"] = ""
     if not label["task"]:
         flags.append("模型没有给出任务文本")
     label["flags"] = flags
     return label
 
 
-def _by_text(entries, text):
-    key = text.strip().rstrip(".").lower()
-    return next((x for x in entries if key and x["text"].strip().rstrip(".").lower() == key), None)
+def parse_segments_answer(answer, duration_s, task=None):
+    """Timed subtasks inside [0, duration_s], sorted and not overlapping."""
+    parsed = _json_object(answer)
+    if parsed is None or not isinstance(parsed.get("segments"), list):
+        return {"segments": [], "flags": ["模型输出无法解析"]}
+    subtasks = {s["id"]: s for s in (task or {}).get("subtasks", [])}
+    segments = []
+    for item in parsed["segments"]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            start = min(max(float(item.get("start")), 0.0), duration_s)
+            end = min(max(float(item.get("end")), 0.0), duration_s)
+        except (TypeError, ValueError):
+            continue
+        if end - start < 0.2:
+            continue
+        flags = []
+        text = _english(item.get("subtask"), "subtask", flags)
+        sub_id = str(item.get("subtask_id") or "").strip()
+        sub = subtasks.get(sub_id)
+        if subtasks:
+            if sub is None and sub_id:
+                flags.append(f"subtask_id {sub_id} 不属于所选 task")
+            elif sub is None:
+                sub = _by_text(subtasks.values(), text)
+                if sub is None:
+                    flags.append("模型未能匹配动作表中的 subtask")
+        text = text or (sub["text"] if sub else "")
+        if not text:
+            flags.append("模型没有给出子任务文本")
+        segments.append(
+            {"start": round(start, 2), "end": round(end, 2), "subtask_id": sub["id"] if sub else "",
+             "subtask": text, "flags": flags}
+        )
+    segments.sort(key=lambda s: s["start"])
+    for previous, current in zip(segments, segments[1:]):
+        if current["start"] < previous["end"]:  # the model sometimes overlaps neighbours by a second
+            middle = round((current["start"] + previous["end"]) / 2, 2)
+            previous["end"], current["start"] = middle, middle
+    return {"segments": [s for s in segments if s["end"] - s["start"] >= 0.2], "flags": []}

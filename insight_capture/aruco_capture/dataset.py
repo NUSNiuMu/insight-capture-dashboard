@@ -28,8 +28,10 @@ from .pose_track import OFFLINE_DB, pose_settings, smooth_arm
 
 # Ported from the auto_pause episode splitter in
 # insight_capture/legacy/umi_zarr.py: a hand is "idle" once its linear,
-# angular and gripper speed all sit below these thresholds.
-DEFAULT_IDLE_DURATION_S = 0.8
+# angular and gripper speed all sit below these thresholds. Pauses of at
+# least DEFAULT_IDLE_DURATION_S separate tasks (the operator resetting the
+# scene); shorter ones stay inside a segment, where the VLM splits subtasks.
+DEFAULT_IDLE_DURATION_S = 2.0
 DEFAULT_IDLE_LINEAR_SPEED_M_S = 0.02
 DEFAULT_IDLE_ANGULAR_SPEED_DEG_S = 10.0
 DEFAULT_IDLE_GRIPPER_SPEED_M_S = 0.005
@@ -368,11 +370,15 @@ def suggest_pause_segments(
     minimum_duration_s=DEFAULT_MINIMUM_SEGMENT_DURATION_S,
     duration_s=None,
 ):
-    """建议以双臂静止时刻为界的片段草稿，供人工标注前预填任务文本。
+    """静止分段：以双臂同时静止的长停顿为界，给出 task 级的片段草稿。
 
     静止检测移植自 main 分支 `insight_capture/legacy/umi_zarr.py` 的
-    `auto_pause` episode 切分：双臂线速度、角速度、开合速度同时低于阈值
-    并持续 `idle_duration_s` 以上时视为一次停顿，在停顿区间中点切一刀。
+    `auto_pause`：双臂线速度、角速度、开合速度同时低于阈值视为静止，
+    短于 `idle_gap_tolerance_s` 的运动当作抖动并入静止。静止持续
+    `idle_duration_s`（默认 2 秒）以上视为 task 之间的停顿（操作者在复位
+    现场），停顿不论多长都整段丢弃——片段从动作开始的那一帧起、到动作
+    结束的那一帧止，录制首尾的长停顿同样去掉；更短的停顿留在片段内，
+    由预标注模型切分 subtask。短于 `minimum_duration_s` 的零碎动作丢弃。
     只在 `good`（双臂位姿、开合度与全部视频同时有效）的相邻帧之间判断
     静止，缺失或跳变数据不会被误判为停顿。返回的片段 `task` 留空，
     必须由人工填写后才能通过 `validate_segments` 保存。
@@ -398,25 +404,22 @@ def suggest_pause_segments(
         if end - start <= maximum_gap_intervals and start > 0 and end < len(stationary):
             stationary[start:end] = True
 
+    # Interval i lies between frames i and i + 1, so an idle run of
+    # intervals [start, end) holds frames start..end still: frame start ends
+    # the previous motion and frame end begins the next one. Everything in
+    # between is dropped (at the recording's edges, up to the edge itself).
     minimum_idle_intervals = max(1, int(math.ceil(idle_duration_s * fps)))
-    minimum_frames = max(1, int(math.ceil(minimum_duration_s * fps)))
+    resting = np.zeros(frame_count, dtype=bool)
     padded = np.concatenate(([False], stationary, [False])).astype(np.int8)
-    changes = np.flatnonzero(np.diff(padded)).reshape(-1, 2)
-    cuts, previous_cut = [], 0
-    for start, end in changes:
-        interval_count = int(end - start)
-        if interval_count < minimum_idle_intervals or start == 0 or end == len(stationary):
-            continue
-        cut = int((start + end + 1) // 2)
-        if cut - previous_cut < minimum_frames or frame_count - cut < minimum_frames:
-            continue
-        cuts.append(cut)
-        previous_cut = cut
+    for start, end in np.flatnonzero(np.diff(padded)).reshape(-1, 2):
+        if end - start >= minimum_idle_intervals:
+            resting[(start + 1 if start > 0 else 0) : (end if end < len(stationary) else frame_count)] = True
 
-    boundaries = [0, *cuts, frame_count]
+    minimum_frames = max(1, int(math.ceil(minimum_duration_s * fps)))
     limit = float(duration_s) if duration_s is not None else float(grid[-1]) + 1.0 / fps
     segments = []
-    for start_index, end_index in zip(boundaries[:-1], boundaries[1:]):
+    active = np.concatenate(([False], ~resting, [False])).astype(np.int8)
+    for start_index, end_index in np.flatnonzero(np.diff(active)).reshape(-1, 2):
         # Trim each draft to the frames that actually have video and both
         # arms, so it never starts before the first usable frame or runs
         # past the last one (or past the end of the recording).
@@ -424,6 +427,8 @@ def suggest_pause_segments(
         if not len(usable):
             continue
         first, last = start_index + usable[0], start_index + usable[-1]
+        if last + 1 - first < minimum_frames:
+            continue
         segments.append(
             {
                 "start_s": round(float(grid[first]), 3),

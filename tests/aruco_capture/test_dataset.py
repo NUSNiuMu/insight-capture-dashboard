@@ -49,11 +49,40 @@ class SuggestPauseSegmentsTests(unittest.TestCase):
 
         self.assertEqual(len(segments), 2)
         self.assertEqual(segments[0]["start_s"], 0.0)
-        self.assertEqual(segments[0]["end_s"], segments[1]["start_s"])
+        # Frames 39-80 are still: the first move ends at 39, the next starts
+        # at 80, and the pause between them belongs to no segment.
+        self.assertAlmostEqual(segments[0]["end_s"], (39 + 1) / fps, places=2)
+        self.assertAlmostEqual(segments[1]["start_s"], 80 / fps, places=2)
         self.assertAlmostEqual(segments[1]["end_s"], grid[-1] + 1.0 / fps)
         for segment in segments:
             self.assertEqual(segment["task"], "")
             self.assertEqual(segment["hands"], "both")
+
+    def test_pause_shorter_than_two_seconds_stays_inside(self):
+        fps = 20
+        move = _moving_positions(40, 0.02)
+        idle = _idle_positions(30, move[-1])  # 1.5 s: a pause between subtasks
+        tail = _moving_positions(40, 0.02, start=move[-1][0])
+        grid, state, good = _build(fps, move + idle + tail)
+
+        segments = suggest_pause_segments(grid, state, good, fps)
+
+        self.assertEqual(len(segments), 1)
+        self.assertAlmostEqual(segments[0]["end_s"], grid[-1] + 1.0 / fps)
+
+    def test_leading_and_trailing_rest_is_dropped(self):
+        fps = 20
+        start = _idle_positions(60, [0.0, 0.0, 0.0])  # 3 s of resetting the scene
+        move = _moving_positions(40, 0.02)
+        end = _idle_positions(60, move[-1])
+        grid, state, good = _build(fps, start + move + end)
+
+        segments = suggest_pause_segments(grid, state, good, fps)
+
+        self.assertEqual(len(segments), 1)
+        # Still until frame 60 and from frame 99 on.
+        self.assertAlmostEqual(segments[0]["start_s"], 60 / fps, places=2)
+        self.assertAlmostEqual(segments[0]["end_s"], (99 + 1) / fps, places=2)
 
     def test_continuous_motion_yields_a_single_segment(self):
         fps = 20
@@ -75,7 +104,7 @@ class SuggestPauseSegmentsTests(unittest.TestCase):
         good = np.ones(len(left), dtype=bool)
         # Break the pause roughly in half with a bad stretch well longer than
         # the 0.15s gap-tolerance, leaving two ~0.55s idle runs on either
-        # side -- both short of idle_duration_s (0.8s), so neither cuts.
+        # side -- both short of idle_duration_s (2 s), so neither cuts.
         good[51:69] = False
         grid, state, good = _build(fps, left, good=good)
 

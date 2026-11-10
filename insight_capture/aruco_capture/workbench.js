@@ -1119,7 +1119,8 @@ function renderParts() {
     row.append(b, remove);
     $("segments").append(row);
     if (review) {
-      const block = el("button", p.task || "未填写", p.hands || "both");
+      // Fine-grained drafts share one task text, so the subtask tells them apart.
+      const block = el("button", p.subtask || p.task || "未填写", p.hands || "both");
       block.dataset.index = i;
       block.classList.toggle("unfilled", unfilled(p));
       block.style.left = (p.start_s / review.duration_s) * 100 + "%";
@@ -1901,6 +1902,7 @@ function renderDraft() {
     text =
       `预标注草稿 ${draft.segments.length} 段` +
       (flagged ? ` · ${flagged} 段存疑` : "") +
+      (draft.task?.task_id ? ` · task ${draft.task.task_id}` : "") +
       ` · ${draft.model || "模型未知"} · ` +
       new Date(draft.created_unix_ns / 1e6).toLocaleString("zh-CN", {
         hour12: false,
