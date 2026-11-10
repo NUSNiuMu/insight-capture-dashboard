@@ -1,0 +1,129 @@
+﻿task_id,task,task_zh,subtask_id,subtask,subtask_zh
+a01_move_gripper_left,"Close and open the left gripper, then move it forward, backward, left, right, up and down",左手依次执行闭合、打开、向前、向后、向左、向右、向上、向下运动,close_gripper,Close the left gripper,闭合
+a01_move_gripper_left,,,open_gripper,Open the left gripper,打开
+a01_move_gripper_left,,,move_forward,Move the left gripper forward,向前
+a01_move_gripper_left,,,move_backward,Move the left gripper backward,向后
+a01_move_gripper_left,,,move_left,Move the left gripper to the left,向左
+a01_move_gripper_left,,,move_right,Move the left gripper to the right,向右
+a01_move_gripper_left,,,move_up,Move the left gripper up,向上
+a01_move_gripper_left,,,move_down,Move the left gripper down,向下
+a02_move_gripper_right,"Close and open the right gripper, then move it forward, backward, left, right, up and down",右手依次执行闭合、打开、向前、向后、向左、向右、向上、向下运动,close_gripper,Close the right gripper,闭合
+a02_move_gripper_right,,,open_gripper,Open the right gripper,打开
+a02_move_gripper_right,,,move_forward,Move the right gripper forward,向前
+a02_move_gripper_right,,,move_backward,Move the right gripper backward,向后
+a02_move_gripper_right,,,move_left,Move the right gripper to the left,向左
+a02_move_gripper_right,,,move_right,Move the right gripper to the right,向右
+a02_move_gripper_right,,,move_up,Move the right gripper up,向上
+a02_move_gripper_right,,,move_down,Move the right gripper down,向下
+a03_move_gripper_both,"Close and open both grippers, then move them forward, backward, left, right, up and down",双手依次执行闭合、打开、向前、向后、向左、向右、向上、向下运动,close_gripper,Close the both grippers,闭合
+a03_move_gripper_both,,,open_gripper,Open the both grippers,打开
+a03_move_gripper_both,,,move_forward,Move the both grippers forward,向前
+a03_move_gripper_both,,,move_backward,Move the both grippers backward,向后
+a03_move_gripper_both,,,move_left,Move the both grippers to the left,向左
+a03_move_gripper_both,,,move_right,Move the both grippers to the right,向右
+a03_move_gripper_both,,,move_up,Move the both grippers up,向上
+a03_move_gripper_both,,,move_down,Move the both grippers down,向下
+a04_cup_left_to_right_left,Pick up the cup on the left with the left gripper and place it on the right,左手：抓取左侧的杯子、放置在右侧（1个杯子）,grasp_cup,Grasp the cup on the left side of the table with the left gripper,左手抓取桌面左侧的杯子
+a04_cup_left_to_right_left,,,lift_cup,Lift the cup off the table,提起杯子
+a04_cup_left_to_right_left,,,carry_cup,Carry the cup to the right side of the table,把杯子搬到桌面右侧
+a04_cup_left_to_right_left,,,place_cup,Put the cup down on the right side of the table,放在桌面右侧
+a04_cup_left_to_right_left,,,release_cup,Open the left gripper to release the cup and move it away,松开夹爪并移开
+a05_cup_left_to_right_right,Pick up the cup on the left with the right gripper and place it on the right,右手：抓取左侧的杯子、放置在右侧（1个杯子）,grasp_cup,Grasp the cup on the left side of the table with the right gripper,右手抓取桌面左侧的杯子
+a05_cup_left_to_right_right,,,lift_cup,Lift the cup off the table,提起杯子
+a05_cup_left_to_right_right,,,carry_cup,Carry the cup to the right side of the table,把杯子搬到桌面右侧
+a05_cup_left_to_right_right,,,place_cup,Put the cup down on the right side of the table,放在桌面右侧
+a05_cup_left_to_right_right,,,release_cup,Open the right gripper to release the cup and move it away,松开夹爪并移开
+a06_cup_right_to_left_left,Pick up the cup on the right with the left gripper and place it on the left,左手：抓取右侧的杯子、放置在左侧（1个）,grasp_cup,Grasp the cup on the right side of the table with the left gripper,左手抓取桌面右侧的杯子
+a06_cup_right_to_left_left,,,lift_cup,Lift the cup off the table,提起杯子
+a06_cup_right_to_left_left,,,carry_cup,Carry the cup to the left side of the table,把杯子搬到桌面左侧
+a06_cup_right_to_left_left,,,place_cup,Put the cup down on the left side of the table,放在桌面左侧
+a06_cup_right_to_left_left,,,release_cup,Open the left gripper to release the cup and move it away,松开夹爪并移开
+a07_cup_right_to_left_right,Pick up the cup on the right with the right gripper and place it on the left,右手：抓取右侧的杯子、放置在左侧（1个）,grasp_cup,Grasp the cup on the right side of the table with the right gripper,右手抓取桌面右侧的杯子
+a07_cup_right_to_left_right,,,lift_cup,Lift the cup off the table,提起杯子
+a07_cup_right_to_left_right,,,carry_cup,Carry the cup to the left side of the table,把杯子搬到桌面左侧
+a07_cup_right_to_left_right,,,place_cup,Put the cup down on the left side of the table,放在桌面左侧
+a07_cup_right_to_left_right,,,release_cup,Open the right gripper to release the cup and move it away,松开夹爪并移开
+a08_swap_shapes,"Swap the positions of the cube, the cylinder and the triangular prism one after another",双手：依次调换正方体、圆柱体、三棱柱的位置（散落在桌面上）,grasp_cube,Grasp the cube,抓取正方体
+a08_swap_shapes,,,place_cube,"Place the cube at its new position, where another object stood",把正方体放到新位置（另一个物体原来的位置）
+a08_swap_shapes,,,grasp_cylinder,Grasp the cylinder,抓取圆柱体
+a08_swap_shapes,,,place_cylinder,"Place the cylinder at its new position, where another object stood",把圆柱体放到新位置（另一个物体原来的位置）
+a08_swap_shapes,,,grasp_prism,Grasp the triangular prism,抓取三棱柱
+a08_swap_shapes,,,place_prism,"Place the triangular prism at its new position, where another object stood",把三棱柱放到新位置（另一个物体原来的位置）
+a09_prints_to_plate,Put the 3D-printed parts on the table onto the plate,双手：将桌面上的打印件放置在碟子中,grasp_print,Grasp a 3D-printed part on the table,抓取桌面上的一个打印件
+a09_prints_to_plate,,,move_over_plate,Lift it and move it above the plate,提起并移到碟子上方
+a09_prints_to_plate,,,release_into_plate,Release it onto the plate,松开，放入碟子中
+a10_prints_to_cup,Put the 3D-printed parts on the table into the cup,双手：将桌面上的打印件放置在杯子中,grasp_print,Grasp a 3D-printed part on the table,抓取桌面上的一个打印件
+a10_prints_to_cup,,,move_over_cup,Lift it and move it above the cup,提起并移到杯子上方
+a10_prints_to_cup,,,release_into_cup,Drop it into the cup,松开，落入杯子中
+a11_flip_cup_twice,"Flip the cup with the left gripper, then flip it again with the right gripper",左手将杯子翻转，随后右手再次翻转（1个）,left_grasp_cup,Grasp the cup with the left gripper,左手抓取杯子
+a11_flip_cup_twice,,,left_flip_cup,Turn the cup over with the left gripper,左手将杯子翻转
+a11_flip_cup_twice,,,left_place_cup,Put the cup back at its original position and release it,放回原位并松开
+a11_flip_cup_twice,,,right_grasp_cup,Grasp the cup with the right gripper,右手抓取杯子
+a11_flip_cup_twice,,,right_flip_cup,Turn the cup over again with the right gripper,右手再次翻转杯子
+a11_flip_cup_twice,,,right_place_cup,Put the cup back at its original position and release it,放回原位并松开
+a12_invert_and_nest_cups,"Turn the middle paper cup upside down, then nest the left and right cups onto it upside down",双手：倒置中间的纸杯，将左右侧的纸杯倒扣进入（3个）,grasp_middle_cup,Grasp the middle paper cup,抓取中间的纸杯
+a12_invert_and_nest_cups,,,invert_middle_cup,Turn it upside down and put it back in the middle,倒置后放回中间
+a12_invert_and_nest_cups,,,grasp_left_cup,Grasp the left paper cup,抓取左侧的纸杯
+a12_invert_and_nest_cups,,,nest_left_cup,Turn it upside down and put it over the middle cup,倒扣在中间的纸杯上
+a12_invert_and_nest_cups,,,grasp_right_cup,Grasp the right paper cup,抓取右侧的纸杯
+a12_invert_and_nest_cups,,,nest_right_cup,Turn it upside down and put it over the stacked cups,倒扣在已叠好的纸杯上
+a13_rotate_bottle_front,Rotate the bottle so that its front faces forward,双手：旋转瓶子，使其正面朝前,grasp_bottle,Grasp the bottle,抓住瓶子
+a13_rotate_bottle_front,,,rotate_bottle,Rotate the bottle until its front faces forward,旋转瓶子至正面朝前
+a13_rotate_bottle_front,,,release_bottle,Release the bottle and move the gripper away,松开瓶子并移开夹爪
+a14_fold_towel_horizontal,"Fold the towel horizontally, then unfold it",双手：横向折叠毛巾然后打开,grasp_near_corners,Grasp the two near corners of the towel with both grippers,双手抓住毛巾靠近自己的两个角
+a14_fold_towel_horizontal,,,fold_towel,"Fold the towel in half along its horizontal center line, laying the near edge onto the far edge",沿横向中线对折，把近边叠到远边上
+a14_fold_towel_horizontal,,,release_folded,Release the folded towel,松开折好的毛巾
+a14_fold_towel_horizontal,,,grasp_top_corners,Grasp the two corners of the top layer with both grippers,双手抓住上层的两个角
+a14_fold_towel_horizontal,,,unfold_towel,Pull the top layer back to unfold the towel,把上层拉回，展开毛巾
+a14_fold_towel_horizontal,,,release_unfolded,Release the towel,松开毛巾
+a15_fold_towel_vertical,"Fold the towel vertically, then unfold it",双手：竖向折叠毛巾然后打开,grasp_left_corners,Grasp the two left corners of the towel with both grippers,双手抓住毛巾左侧的两个角
+a15_fold_towel_vertical,,,fold_towel,"Fold the towel in half along its vertical center line, laying the left edge onto the right edge",沿竖向中线对折，把左边叠到右边上
+a15_fold_towel_vertical,,,release_folded,Release the folded towel,松开折好的毛巾
+a15_fold_towel_vertical,,,grasp_top_corners,Grasp the two corners of the top layer with both grippers,双手抓住上层的两个角
+a15_fold_towel_vertical,,,unfold_towel,Pull the top layer back to unfold the towel,把上层拉回，展开毛巾
+a15_fold_towel_vertical,,,release_unfolded,Release the towel,松开毛巾
+a16_flatten_towel,Spread the towel flat on the table,双手：平铺毛巾,grasp_two_corners,Grasp two corners of the towel with both grippers,双手各抓住毛巾一角
+a16_flatten_towel,,,spread_towel,Pull the corners apart to spread the towel out,向两侧拉开，展开毛巾
+a16_flatten_towel,,,lay_towel_flat,Lay the towel flat on the table,把毛巾平铺在桌面上
+a16_flatten_towel,,,release_towel,Release the towel,松开毛巾
+a17_stack_cups_left_holds,Hold a cup with the left gripper and stack the cups from the table onto it with the right gripper,左手拾起杯子，右手拾起桌面上的杯子并堆叠（3个）,left_hold_cup_1,Pick up the first cup with the left gripper and hold it still,左手拾起第一个杯子并保持静止
+a17_stack_cups_left_holds,,,right_grasp_cup_2,Grasp the second cup on the table with the right gripper,右手拾起桌面上的第二个杯子
+a17_stack_cups_left_holds,,,stack_cup_2,Stack the second cup onto the cup in the left gripper,叠到左手的杯子上
+a17_stack_cups_left_holds,,,right_grasp_cup_3,Grasp the third cup on the table with the right gripper,右手拾起桌面上的第三个杯子
+a17_stack_cups_left_holds,,,stack_cup_3,Stack the third cup on top,叠到最上面
+a18_stack_cups_right_holds,Hold a cup with the right gripper and stack the cups from the table onto it with the left gripper,右手拾起杯子，左手拾起桌面上的杯子并堆叠（3个）,right_hold_cup_1,Pick up the first cup with the right gripper and hold it still,右手拾起第一个杯子并保持静止
+a18_stack_cups_right_holds,,,left_grasp_cup_2,Grasp the second cup on the table with the left gripper,左手拾起桌面上的第二个杯子
+a18_stack_cups_right_holds,,,stack_cup_2,Stack the second cup onto the cup in the right gripper,叠到右手的杯子上
+a18_stack_cups_right_holds,,,left_grasp_cup_3,Grasp the third cup on the table with the left gripper,左手拾起桌面上的第三个杯子
+a18_stack_cups_right_holds,,,stack_cup_3,Stack the third cup on top,叠到最上面
+d01_take_cups_from_stack,Take the cups out of the cup stack one by one,双手：从杯子堆栈中取出杯子（6个，下同）,take_cup_1,Take the first cup off the top of the stack,从堆栈顶部取出第一个杯子
+d01_take_cups_from_stack,,,place_cup_1,Place it on the table beside the stack,放在堆栈旁的桌面上
+d01_take_cups_from_stack,,,take_cup_2,Take the second cup off the top of the stack,从堆栈顶部取出第二个杯子
+d01_take_cups_from_stack,,,place_cup_2,Place it on the table beside the stack,放在堆栈旁的桌面上
+d01_take_cups_from_stack,,,take_cup_3,Take the third cup off the top of the stack,从堆栈顶部取出第三个杯子
+d01_take_cups_from_stack,,,place_cup_3,Place it on the table beside the stack,放在堆栈旁的桌面上
+d01_take_cups_from_stack,,,take_cup_4,Take the fourth cup off the top of the stack,从堆栈顶部取出第四个杯子
+d01_take_cups_from_stack,,,place_cup_4,Place it on the table beside the stack,放在堆栈旁的桌面上
+d01_take_cups_from_stack,,,take_cup_5,Take the fifth cup off the top of the stack,从堆栈顶部取出第五个杯子
+d01_take_cups_from_stack,,,place_cup_5,Place it on the table beside the stack,放在堆栈旁的桌面上
+d01_take_cups_from_stack,,,take_cup_6,Take the last cup off the top of the stack,从堆栈顶部取出最后一个杯子
+d01_take_cups_from_stack,,,place_cup_6,Place it on the table beside the stack,放在堆栈旁的桌面上
+d02_cup_pyramid,Take the cups out of the stack and stack them upside down into a 3-2-1 pyramid,双手：从杯子堆栈中取出杯子，随后倒扣叠成3+2+1的塔形状,take_cup_1,Take the first cup out of the stack,取出第一个杯子
+d02_cup_pyramid,,,place_cup_1_bottom_left,"Place it upside down on the table, just left of the center",倒扣放在桌面中央偏左的位置（底层左）
+d02_cup_pyramid,,,take_cup_2,Take the second cup out of the stack,取出第二个杯子
+d02_cup_pyramid,,,place_cup_2_bottom_middle,"Place it upside down at the center of the table, right next to the first cup",倒扣放在桌面中央，紧挨第一个杯子（底层中）
+d02_cup_pyramid,,,take_cup_3,Take the third cup out of the stack,取出第三个杯子
+d02_cup_pyramid,,,place_cup_3_bottom_right,"Place it upside down just right of the center, right next to the second cup",倒扣放在桌面中央偏右，紧挨第二个杯子（底层右）
+d02_cup_pyramid,,,take_cup_4,Take the fourth cup out of the stack,取出第四个杯子
+d02_cup_pyramid,,,place_cup_4_middle_left,Place it upside down on top of the first and second cups,倒扣放在第一、二个杯子上方（第二层左）
+d02_cup_pyramid,,,take_cup_5,Take the fifth cup out of the stack,取出第五个杯子
+d02_cup_pyramid,,,place_cup_5_middle_right,Place it upside down on top of the second and third cups,倒扣放在第二、三个杯子上方（第二层右）
+d02_cup_pyramid,,,take_cup_6,Take the last cup out of the stack,取出最后一个杯子
+d02_cup_pyramid,,,place_cup_6_top,Place it upside down on top of the two cups in the second layer,倒扣放在第二层两个杯子上方（塔顶）
+d03_flatten_fold_towel,Flatten the crumpled towel and fold it,双手：将混乱的毛巾展平并折叠,grasp_two_corners,Grasp two corners of the crumpled towel with both grippers,双手抓住毛巾的两个角
+d03_flatten_fold_towel,,,lift_and_spread,Lift the towel and spread it out,提起并展开毛巾
+d03_flatten_fold_towel,,,lay_towel_flat,Lay the towel flat on the table,平铺在桌面上
+d03_flatten_fold_towel,,,smooth_towel,Smooth out the wrinkles,抚平褶皱
+d03_flatten_fold_towel,,,fold_in_half,Fold the towel in half,对折毛巾
+d03_flatten_fold_towel,,,fold_in_half_again,Fold it in half again,再对折一次
+d03_flatten_fold_towel,,,release_towel,Release the towel,松开毛巾

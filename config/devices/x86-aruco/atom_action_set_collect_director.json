@@ -1,0 +1,813 @@
+{
+  "version": "atom-collect-director-v1",
+  "tasks": [
+    {
+      "id": "a01_move_gripper_left",
+      "text": "Close and open the left gripper, then move it forward, backward, left, right, up and down",
+      "zh": "左手依次执行闭合、打开、向前、向后、向左、向右、向上、向下运动",
+      "description": "atom_action_set #1 · 类别：移动与开合 · 手臂：左手 · 注意：每个运动间停顿 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "close_gripper",
+          "text": "Close the left gripper",
+          "zh": "闭合"
+        },
+        {
+          "id": "open_gripper",
+          "text": "Open the left gripper",
+          "zh": "打开"
+        },
+        {
+          "id": "move_forward",
+          "text": "Move the left gripper forward",
+          "zh": "向前"
+        },
+        {
+          "id": "move_backward",
+          "text": "Move the left gripper backward",
+          "zh": "向后"
+        },
+        {
+          "id": "move_left",
+          "text": "Move the left gripper to the left",
+          "zh": "向左"
+        },
+        {
+          "id": "move_right",
+          "text": "Move the left gripper to the right",
+          "zh": "向右"
+        },
+        {
+          "id": "move_up",
+          "text": "Move the left gripper up",
+          "zh": "向上"
+        },
+        {
+          "id": "move_down",
+          "text": "Move the left gripper down",
+          "zh": "向下"
+        }
+      ]
+    },
+    {
+      "id": "a02_move_gripper_right",
+      "text": "Close and open the right gripper, then move it forward, backward, left, right, up and down",
+      "zh": "右手依次执行闭合、打开、向前、向后、向左、向右、向上、向下运动",
+      "description": "atom_action_set #2 · 类别：移动与开合 · 手臂：右手 · 注意：每个运动间停顿 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "close_gripper",
+          "text": "Close the right gripper",
+          "zh": "闭合"
+        },
+        {
+          "id": "open_gripper",
+          "text": "Open the right gripper",
+          "zh": "打开"
+        },
+        {
+          "id": "move_forward",
+          "text": "Move the right gripper forward",
+          "zh": "向前"
+        },
+        {
+          "id": "move_backward",
+          "text": "Move the right gripper backward",
+          "zh": "向后"
+        },
+        {
+          "id": "move_left",
+          "text": "Move the right gripper to the left",
+          "zh": "向左"
+        },
+        {
+          "id": "move_right",
+          "text": "Move the right gripper to the right",
+          "zh": "向右"
+        },
+        {
+          "id": "move_up",
+          "text": "Move the right gripper up",
+          "zh": "向上"
+        },
+        {
+          "id": "move_down",
+          "text": "Move the right gripper down",
+          "zh": "向下"
+        }
+      ]
+    },
+    {
+      "id": "a03_move_gripper_both",
+      "text": "Close and open both grippers, then move them forward, backward, left, right, up and down",
+      "zh": "双手依次执行闭合、打开、向前、向后、向左、向右、向上、向下运动",
+      "description": "atom_action_set #3 · 类别：移动与开合 · 手臂：双手 · 注意：每个运动间停顿 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "close_gripper",
+          "text": "Close the both grippers",
+          "zh": "闭合"
+        },
+        {
+          "id": "open_gripper",
+          "text": "Open the both grippers",
+          "zh": "打开"
+        },
+        {
+          "id": "move_forward",
+          "text": "Move the both grippers forward",
+          "zh": "向前"
+        },
+        {
+          "id": "move_backward",
+          "text": "Move the both grippers backward",
+          "zh": "向后"
+        },
+        {
+          "id": "move_left",
+          "text": "Move the both grippers to the left",
+          "zh": "向左"
+        },
+        {
+          "id": "move_right",
+          "text": "Move the both grippers to the right",
+          "zh": "向右"
+        },
+        {
+          "id": "move_up",
+          "text": "Move the both grippers up",
+          "zh": "向上"
+        },
+        {
+          "id": "move_down",
+          "text": "Move the both grippers down",
+          "zh": "向下"
+        }
+      ]
+    },
+    {
+      "id": "a04_cup_left_to_right_left",
+      "text": "Pick up the cup on the left with the left gripper and place it on the right",
+      "zh": "左手：抓取左侧的杯子、放置在右侧（1个杯子）",
+      "description": "atom_action_set #4 · 类别：抓取与放置 · 手臂：左手 · 注意：杯子的开始位置、放置位置随机 · 采集 5 次",
+      "subtasks": [
+        {
+          "id": "grasp_cup",
+          "text": "Grasp the cup on the left side of the table with the left gripper",
+          "zh": "左手抓取桌面左侧的杯子"
+        },
+        {
+          "id": "lift_cup",
+          "text": "Lift the cup off the table",
+          "zh": "提起杯子"
+        },
+        {
+          "id": "carry_cup",
+          "text": "Carry the cup to the right side of the table",
+          "zh": "把杯子搬到桌面右侧"
+        },
+        {
+          "id": "place_cup",
+          "text": "Put the cup down on the right side of the table",
+          "zh": "放在桌面右侧"
+        },
+        {
+          "id": "release_cup",
+          "text": "Open the left gripper to release the cup and move it away",
+          "zh": "松开夹爪并移开"
+        }
+      ]
+    },
+    {
+      "id": "a05_cup_left_to_right_right",
+      "text": "Pick up the cup on the left with the right gripper and place it on the right",
+      "zh": "右手：抓取左侧的杯子、放置在右侧（1个杯子）",
+      "description": "atom_action_set #5 · 类别：抓取与放置 · 手臂：右手 · 注意：杯子的开始位置随机、放置位置随机 · 采集 5 次",
+      "subtasks": [
+        {
+          "id": "grasp_cup",
+          "text": "Grasp the cup on the left side of the table with the right gripper",
+          "zh": "右手抓取桌面左侧的杯子"
+        },
+        {
+          "id": "lift_cup",
+          "text": "Lift the cup off the table",
+          "zh": "提起杯子"
+        },
+        {
+          "id": "carry_cup",
+          "text": "Carry the cup to the right side of the table",
+          "zh": "把杯子搬到桌面右侧"
+        },
+        {
+          "id": "place_cup",
+          "text": "Put the cup down on the right side of the table",
+          "zh": "放在桌面右侧"
+        },
+        {
+          "id": "release_cup",
+          "text": "Open the right gripper to release the cup and move it away",
+          "zh": "松开夹爪并移开"
+        }
+      ]
+    },
+    {
+      "id": "a06_cup_right_to_left_left",
+      "text": "Pick up the cup on the right with the left gripper and place it on the left",
+      "zh": "左手：抓取右侧的杯子、放置在左侧（1个）",
+      "description": "atom_action_set #6 · 类别：抓取与放置 · 手臂：左手 · 注意：杯子的开始位置随机、放置位置随机 · 采集 5 次",
+      "subtasks": [
+        {
+          "id": "grasp_cup",
+          "text": "Grasp the cup on the right side of the table with the left gripper",
+          "zh": "左手抓取桌面右侧的杯子"
+        },
+        {
+          "id": "lift_cup",
+          "text": "Lift the cup off the table",
+          "zh": "提起杯子"
+        },
+        {
+          "id": "carry_cup",
+          "text": "Carry the cup to the left side of the table",
+          "zh": "把杯子搬到桌面左侧"
+        },
+        {
+          "id": "place_cup",
+          "text": "Put the cup down on the left side of the table",
+          "zh": "放在桌面左侧"
+        },
+        {
+          "id": "release_cup",
+          "text": "Open the left gripper to release the cup and move it away",
+          "zh": "松开夹爪并移开"
+        }
+      ]
+    },
+    {
+      "id": "a07_cup_right_to_left_right",
+      "text": "Pick up the cup on the right with the right gripper and place it on the left",
+      "zh": "右手：抓取右侧的杯子、放置在左侧（1个）",
+      "description": "atom_action_set #7 · 类别：抓取与放置 · 手臂：右手 · 注意：杯子的开始位置随机、放置位置随机 · 采集 5 次",
+      "subtasks": [
+        {
+          "id": "grasp_cup",
+          "text": "Grasp the cup on the right side of the table with the right gripper",
+          "zh": "右手抓取桌面右侧的杯子"
+        },
+        {
+          "id": "lift_cup",
+          "text": "Lift the cup off the table",
+          "zh": "提起杯子"
+        },
+        {
+          "id": "carry_cup",
+          "text": "Carry the cup to the left side of the table",
+          "zh": "把杯子搬到桌面左侧"
+        },
+        {
+          "id": "place_cup",
+          "text": "Put the cup down on the left side of the table",
+          "zh": "放在桌面左侧"
+        },
+        {
+          "id": "release_cup",
+          "text": "Open the right gripper to release the cup and move it away",
+          "zh": "松开夹爪并移开"
+        }
+      ]
+    },
+    {
+      "id": "a08_swap_shapes",
+      "text": "Swap the positions of the cube, the cylinder and the triangular prism one after another",
+      "zh": "双手：依次调换正方体、圆柱体、三棱柱的位置（散落在桌面上）",
+      "description": "atom_action_set #8 · 类别：抓取与放置 · 手臂：双手 · 注意：物体摆放的位置随机、姿态随机，每次动作结束后重新随机场景 · 采集 5 次",
+      "subtasks": [
+        {
+          "id": "grasp_cube",
+          "text": "Grasp the cube",
+          "zh": "抓取正方体"
+        },
+        {
+          "id": "place_cube",
+          "text": "Place the cube at its new position, where another object stood",
+          "zh": "把正方体放到新位置（另一个物体原来的位置）"
+        },
+        {
+          "id": "grasp_cylinder",
+          "text": "Grasp the cylinder",
+          "zh": "抓取圆柱体"
+        },
+        {
+          "id": "place_cylinder",
+          "text": "Place the cylinder at its new position, where another object stood",
+          "zh": "把圆柱体放到新位置（另一个物体原来的位置）"
+        },
+        {
+          "id": "grasp_prism",
+          "text": "Grasp the triangular prism",
+          "zh": "抓取三棱柱"
+        },
+        {
+          "id": "place_prism",
+          "text": "Place the triangular prism at its new position, where another object stood",
+          "zh": "把三棱柱放到新位置（另一个物体原来的位置）"
+        }
+      ]
+    },
+    {
+      "id": "a09_prints_to_plate",
+      "text": "Put the 3D-printed parts on the table onto the plate",
+      "zh": "双手：将桌面上的打印件放置在碟子中",
+      "description": "atom_action_set #9 · 类别：抓取与放置 · 手臂：双手 · 注意：物体摆放的位置随机、姿态随机 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "grasp_print",
+          "text": "Grasp a 3D-printed part on the table",
+          "zh": "抓取桌面上的一个打印件"
+        },
+        {
+          "id": "move_over_plate",
+          "text": "Lift it and move it above the plate",
+          "zh": "提起并移到碟子上方"
+        },
+        {
+          "id": "release_into_plate",
+          "text": "Release it onto the plate",
+          "zh": "松开，放入碟子中"
+        }
+      ]
+    },
+    {
+      "id": "a10_prints_to_cup",
+      "text": "Put the 3D-printed parts on the table into the cup",
+      "zh": "双手：将桌面上的打印件放置在杯子中",
+      "description": "atom_action_set #10 · 类别：抓取与放置 · 手臂：双手 · 注意：物体摆放的位置随机、姿态随机，每次动作结束后重新随机场景 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "grasp_print",
+          "text": "Grasp a 3D-printed part on the table",
+          "zh": "抓取桌面上的一个打印件"
+        },
+        {
+          "id": "move_over_cup",
+          "text": "Lift it and move it above the cup",
+          "zh": "提起并移到杯子上方"
+        },
+        {
+          "id": "release_into_cup",
+          "text": "Drop it into the cup",
+          "zh": "松开，落入杯子中"
+        }
+      ]
+    },
+    {
+      "id": "a11_flip_cup_twice",
+      "text": "Flip the cup with the left gripper, then flip it again with the right gripper",
+      "zh": "左手将杯子翻转，随后右手再次翻转（1个）",
+      "description": "atom_action_set #11 · 类别：翻转 · 手臂：双手 · 注意：杯子放置在原来的位置 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "left_grasp_cup",
+          "text": "Grasp the cup with the left gripper",
+          "zh": "左手抓取杯子"
+        },
+        {
+          "id": "left_flip_cup",
+          "text": "Turn the cup over with the left gripper",
+          "zh": "左手将杯子翻转"
+        },
+        {
+          "id": "left_place_cup",
+          "text": "Put the cup back at its original position and release it",
+          "zh": "放回原位并松开"
+        },
+        {
+          "id": "right_grasp_cup",
+          "text": "Grasp the cup with the right gripper",
+          "zh": "右手抓取杯子"
+        },
+        {
+          "id": "right_flip_cup",
+          "text": "Turn the cup over again with the right gripper",
+          "zh": "右手再次翻转杯子"
+        },
+        {
+          "id": "right_place_cup",
+          "text": "Put the cup back at its original position and release it",
+          "zh": "放回原位并松开"
+        }
+      ]
+    },
+    {
+      "id": "a12_invert_and_nest_cups",
+      "text": "Turn the middle paper cup upside down, then nest the left and right cups onto it upside down",
+      "zh": "双手：倒置中间的纸杯，将左右侧的纸杯倒扣进入（3个）",
+      "description": "atom_action_set #12 · 类别：翻转 · 手臂：双手 · 注意：多多改变动作顺序 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "grasp_middle_cup",
+          "text": "Grasp the middle paper cup",
+          "zh": "抓取中间的纸杯"
+        },
+        {
+          "id": "invert_middle_cup",
+          "text": "Turn it upside down and put it back in the middle",
+          "zh": "倒置后放回中间"
+        },
+        {
+          "id": "grasp_left_cup",
+          "text": "Grasp the left paper cup",
+          "zh": "抓取左侧的纸杯"
+        },
+        {
+          "id": "nest_left_cup",
+          "text": "Turn it upside down and put it over the middle cup",
+          "zh": "倒扣在中间的纸杯上"
+        },
+        {
+          "id": "grasp_right_cup",
+          "text": "Grasp the right paper cup",
+          "zh": "抓取右侧的纸杯"
+        },
+        {
+          "id": "nest_right_cup",
+          "text": "Turn it upside down and put it over the stacked cups",
+          "zh": "倒扣在已叠好的纸杯上"
+        }
+      ]
+    },
+    {
+      "id": "a13_rotate_bottle_front",
+      "text": "Rotate the bottle so that its front faces forward",
+      "zh": "双手：旋转瓶子，使其正面朝前",
+      "description": "atom_action_set #13 · 类别：旋转 · 手臂：双手 · 注意：改变瓶子在桌面的位置，使用不同手进行动作 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "grasp_bottle",
+          "text": "Grasp the bottle",
+          "zh": "抓住瓶子"
+        },
+        {
+          "id": "rotate_bottle",
+          "text": "Rotate the bottle until its front faces forward",
+          "zh": "旋转瓶子至正面朝前"
+        },
+        {
+          "id": "release_bottle",
+          "text": "Release the bottle and move the gripper away",
+          "zh": "松开瓶子并移开夹爪"
+        }
+      ]
+    },
+    {
+      "id": "a14_fold_towel_horizontal",
+      "text": "Fold the towel horizontally, then unfold it",
+      "zh": "双手：横向折叠毛巾然后打开",
+      "description": "atom_action_set #14 · 类别：协作 · 手臂：双手 · 注意：使用双手同时动作 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "grasp_near_corners",
+          "text": "Grasp the two near corners of the towel with both grippers",
+          "zh": "双手抓住毛巾靠近自己的两个角"
+        },
+        {
+          "id": "fold_towel",
+          "text": "Fold the towel in half along its horizontal center line, laying the near edge onto the far edge",
+          "zh": "沿横向中线对折，把近边叠到远边上"
+        },
+        {
+          "id": "release_folded",
+          "text": "Release the folded towel",
+          "zh": "松开折好的毛巾"
+        },
+        {
+          "id": "grasp_top_corners",
+          "text": "Grasp the two corners of the top layer with both grippers",
+          "zh": "双手抓住上层的两个角"
+        },
+        {
+          "id": "unfold_towel",
+          "text": "Pull the top layer back to unfold the towel",
+          "zh": "把上层拉回，展开毛巾"
+        },
+        {
+          "id": "release_unfolded",
+          "text": "Release the towel",
+          "zh": "松开毛巾"
+        }
+      ]
+    },
+    {
+      "id": "a15_fold_towel_vertical",
+      "text": "Fold the towel vertically, then unfold it",
+      "zh": "双手：竖向折叠毛巾然后打开",
+      "description": "atom_action_set #15 · 类别：协作 · 手臂：双手 · 注意：使用双手同时动作 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "grasp_left_corners",
+          "text": "Grasp the two left corners of the towel with both grippers",
+          "zh": "双手抓住毛巾左侧的两个角"
+        },
+        {
+          "id": "fold_towel",
+          "text": "Fold the towel in half along its vertical center line, laying the left edge onto the right edge",
+          "zh": "沿竖向中线对折，把左边叠到右边上"
+        },
+        {
+          "id": "release_folded",
+          "text": "Release the folded towel",
+          "zh": "松开折好的毛巾"
+        },
+        {
+          "id": "grasp_top_corners",
+          "text": "Grasp the two corners of the top layer with both grippers",
+          "zh": "双手抓住上层的两个角"
+        },
+        {
+          "id": "unfold_towel",
+          "text": "Pull the top layer back to unfold the towel",
+          "zh": "把上层拉回，展开毛巾"
+        },
+        {
+          "id": "release_unfolded",
+          "text": "Release the towel",
+          "zh": "松开毛巾"
+        }
+      ]
+    },
+    {
+      "id": "a16_flatten_towel",
+      "text": "Spread the towel flat on the table",
+      "zh": "双手：平铺毛巾",
+      "description": "atom_action_set #16 · 类别：协作 · 手臂：双手 · 注意：使用双手同时动作 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "grasp_two_corners",
+          "text": "Grasp two corners of the towel with both grippers",
+          "zh": "双手各抓住毛巾一角"
+        },
+        {
+          "id": "spread_towel",
+          "text": "Pull the corners apart to spread the towel out",
+          "zh": "向两侧拉开，展开毛巾"
+        },
+        {
+          "id": "lay_towel_flat",
+          "text": "Lay the towel flat on the table",
+          "zh": "把毛巾平铺在桌面上"
+        },
+        {
+          "id": "release_towel",
+          "text": "Release the towel",
+          "zh": "松开毛巾"
+        }
+      ]
+    },
+    {
+      "id": "a17_stack_cups_left_holds",
+      "text": "Hold a cup with the left gripper and stack the cups from the table onto it with the right gripper",
+      "zh": "左手拾起杯子，右手拾起桌面上的杯子并堆叠（3个）",
+      "description": "atom_action_set #17 · 类别：协作 · 手臂：双手 · 注意：左手尽量保持静止 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "left_hold_cup_1",
+          "text": "Pick up the first cup with the left gripper and hold it still",
+          "zh": "左手拾起第一个杯子并保持静止"
+        },
+        {
+          "id": "right_grasp_cup_2",
+          "text": "Grasp the second cup on the table with the right gripper",
+          "zh": "右手拾起桌面上的第二个杯子"
+        },
+        {
+          "id": "stack_cup_2",
+          "text": "Stack the second cup onto the cup in the left gripper",
+          "zh": "叠到左手的杯子上"
+        },
+        {
+          "id": "right_grasp_cup_3",
+          "text": "Grasp the third cup on the table with the right gripper",
+          "zh": "右手拾起桌面上的第三个杯子"
+        },
+        {
+          "id": "stack_cup_3",
+          "text": "Stack the third cup on top",
+          "zh": "叠到最上面"
+        }
+      ]
+    },
+    {
+      "id": "a18_stack_cups_right_holds",
+      "text": "Hold a cup with the right gripper and stack the cups from the table onto it with the left gripper",
+      "zh": "右手拾起杯子，左手拾起桌面上的杯子并堆叠（3个）",
+      "description": "atom_action_set #18 · 类别：协作 · 手臂：双手 · 注意：右手尽量保持静止 · 采集 10 次",
+      "subtasks": [
+        {
+          "id": "right_hold_cup_1",
+          "text": "Pick up the first cup with the right gripper and hold it still",
+          "zh": "右手拾起第一个杯子并保持静止"
+        },
+        {
+          "id": "left_grasp_cup_2",
+          "text": "Grasp the second cup on the table with the left gripper",
+          "zh": "左手拾起桌面上的第二个杯子"
+        },
+        {
+          "id": "stack_cup_2",
+          "text": "Stack the second cup onto the cup in the right gripper",
+          "zh": "叠到右手的杯子上"
+        },
+        {
+          "id": "left_grasp_cup_3",
+          "text": "Grasp the third cup on the table with the left gripper",
+          "zh": "左手拾起桌面上的第三个杯子"
+        },
+        {
+          "id": "stack_cup_3",
+          "text": "Stack the third cup on top",
+          "zh": "叠到最上面"
+        }
+      ]
+    },
+    {
+      "id": "d01_take_cups_from_stack",
+      "text": "Take the cups out of the cup stack one by one",
+      "zh": "双手：从杯子堆栈中取出杯子（6个，下同）",
+      "description": "demo_set #1 · 类别：取杯子 · 手臂：双手 · 采集 30 次",
+      "subtasks": [
+        {
+          "id": "take_cup_1",
+          "text": "Take the first cup off the top of the stack",
+          "zh": "从堆栈顶部取出第一个杯子"
+        },
+        {
+          "id": "place_cup_1",
+          "text": "Place it on the table beside the stack",
+          "zh": "放在堆栈旁的桌面上"
+        },
+        {
+          "id": "take_cup_2",
+          "text": "Take the second cup off the top of the stack",
+          "zh": "从堆栈顶部取出第二个杯子"
+        },
+        {
+          "id": "place_cup_2",
+          "text": "Place it on the table beside the stack",
+          "zh": "放在堆栈旁的桌面上"
+        },
+        {
+          "id": "take_cup_3",
+          "text": "Take the third cup off the top of the stack",
+          "zh": "从堆栈顶部取出第三个杯子"
+        },
+        {
+          "id": "place_cup_3",
+          "text": "Place it on the table beside the stack",
+          "zh": "放在堆栈旁的桌面上"
+        },
+        {
+          "id": "take_cup_4",
+          "text": "Take the fourth cup off the top of the stack",
+          "zh": "从堆栈顶部取出第四个杯子"
+        },
+        {
+          "id": "place_cup_4",
+          "text": "Place it on the table beside the stack",
+          "zh": "放在堆栈旁的桌面上"
+        },
+        {
+          "id": "take_cup_5",
+          "text": "Take the fifth cup off the top of the stack",
+          "zh": "从堆栈顶部取出第五个杯子"
+        },
+        {
+          "id": "place_cup_5",
+          "text": "Place it on the table beside the stack",
+          "zh": "放在堆栈旁的桌面上"
+        },
+        {
+          "id": "take_cup_6",
+          "text": "Take the last cup off the top of the stack",
+          "zh": "从堆栈顶部取出最后一个杯子"
+        },
+        {
+          "id": "place_cup_6",
+          "text": "Place it on the table beside the stack",
+          "zh": "放在堆栈旁的桌面上"
+        }
+      ]
+    },
+    {
+      "id": "d02_cup_pyramid",
+      "text": "Take the cups out of the stack and stack them upside down into a 3-2-1 pyramid",
+      "zh": "双手：从杯子堆栈中取出杯子，随后倒扣叠成3+2+1的塔形状",
+      "description": "demo_set #2 · 类别：叠杯子 · 手臂：双手 · 采集 30 次",
+      "subtasks": [
+        {
+          "id": "take_cup_1",
+          "text": "Take the first cup out of the stack",
+          "zh": "取出第一个杯子"
+        },
+        {
+          "id": "place_cup_1_bottom_left",
+          "text": "Place it upside down on the table, just left of the center",
+          "zh": "倒扣放在桌面中央偏左的位置（底层左）"
+        },
+        {
+          "id": "take_cup_2",
+          "text": "Take the second cup out of the stack",
+          "zh": "取出第二个杯子"
+        },
+        {
+          "id": "place_cup_2_bottom_middle",
+          "text": "Place it upside down at the center of the table, right next to the first cup",
+          "zh": "倒扣放在桌面中央，紧挨第一个杯子（底层中）"
+        },
+        {
+          "id": "take_cup_3",
+          "text": "Take the third cup out of the stack",
+          "zh": "取出第三个杯子"
+        },
+        {
+          "id": "place_cup_3_bottom_right",
+          "text": "Place it upside down just right of the center, right next to the second cup",
+          "zh": "倒扣放在桌面中央偏右，紧挨第二个杯子（底层右）"
+        },
+        {
+          "id": "take_cup_4",
+          "text": "Take the fourth cup out of the stack",
+          "zh": "取出第四个杯子"
+        },
+        {
+          "id": "place_cup_4_middle_left",
+          "text": "Place it upside down on top of the first and second cups",
+          "zh": "倒扣放在第一、二个杯子上方（第二层左）"
+        },
+        {
+          "id": "take_cup_5",
+          "text": "Take the fifth cup out of the stack",
+          "zh": "取出第五个杯子"
+        },
+        {
+          "id": "place_cup_5_middle_right",
+          "text": "Place it upside down on top of the second and third cups",
+          "zh": "倒扣放在第二、三个杯子上方（第二层右）"
+        },
+        {
+          "id": "take_cup_6",
+          "text": "Take the last cup out of the stack",
+          "zh": "取出最后一个杯子"
+        },
+        {
+          "id": "place_cup_6_top",
+          "text": "Place it upside down on top of the two cups in the second layer",
+          "zh": "倒扣放在第二层两个杯子上方（塔顶）"
+        }
+      ]
+    },
+    {
+      "id": "d03_flatten_fold_towel",
+      "text": "Flatten the crumpled towel and fold it",
+      "zh": "双手：将混乱的毛巾展平并折叠",
+      "description": "demo_set #3 · 类别：叠毛巾 · 手臂：双手 · 采集 30 次",
+      "subtasks": [
+        {
+          "id": "grasp_two_corners",
+          "text": "Grasp two corners of the crumpled towel with both grippers",
+          "zh": "双手抓住毛巾的两个角"
+        },
+        {
+          "id": "lift_and_spread",
+          "text": "Lift the towel and spread it out",
+          "zh": "提起并展开毛巾"
+        },
+        {
+          "id": "lay_towel_flat",
+          "text": "Lay the towel flat on the table",
+          "zh": "平铺在桌面上"
+        },
+        {
+          "id": "smooth_towel",
+          "text": "Smooth out the wrinkles",
+          "zh": "抚平褶皱"
+        },
+        {
+          "id": "fold_in_half",
+          "text": "Fold the towel in half",
+          "zh": "对折毛巾"
+        },
+        {
+          "id": "fold_in_half_again",
+          "text": "Fold it in half again",
+          "zh": "再对折一次"
+        },
+        {
+          "id": "release_towel",
+          "text": "Release the towel",
+          "zh": "松开毛巾"
+        }
+      ]
+    }
+  ]
+}

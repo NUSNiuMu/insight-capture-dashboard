@@ -174,6 +174,33 @@ Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、
    - JSON：`{"version": "...", "tasks": [{"id", "text", "zh", "description", "subtasks": [{"id", "text", "zh"}]}]}`，`id` 只能用英文字母、数字和 `_ . -`，`text` 为标准英文说法，`zh`、`description`、`subtasks` 可省略；task id 不可重复，同一 task 下 subtask id 不可重复（不同 task 可复用同一 subtask id）。`version` 省略时取文件名。
    - CSV：表头 `task_id,task,task_zh,subtask_id,subtask,subtask_zh`，每行一个 subtask，同一 `task_id` 的后续行可省略 task 文本；`subtask_id` 为空的行只声明 task。UTF-8 或 Excel 中文系统另存的 GBK 编码都可读。
 
+   **采集指导动作表**：`config/devices/x86-aruco/atom_action_set_collect_director.xls`（采集指导表原件，Excel `.xls`，不能直接导入）已转换为可导入的 `atom_action_set_collect_director.json`（推荐，版本 `atom-collect-director-v1`）和同内容的 `.csv`（带 BOM 的 UTF-8，方便在 Excel 里修改）。转换规则：
+   - 表格的每一行是一个 task：`atom_action_set` 的 18 行记为 `a01`–`a18`，`demo_set` 的 3 行记为 `d01`–`d03`，id 形如 `a04_cup_left_to_right_left`；`text` 为人工补写的英文标准说法，`zh` 为原中文描述（描述本身不含手臂的，前面加“左手：/右手：/双手：”）。原表第 5、7 行描述为空，沿用上一行描述、换成右手。
+   - 类别、手臂、注意事项和采集次数写进 task 的 `description`（如 `atom_action_set #4 · 类别：抓取与放置 · 手臂：左手 · 注意：杯子的开始位置、放置位置随机 · 采集 5 次`），在下拉选项上悬停可见，也会写进给预标注模型的提示里。CSV 没有 `description` 列，所以只有 JSON 带这些信息。
+   - 原表没有 subtask 列，subtask 按描述拆到“对哪个物体、用哪只手、放到哪里”的单步动作（共 128 个），抓取与放置分开、带上位置或序号。例如：
+     - 移动与开合：闭合、打开、向前、向后、向左、向右、向上、向下各一步；
+     - 抓放杯子（`a04`–`a07`）：抓取桌面左侧的杯子 → 提起 → 搬到右侧 → 放在桌面右侧 → 松开并移开；
+     - 翻转（`a11`）：左手抓取 → 左手翻转 → 放回原位，右手再重复一遍；倒扣（`a12`）按中间 / 左侧 / 右侧纸杯命名，不规定先后，原表要求“多多改变动作顺序”；
+     - 毛巾（`a14`–`a16`、`d03`）：抓住两角 → 沿中线对折 → 松开 → 抓住上层两角 → 拉回展开 → 松开；
+     - 堆叠（`a17`、`a18`）：一只手拾起第一个杯子并保持静止，另一只手依次拾起第二、第三个杯子叠上去；
+     - 取杯（`d01`）：从堆栈顶部依次取出第一个……最后一个杯子，各自放在堆栈旁；
+     - 叠塔（`d02_cup_pyramid`）：每个杯子的取出和摆放位置，按底层自左向右（桌面中央偏左、中央、中央偏右）、第二层左右、塔顶的顺序，共 12 步。
+
+     其中有几处是按常见做法补的假设，需对照实际采集方式核对：`a08` 三个物体只写“放到另一个物体原来的位置”，不规定互换顺序；横向 / 竖向对折写成“近边叠到远边”“左边叠到右边”；`d03` 写成对折两次；`d01` 写成取出后放在堆栈旁。拆法如需调整，改 CSV 或 JSON 后重新导入即可。原表的 `prompt` 1/2/3 列为空，未转换。
+
+   导入方法（二选一，导入一次即对这台采集机上的所有录制生效）：
+   1. 网页：“回放与标注”页选中任一录制，在编辑区上方点“导入动作表”，选择 `atom_action_set_collect_director.json`（文件需在打开网页的这台电脑上，可从仓库复制）。成功后提示栏显示“已导入动作表 atom-collect-director-v1（21 个 task）”，task / subtask 输入框上方出现下拉框。
+   2. 命令行（在仓库根目录执行，`<采集机>` 换成采集机地址，本机为 `127.0.0.1`）：
+
+      ```bash
+      python3 -c 'import json, sys; print(json.dumps({"filename": sys.argv[1].rsplit("/", 1)[-1], "content": open(sys.argv[1], encoding="utf-8").read()}))' \
+        config/devices/x86-aruco/atom_action_set_collect_director.json \
+        | curl -s -X POST http://<采集机>:8770/api/action-table -H 'Content-Type: application/json' -d @- \
+        | python3 -c 'import json, sys; t = json.load(sys.stdin); print(t.get("error") or "已导入 %s：%d 个 task" % (t["version"], len(t["tasks"])))'
+      ```
+
+   导入后可用 `curl -s http://<采集机>:8770/api/action-table` 查看当前表；修改表格后重新导入会替换当前表，旧版本留在 `outputs/aruco-capture/_action_tables/`。
+
    导入后，task 和 subtask 输入框上方各出现一个下拉框：选中动作表条目时，文本框为空或仍是某条标准说法则预填所选条目的标准说法；已改写成自己措辞的文本保留不动。文本可以自由改写（同一动作用不同表达，用于训练语言理解），下拉框记录的是标准 id。subtask 下拉只列所选 task 下的条目。不选 task 即为表外动作，只填文本也能保存，但片段列表会标“表外”并统计“N 段未关联动作表”；片段引用的 id 已不在当前表中时同样标“表外”，下拉框保留该 id 并注明“当前动作表中已无”。“把此任务文本也填到其余未填写片段”会一并带上所选 task id。对应接口 `GET /api/action-table`、`POST /api/action-table`（请求体 `{"filename", "content"}`）。
    预标注（可选）：在有 GPU 的机器上单独运行推理服务 `insight_capture.vlm_service`（默认 Qwen3.8-27B-FP8，约 30 GB 显存，放在 4090 48 GB 那台；也兼容 Qwen2.5-VL-7B，约 17 GB。216 的 RTX 3080 10 GB 都放不下），采集服务通过 `ARUCO_ANNOTATION_URL` 指向它：
 
