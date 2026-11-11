@@ -1,4 +1,4 @@
-import { MobilePreview } from "/static/shared/mobile-preview.js?v=20261104-functional-fixes-2";
+import { mountPreview } from "/static/preview.js?v=20261111";
 import { CaptureManagement } from "./management.js?v=20261105-recovery-log";
 import { cameraLabel, deviceLabel, errorText, issueText } from "./presentation.js?v=20261105-decoupled-mapping";
 
@@ -6,8 +6,7 @@ const el = id => document.getElementById(id);
 const labels = { idle: "Ready", starting: "Starting", recording: "Recording", saving: "Saving", saved: "Saved", error: "Error", playback: "Desktop playback" };
 const management = new CaptureManagement(api);
 let devices = [];
-let previewOptions = "";
-const preview = new MobilePreview(el("preview-video"), el("preview-status"));
+const preview = mountPreview(el("preview-root"));
 let snapshot = null, online = false, pending = false, previewEnabled = false, message = "";
 let mapping = null;
 
@@ -31,13 +30,6 @@ function render() {
   el("storage-help").textContent = s.distributed?.enabled
     ? "Head data stays on EgoHalo; wrist data stays on Jetson. Transfer recordings when you finish."
     : "Recordings are saved on Jetson.";
-  const options = JSON.stringify(s.preview_cameras);
-  if (options !== previewOptions) {
-    const selected = el("preview-camera").value;
-    el("preview-camera").replaceChildren(...s.preview_cameras.map(camera => new Option(cameraLabel(camera.name), camera.name)));
-    if (s.preview_cameras.some(camera => camera.name === selected)) el("preview-camera").value = selected;
-    previewOptions = options;
-  }
   el("state").textContent = labels[s.state] || s.state;
   el("orb").className = `orb ${s.state}`;
   const help = { idle: "Choose a task and check your devices.", starting: "Starting recording…", recording: "Recording. You can calibrate below.", saving: "Saving your recording. Keep devices powered on.", saved: "Saved. Ready for the next recording.", error: "Check the message below.", playback: "Return to Live on Jetson to resume capture." };
@@ -79,6 +71,7 @@ function render() {
   el("result-error").hidden = !error; el("result-error").textContent = errorText(error) || "";
   renderCalibration();
   management.update(s, pending || !online);
+  refreshPreview();
 }
 function renderCalibration() {
   const headDevice = devices.find(device => device.role === "head");
@@ -137,12 +130,9 @@ el("calibrate").onclick = async () => {
   finally { pending = false; render(); }
 };
 function refreshPreview() {
-  if (!previewEnabled || document.hidden || snapshot?.state === "playback") {
-    preview.stop();
-    if (snapshot?.state === "playback") el("preview-status").textContent = "Preview paused for desktop playback.";
-    return;
-  }
-  preview.start(el("preview-camera").value);
+  preview.update({ preview: snapshot?.preview || {}, online,
+    recording: ["starting", "recording", "saving"].includes(snapshot?.state),
+    active: previewEnabled && !document.hidden && snapshot?.state !== "playback" });
 }
 el("preview-toggle").onclick = () => {
   previewEnabled = !previewEnabled;
@@ -150,10 +140,9 @@ el("preview-toggle").onclick = () => {
   el("preview-toggle").textContent = previewEnabled ? "Hide preview" : "Show preview";
   refreshPreview();
 };
-el("preview-camera").onchange = refreshPreview;
 document.addEventListener("visibilitychange", refreshPreview);
 window.addEventListener("pagehide", () => preview.stop());
-poll(() => `/api/mobile/status${previewEnabled && !document.hidden ? "?preview=1" : ""}`, value => {
+poll(() => "/api/mobile/status", value => {
   const wasPlaying = snapshot?.state === "playback";
   if (value) snapshot = value;
   online = value !== null;

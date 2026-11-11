@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#f5f5f7">
   <title>Insight Capture</title>
   <link rel="stylesheet" href="/static/mobile.css?v=20261104-functional-fixes-2">
+  <link rel="stylesheet" href="/static/preview.css?v=20261111">
 </head>
 <body>
   <main>
@@ -31,10 +32,9 @@
       <p id="calibration-message" role="status" hidden></p>
     </section>
     <section class="preview-section"><div class="section-title"><h2>Live preview</h2><button id="preview-toggle" class="text-button">Show preview</button></div>
-      <p id="preview-description">One camera at a time.</p>
+      <p id="preview-description">中间相机与双腕左目总览。准备、录制和保存时暂停，完成后恢复。</p>
       <div id="preview-panel" hidden>
-        <label class="sr-only" for="preview-camera">Camera</label><select id="preview-camera"></select>
-        <div class="media"><video id="preview-video" autoplay muted playsinline hidden></video><span id="preview-status">Connecting video…</span></div>
+        <div id="preview-root"></div>
       </div>
     </section>
     <section class="result"><div class="section-title"><h2>Latest recording</h2><span id="result-state">—</span></div><p id="filename">No recordings yet</p><p id="result-error" role="alert" hidden></p></section>
@@ -55,6 +55,6 @@
     </details>
     <footer><span id="storage-help">Loading storage…</span></footer>
   </main>
-  <script type="module" src="/static/pages/mobile.js?v=20261105-recovery-log"></script>
+  <script type="module" src="/static/pages/mobile.js?v=20261111-20261105-recovery-log"></script>
 </body>
 </html>

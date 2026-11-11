@@ -1,536 +1,207 @@
-"""Per-viewer hardware H.264 WebRTC streams."""
-
+"""Offline go2rtc service and shared Jetson H264 producers."""
+import asyncio
+from contextlib import suppress
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
 import threading
-import time
-from typing import Callable, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
-from .rate import select_frame
-from .h264 import H264Gate
-
-try:
-    import gi
-
-    gi.require_version("Gst", "1.0")
-    gi.require_version("GstWebRTC", "1.0")
-    gi.require_version("GstSdp", "1.0")
-    from gi.repository import GLib, Gst, GstSdp, GstWebRTC
-except Exception:  # pragma: no cover - non-Jetson dev machines
-    Gst = None
-
-_REQUIRED_ELEMENTS = (
-    "webrtcbin",
-    "nicesrc",
-    "dtlssrtpenc",
-    "h264parse",
-    "rtph264pay",
-    "nvvidconv",
-    "nvv4l2h264enc",
-    "nvjpegdec",
-)
-
-# ~0.15 bits per pixel per frame at 30fps: 544x640 -> ~1.6 Mbps,
-# 1088x1920 -> ~9.4 Mbps. Clamped so tiny streams still get enough for
-# clean motion and huge ones don't swamp WiFi viewers.
-_MIN_BITRATE = 1_500_000
-_MAX_BITRATE = 10_000_000
-
-def _encoder_dims(width: int, height: int) -> Tuple[int, int]:
-    """Keep the published resolution, rounded down only when NV12 requires it."""
-    return (max(2, int(width) & ~1), max(2, int(height) & ~1))
+from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
+from .preview_config import FPS
 
 
-def _bitrate_for(width: int, height: int, fps: int = 30) -> int:
-    return max(_MIN_BITRATE, min(_MAX_BITRATE, int(width * height * fps * 0.15)))
-
-
-# One query resolves both of a browser's candidates (UDP + TCP carry the same
-# name), and reconnects reuse it too. Entries are tiny; no eviction needed.
-_mdns_cache: Dict[str, str] = {}
-
-
-def _resolve_mdns(hostname: str, timeout: float = 2.0) -> Optional[str]:
-    """Resolve browser-obfuscated .local ICE candidates via multicast DNS."""
-    import socket
-    import struct
-    import time
-
-    target = hostname.rstrip(".").lower()
-    cached = _mdns_cache.get(target)
-    if cached:
-        return cached
-    query = struct.pack(">HHHHHH", 0, 0, 1, 0, 0, 0)
-    for label in target.split("."):
-        encoded = label.encode("utf-8")
-        query += struct.pack("B", len(encoded)) + encoded
-    query += b"\x00" + struct.pack(">HH", 1, 1)  # A record, class IN
-
-    def _skip_name(data: bytes, pos: int) -> int:
-        while pos < len(data) and data[pos] != 0:
-            if data[pos] & 0xC0:
-                return pos + 2
-            pos += 1 + data[pos]
-        return pos + 1
-
-    def _read_name(data: bytes, pos: int) -> str:
-        parts = []
-        hops = 0
-        while pos < len(data) and data[pos] != 0 and hops < 16:
-            if data[pos] & 0xC0:
-                pos = ((data[pos] & 0x3F) << 8) | data[pos + 1]
-                hops += 1
-                continue
-            parts.append(data[pos + 1 : pos + 1 + data[pos]].decode("utf-8", "replace"))
-            pos += 1 + data[pos]
-        return ".".join(parts).lower()
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-    try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        except OSError:
-            pass
-        sock.bind(("", 5353))
-        sock.setsockopt(
-            socket.IPPROTO_IP,
-            socket.IP_ADD_MEMBERSHIP,
-            socket.inet_aton("224.0.0.251") + socket.inet_aton("0.0.0.0"),
-        )
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
-        sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
-        sock.sendto(query, ("224.0.0.251", 5353))
-        end_time = time.monotonic() + timeout
-        while time.monotonic() < end_time:
-            sock.settimeout(max(0.05, end_time - time.monotonic()))
-            try:
-                data, _addr = sock.recvfrom(4096)
-            except socket.timeout:
-                break
-            try:
-                flags, qdcount, ancount = struct.unpack(">HHH", data[2:8])
-                if not (flags & 0x8000) or not ancount:
-                    continue  # a query (possibly our own echo), not a response
-                pos = 12
-                for _ in range(qdcount):
-                    pos = _skip_name(data, pos) + 4
-                for _ in range(ancount):
-                    name = _read_name(data, pos)
-                    pos = _skip_name(data, pos)
-                    rtype, _rclass, _ttl, rdlen = struct.unpack(">HHIH", data[pos : pos + 10])
-                    pos += 10
-                    if rtype == 1 and rdlen == 4 and name == target:
-                        address = socket.inet_ntoa(data[pos : pos + 4])
-                        _mdns_cache[target] = address
-                        return address
-                    pos += rdlen
-            except (IndexError, struct.error):
-                continue
-        return None
-    except OSError:
-        return None
-    finally:
-        sock.close()
-
-
-class WebRtcSession:
-    """One locked H.264 pipeline for a viewer-camera pair."""
-
-    def __init__(
-        self,
-        camera_name: str,
-        send_signal: Callable[[Dict], None],
-        log: Callable[[str], None],
-        target_fps: int = 30,
-    ) -> None:
-        self.camera_name = camera_name
-        self._send_signal = send_signal
-        self._log = log
-        self._lock = threading.Lock()
-        self._pipeline = None
-        self._appsrc = None
-        self._webrtc = None
-        self._caps_key: Optional[Tuple] = None
-        self._closed = False
-        self._target_fps = max(5, min(30, int(target_fps)))
-        self._next_frame_at = 0.0
-        self._h264_gate = H264Gate()
-        self._stats_lock = threading.Lock()
-        self._stats = {
-            "session_received": 0,
-            "throttled": 0,
-            "caps_mismatch": 0,
-            "appsrc_pushed": 0,
-            "appsrc_failed": 0,
-            "encoded": 0,
-        }
-
-    # ── frame ingest (camera worker thread) ─────────────────────────────────
-
-    def push_frame(
-        self,
-        data: bytes,
-        fmt: str,
-        width: int,
-        height: int,
-        *,
-        rate_checked: bool = False,
-    ) -> None:
-        with self._stats_lock:
-            self._stats["session_received"] += 1
-        if not rate_checked and fmt != "H264":
-            now = time.monotonic()
-            selected, self._next_frame_at = select_frame(
-                now, self._next_frame_at, self._target_fps
-            )
-            if not selected:
-                with self._stats_lock:
-                    self._stats["throttled"] += 1
-                return
-        caps_key = (fmt, width, height)
-        with self._lock:
-            if self._closed:
-                return
-            if self._pipeline is None:
-                try:
-                    self._build_pipeline(fmt, width, height)
-                    self._caps_key = caps_key
-                except Exception as exc:
-                    self._log(f"webrtc[{self.camera_name}]: pipeline build failed ({exc}); closing session")
-                    self._teardown_locked()
-                    return
-            elif self._caps_key != caps_key:
-                # Camera format changed mid-session (e.g. playback of a
-                # different bag). Renegotiating is not worth the complexity;
-                # the viewer reconnects and gets a fresh session.
-                with self._stats_lock:
-                    self._stats["caps_mismatch"] += 1
-                return
-            appsrc = self._appsrc
-            if fmt == "H264":
-                if appsrc.get_property("current-level-buffers") >= 8:
-                    self._h264_gate.reset()
-                    return
-                data = self._h264_gate.accept(data)
-                if data is None:
-                    return
-        buf = Gst.Buffer.new_wrapped(data)
-        if appsrc.emit("push-buffer", buf) == Gst.FlowReturn.OK:
-            with self._stats_lock:
-                self._stats["appsrc_pushed"] += 1
-        else:
-            with self._stats_lock:
-                self._stats["appsrc_failed"] += 1
-            self._log(f"webrtc[{self.camera_name}]: push-buffer failed; closing session")
-            self.close()
-
-    # ── pipeline (called under self._lock) ──────────────────────────────────
-
-    def _build_pipeline(self, fmt: str, width: int, height: int) -> None:
-        out_width, out_height = _encoder_dims(width, height)
-        bitrate = _bitrate_for(out_width, out_height, self._target_fps)
-        if fmt == "H264":
-            source = (
-                "appsrc name=src is-live=true format=time do-timestamp=true "
-                "block=false max-buffers=8 "
-                "caps=video/x-h264,stream-format=byte-stream,alignment=au ! "
-            )
-        elif fmt == "JPEG":
-            source = (
-                f"appsrc name=src is-live=true format=time do-timestamp=true "
-                f"block=false max-buffers=3 leaky-type=downstream "
-                f"caps=image/jpeg,width={width},height={height},framerate={self._target_fps}/1 ! "
-                f"nvjpegdec ! "
-            )
-        else:
-            source = (
-                f"appsrc name=src is-live=true format=time do-timestamp=true "
-                f"block=false max-buffers=3 leaky-type=downstream "
-                f"caps=video/x-raw,format={fmt},width={width},height={height},framerate={self._target_fps}/1 ! "
-            )
-        # insert-sps-pps + config-interval=-1: parameter sets ride along with
-        # every IDR so a viewer joining mid-stream can start decoding at the
-        # next keyframe. A one-second IDR interval bounds that wait.
-        encoder = "" if fmt == "H264" else (
-            f"nvvidconv ! video/x-raw(memory:NVMM),format=NV12,width={out_width},height={out_height} ! "
-            f"nvv4l2h264enc bitrate={bitrate} insert-sps-pps=true "
-            f"idrinterval={self._target_fps} iframeinterval={self._target_fps} "
-            f"maxperf-enable=true ! "
-        )
-        description = (
-            f"{source}{encoder}"
-            f"h264parse name=parser config-interval=-1 ! "
-            f"rtph264pay pt=96 mtu=1200 aggregate-mode=zero-latency config-interval=-1 ! "
-            f"application/x-rtp,media=video,encoding-name=H264,payload=96 ! "
-            f"webrtcbin name=webrtc bundle-policy=max-bundle"
-        )
-        pipeline = Gst.parse_launch(description)
-        webrtc = pipeline.get_by_name("webrtc")
-        parser = pipeline.get_by_name("parser")
-        parser.get_static_pad("src").add_probe(
-            Gst.PadProbeType.BUFFER, self._on_encoded_buffer
-        )
-        webrtc.connect("on-negotiation-needed", self._on_negotiation_needed)
-        webrtc.connect("on-ice-candidate", self._on_ice_candidate)
-        if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-            pipeline.set_state(Gst.State.NULL)
-            raise RuntimeError("pipeline refused to start")
-        self._pipeline = pipeline
-        self._appsrc = pipeline.get_by_name("src")
-        self._webrtc = webrtc
-        if fmt == "H264":
-            self._log(f"webrtc[{self.camera_name}]: H.264 passthrough {width}x{height}, source cadence/bitrate")
-        else:
-            self._log(
-                f"webrtc[{self.camera_name}]: streaming {fmt} {width}x{height} -> "
-                f"{out_width}x{out_height} at {self._target_fps} fps, {bitrate // 1000} kbps"
-            )
-
-    # ── webrtcbin callbacks (GStreamer threads) ─────────────────────────────
-
-    def _on_encoded_buffer(self, _pad, _info):
-        with self._stats_lock:
-            self._stats["encoded"] += 1
-        return Gst.PadProbeReturn.OK
-
-    def snapshot_stats(self) -> Dict[str, int]:
-        with self._stats_lock:
-            stats = dict(self._stats)
-        stats["target_fps"] = self._target_fps
-        return stats
-
-    @property
-    def target_fps(self) -> int:
-        return self._target_fps
-
-    def _on_negotiation_needed(self, webrtc) -> None:
-        try:
-            # We only ever send; advertising sendonly keeps the browser from
-            # allocating a return channel it will never use.
-            transceiver = webrtc.emit("get-transceiver", 0)
-            if transceiver is not None:
-                transceiver.set_property(
-                    "direction", GstWebRTC.WebRTCRTPTransceiverDirection.SENDONLY
-                )
-        except Exception:
-            pass
-        promise = Gst.Promise.new_with_change_func(self._on_offer_created, webrtc)
-        webrtc.emit("create-offer", None, promise)
-
-    def _on_offer_created(self, promise, webrtc) -> None:
-        reply = promise.get_reply()
-        offer = reply.get_value("offer")
-        webrtc.emit("set-local-description", offer, Gst.Promise.new())
-        self._send_signal({"type": "offer", "sdp": offer.sdp.as_text()})
-
-    def _on_ice_candidate(self, _webrtc, mline_index: int, candidate: str) -> None:
-        self._send_signal({"type": "ice", "candidate": candidate, "sdpMLineIndex": int(mline_index)})
-
-    # ── signaling from the browser (websocket thread) ───────────────────────
-
-    def set_remote_answer(self, sdp_text: str) -> None:
-        with self._lock:
-            webrtc = self._webrtc
-        if webrtc is None or not sdp_text:
-            return
-        ok, sdp_message = GstSdp.SDPMessage.new()
-        if ok != GstSdp.SDPResult.OK:
-            return
-        if GstSdp.sdp_message_parse_buffer(sdp_text.encode(), sdp_message) != GstSdp.SDPResult.OK:
-            self._log(f"webrtc[{self.camera_name}]: unparseable SDP answer")
-            return
-        answer = GstWebRTC.WebRTCSessionDescription.new(
-            GstWebRTC.WebRTCSDPType.ANSWER, sdp_message
-        )
-        webrtc.emit("set-remote-description", answer, Gst.Promise.new())
-
-    def add_ice_candidate(self, mline_index: int, candidate: str) -> None:
-        with self._lock:
-            webrtc = self._webrtc
-        if webrtc is None or not candidate:
-            return
-        # candidate:<f> <comp> <proto> <prio> <addr> <port> typ ... -- addr
-        # is field 5. See _resolve_mdns for why .local names must be
-        # rewritten to real IPs before webrtcbin/libnice sees them.
-        parts = candidate.split()
-        if len(parts) > 4 and parts[4].endswith(".local"):
-            # Resolve mDNS off the event loop so signaling remains responsive.
-            threading.Thread(
-                target=self._resolve_and_add,
-                args=(int(mline_index), parts),
-                daemon=True,
-                name=f"mdns_resolve_{self.camera_name}",
-            ).start()
-            return
-        webrtc.emit("add-ice-candidate", int(mline_index), candidate)
-
-    def _resolve_and_add(self, mline_index: int, parts: List[str]) -> None:
-        hostname = parts[4]
-        resolved = None
-        # WiFi multicast is lossy; a couple of short attempts beats one
-        # long one (the responder answers in ~10ms when the query gets
-        # through at all).
-        for _attempt in range(3):
-            resolved = _resolve_mdns(hostname, timeout=0.7)
-            if resolved:
-                break
-        if not resolved:
-            self._log(
-                f"webrtc[{self.camera_name}]: cannot resolve mDNS candidate "
-                f"{hostname} (multicast blocked?); dropping it"
-            )
-            return
-        self._log(f"webrtc[{self.camera_name}]: mDNS {hostname} -> {resolved}")
-        parts[4] = resolved
-        with self._lock:
-            webrtc = self._webrtc
-        if webrtc is not None:
-            webrtc.emit("add-ice-candidate", mline_index, " ".join(parts))
-
-    # ── teardown ─────────────────────────────────────────────────────────────
-
-    def close(self) -> None:
-        with self._lock:
-            self._teardown_locked()
-
-    def _teardown_locked(self) -> None:
-        self._closed = True
-        pipeline = self._pipeline
-        self._pipeline = None
-        self._appsrc = None
-        self._webrtc = None
-        if pipeline is not None:
-            try:
-                pipeline.set_state(Gst.State.NULL)
-            except Exception:
-                pass
+def validate_signal(raw, offered):
+    """Independent copy of Ego's narrow go2rtc browser signalling contract."""
+    if len(raw) > 65536:
+        raise ValueError("预览信令过大")
+    msg = json.loads(raw)
+    if not isinstance(msg, dict) or not isinstance(msg.get("value"), str):
+        raise ValueError("无效预览信令")
+    kind, value = msg.get("type"), msg["value"]
+    if kind == "webrtc/offer" and not offered:
+        if " H264/90000" not in value or "a=recvonly" not in value:
+            raise ValueError("客户端未提供 H264 WebRTC 接收能力")
+        offered = True
+    elif kind != "webrtc/candidate" or not offered or len(value) > 4096:
+        raise ValueError("不支持的预览信令")
+    return json.dumps({"type": kind, "value": value}), offered
 
 
 class WebRtcStreams:
-    """Registry of worker-process WebRTC sessions keyed by camera."""
+    def __init__(self, description, port, on_session_state_change, log=print):
+        self.description, self.port, self.log = description, port, log
+        self.changed = on_session_state_change
+        self.sources = {s["id"]: {**s, "regions": [dict(id=s["id"], x=0, y=0, width=s["width"], height=s["height"])]}
+                        for s in description["sources"]}
+        if description["overview"]:
+            self.sources["__overview__"] = description["overview"]
+        self.lock = threading.Lock()
+        self.producers = {}
+        self.watchers = {}
+        self.clients = set()
+        self.process = None
+        self.temp = None
+        self.session = None
+        self.loop = None
+        self.api_port = port + 1
+        self.media_port = port + 2
 
-    def __init__(
-        self,
-        log: Callable[[str], None],
-        on_session_state_change: Optional[Callable[[str, int], None]] = None,
-    ) -> None:
-        self._log = log
-        self._on_session_state_change = on_session_state_change
-        self._lock = threading.Lock()
-        self._sessions: Dict[str, List[WebRtcSession]] = {}
-        self._frames_received: Dict[str, int] = {}
-        # webrtcbin's ICE/DTLS internals expect a running GLib main loop for
-        # their timers; hw_jpeg's pull-based pipelines never needed one, so
-        # this module owns it.
-        self._main_loop = GLib.MainLoop()
-        threading.Thread(target=self._main_loop.run, daemon=True, name="webrtc_glib_loop").start()
+    async def start(self, app):
+        self.loop = asyncio.get_running_loop()
+        binary = Path(__file__).resolve().parents[2] / "deploy/bin/go2rtc"
+        if not binary.is_file() or not os.access(binary, os.X_OK):
+            raise RuntimeError("Bundled go2rtc is missing or not executable")
+        # No STUN/TURN or cloud candidates. Only addresses actually on this Jetson.
+        addresses = json.loads(subprocess.check_output(["ip", "-j", "-4", "addr"], text=True))
+        hosts = [a["local"] for iface in addresses for a in iface.get("addr_info", [])
+                 if a.get("scope") == "global" and not a["local"].startswith("169.254.")]
+        config = {"api": {"listen": f"127.0.0.1:{self.api_port}", "allow_paths": ["/api/ws"]},
+                  "rtsp": {"listen": ""}, "srt": {"listen": ""},
+                  "webrtc": {"listen": f":{self.media_port}",
+                             "candidates": [f"{h}:{self.media_port}" for h in hosts],
+                             "filters": {"ips": hosts, "networks": ["udp4", "tcp4"]}},
+                  "streams": {name: f"http://127.0.0.1:{self.port}/stream/{quote(name, safe='')}.h264" for name in self.sources},
+                  "log": {"level": "warn"}}
+        self.temp = tempfile.TemporaryDirectory(prefix="insight-preview-")
+        path = Path(self.temp.name) / "go2rtc.json"
+        path.write_text(json.dumps(config))
+        self.process = subprocess.Popen([str(binary), "-config", str(path)])
+        self.session = ClientSession(timeout=ClientTimeout(total=None, sock_connect=3))
+        for _ in range(60):
+            if self.process.poll() is not None:
+                raise RuntimeError("go2rtc exited during startup")
+            try:
+                reader, writer = await asyncio.open_connection("127.0.0.1", self.api_port)
+                writer.close()
+                await writer.wait_closed()
+                return
+            except OSError:
+                await asyncio.sleep(.05)
+        raise RuntimeError("go2rtc did not start")
 
-    @classmethod
-    def create(cls, log=print, on_session_state_change=None) -> Optional["WebRtcStreams"]:
-        if Gst is None:
-            log("webrtc: PyGObject/GstWebRTC not importable; WebRTC streaming disabled")
-            return None
+    def _update_demand(self):
+        required = {region["id"] for source, count in self.watchers.items() if count
+                    for region in self.sources[source]["regions"]}
+        for source in self.description["sources"]:
+            self.changed(source["id"], FPS if source["id"] in required else 0)
+
+    async def websocket(self, request):
+        source = request.query.get("source", "__overview__")
+        if source not in self.sources:
+            raise web.HTTPNotFound(text="Unknown preview source")
+        if len(self.clients) >= 4:
+            raise web.HTTPTooManyRequests(text="Too many preview viewers")
+        ws = web.WebSocketResponse(heartbeat=15, max_msg_size=65536)
+        await ws.prepare(request)
+        self.clients.add(ws)
+        self.watchers[source] = self.watchers.get(source, 0) + 1
+        self._update_demand()
         try:
-            if not Gst.is_initialized():
-                Gst.init(None)
-        except Exception as exc:
-            log(f"webrtc: Gst.init failed ({exc}); WebRTC streaming disabled")
-            return None
-        missing = [name for name in _REQUIRED_ELEMENTS if Gst.ElementFactory.find(name) is None]
-        if missing:
-            log(f"webrtc: missing GStreamer elements {missing}; WebRTC streaming disabled")
-            return None
-        log("webrtc: hardware H.264 WebRTC streaming enabled")
-        return cls(log=log, on_session_state_change=on_session_state_change)
+            async with self.session.ws_connect(f"http://127.0.0.1:{self.api_port}/api/ws?src={quote(source, safe='')}") as upstream:
+                async def outbound():
+                    offered = False
+                    async for msg in ws:
+                        if msg.type == WSMsgType.TEXT:
+                            raw, offered = validate_signal(msg.data, offered)
+                            await upstream.send_str(raw)
+                async def inbound():
+                    async for msg in upstream:
+                        if msg.type == WSMsgType.TEXT:
+                            await ws.send_str(msg.data)
+                tasks = [asyncio.create_task(outbound()), asyncio.create_task(inbound())]
+                try:
+                    done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        task.result()
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+        except (ValueError, OSError, asyncio.TimeoutError) as exc:
+            with suppress(Exception):
+                await ws.send_json({"type": "error", "value": str(exc)})
+        finally:
+            self.clients.discard(ws)
+            self.watchers[source] -= 1
+            self._update_demand()
+            if self.watchers[source] == 0:
+                with self.lock:
+                    producer = self.producers.pop(source, None)
+                if producer:
+                    await asyncio.to_thread(producer.close)
+            await ws.close()
+        return ws
 
-    def create_session(
-        self,
-        camera_name: str,
-        send_signal: Callable[[Dict], None],
-        target_fps: int = 30,
-    ) -> WebRtcSession:
-        session = WebRtcSession(
-            camera_name,
-            send_signal,
-            self._log,
-            target_fps=target_fps,
-        )
-        with self._lock:
-            sessions = self._sessions.setdefault(camera_name, [])
-            sessions.append(session)
-        self._notify_session_rate(camera_name)
-        return session
+    async def h264(self, request):
+        # This endpoint is bound to loopback with the worker and only go2rtc uses it.
+        name = request.match_info["source"]
+        if name not in self.sources or self.watchers.get(name, 0) == 0:
+            raise web.HTTPNotFound()
+        from .jetson_preview import OverviewEncoder
+        queue = asyncio.Queue(maxsize=16)
+        closed = False
+        overflow = False
+        def deliver(data):
+            def enqueue():
+                nonlocal overflow
+                if closed or overflow:
+                    return
+                if queue.full():
+                    # Reconnect at a new GOP instead of sending a corrupted H264 tail.
+                    overflow = True
+                    return
+                queue.put_nowait(data)
+            self.loop.call_soon_threadsafe(enqueue)
+        producer = await asyncio.to_thread(OverviewEncoder, self.sources[name], deliver, self.log)
+        with self.lock:
+            old = self.producers.get(name)
+            self.producers[name] = producer
+        if old:
+            await asyncio.to_thread(old.close)
+        response = web.StreamResponse(headers={"Content-Type": "video/h264", "Cache-Control": "no-store"})
+        try:
+            await response.prepare(request)
+            while self.watchers.get(name, 0) and not overflow:
+                data = await asyncio.wait_for(queue.get(), timeout=3)
+                await asyncio.wait_for(response.write(data), timeout=2)
+        except (ConnectionError, asyncio.TimeoutError):
+            pass
+        finally:
+            closed = True
+            with self.lock:
+                if self.producers.get(name) is producer:
+                    self.producers.pop(name, None)
+            await asyncio.to_thread(producer.close)
+        return response
 
-    def close_session(self, session: WebRtcSession) -> None:
-        with self._lock:
-            sessions = self._sessions.get(session.camera_name, [])
-            if session in sessions:
-                sessions.remove(session)
-        session.close()
-        self._notify_session_rate(session.camera_name)
+    def push_resolved_frame(self, name, fmt, width, height, data, stamp):
+        with self.lock:
+            producers = list(self.producers.values())
+        for producer in producers:
+            producer.push(name, fmt, width, height, data, stamp)
 
-    def _notify_session_rate(self, camera_name: str) -> None:
-        if not self._on_session_state_change:
-            return
-        with self._lock:
-            target_fps = max(
-                (session.target_fps for session in self._sessions.get(camera_name, ())),
-                default=0,
-            )
-        self._on_session_state_change(camera_name, target_fps)
+    def snapshot_stats(self):
+        with self.lock:
+            return {name: producer.status() for name, producer in self.producers.items()}
 
-    def push_resolved_frame(self, camera_name: str, fmt: str, width: int, height: int, data: bytes) -> None:
-        """Fan a resolved frame out to all sessions for its camera."""
-        with self._lock:
-            self._frames_received[camera_name] = (
-                self._frames_received.get(camera_name, 0) + 1
-            )
-            sessions = list(self._sessions.get(camera_name, ()))
-        if not sessions:
-            return
-        max_target_fps = max(session.target_fps for session in sessions)
-        for session in sessions:
-            session.push_frame(
-                data,
-                fmt,
-                width,
-                height,
-                rate_checked=(
-                    self._on_session_state_change is not None
-                    and session.target_fps == max_target_fps
-                ),
-            )
-
-    def snapshot_stats(self) -> Dict[str, Dict[str, int]]:
-        """Return cumulative per-camera counters for the worker lifetime."""
-        with self._lock:
-            received = dict(self._frames_received)
-            sessions_by_camera = {
-                camera_name: list(sessions)
-                for camera_name, sessions in self._sessions.items()
-            }
-        result = {}
-        for camera_name in set(received) | set(sessions_by_camera):
-            session_stats = [
-                session.snapshot_stats()
-                for session in sessions_by_camera.get(camera_name, ())
-            ]
-            aggregate = {
-                "worker_received": received.get(camera_name, 0),
-                "sessions": len(session_stats),
-                "target_fps": (
-                    max(stats["target_fps"] for stats in session_stats)
-                    if session_stats
-                    else 0
-                ),
-            }
-            for key in (
-                "session_received",
-                "throttled",
-                "caps_mismatch",
-                "appsrc_pushed",
-                "appsrc_failed",
-                "encoded",
-            ):
-                aggregate[key] = sum(stats[key] for stats in session_stats)
-            result[camera_name] = aggregate
-        return result
+    async def close(self, app):
+        for client in list(self.clients):
+            await client.close(code=1001, message=b"Preview paused")
+        with self.lock:
+            producers, self.producers = list(self.producers.values()), {}
+        for producer in producers:
+            await asyncio.to_thread(producer.close)
+        if self.session:
+            await self.session.close()
+        if self.process:
+            self.process.terminate()
+            try:
+                await asyncio.to_thread(self.process.wait, 2)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                await asyncio.to_thread(self.process.wait)
+        if self.temp:
+            self.temp.cleanup()

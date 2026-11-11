@@ -9,6 +9,7 @@ import json
 
 from aiohttp import web
 
+from insight_capture.media.preview_config import preview_description
 from insight_capture.api.support import read_json_body
 from insight_capture.runtime.camera_health import evaluate_calibration_cameras
 
@@ -82,6 +83,7 @@ class MobileCaptureRoutes:
             "started_at_epoch_s": getattr(manager, "started_at", None),
             "server_time": time.time(), "operation": self._operation,
             "preflight": report, "devices": devices, "task_status": task_status,
+            "preview": preview_description(self.context.node.cameras, self.context.node.poses, paused=self.context.node._preview_manager.paused),
             "preview_cameras": [{"name": c.name, "label": c.label} for c in preview_cameras],
             "distributed": status.get("distributed"),
             "storage": status.get("storage", {}),
@@ -89,8 +91,6 @@ class MobileCaptureRoutes:
         }
 
     async def status(self, request):
-        if request.query.get("preview") == "1":
-            self.context.node.note_viewer_activity()
         return web.json_response(await asyncio.to_thread(self._snapshot), headers={"Cache-Control": "no-store"})
 
     async def command(self, request):

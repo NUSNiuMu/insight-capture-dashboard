@@ -34,12 +34,13 @@ nmcli connection modify jetson-capture-hotspot \
     802-11-wireless-security.key-mgmt wpa-psk \
     802-11-wireless-security.proto rsn 802-11-wireless-security.pairwise ccmp \
     802-11-wireless-security.psk "$INSIGHT_HOTSPOT_PASSWORD" \
-    ipv4.method shared ipv4.addresses 10.77.0.1/24 ipv4.gateway '' ipv4.dns '' \
+    ipv4.method manual ipv4.addresses 10.77.0.1/24 ipv4.gateway '' ipv4.dns '' \
     ipv4.never-default yes ipv6.method disabled
 install -Dm 0755 "$here/hotspot/start.sh" /usr/local/libexec/insight-capture-hotspot
-install -m 0755 "$here/hotspot/dispatcher.sh" /etc/NetworkManager/dispatcher.d/90-insight-hotspot
-install -m 0644 "$here/hotspot/insight-capture-hotspot.service" /etc/systemd/system/
+install -m 0755 "$here/hotspot/isolate.sh" /usr/local/libexec/insight-capture-isolate
+install -m 0644 "$here/hotspot/dnsmasq.conf" /etc/insight-capture-dnsmasq.conf
+install -m 0644 "$here"/hotspot/insight-capture-*.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable insight-capture-hotspot.service
+systemctl enable insight-capture-isolation.service insight-capture-hotspot.service insight-capture-dhcp.service
 echo 'Installed. Reboot to apply the driver and NetworkManager configuration.'
 echo 'Phone page: http://10.77.0.1:8765/mobile'

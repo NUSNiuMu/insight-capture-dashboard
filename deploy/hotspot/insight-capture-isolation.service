@@ -1,0 +1,12 @@
+[Unit]
+Description=Prevent capture hotspot forwarding to other networks
+Before=insight-capture-hotspot.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/insight-capture-isolate
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

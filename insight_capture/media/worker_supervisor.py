@@ -6,6 +6,7 @@ import contextlib
 import http.client
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -93,7 +94,7 @@ class WorkerSupervisor:
             fmt, width, height = layout
             data = bytes(msg.data)
         self._queue_webrtc_frame(
-            camera_name, (fmt, width, height, data), rate_checked=True
+            camera_name, (fmt, width, height, data, self.owner._stamp_to_ns(msg.header.stamp)), rate_checked=True
         )
 
     def _start_webrtc_worker(self) -> "subprocess.Popen":
@@ -128,6 +129,7 @@ class WorkerSupervisor:
             env=env,
             stdout=log_file,
             stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
         log_file.close()
         self.owner.get_logger().info(f"webrtc: spawned webrtc_worker.py pid={proc.pid} port={self.owner.webrtc_port}")
@@ -136,6 +138,8 @@ class WorkerSupervisor:
     def ensure_webrtc_worker(self) -> None:
         """Start WebRTC only after the first viewer lease is acquired."""
         with self.owner._webrtc_worker_lock:
+            if self.owner._preview_manager.paused:
+                return
             proc = getattr(self.owner, "_webrtc_proc", None)
             if proc is not None and proc.poll() is None:
                 return
@@ -147,11 +151,13 @@ class WorkerSupervisor:
             if proc is None:
                 return
             self.owner._webrtc_proc = None
-            proc.terminate()
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, signal.SIGTERM)
             try:
                 proc.wait(timeout=3.0)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait(timeout=3.0)
             self.owner._webrtc_available_cached = False
             self.owner._webrtc_has_sessions.clear()
@@ -193,8 +199,8 @@ class WorkerSupervisor:
                                 self.owner._webrtc_main_metrics[camera_name]["ipc_sent"] += 1
                         for camera_name, queue in list(self._h264_queues.items()):
                             spec = next(c for c in self.owner.cameras if c.name == camera_name)
-                            for data in queue.drain():
-                                conn.send((camera_name, "H264", spec.width, spec.height, data))
+                            for data, stamp, received in queue.drain_with_metadata():
+                                conn.send((camera_name, "H264", spec.width, spec.height, data, stamp or 0))
                                 with self.owner._webrtc_metrics_lock:
                                     self.owner._webrtc_main_metrics[camera_name]["ipc_sent"] += 1
             except (EOFError, OSError) as exc:

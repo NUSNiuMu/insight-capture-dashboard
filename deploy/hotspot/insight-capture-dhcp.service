@@ -1,0 +1,13 @@
+[Unit]
+Description=Insight isolated capture DHCP and local DNS
+Wants=insight-capture-hotspot.service
+After=insight-capture-hotspot.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/insight-capture-dnsmasq.conf --pid-file=
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

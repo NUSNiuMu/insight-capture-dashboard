@@ -42,6 +42,10 @@ class CapturePreflight:
         global_capture = not (calibration_mode or raw_capture)
         failures = []
         warnings = []
+        monitor = getattr(self.recording_manager, "clock_monitor", None)
+        clocks = monitor.status() if monitor else None
+        if clocks is not None and not clocks["ok"]:
+            failures.append(self._failure("clock_not_ready", "三台相机 NTP 校时尚未达到录制门槛", clocks=clocks))
         camera_health = {}
         configured_camera_names = {camera.name for camera in self.node.cameras}
         if calibration_mode:
@@ -193,6 +197,7 @@ class CapturePreflight:
             "failures": failures,
             "warnings": warnings,
             "camera_health": camera_health,
+            "clocks": clocks,
             "mapping": mapping,
             "storage": storage,
             "distributed": distributed,

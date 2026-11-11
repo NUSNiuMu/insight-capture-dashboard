@@ -26,6 +26,8 @@ class NativePreviewRoutes:
             fps = max(5, min(30, int(request.query.get("fps", 30))))
         except ValueError:
             fps = 30
+        if self.context.node._preview_manager.paused:
+            raise web.HTTPConflict(text="Preview paused during capture")
         ws = web.WebSocketResponse(heartbeat=20, compress=False)
         await ws.prepare(request)
         client = hub.connect(name, fps, asyncio.get_running_loop())
@@ -35,6 +37,8 @@ class NativePreviewRoutes:
             while not ws.closed:
                 await client.event.wait()
                 client.event.clear()
+                if client.closed:
+                    return
                 for packet in client.packets():
                     # A stalled local viewer must not retain a growing TCP backlog.
                     await asyncio.wait_for(ws.send_bytes(packet), timeout=0.15)

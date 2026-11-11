@@ -18,7 +18,6 @@ class CameraRoutes:
         self.context = context
 
     async def _handle_camera_snapshot(self, _request: web.Request) -> web.Response:
-        self.context.node.note_viewer_activity()
         payload = self.context.node.build_camera_payload()
         payload["playback_mode"] = (
             self.context.prepared_playback_manager.status()["state"] == "playing"
@@ -39,7 +38,6 @@ class CameraRoutes:
         return web.Response(body=frame.data, content_type=frame.mime_type, headers=headers)
 
     async def _handle_browser_stats(self, request: web.Request) -> web.Response:
-        self.context.node.note_viewer_activity()
         camera_name = request.match_info.get("camera_name", "")
         if camera_name not in {camera.name for camera in self.context.node.cameras}:
             raise web.HTTPNotFound(text="unknown camera")

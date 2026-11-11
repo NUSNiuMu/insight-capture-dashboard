@@ -88,3 +88,39 @@ def measure_clocks(config: dict) -> dict:
         "max_pairwise_clock_bound_ms": pairwise_limit,
         "ok": bool(results) and all(item["ok"] for item in results.values()) and pairwise_bound <= pairwise_limit,
     }
+
+
+class ClockMonitor:
+    """Read-only camera clock measurements; never changes a recording clock."""
+    def __init__(self, config):
+        import threading
+        self.config = config
+        self._lock = threading.Lock()
+        self._report = {"ok": False, "devices": {}, "error": "Waiting for NTP measurement"}
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="camera_ntp_monitor")
+        self._thread.start()
+
+    def measure(self):
+        report = measure_clocks(self.config)
+        with self._lock:
+            self._report = report
+        return report
+
+    def status(self):
+        with self._lock:
+            report = dict(self._report)
+        age = max(0, time.time() - report.get("checked_at_epoch_s", 0))
+        return {**report, "age_sec": age, "ok": bool(report.get("ok")) and age <= 30}
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                self.measure()
+            except Exception as exc:
+                with self._lock:
+                    self._report = {"ok": False, "error": str(exc), "devices": {}}
+            self._stop.wait(10)
+
+    def close(self):
+        self._stop.set()

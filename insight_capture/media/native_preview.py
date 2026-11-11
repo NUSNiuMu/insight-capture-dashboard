@@ -109,10 +109,25 @@ class NativePreviewHub:
         self.specs = {camera.name: camera for camera in cameras}
         self._lock = threading.Lock()
         self._clients = {}
+        self.paused = False
+
+    def pause(self):
+        with self._lock:
+            self.paused = True
+            clients = [c for group in self._clients.values() for c in group]
+        for client in clients:
+            client.close()
+            client.loop.call_soon_threadsafe(client.event.set)
+
+    def resume(self):
+        with self._lock:
+            self.paused = False
 
     def connect(self, name, fps, loop):
         client = NativePreviewClient(self.specs[name], fps, loop)
         with self._lock:
+            if self.paused:
+                raise RuntimeError("Preview paused during capture")
             self._clients.setdefault(name, set()).add(client)
         return client
 

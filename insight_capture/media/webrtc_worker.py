@@ -11,6 +11,8 @@ import signal
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
+from insight_capture.media.preview_config import preview_description
 from typing import Dict, Iterable, Optional
 
 from aiohttp import web
@@ -82,11 +84,11 @@ class IpcServer:
                     conn.send(("session_state", name, target_fps))
                 while True:
                     message = conn.recv()
-                    if not (isinstance(message, tuple) and len(message) == 5):
+                    if not (isinstance(message, tuple) and len(message) == 6):
                         continue
-                    camera_name, fmt, width, height, data = message
+                    camera_name, fmt, width, height, data, stamp = message
                     if self._streams is not None:
-                        self._streams.push_resolved_frame(camera_name, fmt, width, height, data)
+                        self._streams.push_resolved_frame(camera_name, fmt, width, height, data, stamp)
             except (EOFError, OSError) as exc:
                 self._log(f"webrtc ipc: main process disconnected ({exc}); waiting for reconnect")
             finally:
@@ -102,71 +104,23 @@ def _log(message: str) -> None:
     print(f"[webrtc_worker] {message}", flush=True)
 
 
-def build_app(streams: Optional[WebRtcStreams], camera_topic_types: Dict[str, str], ipc_server: IpcServer) -> web.Application:
-    async def handle_webrtc_ws(request: web.Request) -> web.WebSocketResponse:
-        ws = web.WebSocketResponse(heartbeat=20.0)
-        await ws.prepare(request)
-        camera_name = request.query.get("camera", "")
-        topic_type = camera_topic_types.get(camera_name)
-        if streams is None or topic_type is None:
-            await ws.send_json({"type": "webrtc_unavailable"})
-            await ws.close()
-            return ws
-        loop = asyncio.get_running_loop()
-
-        def send_signal(payload: Dict) -> None:
-            # Offer/ICE callbacks land on GStreamer threads; hop back onto
-            # this process's own event loop for the websocket write.
-            try:
-                asyncio.run_coroutine_threadsafe(ws.send_json(payload), loop)
-            except RuntimeError:
-                pass  # loop shutting down; the session is about to close too
-
-        try:
-            target_fps = max(5, min(30, int(request.query.get("fps", "30"))))
-        except (TypeError, ValueError):
-            target_fps = 30
-        session = streams.create_session(
-            camera_name,
-            send_signal,
-            target_fps=target_fps,
-        )
-        try:
-            async for message in ws:
-                if message.type != web.WSMsgType.TEXT:
-                    continue
-                try:
-                    data = json.loads(message.data)
-                except json.JSONDecodeError:
-                    continue
-                kind = data.get("type")
-                if kind == "answer":
-                    session.set_remote_answer(str(data.get("sdp", "")))
-                elif kind == "ice" and data.get("candidate"):
-                    session.add_ice_candidate(
-                        int(data.get("sdpMLineIndex") or 0), str(data["candidate"])
-                    )
-        finally:
-            streams.close_session(session)
-        return ws
-
-    async def handle_healthz(_request: web.Request) -> web.Response:
-        available = streams is not None and ipc_server.ready()
-        camera_stats = streams.snapshot_stats() if streams is not None else {}
-        return web.json_response(
-            {"webrtc_available": available, "cameras": camera_stats}
-        )
-
+def build_app(streams, ipc_server):
+    async def health(request):
+        return web.json_response({"webrtc_available": ipc_server.ready() and streams.process.poll() is None,
+                                  "cameras": streams.snapshot_stats()})
     app = web.Application()
-    app.router.add_get("/ws/webrtc", handle_webrtc_ws)
-    app.router.add_get("/healthz", handle_healthz)
+    app.router.add_get("/ws/webrtc", streams.websocket)
+    app.router.add_get("/stream/{source}.h264", streams.h264)
+    app.router.add_get("/healthz", health)
+    app.on_startup.append(streams.start)
+    app.on_shutdown.append(streams.close)
     return app
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--webrtc-port", type=int, default=8766)
     parser.add_argument("--ipc-socket", required=True)
     return parser.parse_args()
@@ -188,10 +142,12 @@ def main() -> None:
     camera_topic_types = {item["name"]: item["type"] for item in config.get("cameras", [])}
 
     ipc_server = IpcServer(args.ipc_socket, authkey, camera_topic_types.keys(), log=_log)
-    streams = WebRtcStreams.create(log=_log, on_session_state_change=ipc_server.on_session_state_change)
+    description = preview_description([SimpleNamespace(**c) for c in config["cameras"]],
+                                      [SimpleNamespace(**p) for p in config["poses"]])
+    streams = WebRtcStreams(description, args.webrtc_port, ipc_server.on_session_state_change, log=_log)
     ipc_server.start(streams)
 
-    app = build_app(streams, camera_topic_types, ipc_server)
+    app = build_app(streams, ipc_server)
     web.run_app(app, host=args.host, port=args.webrtc_port, print=None)
 
 

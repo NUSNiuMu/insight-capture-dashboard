@@ -108,5 +108,26 @@
     "center_left_frame": "insight9_a_camera_left",
     "center_right_frame": "insight9_a_camera_right",
     "mapping_camera_frame": "insight9_mapping_camera_center"
+  },
+  "clock_sync": {
+    "enabled": true,
+    "clock_devices": [
+      {
+        "name": "insight3_a",
+        "host": "169.254.20.1"
+      },
+      {
+        "name": "insight3_b",
+        "host": "169.254.30.1"
+      },
+      {
+        "name": "insight9_a",
+        "host": "169.254.40.1"
+      }
+    ],
+    "ntp_samples": 3,
+    "max_clock_bound_ms": 10,
+    "max_pairwise_clock_bound_ms": 20,
+    "max_ntp_rtt_ms": 10
   }
 }

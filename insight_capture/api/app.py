@@ -4,6 +4,7 @@ from aiohttp import web
 
 from .context import DashboardContext
 from .middleware import create_json_error_middleware, create_static_cache_middleware
+from .routes.preview import PreviewRoutes
 from .routes.cameras import CameraRoutes
 from .routes.diagnostics import DiagnosticRoutes
 from .routes.mapping import MappingRoutes
@@ -30,6 +31,7 @@ def create_app(context: DashboardContext) -> web.Application:
     )
     websocket = PoseWebSocketService(context)
     cameras = CameraRoutes(context)
+    preview = PreviewRoutes(context)
     diagnostics = DiagnosticRoutes(context)
     native_preview = NativePreviewRoutes(context)
     mapping = MappingRoutes(context)
@@ -47,6 +49,7 @@ def create_app(context: DashboardContext) -> web.Application:
     async def handle_health(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True})
 
+    app.router.add_get("/api/preview/webrtc", preview.websocket)
     app.router.add_get("/ws", websocket._handle_ws)
     app.router.add_get("/ws/native", native_preview._handle_stream)
     app.router.add_get("/healthz", handle_health)

@@ -131,7 +131,18 @@ class RecordingRoutes:
         payload = await read_json_body(request)
         return web.json_response(await asyncio.to_thread(manager.start_merge, payload.get("session_id")), status=202)
 
-    async def _start_with_preflight(
+    async def _start_with_preflight(self, **kwargs):
+        gate = getattr(self.context.recording_manager, "preview_control", None)
+        if gate is None:
+            return await self._start_preflight_and_record(**kwargs)
+        token = object()
+        await asyncio.to_thread(gate.pause, token)
+        try:
+            return await self._start_preflight_and_record(**kwargs)
+        finally:
+            gate.resume(token)
+
+    async def _start_preflight_and_record(
         self,
         *,
         topics,

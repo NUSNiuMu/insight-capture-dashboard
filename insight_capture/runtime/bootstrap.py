@@ -137,6 +137,7 @@ def build_recording_manager(
 
     runtime_config = settings.runtime_config
     manager = RecordingManager(
+        preview_control=node._preview_manager,
         raw_config=settings.raw_config,
         ros_domain_id=settings.ros_domain_id,
         rosbag_root=settings.rosbag_root,

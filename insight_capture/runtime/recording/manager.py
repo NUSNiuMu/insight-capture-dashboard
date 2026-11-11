@@ -16,6 +16,7 @@ from typing import Callable, Deque, Dict, List, Optional, Sequence, Set
 
 
 from insight_capture.core.bag import MANIFEST_NAME, read_metadata
+from .clock_sync import ClockMonitor
 from .storage import probe_recording_root
 from .recorder import (
     _normalize_topics,
@@ -53,7 +54,11 @@ class RecordingManager:
         storage_status: Optional[Dict[str, object]] = None,
         storage_resolver: Optional[Callable[[], tuple[Path, Dict[str, object]]]] = None,
         storage_browse_roots: Optional[Sequence[Path]] = None,
+        preview_control=None,
     ) -> None:
+        self.clock_monitor = ClockMonitor(raw_config["clock_sync"]) if raw_config.get("clock_sync", {}).get("enabled") else None
+        self._clock_start = None
+        self.preview_control = preview_control
         self.raw_config = raw_config
         self.ros_domain_id = int(ros_domain_id)
         self.rosbag_root = rosbag_root.resolve()
@@ -415,7 +420,28 @@ class RecordingManager:
         missing = [topic for topic in selected if not results[topic]["ok"]]
         return {"ok": not missing, "topics": results, "missing": missing}
 
-    def start(
+    def start(self, *args, **kwargs):
+        if self.preview_control:
+            self.preview_control.pause("recording")
+        try:
+            if self.clock_monitor:
+                self._clock_start = self.clock_monitor.measure()
+                if not self._clock_start["ok"]:
+                    raise RuntimeError("三台相机 NTP 校时尚未达到录制门槛，请等待校时完成。")
+            return self._start(*args, **kwargs)
+        except BaseException:
+            if self.preview_control and not self.processes and not self._image_writer_active and self.merge_state not in {"merging", "finalizing"}:
+                self.preview_control.resume("recording")
+            raise
+
+    def stop(self, *args, **kwargs):
+        try:
+            return self._stop(*args, **kwargs)
+        finally:
+            if self.preview_control and not self.processes and not self._image_writer_active and self.merge_state not in {"merging", "finalizing"}:
+                self.preview_control.resume("recording")
+
+    def _start(
         self,
         topics: Optional[Sequence[str]] = None,
         bag_name: Optional[str] = None,
@@ -597,6 +623,7 @@ class RecordingManager:
                 "selected_topics": list(selected_topics),
                 "started_at_epoch_s": self.started_at,
                 "camera_configuration": json.loads(json.dumps(self.raw_config)),
+                "clock_start": self._clock_start,
             }
             self.merge_state = "idle"
             self.merge_error = None
@@ -629,7 +656,7 @@ class RecordingManager:
             )
         return self.status()
 
-    def stop(
+    def _stop(
         self,
         timeout_sec: float = 30.0,
         *,
@@ -797,6 +824,8 @@ class RecordingManager:
                 json.dumps(self._network_audit, indent=2, sort_keys=True)
             )
         manifest = dict(self._recording_manifest or {})
+        if getattr(self, "clock_monitor", None):
+            manifest["clock_stop"] = self.clock_monitor.measure()
         manifest.update({
             "message_count": int(info.get("message_count", 0) or 0),
             "topic_count": len(info.get("topics_with_message_count") or []),

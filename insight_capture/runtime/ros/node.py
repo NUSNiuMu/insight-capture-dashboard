@@ -240,7 +240,6 @@ class PoseBridgeNode(Node):
         }
         self._webrtc_worker_stats: Dict[str, Dict[str, object]] = {}
         self._webrtc_browser_stats: Dict[str, Dict[str, object]] = {}
-        self._last_recording_preview_at: Dict[str, float] = {}
         self._webrtc_worker_lock = threading.Lock()
         self._webrtc_proc: Optional[subprocess.Popen] = None
         self._preview_manager = PreviewManager(

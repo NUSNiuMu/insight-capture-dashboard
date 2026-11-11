@@ -15,7 +15,6 @@ from insight_capture.core.performance import track
 from insight_capture.core.models import CameraFrame
 from insight_capture.media.cdr import compressed_image_view
 
-RECORDING_WEBRTC_PREVIEW_FPS = 10.0
 
 
 class ImagePipeline:
@@ -77,14 +76,6 @@ class ImagePipeline:
             if not self.owner.preview_requested():
                 continue
             try:
-                # Throttle WebRTC previews before allowing capture backpressure.
-                preview_now = time.monotonic()
-                if self.owner._recording_active() and self.owner._webrtc_has_sessions.get(camera_name):
-                    min_interval = 1.0 / RECORDING_WEBRTC_PREVIEW_FPS
-                    previous = self.owner._last_recording_preview_at.get(camera_name, 0.0)
-                    if preview_now - previous < min_interval:
-                        continue
-                    self.owner._last_recording_preview_at[camera_name] = preview_now
                 now = time.monotonic()
                 native = getattr(self.owner, "native_preview", None)
                 # Source JPEG also feeds WebRTC; raw streams use their active transport only.
