@@ -4,7 +4,6 @@ import { deviceWebSocketUrl } from './endpoint.js'
 export function startWebRTC({ video, source, onFailure, onStats, onReady }) {
   let pc, socket, timeout, statsTimer, stopped = false, previous, lastFrame = performance.now()
   let remoteReady = false, candidates = [], chain = Promise.resolve(), offerSent = false
-  let selectedSource = source
   const localCandidates = []
   const close = () => {
     if (stopped) return
@@ -23,13 +22,6 @@ export function startWebRTC({ video, source, onFailure, onStats, onReady }) {
     close()
     onFailure(error?.message || String(error))
   }
-  const switchSource = next => {
-    if (stopped || !next || next === selectedSource) return
-    selectedSource = next
-    if (socket?.readyState === WebSocket.OPEN && offerSent) {
-      socket.send(JSON.stringify({ type: 'preview/source', value: next }))
-    }
-  }
   async function stats() {
     try {
       const report = await pc.getStats()
@@ -41,7 +33,7 @@ export function startWebRTC({ video, source, onFailure, onStats, onReady }) {
       for (const row of report.values()) {
         if (row.type !== 'inbound-rtp' || (row.kind || row.mediaType) !== 'video') continue
         const codec = report.get(row.codecId)?.mimeType || ''
-        if (codec && !/^video\/(h264|h265)$/i.test(codec)) throw new Error(`协商编码不是 H.264/H.265：${codec}`)
+        if (codec && !/^video\/h264$/i.test(codec)) throw new Error(`协商编码不是 H.264：${codec}`)
         const frames = row.framesDecoded || 0
         if (frames > (previous?.frames || 0)) {
           lastFrame = performance.now(); clearTimeout(timeout); onReady()
@@ -71,8 +63,8 @@ export function startWebRTC({ video, source, onFailure, onStats, onReady }) {
       if (typeof RTCPeerConnection === 'undefined' || typeof RTCRtpReceiver === 'undefined') {
         throw new Error('浏览器不支持 WebRTC')
       }
-      const codecs = RTCRtpReceiver.getCapabilities?.('video')?.codecs.filter(c => /^video\/(H264|H265)$/i.test(c.mimeType)) || []
-      if (!codecs.length) throw new Error('此浏览器未提供 H.264/H.265 WebRTC 解码能力')
+      const codecs = RTCRtpReceiver.getCapabilities?.('video')?.codecs.filter(c => /^video\/H264$/i.test(c.mimeType)) || []
+      if (!codecs.length) throw new Error('此浏览器未提供 H.264 WebRTC 解码能力')
       pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle' })
       const transceiver = pc.addTransceiver('video', { direction: 'recvonly' })
       if (!transceiver.setCodecPreferences) throw new Error('浏览器不支持指定视频编码')
@@ -107,7 +99,6 @@ export function startWebRTC({ video, source, onFailure, onStats, onReady }) {
           offerSent = true
           for (const value of localCandidates) send('webrtc/candidate', value)
           localCandidates.length = 0
-          if (selectedSource !== source) send('preview/source', selectedSource)
         } catch (error) { fail(error) }
       }
       socket.onmessage = event => {
@@ -117,7 +108,7 @@ export function startWebRTC({ video, source, onFailure, onStats, onReady }) {
           const msg = JSON.parse(event.data)
           if (msg.type === 'error') throw new Error(msg.value)
           if (msg.type === 'webrtc/answer') {
-            if (!/ H26[45]\/90000/i.test(msg.value)) throw new Error('服务端未协商 H.264/H.265')
+            if (!/ H264\/90000/i.test(msg.value)) throw new Error('服务端未协商 H.264')
             await pc.setRemoteDescription({ type: 'answer', sdp: msg.value })
             remoteReady = true
             for (const candidate of candidates) await pc.addIceCandidate(candidate)
@@ -126,8 +117,6 @@ export function startWebRTC({ video, source, onFailure, onStats, onReady }) {
             const candidate = { candidate: msg.value, sdpMid: '0', sdpMLineIndex: 0 }
             if (remoteReady) await pc.addIceCandidate(candidate)
             else candidates.push(candidate)
-          } else if (msg.type === 'preview/source') {
-            selectedSource = msg.value
           }
         }).catch(fail)
       }
@@ -137,5 +126,5 @@ export function startWebRTC({ video, source, onFailure, onStats, onReady }) {
       statsTimer = setTimeout(stats, 1000)
     } catch (error) { fail(error) }
   })
-  return { close, switchSource }
+  return { close }
 }
