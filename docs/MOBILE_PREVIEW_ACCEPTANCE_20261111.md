@@ -40,7 +40,10 @@
 - 51 项相关回归检查通过；新增覆盖 DHCP 对端发现、非标准地址、过期租约、重复/缺失角色、动态 DDS 默认值、NTP 缓存失效和相机直连设置幂等性。运行库在 Jetson 的实际 ROS Humble/Fast DDS 环境编译并使用。
 - 本次没有拿另一台实体相机替换验证。新设备仍需正确设置角色 namespace、原生 NTP、直连 DDS 以及 Insight9 专用 SSH 查询授权；一旦完成首次设备配置，改 IP 不需补白名单。没有实现基于序列号的完整自动校准继承/失效机制。
 
-证据：`ip-head-50-final.json`、`ip-head-private.json`、`ip-head-restore-private.json`、`recording-private-ip.json`、`mcap-private-ip.txt`、`webrtc-private-ip.json`。
+- 最终恢复 `.40.1/.40.2` 约 27.03 秒，后端仍未重启。随后完成新版软件重启验收：约 55.63 秒 USB SSH 恢复、62.17 秒网页可达、204.77 秒三机图像/VIO、NTP 与录制预检全部就绪，原有开机相机重启服务成功结束。采集热点、DHCP、动态发现和 chrony 均自动启动；热点地址上的手机网页 HTTP 200。
+- 重启后时钟偏差（相机减 Jetson）：`insight3_a` −0.228 ms、`insight3_b` −0.2552 ms、`insight9_a` −0.239 ms；含往返不确定度的两设备合计界限 15.3502 ms，小于 20 ms。现场三台相机回到原 `.20/.30/.40` 地址，原活动任务仍是 22 条 take，QA take 0003 独立保存。此结果仍不替代实际断电、实体手机 AP 和长期漂移验收。
+
+证据：`ip-head-50-final.json`、`ip-head-private.json`、`ip-head-restore-private.json`、`recording-private-ip.json`、`mcap-private-ip.txt`、`webrtc-private-ip.json`、`ip-head-restore-final.json`、`reboot-dynamic-ip.json`。
 
 ## 尚未验收
 
