@@ -4,6 +4,7 @@ from contextlib import suppress
 import json
 import os
 from pathlib import Path
+import socket
 import subprocess
 import tempfile
 import threading
@@ -42,46 +43,72 @@ class WebRtcStreams:
         self.producers = {}
         self.watchers = {}
         self.clients = set()
-        self.process = None
-        self.temp = None
+        self.services = {}
+        self.listeners = {}
+        self.service_lock = asyncio.Lock()
+        self.producer_lock = asyncio.Lock()
         self.session = None
         self.loop = None
-        self.api_port = port + 1
         self.media_port = port + 2
 
     async def start(self, app):
         self.loop = asyncio.get_running_loop()
+        self.session = ClientSession(timeout=ClientTimeout(total=None, sock_connect=3))
+
+    async def service(self, address):
+        # ICE learns peer-reflexive addresses too, so signalling filters alone
+        # cannot isolate AP/USB/office networks. Bind one lightweight relay per
+        # page-facing address; their consumers share the same H264 encoder.
+        async with self.service_lock:
+            existing = self.services.get(address)
+            if existing and existing[0].poll() is None:
+                return existing[2]
+            if existing:
+                existing[1].cleanup()
+                del self.services[address]
+            return await self._start_service(address)
+
+    async def _start_service(self, address):
         binary = Path(__file__).resolve().parents[2] / "deploy/bin/go2rtc"
         if not binary.is_file() or not os.access(binary, os.X_OK):
             raise RuntimeError("Bundled go2rtc is missing or not executable")
-        # No STUN/TURN or cloud candidates. Only addresses actually on this Jetson.
         addresses = json.loads(subprocess.check_output(["ip", "-j", "-4", "addr"], text=True))
-        hosts = [a["local"] for iface in addresses for a in iface.get("addr_info", [])
-                 if a.get("scope") == "global" and not a["local"].startswith("169.254.")]
-        config = {"api": {"listen": f"127.0.0.1:{self.api_port}", "allow_paths": ["/api/ws"]},
+        hosts = {a["local"] for iface in addresses for a in iface.get("addr_info", [])}
+        if address not in hosts:
+            raise web.HTTPBadRequest(text="Preview address is not on this device")
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            api_port = probe.getsockname()[1]
+        config = {"api": {"listen": f"127.0.0.1:{api_port}", "allow_paths": ["/api/ws"]},
                   "rtsp": {"listen": ""}, "srt": {"listen": ""},
-                  "webrtc": {"listen": f":{self.media_port}",
+                  "webrtc": {"listen": f"{address}:{self.media_port}",
                              "ice_servers": [],
-                             "candidates": [f"{h}:{self.media_port}" for h in hosts],
-                             "filters": {"ips": hosts, "networks": ["udp4", "tcp4"]}},
+                             "candidates": [f"{address}:{self.media_port}"],
+                             "filters": {"ips": [address], "loopback": address.startswith("127."),
+                                         "networks": ["udp4", "tcp4"]}},
                   "streams": {name: f"http://127.0.0.1:{self.port}/stream/{quote(name, safe='')}.h264" for name in self.sources},
                   "log": {"level": "warn"}}
-        self.temp = tempfile.TemporaryDirectory(prefix="insight-preview-")
-        path = Path(self.temp.name) / "go2rtc.json"
+        temp = tempfile.TemporaryDirectory(prefix="insight-preview-")
+        path = Path(temp.name) / "go2rtc.json"
         path.write_text(json.dumps(config))
-        self.process = subprocess.Popen([str(binary), "-config", str(path)])
-        self.session = ClientSession(timeout=ClientTimeout(total=None, sock_connect=3))
-        for _ in range(60):
-            if self.process.poll() is not None:
-                raise RuntimeError("go2rtc exited during startup")
-            try:
-                reader, writer = await asyncio.open_connection("127.0.0.1", self.api_port)
-                writer.close()
-                await writer.wait_closed()
-                return
-            except OSError:
-                await asyncio.sleep(.05)
-        raise RuntimeError("go2rtc did not start")
+        process = subprocess.Popen([str(binary), "-config", str(path)])
+        self.services[address] = (process, temp, api_port)
+        try:
+            for _ in range(60):
+                if process.poll() is not None:
+                    raise RuntimeError("go2rtc exited during startup")
+                try:
+                    reader, writer = await asyncio.open_connection("127.0.0.1", api_port)
+                    writer.close()
+                    await writer.wait_closed()
+                    return api_port
+                except OSError:
+                    await asyncio.sleep(.05)
+            raise RuntimeError("go2rtc did not start")
+        except BaseException:
+            await self._stop_service(process, temp)
+            self.services.pop(address, None)
+            raise
 
     def _update_demand(self):
         required = {region["id"] for source, count in self.watchers.items() if count
@@ -95,13 +122,14 @@ class WebRtcStreams:
             raise web.HTTPNotFound(text="Unknown preview source")
         if len(self.clients) >= 4:
             raise web.HTTPTooManyRequests(text="Too many preview viewers")
+        api_port = await self.service(request.query.get("address", "127.0.0.1"))
         ws = web.WebSocketResponse(heartbeat=15, max_msg_size=65536)
         await ws.prepare(request)
         self.clients.add(ws)
         self.watchers[source] = self.watchers.get(source, 0) + 1
         self._update_demand()
         try:
-            async with self.session.ws_connect(f"http://127.0.0.1:{self.api_port}/api/ws?src={quote(source, safe='')}") as upstream:
+            async with self.session.ws_connect(f"http://127.0.0.1:{api_port}/api/ws?src={quote(source, safe='')}") as upstream:
                 async def outbound():
                     offered = False
                     async for msg in ws:
@@ -143,39 +171,49 @@ class WebRtcStreams:
             raise web.HTTPNotFound()
         from .jetson_preview import OverviewEncoder
         queue = asyncio.Queue(maxsize=16)
-        closed = False
-        overflow = False
-        def deliver(data):
+        state = {"overflow": False, "started": False}
+        def deliver(data, keyframe):
             def enqueue():
-                nonlocal overflow
-                if closed or overflow:
-                    return
-                if queue.full():
-                    # Reconnect at a new GOP instead of sending a corrupted H264 tail.
-                    overflow = True
-                    return
-                queue.put_nowait(data)
+                for pending, listener in self.listeners.get(name, {}).items():
+                    if listener["overflow"]:
+                        continue
+                    if not listener["started"]:
+                        if not keyframe:
+                            continue
+                        listener["started"] = True
+                    if pending.full():
+                        # Reconnect this viewer at a new GOP, without disturbing
+                        # other links consuming the shared encoded output.
+                        listener["overflow"] = True
+                    else:
+                        pending.put_nowait(data)
             self.loop.call_soon_threadsafe(enqueue)
-        producer = await asyncio.to_thread(OverviewEncoder, self.sources[name], deliver, self.log)
-        with self.lock:
-            old = self.producers.get(name)
-            self.producers[name] = producer
-        if old:
-            await asyncio.to_thread(old.close)
+        async with self.producer_lock:
+            self.listeners.setdefault(name, {})[queue] = state
+            if name not in self.producers:
+                try:
+                    producer = await asyncio.to_thread(OverviewEncoder, self.sources[name], deliver, self.log)
+                except BaseException:
+                    self.listeners[name].pop(queue, None)
+                    raise
+                with self.lock:
+                    self.producers[name] = producer
         response = web.StreamResponse(headers={"Content-Type": "video/h264", "Cache-Control": "no-store"})
         try:
             await response.prepare(request)
-            while self.watchers.get(name, 0) and not overflow:
+            while self.watchers.get(name, 0) and not state["overflow"]:
                 data = await asyncio.wait_for(queue.get(), timeout=3)
                 await asyncio.wait_for(response.write(data), timeout=2)
         except (ConnectionError, asyncio.TimeoutError):
             pass
         finally:
-            closed = True
-            with self.lock:
-                if self.producers.get(name) is producer:
-                    self.producers.pop(name, None)
-            await asyncio.to_thread(producer.close)
+            async with self.producer_lock:
+                self.listeners[name].pop(queue, None)
+                if not self.listeners[name]:
+                    with self.lock:
+                        producer = self.producers.pop(name, None)
+                    if producer:
+                        await asyncio.to_thread(producer.close)
         return response
 
     def push_resolved_frame(self, name, fmt, width, height, data, stamp):
@@ -197,12 +235,17 @@ class WebRtcStreams:
             await asyncio.to_thread(producer.close)
         if self.session:
             await self.session.close()
-        if self.process:
-            self.process.terminate()
+        for process, temp, _port in self.services.values():
+            await self._stop_service(process, temp)
+        self.services.clear()
+
+    @staticmethod
+    async def _stop_service(process, temp):
+        if process.poll() is None:
+            process.terminate()
             try:
-                await asyncio.to_thread(self.process.wait, 2)
+                await asyncio.to_thread(process.wait, 2)
             except subprocess.TimeoutExpired:
-                self.process.kill()
-                await asyncio.to_thread(self.process.wait)
-        if self.temp:
-            self.temp.cleanup()
+                process.kill()
+                await asyncio.to_thread(process.wait)
+        temp.cleanup()

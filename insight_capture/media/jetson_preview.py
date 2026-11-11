@@ -140,7 +140,7 @@ class OverviewEncoder:
             return Gst.FlowReturn.EOS
         buf = sample.get_buffer()
         self.frames_encoded += 1
-        self.deliver(buf.extract_dup(0, buf.get_size()))
+        self.deliver(buf.extract_dup(0, buf.get_size()), not buf.has_flags(Gst.BufferFlags.DELTA_UNIT))
         return Gst.FlowReturn.OK
 
     def push(self, name, fmt, width, height, data, stamp):

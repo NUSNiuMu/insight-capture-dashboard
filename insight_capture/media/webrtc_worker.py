@@ -106,7 +106,7 @@ def _log(message: str) -> None:
 
 def build_app(streams, ipc_server):
     async def health(request):
-        return web.json_response({"webrtc_available": ipc_server.ready() and streams.process.poll() is None,
+        return web.json_response({"webrtc_available": ipc_server.ready(),
                                   "cameras": streams.snapshot_stats()})
     app = web.Application()
     app.router.add_get("/ws/webrtc", streams.websocket)
