@@ -30,6 +30,7 @@ sync_host_runtime() {
     trap cleanup_host_sync EXIT
 
     docker cp "${container}:/workspaces/insight_capture/insight_capture/__init__.py" "${temporary}/insight_capture_init.py"
+    docker cp "${container}:/workspaces/insight_capture/insight_capture/runtime/discovery.py" "${temporary}/discovery.py"
     docker cp "${container}:/workspaces/insight_capture/deploy" "${temporary}/deploy"
     docker cp "${container}:/workspaces/insight_capture/scripts" "${temporary}/scripts"
     docker cp "${container}:/workspaces/insight_capture/tools/diagnostics/sync_camera_restart.py" "${temporary}/sync_camera_restart.py"
@@ -53,6 +54,8 @@ sync_host_runtime() {
         "${HOST_RUNTIME_ROOT}/deploy/install_voice_control_service.sh" \
         "${HOST_RUNTIME_ROOT}/deploy/systemd/insight-voice-control.service.in"
     install -m 0644 "${temporary}/insight_capture_init.py" "${HOST_RUNTIME_ROOT}/insight_capture/__init__.py"
+    mkdir -p "${HOST_RUNTIME_ROOT}/insight_capture/runtime"
+    install -m 0644 "${temporary}/discovery.py" "${HOST_RUNTIME_ROOT}/insight_capture/runtime/discovery.py"
     cp -a "${temporary}/deploy/." "${HOST_RUNTIME_ROOT}/deploy/"
     cp -a "${temporary}/scripts/." "${HOST_RUNTIME_ROOT}/scripts/"
     install -m 0755 "${temporary}/sync_camera_restart.py" "${HOST_RUNTIME_ROOT}/tools/diagnostics/sync_camera_restart.py"
@@ -152,6 +155,13 @@ docker run --rm --network none --entrypoint python3 \
     -v "${SCRIPT_DIR}:/installation" "${IMAGE_NAME}:${version}" \
     /workspaces/insight_capture/deploy/migrate_release.py /installation
 ROOT_DIR="${SCRIPT_DIR}"
+if python3 -c 'import json,sys; sys.exit(not json.load(open(sys.argv[1])).get("clock_sync", {}).get("discover_usb"))' "${SCRIPT_DIR}/config/cameras.json"; then
+    if [[ $EUID == 0 ]]; then
+        bash "${SCRIPT_DIR}/deploy/install_camera_discovery.sh"
+    else
+        sudo bash "${SCRIPT_DIR}/deploy/install_camera_discovery.sh"
+    fi
+fi
 source "${SCRIPT_DIR}/deploy/device_services.sh"
 # Keep the phone/API reachable while inference engines initialize.
 load_device_services

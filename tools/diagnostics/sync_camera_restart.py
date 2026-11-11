@@ -22,11 +22,6 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 
-DEFAULT_CAMERAS = (
-    ("insight3_a", "169.254.10.1", "169.254.10.2"),
-    ("insight3_b", "169.254.20.1", "169.254.20.2"),
-    ("insight9_a", "169.254.30.1", "169.254.30.2"),
-)
 NTP_OFFSET_RE = re.compile(r"offset\s+([+-]?\d+(?:\.\d+)?)")
 LPWM_EVENT_RE = re.compile(
     r"\[(\d+(?:\.\d+)?)\].*\bVIN lpwm_enable=(\d+)\b"
@@ -503,9 +498,18 @@ def main() -> int:
     if args.measure_seconds <= 0 or args.recovery_seconds < 0:
         raise CameraSyncError("Measurement and recovery durations must be positive")
 
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     ros_domain_id = load_ros_domain_id(root / "config" / "cameras.json")
-    specs = [CameraSpec(*values) for values in DEFAULT_CAMERAS]
+    sys.path.insert(0, str(root))
+    from insight_capture.runtime.discovery import resolved_cameras
+    peers = resolved_cameras()
+    names = [camera['name'] for camera in json.loads((root / 'config/cameras.json').read_text())['cameras']]
+    specs = []
+    for name in names:
+        matches = [peer for peer in peers if peer['namespace'] == name]
+        if len(matches) != 1:
+            raise CameraSyncError(f'Expected one USB camera named {name}, found {len(matches)}')
+        specs.append(CameraSpec(name, matches[0]['host'], matches[0]['address']))
     password = None
     if not args.identity_file:
         password = os.environ.get(args.password_env)

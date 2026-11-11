@@ -79,6 +79,16 @@ def migrate(root: Path, templates: Path) -> dict:
             camera["avatar_model"] = model.replace("iron-man_helmet_mk3_clean.glb", "iron-man_helmet_mk3_optimized.glb")
         cameras = upgraded
         write(config / "cameras.json", cameras)
+    if profile == 'jetson-nx' and cameras.get('clock_sync', {}).get('enabled'):
+        cameras['ros_transport'] = {'camera_usb_only': True}
+        clocks = cameras['clock_sync']
+        clocks['discover_usb'] = True
+        for device in clocks.get('clock_devices', []):
+            device.pop('host', None)
+            device.pop('ntp_server', None)
+            if device.get('method') == 'ssh_ntpdate':
+                device['ssh_host_key_alias'] = 'insight-clock-' + device['name']
+        write(config / 'cameras.json', cameras)
     runtime_defaults = read(templates / "devices" / profile / "runtime.json", {})
     runtime_path = config / "runtime.json"
     old_runtime = read(runtime_path if runtime_path.exists() else config / "post_processing.json", {})

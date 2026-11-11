@@ -44,7 +44,8 @@ chronyd -p -f "$here/hotspot/chrony.conf" >/dev/null
 [[ -e /etc/chrony/chrony.conf.before-insight-capture ]] || cp -a /etc/chrony/chrony.conf /etc/chrony/chrony.conf.before-insight-capture
 install -m 0644 "$here/hotspot/chrony.conf" /etc/chrony/chrony.conf
 systemctl enable chrony
+install -m 0755 "$here/../insight_capture/runtime/discovery.py" /usr/local/libexec/insight-capture-camera-discovery
 systemctl daemon-reload
-systemctl enable insight-capture-isolation.service insight-capture-hotspot.service insight-capture-dhcp.service
+systemctl enable insight-capture-isolation.service insight-capture-hotspot.service insight-capture-dhcp.service insight-capture-camera-discovery.service
 echo 'Installed. Reboot to apply the driver and NetworkManager configuration.'
 echo 'Phone page: http://10.77.0.1:8765/mobile'

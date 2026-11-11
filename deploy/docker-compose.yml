@@ -42,6 +42,7 @@ services:
       # - DASHBOARD_PORT=8765
 
     volumes:
+      - /run/insight-capture-network:/run/insight-capture-network:ro
       # ── Data directories only (the code lives inside the image) ───────────
       # These persist across image upgrades. update.sh seeds config/ from the
       # image on first install; the app writes calibration/settings back here.

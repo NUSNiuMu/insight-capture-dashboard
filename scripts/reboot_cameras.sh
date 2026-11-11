@@ -88,33 +88,16 @@ except Exception:
 PY
 }
 
-# Print one "http://<ip>" per camera currently reachable on a 169.254.x.x
-# link, derived from local interface addresses (not a brute-force /16 scan,
-# which is both slow and unreliable across a container network namespace).
+# The DHCP peer and camera API define the endpoint, not its address range.
 discover_devices() {
-    local line iface cidr ip prefix last device_ip
-    ip -4 -o addr show up 2>/dev/null | while read -r line; do
-        iface="$(awk '{print $2}' <<< "${line}")"
-        [[ "${iface}" == "lo" || "${iface}" == docker* ]] && continue
-        cidr="$(awk '{print $4}' <<< "${line}")"
-        ip="${cidr%%/*}"
-        [[ "${ip}" == 169.254.* ]] || continue
-        prefix="${ip%.*}"
-        last="${ip##*.}"
-        if [[ "${last}" == "1" ]]; then
-            device_ip="${prefix}.2"
-        else
-            device_ip="${prefix}.1"
-        fi
-        echo "http://${device_ip}"
-    done | sort -u
+    python3 "${ROOT_DIR}/insight_capture/runtime/discovery.py" --urls
 }
 
 EXPECTED_COUNT="$(expected_camera_count)"
 if (( EXPECTED_COUNT > 0 )); then
-    log "Discovering cameras on 169.254.0.0/16 links (expecting ${EXPECTED_COUNT} per config/cameras.json)..."
+    log "Discovering cameras on camera USB links (expecting ${EXPECTED_COUNT} per config/cameras.json)..."
 else
-    log "Discovering cameras on 169.254.0.0/16 links (no expected count available)..."
+    log "Discovering cameras on camera USB links (no expected count available)..."
 fi
 DEVICES=()
 discovery_deadline=$(( SECONDS + DISCOVERY_TIMEOUT ))
@@ -129,7 +112,7 @@ while (( SECONDS < discovery_deadline )); do
 done
 
 if (( ${#DEVICES[@]} == 0 )); then
-    log "ERROR: No cameras found on any 169.254.x.x interface within ${DISCOVERY_TIMEOUT}s."
+    log "ERROR: No cameras found on any camera USB interface within ${DISCOVERY_TIMEOUT}s."
     log "Check that camera USB/Ethernet links are connected, and that 'ip' works in this environment."
     exit 1
 fi

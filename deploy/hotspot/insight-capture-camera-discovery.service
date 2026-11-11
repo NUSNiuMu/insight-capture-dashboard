@@ -1,0 +1,14 @@
+[Unit]
+Description=Discover USB cameras and grant capture clock access
+After=NetworkManager.service chrony.service
+Requires=chrony.service
+
+[Service]
+ExecStart=/usr/bin/python3 /usr/local/libexec/insight-capture-camera-discovery --serve
+Restart=always
+RestartSec=2
+RuntimeDirectory=insight-capture-network
+RuntimeDirectoryPreserve=yes
+
+[Install]
+WantedBy=multi-user.target

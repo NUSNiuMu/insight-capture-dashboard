@@ -702,7 +702,10 @@ def main():
     parser.add_argument("--runtime-config", type=Path, default=runtime_config_path())
     parser.add_argument("--socket", type=Path, default=Path("/run/looper/mapping.sock"))
     args = parser.parse_args()
-    os.environ["ROS_DOMAIN_ID"] = str(json.loads(args.config.read_text())["ros_domain_id"])
+    config = json.loads(args.config.read_text())
+    os.environ["ROS_DOMAIN_ID"] = str(config["ros_domain_id"])
+    from insight_capture.runtime.ros.network import configure_ros_network
+    configure_ros_network(config)
     rclpy.init()
     node = LooperNode(args)
     try:

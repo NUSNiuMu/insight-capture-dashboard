@@ -25,7 +25,7 @@
 
 单无线电的 STA/AP 必须同信道：STA 已连接时 AP 跟随其信道；STA 未连接时 AP 自行启动，默认 5 GHz 信道 36。最终信道须在部署地区和手机上实际验证。运行脚本持续检查接口及信道，开机不依赖外网连接。
 
-Jetson chrony 向 169.254.10/20/30/40 网段提供 NTP，使用本机时钟作为参考，启动时由 RTC 提供日期和时间。配置完全由本项目提供，不加载公网 NTP、DHCP 时间源或系统额外 sources；重新连上调试 Wi-Fi 也不会跳变采集时间。绝对 UTC 的校准只在空闲维护时进行，校准后需重启相机采集进程，再通过 NTP 和图像时间基准检查。RTC 是否能跨实际断电保持正确时间须单独验收。相机时钟相对偏差、图像时间戳配对、绝对 UTC 正确性是三个不同指标。NTP 检查仅测量，不在录制中调整系统时钟。
+Jetson chrony 仅向当前发现的相机 USB 对端提供 NTP，使用本机时钟作为参考，启动时由 RTC 提供日期和时间。配置完全由本项目提供，不加载公网 NTP、DHCP 时间源或系统额外 sources；重新连上调试 Wi-Fi 也不会跳变采集时间。绝对 UTC 的校准只在空闲维护时进行，校准后需重启相机采集进程，再通过 NTP 和图像时间基准检查。RTC 是否能跨实际断电保持正确时间须单独验收。相机时钟相对偏差、图像时间戳配对、绝对 UTC 正确性是三个不同指标。NTP 检查仅测量，不在录制中调整系统时钟。
 
 `jetson-nx` 配置启用录制前的时钟检查，单设备偏差界限 10 ms、两设备合计界限 20 ms，包含网络往返带来的不确定度。未通过时保留预览并阻止开始录制。录制清单保存开始和结束的测量报告。同步标志本身不作为精度证明。
 
@@ -41,4 +41,21 @@ Insight9 当前固件只提供 NTP 客户端，检查使用经严格主机密钥
 
 设备接入时，在空闲状态执行 `deploy/guard_camera_time_sync.sh`，为相机固件已有的 `time_sync.sh` 加单实例锁。两个并发 ntpdate 都基于调整前的时钟测量，会导致大偏差被应用两次；锁避免这种启动竞争。脚本保留原文件备份，不新增校时服务。首次纠正大时间偏差需先停止相机采集服务，校时后再启动，并重新核验 ROS 图像 header。
 
-DDS 数据面仅发布三条相机 USB 链路和 loopback 的地址，不向相机公布办公室 Wi-Fi、手机热点、电脑 USB 调试或 Docker 网桥地址。这样 Wi-Fi/AP 切换不会改变采集数据面的可达地址。
+DDS 数据面动态发现当前相机 USB 链路，仅发布这些链路和 loopback 的地址，不向相机公布办公室 Wi-Fi、手机热点、电脑 USB 调试或 Docker 网桥地址。这样 Wi-Fi/AP 切换不会改变采集数据面的可达地址。
+
+
+## 改 IP 与更换设备
+
+`jetson-nx` 使用 `ros_transport.camera_usb_only=true` 和 `clock_sync.discover_usb=true`，配置中不保存相机 IP 白名单。USB 网卡按 CDC-NCM 驱动发现；Jetson 端地址来自实际接口，相机地址来自该接口的 DHCP server identifier，再通过相机 `/api/ip-config` 核对双方地址。角色按 `/api/camera-config` 返回的 namespace 匹配，不按 IP、MAC、插口或插入顺序分配。
+
+因此同一台相机改成 `169.254.50.1 ↔ 169.254.50.2` 或其他有效 IPv4 配对，不需要修改 InsightCapture 配置；也不要求末位必须为 `.1/.2`。多台相机的网段不能相互冲突，也不能与 AP、调试或其他连接的网段冲突。无匹配角色、重复 namespace、租约不符或发现结果过期时，时钟预检不会沿用旧设备的通过结果。
+
+`insight-capture-camera-discovery.service` 维护自己的 `/run/insight-capture-network/cameras.json`，并动态授权/撤销 chrony 对端。服务开机启动；没有相机时 chrony 默认拒绝客户端。应用与在线校准的相机输入 participant 在 USB 网卡或地址变化后重建，运行中的任务和 Web 服务保留。Fast DDS 的进程内传输默认值与后续录制子进程配置同步更新；录制话题查询不再复用可能持有旧地址的 ROS CLI daemon。
+
+首次接入一台相机，除配置正确的角色 namespace、ROS domain 和原生校时外，还需在相机空闲时运行本项目 `deploy/guard_camera_dds.sh`，随后重启其 `S99all_run`。它只启用 CycloneDDS 的 `DontRoute=true`，让相机从 Jetson 公布的地址中选择直连链路，避免改 IP 后丢失默认路由时错误地向另一条 USB 网段回传。该设置没有具体 IP，原生改 IP 接口会保留；三台现场相机均已配置。`deploy/guard_camera_time_sync.sh` 仍用于串行化相机原生 NTP 调用。
+
+Insight9 的只读 SSH 时钟查询使用 `deploy/camera_clock_query.sh` 作为专用公钥的强制命令，目标从本次 `SSH_CONNECTION` 的 Jetson 地址取得。Jetson 使用角色对应的 `HostKeyAlias=insight-clock-<namespace>` 保存已验证的相机主机公钥，因此同一台设备改 IP 不会失去信任；换成另一台实体设备，需要首次登记新主机公钥和授权查询公钥。不会关闭严格主机密钥检查，也不把相机密码写入配置。
+
+新设备接入后的在线校准仍由本项目自己的 LooperVIO 建图/重定位完成。IP 不是校准身份；仅改地址不会改变逻辑角色，但相机采集进程重启、VIO 重置和实际更换/移动相机后，需要重新确认校准结果。当前实现并未增加基于实体序列号的完整自动换机校准流程。
+
+安装/升级独立发现服务使用 `sudo bash deploy/install_camera_discovery.sh`；已有采集热点的客户升级入口会更新该服务。客户镜像构建会编译本项目的 Fast DDS 适配库。源码挂载开发部署还需执行 `docker compose run --rm --no-deps insight-dashboard bash deploy/build_dds_network.sh`，将同一份库生成到本项目 `.native-build/`，不访问任何其他项目。

@@ -9,6 +9,7 @@ import ipaddress
 import subprocess
 import struct
 import time
+from insight_capture.runtime.discovery import resolved_cameras
 
 
 NTP_EPOCH = 2_208_988_800
@@ -63,9 +64,11 @@ def ssh_ntp_sample(device):
     """Query a client-only camera's ntpdate; no clock-setting options are used."""
     host = str(ipaddress.ip_address(device["host"]))
     server = str(ipaddress.ip_address(device["ntp_server"]))
+    alias = device.get('ssh_host_key_alias')
     completed = subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
          "-o", "ConnectTimeout=3", "-o", "ConnectionAttempts=1",
+         *(['-o', f'HostKeyAlias={alias}'] if alias else []),
          "-i", device.get("ssh_identity", "/root/.ssh/insight_clock_ed25519"), f"root@{host}",
          f"ntpdate -q -p 3 -t 1 {server}"],
         capture_output=True, text=True, timeout=12, check=False)
@@ -84,10 +87,17 @@ def ssh_ntp_sample(device):
 def measure_clocks(config: dict) -> dict:
     """Use each device's least delayed sample; fail closed on missing clocks."""
     devices = config["clock_devices"]
+    peers = resolved_cameras() if config.get('discover_usb') else None
     limit = float(config.get("max_clock_bound_ms", 10))
     rtt_limit = float(config.get("max_ntp_rtt_ms", 10))
 
     def measure(device):
+        device = dict(device)
+        if peers is not None:
+            matches = [peer for peer in peers if peer['namespace'] == device['name']]
+            if len(matches) != 1:
+                return device['name'], {'ok': False, 'error': f'Expected one USB camera named {device["name"]}, found {len(matches)}'}
+            device.update(host=matches[0]['host'], ntp_server=matches[0]['address'])
         samples, errors = [], []
         for _ in range(1 if device.get("method") == "ssh_ntpdate" else int(config.get("ntp_samples", 3))):
             try:
@@ -136,6 +146,15 @@ class ClockMonitor:
     def status(self):
         with self._lock:
             report = dict(self._report)
+        if self.config.get('discover_usb'):
+            try:
+                peers = resolved_cameras()
+                for name, result in report.get('devices', {}).items():
+                    hosts = [peer['host'] for peer in peers if peer['namespace'] == name]
+                    if hosts != [result.get('host')]:
+                        report.update(ok=False, error='USB camera changed; waiting for a fresh NTP measurement')
+            except (OSError, ValueError, KeyError) as exc:
+                report.update(ok=False, error=str(exc))
         age = max(0, time.time() - report.get("checked_at_epoch_s", 0))
         return {**report, "age_sec": age, "ok": bool(report.get("ok")) and age <= 30}
 

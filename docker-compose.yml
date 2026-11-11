@@ -42,6 +42,7 @@ services:
       # - DASHBOARD_PORT=8765
 
     volumes:
+      - /run/insight-capture-network:/run/insight-capture-network:ro
       # ── Source code (live-mounted; no rebuild needed for code changes) ─────
       # /workspaces/looper-vio-colmap-handoff (a sibling, not under this
       # path) and the COLMAP binary are baked into the image, not part of

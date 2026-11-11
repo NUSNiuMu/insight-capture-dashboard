@@ -34,6 +34,7 @@ chronyd -p -f "$here/hotspot/chrony.conf" >/dev/null
 install -m 0644 "$here/hotspot/chrony.conf" /etc/chrony/chrony.conf
 systemctl enable chrony
 systemctl restart chrony
+install -m 0755 "$here/../insight_capture/runtime/discovery.py" /usr/local/libexec/insight-capture-camera-discovery
 systemctl daemon-reload
-systemctl enable --now insight-capture-isolation.service insight-capture-hotspot.service insight-capture-dhcp.service
+systemctl enable --now insight-capture-isolation.service insight-capture-hotspot.service insight-capture-dhcp.service insight-capture-camera-discovery.service
 printf 'Capture network configured. Backup: %s\nPhone: http://10.77.0.1:8765/mobile\n' "$backup"

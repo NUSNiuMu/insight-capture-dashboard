@@ -230,7 +230,7 @@ def discover_live_topics(
     env["ROS_DOMAIN_ID"] = str(int(ros_domain_id))
     try:
         result = subprocess.run(
-            ["ros2", "topic", "list", "-t"],
+            ["ros2", "topic", "list", "-t", "--no-daemon", "--spin-time", "0.5"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

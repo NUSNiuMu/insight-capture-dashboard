@@ -1,6 +1,7 @@
 """Keep DDS discovery on the configured capture interfaces."""
 
 import atexit
+import ctypes
 import fcntl
 import ipaddress
 import os
@@ -9,6 +10,11 @@ import socket
 import struct
 import tempfile
 import xml.etree.ElementTree as ET
+from insight_capture.runtime.discovery import camera_links
+from insight_capture.core.paths import PROJECT_ROOT
+
+_dynamic_profile = None
+_transport_library = None
 
 
 def local_ipv4_addresses():
@@ -32,7 +38,8 @@ def configure_ros_network(config):
     transport = config.get("ros_transport", {})
     included = transport.get("include_host_addresses", [])
     excluded = transport.get("exclude_host_addresses", [])
-    if not included and not excluded:
+    dynamic = transport.get("camera_usb_only", False)
+    if not dynamic and not included and not excluded:
         return None
     excluded = {str(ipaddress.IPv4Address(address)) for address in excluded}
     if os.environ.get("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp") not in {
@@ -44,10 +51,21 @@ def configure_ros_network(config):
     )):
         return None
 
-    addresses = local_ipv4_addresses() - excluded
-    if included:
+    addresses = ({link.address for link in camera_links()} if dynamic else local_ipv4_addresses()) - excluded
+    if included and not dynamic:
         addresses &= {str(ipaddress.IPv4Address(address)) for address in included}
     addresses.add("127.0.0.1")
+    path = write_profile(addresses)
+    atexit.register(path.unlink, missing_ok=True)
+    os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(path)
+    if dynamic:
+        global _dynamic_profile
+        _dynamic_profile = path
+        refresh_ros_network()
+    return path
+
+
+def write_profile(addresses, path=None):
     root = ET.Element(
         "profiles", xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles"
     )
@@ -69,9 +87,25 @@ def configure_ros_network(config):
     for transport in ("insight_udp", "insight_shm"):
         ET.SubElement(user_transports, "transport_id").text = transport
     ET.SubElement(rtps, "useBuiltinTransports").text = "false"
-    with tempfile.NamedTemporaryFile(prefix="insight-fastdds-", suffix=".xml", delete=False) as profile:
-        profile.write(ET.tostring(root, encoding="utf-8", xml_declaration=True))
-    path = Path(profile.name)
-    atexit.register(path.unlink, missing_ok=True)
-    os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(path)
+    if path is None:
+        with tempfile.NamedTemporaryFile(prefix="insight-fastdds-", suffix=".xml", delete=False) as profile:
+            path = Path(profile.name)
+    temporary = path.with_suffix('.tmp')
+    temporary.write_bytes(ET.tostring(root, encoding="utf-8", xml_declaration=True))
+    temporary.replace(path)
     return path
+
+
+def refresh_ros_network():
+    """Update both future child processes and Fast DDS's in-process QoS cache."""
+    if _dynamic_profile is None:
+        return
+    addresses = sorted({'127.0.0.1'} | {link.address for link in camera_links()})
+    global _transport_library
+    if _transport_library is None:
+        _transport_library = ctypes.CDLL(str(PROJECT_ROOT / '.native-build/libinsight_dds_network.so'))
+        _transport_library.insight_set_capture_addresses.argtypes = [ctypes.c_char_p]
+        _transport_library.insight_set_capture_addresses.restype = ctypes.c_int
+    if _transport_library.insight_set_capture_addresses(','.join(addresses).encode()) != 0:
+        raise RuntimeError('Cannot refresh the USB-only DDS transport')
+    write_profile(addresses, _dynamic_profile)

@@ -10,6 +10,7 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 
 from insight_capture.runtime.discovery import camera_links
+from insight_capture.runtime.ros.network import refresh_ros_network
 
 
 class CameraInputs:
@@ -25,6 +26,7 @@ class CameraInputs:
         self._create_node()
 
     def _create_node(self):
+        refresh_ros_network()
         self.context = Context()
         self.context.init(domain_id=self.domain)
         self.node = Node(self.owner.get_name() + "_inputs", context=self.context)
