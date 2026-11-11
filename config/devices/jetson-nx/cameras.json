@@ -122,12 +122,24 @@
       },
       {
         "name": "insight9_a",
-        "host": "169.254.40.1"
+        "host": "169.254.40.1",
+        "method": "ssh_ntpdate",
+        "ntp_server": "169.254.40.2",
+        "max_clock_bound_ms": 20,
+        "max_ntp_rtt_ms": 35
       }
     ],
     "ntp_samples": 3,
     "max_clock_bound_ms": 10,
     "max_pairwise_clock_bound_ms": 20,
     "max_ntp_rtt_ms": 10
+  },
+  "ros_transport": {
+    "include_host_addresses": [
+      "127.0.0.1",
+      "169.254.20.2",
+      "169.254.30.2",
+      "169.254.40.2"
+    ]
   }
 }

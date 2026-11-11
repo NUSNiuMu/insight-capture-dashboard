@@ -2,7 +2,7 @@
 # Upgrade the existing AP configuration without replacing the Wi-Fi driver.
 set -euo pipefail
 [[ $EUID == 0 ]] || { echo 'Run with sudo.' >&2; exit 1; }
-for tool in nmcli iw dnsmasq iptables chronyc; do command -v "$tool" >/dev/null; done
+for tool in nmcli iw wpa_cli dnsmasq iptables chronyc; do command -v "$tool" >/dev/null; done
 [[ -f /etc/insight-capture-hotspot.conf ]]
 nmcli connection show jetson-capture-hotspot >/dev/null
 # Do not accept a network change while the recorder state is unknown or busy.
@@ -20,6 +20,7 @@ cp -a /etc/chrony/conf.d /etc/NetworkManager/system-connections /etc/insight-cap
 for unit in jetson-hotspot.service jetson-hotspot-dhcp.service insight-capture-hotspot.service; do
     if systemctl cat "$unit" >/dev/null 2>&1; then systemctl disable --now "$unit"; fi
 done
+nmcli connection down jetson-capture-hotspot 2>/dev/null || true
 nmcli connection modify jetson-capture-hotspot connection.autoconnect no \
     ipv4.method manual ipv4.addresses 10.77.0.1/24 ipv4.gateway '' ipv4.dns '' \
     ipv4.never-default yes ipv6.method disabled

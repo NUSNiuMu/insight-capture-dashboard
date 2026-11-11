@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import concurrent.futures
 import socket
+import re
+import ipaddress
+import subprocess
 import struct
 import time
 
@@ -56,6 +59,28 @@ def ntp_sample(host: str, timeout: float = 0.5) -> dict:
     }
 
 
+def ssh_ntp_sample(device):
+    """Query a client-only camera's ntpdate; no clock-setting options are used."""
+    host = str(ipaddress.ip_address(device["host"]))
+    server = str(ipaddress.ip_address(device["ntp_server"]))
+    completed = subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes",
+         "-o", "ConnectTimeout=3", "-o", "ConnectionAttempts=1",
+         "-i", device.get("ssh_identity", "/root/.ssh/insight_clock_ed25519"), f"root@{host}",
+         f"ntpdate -q -p 3 -t 1 {server}"],
+        capture_output=True, text=True, timeout=12, check=False)
+    output = completed.stdout + completed.stderr
+    match = re.search(r"server [^,]+, stratum (\d+), offset ([+-]?[\d.]+), delay ([\d.]+)", output)
+    if completed.returncode or not match or not 1 <= int(match[1]) <= 15:
+        raise ValueError("Camera NTP query failed: " + output.strip()[-400:])
+    # ntpdate reports server-minus-camera; normalize to camera-minus-Jetson.
+    offset, delay = -float(match[2]) * 1000, float(match[3]) * 1000
+    return {"host": host, "checked_at_epoch_s": time.time(), "stratum": int(match[1]),
+            "method": "camera ntpdate -q, three samples; camera minus Jetson",
+            "offset_ms": round(offset, 4), "round_trip_ms": round(delay, 4),
+            "offset_bound_ms": round(abs(offset) + max(0, delay) / 2, 4)}
+
+
 def measure_clocks(config: dict) -> dict:
     """Use each device's least delayed sample; fail closed on missing clocks."""
     devices = config["clock_devices"]
@@ -64,15 +89,16 @@ def measure_clocks(config: dict) -> dict:
 
     def measure(device):
         samples, errors = [], []
-        for _ in range(int(config.get("ntp_samples", 3))):
+        for _ in range(1 if device.get("method") == "ssh_ntpdate" else int(config.get("ntp_samples", 3))):
             try:
-                samples.append(ntp_sample(device["host"]))
-            except (OSError, ValueError) as exc:
+                samples.append(ssh_ntp_sample(device) if device.get("method") == "ssh_ntpdate" else ntp_sample(device["host"]))
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
                 errors.append(str(exc))
         if not samples:
             return device["name"], {"ok": False, "host": device["host"], "error": "; ".join(errors)}
         best = min(samples, key=lambda sample: sample["round_trip_ms"])
-        best.update(ok=best["offset_bound_ms"] <= limit and best["round_trip_ms"] <= rtt_limit)
+        best.update(ok=best["offset_bound_ms"] <= float(device.get("max_clock_bound_ms", limit))
+                    and best["round_trip_ms"] <= float(device.get("max_ntp_rtt_ms", rtt_limit)))
         return device["name"], best
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(devices))) as executor:
@@ -81,7 +107,7 @@ def measure_clocks(config: dict) -> dict:
     pairwise_bound = sum(bounds[:2]) if bounds else None
     pairwise_limit = float(config.get("max_pairwise_clock_bound_ms", 20))
     return {
-        "method": "NTP four timestamps, minimum round trip; device minus Jetson",
+        "method": "NTP measurement; device minus Jetson; method recorded per device",
         "checked_at_epoch_s": time.time(), "max_clock_bound_ms": limit,
         "max_ntp_rtt_ms": rtt_limit, "devices": results,
         "pairwise_clock_bound_ms": round(pairwise_bound, 4) if pairwise_bound is not None and pairwise_bound != float("inf") else None,

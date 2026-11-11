@@ -21,6 +21,25 @@ class ImagePipeline:
     def __init__(self, owner) -> None:
         self.owner = owner
         self._encoding_paths = {}
+        self._clock_samples = {}
+
+    def clock_status(self):
+        now = time.monotonic()
+        with self.owner.camera_input_lock:
+            samples = dict(self._clock_samples)
+        devices = {}
+        for camera in self.owner.cameras:
+            sample = samples.get(camera.name)
+            if sample is None:
+                devices[camera.name] = {"ok": False, "error": "No source timestamp"}
+                continue
+            stamp_ns, wall_ns, received = sample
+            difference = (stamp_ns - wall_ns) / 1e9
+            devices[camera.name] = {"ok": now - received < 2 and -2 <= difference <= 1,
+                                    "source_minus_receipt_ms": round(difference * 1000, 3),
+                                    "age_sec": round(now - received, 3)}
+        return {"ok": bool(devices) and all(d["ok"] for d in devices.values()), "devices": devices,
+                "method": "Image header versus Jetson receipt; detects wrong epochs, not NTP precision"}
 
     def encoding_status(self):
         """Report the last successful encoder, not hardware availability."""
@@ -47,7 +66,10 @@ class ImagePipeline:
                     self.owner.get_logger().warning(f"Invalid H.264 image: {exc}", throttle_duration_sec=5)
                     return
             with self.owner.camera_input_lock:
-                self.owner.camera_input_times[camera_name].append(time.monotonic())
+                received = time.monotonic()
+                self.owner.camera_input_times[camera_name].append(received)
+                if is_live:
+                    self._clock_samples[camera_name] = (int(msg.header.stamp.sec) * 1_000_000_000 + int(msg.header.stamp.nanosec), time.time_ns(), received)
             if not self.owner._playback_mode:
                 self.owner._feed_recording_writer(camera_topic, msg)
             # Capture keeps the DDS reader and header audit without display work.

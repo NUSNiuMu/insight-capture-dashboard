@@ -1,4 +1,4 @@
-"""Keep local-domain DDS locators away from optional camera USB links."""
+"""Keep DDS discovery on the configured capture interfaces."""
 
 import atexit
 import fcntl
@@ -29,8 +29,10 @@ def local_ipv4_addresses():
 
 def configure_ros_network(config):
     """Apply an optional Fast DDS transport profile before the first ROS init."""
-    excluded = config.get("ros_transport", {}).get("exclude_host_addresses", [])
-    if not excluded:
+    transport = config.get("ros_transport", {})
+    included = transport.get("include_host_addresses", [])
+    excluded = transport.get("exclude_host_addresses", [])
+    if not included and not excluded:
         return None
     excluded = {str(ipaddress.IPv4Address(address)) for address in excluded}
     if os.environ.get("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp") not in {
@@ -42,7 +44,10 @@ def configure_ros_network(config):
     )):
         return None
 
-    addresses = (local_ipv4_addresses() - excluded) | {"127.0.0.1"}
+    addresses = local_ipv4_addresses() - excluded
+    if included:
+        addresses &= {str(ipaddress.IPv4Address(address)) for address in included}
+    addresses.add("127.0.0.1")
     root = ET.Element(
         "profiles", xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles"
     )

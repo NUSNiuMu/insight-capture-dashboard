@@ -46,6 +46,10 @@ class CapturePreflight:
         clocks = monitor.status() if monitor else None
         if clocks is not None and not clocks["ok"]:
             failures.append(self._failure("clock_not_ready", "三台相机 NTP 校时尚未达到录制门槛", clocks=clocks))
+        pipeline = getattr(self.node, "_image_pipeline", None)
+        image_clocks = pipeline.clock_status() if pipeline else None
+        if image_clocks and not image_clocks["ok"]:
+            failures.append(self._failure("image_clock_invalid", "相机图像时间戳未与 Jetson 对齐，请在校时完成后重启相机采集进程", clocks=image_clocks))
         camera_health = {}
         configured_camera_names = {camera.name for camera in self.node.cameras}
         if calibration_mode:
@@ -198,6 +202,7 @@ class CapturePreflight:
             "warnings": warnings,
             "camera_health": camera_health,
             "clocks": clocks,
+            "image_clocks": image_clocks,
             "mapping": mapping,
             "storage": storage,
             "distributed": distributed,

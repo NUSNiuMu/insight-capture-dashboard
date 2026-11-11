@@ -227,7 +227,12 @@ class OverviewEncoder:
 
     def status(self):
         return {"encoded": self.frames_encoded, "paired": self.paired, "unmatched": self.unmatched,
-                "pair_spread_ms": self.last_spread_ms, "stale": self.stale, "error": self.error}
+                "pair_spread_ms": self.last_spread_ms, "stale": self.stale, "error": self.error,
+                "inputs": {name: {"received": d.received, "layout": d.layout,
+                                   "last_stamp_ns": frames[-1][0] if frames else None,
+                                   "age_ms": (time.monotonic_ns() - frames[-1][1]) / 1e6 if frames else None,
+                                   "error": d.error}
+                           for name, d in list(self.decoders.items()) for frames in [d.snapshot()]}}
 
     def close(self):
         with self._close_lock:

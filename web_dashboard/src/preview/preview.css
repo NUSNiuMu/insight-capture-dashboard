@@ -30,3 +30,7 @@
 .preview-head small { margin-left: auto; min-width: 0; }
 .preview-head #preview-expand { flex-shrink: 0; min-height: 40px; width: 40px; padding: 0; color: #fff; background: #20283a; font-size: 22px; }
 .camera-switch.with-overview { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.preview-card button { border: 0; border-radius: 10px; cursor: pointer; font: inherit; }
+.preview-card .camera-switch button { min-height: 44px; font-size: 12px; }
+.preview-card .preview-tiles button { border: 1px solid #ffffff30; border-radius: 0; }
+.preview-card button:disabled { opacity: .5; cursor: default; }
