@@ -40,6 +40,10 @@ install -Dm 0755 "$here/hotspot/start.sh" /usr/local/libexec/insight-capture-hot
 install -m 0755 "$here/hotspot/isolate.sh" /usr/local/libexec/insight-capture-isolate
 install -m 0644 "$here/hotspot/dnsmasq.conf" /etc/insight-capture-dnsmasq.conf
 install -m 0644 "$here"/hotspot/insight-capture-*.service /etc/systemd/system/
+chronyd -p -f "$here/hotspot/chrony.conf" >/dev/null
+[[ -e /etc/chrony/chrony.conf.before-insight-capture ]] || cp -a /etc/chrony/chrony.conf /etc/chrony/chrony.conf.before-insight-capture
+install -m 0644 "$here/hotspot/chrony.conf" /etc/chrony/chrony.conf
+systemctl enable chrony
 systemctl daemon-reload
 systemctl enable insight-capture-isolation.service insight-capture-hotspot.service insight-capture-dhcp.service
 echo 'Installed. Reboot to apply the driver and NetworkManager configuration.'

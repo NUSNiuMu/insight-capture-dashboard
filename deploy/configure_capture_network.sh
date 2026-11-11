@@ -15,7 +15,7 @@ here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 backup=/var/lib/insight-capture-network/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$backup"
 chmod 700 "$backup"
-cp -a /etc/chrony/conf.d /etc/NetworkManager/system-connections /etc/insight-capture-hotspot.conf "$backup/"
+cp -a /etc/chrony /etc/NetworkManager/system-connections /etc/insight-capture-hotspot.conf "$backup/"
 # The old AP owner must not compete for the same virtual interface/profile.
 for unit in jetson-hotspot.service jetson-hotspot-dhcp.service insight-capture-hotspot.service; do
     if systemctl cat "$unit" >/dev/null 2>&1; then systemctl disable --now "$unit"; fi
@@ -30,17 +30,10 @@ install -m 0755 "$here/hotspot/isolate.sh" /usr/local/libexec/insight-capture-is
 rm -f /etc/NetworkManager/dispatcher.d/90-insight-hotspot
 install -m 0644 "$here/hotspot/dnsmasq.conf" /etc/insight-capture-dnsmasq.conf
 install -m 0644 "$here"/hotspot/insight-capture-*.service /etc/systemd/system/
-cat > /etc/chrony/conf.d/insight-cameras.conf <<'CONFIG'
-# Isolated USB camera links, including the Insight9 middle camera.
-allow 169.254.10.0/24
-allow 169.254.20.0/24
-allow 169.254.30.0/24
-allow 169.254.40.0/24
-CONFIG
-# Retain the existing local-reference filename so no duplicate is installed.
-printf 'local stratum 10\n' > /etc/chrony/conf.d/jetson-hotspot.conf
-chronyc allow 169.254.40.0/24
+chronyd -p -f "$here/hotspot/chrony.conf" >/dev/null
+install -m 0644 "$here/hotspot/chrony.conf" /etc/chrony/chrony.conf
 systemctl enable chrony
+systemctl restart chrony
 systemctl daemon-reload
 systemctl enable --now insight-capture-isolation.service insight-capture-hotspot.service insight-capture-dhcp.service
 printf 'Capture network configured. Backup: %s\nPhone: http://10.77.0.1:8765/mobile\n' "$backup"
