@@ -61,6 +61,7 @@ class WebRtcStreams:
         config = {"api": {"listen": f"127.0.0.1:{self.api_port}", "allow_paths": ["/api/ws"]},
                   "rtsp": {"listen": ""}, "srt": {"listen": ""},
                   "webrtc": {"listen": f":{self.media_port}",
+                             "ice_servers": [],
                              "candidates": [f"{h}:{self.media_port}" for h in hosts],
                              "filters": {"ips": hosts, "networks": ["udp4", "tcp4"]}},
                   "streams": {name: f"http://127.0.0.1:{self.port}/stream/{quote(name, safe='')}.h264" for name in self.sources},
