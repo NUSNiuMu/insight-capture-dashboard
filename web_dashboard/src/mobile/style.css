@@ -144,11 +144,14 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 .health-summary { margin-top: 0; gap: 5px; }
 .health-summary span { background: transparent; padding: 5px; }
 .readiness-title strong { font-size: 14px; flex: 1; }
-.task-current { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; }
-.task-current > div { min-width: 0; }
-.task-current small { display: block; color: #596273; font-size: 11px; margin-bottom: 4px; }
-.task-current strong { display: block; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-current button { flex-shrink: 0; }
+.capture-intro { display: flow-root; }
+.capture-page .topbar { min-height: 56px; padding-top: calc(10px + var(--safe-area-inset-top, env(safe-area-inset-top))); padding-bottom: 10px; }
+.capture-page .topbar-title { display: flex; align-items: baseline; gap: 10px; }
+.capture-page .topbar h1 { font-size: 18px; }
+.dock-status #switch-task { flex-shrink: 0; min-height: 44px; }
+.dock-task { display: flex; min-width: 0; }
+.dock-task #task-name { overflow: hidden; text-overflow: ellipsis; }
+.dock-take { flex-shrink: 0; white-space: pre; }
 .capture-view-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 14px; background: #e7ebef; margin: 4px 0 12px; }
 .capture-view-switch button { background: transparent; color: #596273; min-height: 40px; padding: 8px; }
 .capture-view-switch button[aria-pressed="true"] { color: #111827; background: #fff; box-shadow: 0 1px 5px #11182712; }

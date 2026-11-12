@@ -4,7 +4,7 @@ import { t } from "../i18n.js"
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { startWebRTC } from '../webrtc.js'
 import { appActive } from '../lifecycle.js'
-const props = defineProps({ preview: Object, online: Boolean, recording: Boolean, active: { type: Boolean, default: true } })
+const props = defineProps({ preview: Object, online: Boolean, recording: Boolean, active: { type: Boolean, default: true }, availableHeight: { type: Number, default: 0 } })
 const emit = defineEmits(['notify', 'recovered'])
 const selected = ref(''), video = ref(null), failed = ref(false), ready = ref(false)
 const failure = ref('')
@@ -26,7 +26,7 @@ const aspect = computed(() => {
   return dimensions?.width && dimensions?.height ? `${dimensions.width} / ${dimensions.height}` : '3 / 4'
 })
 const pictureStyle = computed(() => {
-  if (!expanded.value || !stageSize.value.width || !stageSize.value.height) return undefined
+  if ((!expanded.value && !props.availableHeight) || !stageSize.value.width || !stageSize.value.height) return undefined
   const [width, height] = aspect.value.split('/').map(Number)
   return { width: `${Math.min(stageSize.value.width, stageSize.value.height * width / height)}px` }
 })
@@ -157,9 +157,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section ref="panel" class="preview-card" :class="{ 'preview-expanded': expanded }"
+  <section ref="panel" class="preview-card" :class="{ 'preview-expanded': expanded, 'preview-fitted': availableHeight && !expanded }"
+    :style="!expanded && availableHeight ? {height: `${availableHeight}px`} : undefined"
     :role="expanded ? 'dialog' : undefined" :aria-modal="expanded ? 'true' : undefined"
     :aria-label="t(&quot;相机预览&quot;)" tabindex="-1" @keydown="keyboard">
+    <div class="preview-controls">
+    <div class="preview-toolbar">
     <div class="preview-head"><span><i></i>{{ t("相机预览") }}</span><small id="preview-topic">
       {{ !online ? t('设备离线') : previewPaused ? t('预览已暂停') : `${t(isOverview ? overview?.label || '三路总览' : source?.label || '等待相机')} · ${t(!ready ? '等待画面' : failed ? '等待重试' : '实时预览')}` }}
     </small><button v-if="!expanded" id="preview-expand" :aria-label="t(&quot;放大预览&quot;)" :disabled="!online || previewPaused" @click="openPreview()">↗</button></div>
@@ -167,14 +170,16 @@ onBeforeUnmount(() => {
       <button v-if="expanded && fullscreenAvailable" @click="fullscreen">{{ t("系统全屏") }}</button>
       <button v-if="expanded" class="preview-close" @click="closePreview">{{ t("关闭预览") }}</button>
     </div>
+    </div>
     <small v-if="failure" id="preview-failure">{{ t('实时预览不可用：') }}{{ t(failure) }}
       <button class="secondary" @click="failed = false; failure = ''; start()">{{ t("重试") }}</button></small>
-    <div id="preview-source" class="camera-switch" :class="{ 'with-overview': overview }"
-      :style="{ gridTemplateColumns: `repeat(${sources.length + (overview ? 1 : 0)}, minmax(0, 1fr))` }" role="group" :aria-label="t(&quot;选择预览相机&quot;)">
+    <div id="preview-source" class="camera-switch"
+      :style="{ '--preview-source-count': sources.length + (overview ? 1 : 0) }" role="group" :aria-label="t(&quot;选择预览相机&quot;)">
       <button v-if="overview" id="preview-overview" :class="{ active: isOverview }" :aria-pressed="isOverview" :disabled="!online" @click="showOverview">{{ t(overview.label || '三路总览') }}</button>
       <button v-for="item in sources" :id="`preview-source-${item.id}`" :key="item.id" type="button"
         :class="{ active: !isOverview && source?.id === item.id, unavailable: item.publisher_count === 0 && preview?.publishers_checked }"
         :aria-pressed="!isOverview && source?.id === item.id" :disabled="!online" @click="selected = item.id">{{ t(item.label) }}</button>
+    </div>
     </div>
     <div ref="stage" class="preview-stage" :style="{ '--preview-aspect': aspect }">
       <div class="preview-picture" :style="pictureStyle">
