@@ -25,8 +25,9 @@ def task_status_message(status: dict) -> str:
 
 
 class TaskRoutes:
-    def __init__(self, context: DashboardContext) -> None:
+    def __init__(self, context: DashboardContext, recording=None) -> None:
         self.context = context
+        self.recording = recording
 
     async def _handle_list(self, _request: web.Request) -> web.Response:
         def snapshot():
@@ -49,8 +50,11 @@ class TaskRoutes:
         return web.json_response({**status, "message": task_status_message(status)})
 
     def _recording_conflict(self, action: str) -> web.Response | None:
-        recording = self.context.recording_manager.status()
-        if not recording.get("recording") and recording.get("merge_state") not in {"merging", "finalizing"}:
+        busy = bool(self.recording and self.recording.busy)
+        recording = {} if busy else self.context.recording_manager.status()
+        if (not busy
+                and not recording.get("recording")
+                and recording.get("merge_state") not in {"merging", "finalizing"}):
             return None
         return web.json_response(
             {
@@ -61,19 +65,21 @@ class TaskRoutes:
         )
 
     async def _handle_create(self, request: web.Request) -> web.Response:
+        payload = await read_json_body(request)
         conflict = self._recording_conflict("create")
         if conflict is not None:
             return conflict
-        task = self.context.take_store.create_task(await read_json_body(request))
+        task = self.context.take_store.create_task(payload)
         return web.json_response({"task": task}, status=201)
 
     async def _handle_update(self, request: web.Request) -> web.Response:
+        payload = await read_json_body(request)
         conflict = self._recording_conflict("edit")
         if conflict is not None:
             return conflict
         task_id = request.match_info.get("task_id", "").strip()
         task = self.context.take_store.update_task(
-            task_id, await read_json_body(request)
+            task_id, payload
         )
         return web.json_response({"task": task})
 

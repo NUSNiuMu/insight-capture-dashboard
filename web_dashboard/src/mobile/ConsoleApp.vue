@@ -7,6 +7,7 @@ import { useCapture, api, id, roleLabel, stateLabel, size, duration } from './us
 import { t, language, setLanguage } from './i18n.js';
 const {status,mapping,tasks,online,pending,error,busy,action,record,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
+const previewError=ref('');
 const route=ref(location.hash.slice(1)||'capture'),visible=ref(!document.hidden),dialog=ref(null),creating=ref(false),name=ref(''),instruction=ref(''),shell=ref(null),footer=ref(null);
 const page=computed(()=>route.value.split('/')[0]);const active=computed(()=>['starting','recording','saving'].includes(status.value?.state));
 const showDock=computed(()=>page.value==='capture'||active.value);
@@ -49,12 +50,12 @@ watch(language,()=>document.title='Insight Capture');
 <div v-if="page==='capture'" class="health-summary"><span v-for="d in devices" :key="d.name" :class="{bad:!health[d.name]?.ready||!clocks.devices?.[d.name]?.ok}">{{roleLabel(d.role)}} · {{online?stage(d):t('离线')}}</span></div>
 <p v-if="!online" class="section-description">{{t('网页断开不会停止设备上的录制。')}}</p>
 <div v-if="page==='capture' && !active" class="issues" :hidden="!status?.preflight?.failures?.length && !status?.preflight?.warnings?.length"><p v-for="issue in status?.preflight?.failures" :key="issue.code" class="issue error">{{t(issue.message)}}</p><p v-for="issue in status?.preflight?.warnings" :key="issue.code" class="issue warning">{{t(issue.message)}}</p></div></section>
-<p v-if="error||status?.operation?.error" role="alert" class="global-error">{{error||status.operation.error}}</p>
+<p v-if="error||status?.operation?.error||(page==='capture'&&previewError)" role="alert" class="global-error">{{error||status?.operation?.error||previewError}}</p>
 <p v-if="status?.state==='saving'" role="status" class="save-progress">{{t('正在保存，请保持设备供电。')}}</p>
 <div v-show="page==='capture'">
 <section class="card task-current"><div><small>{{t('当前任务')}}</small><strong id="task-name">{{task?.name||t('请选择任务')}}</strong></div><button id="switch-task" class="secondary compact" :disabled="busy||!online" @click="openTasks">{{t(task?'切换':'选择任务')}}</button></section>
 <div class="capture-view-switch" role="group" :aria-label="t('采集视图')"><button :aria-pressed="route==='capture'" @click="navigate('capture')">{{t('画面')}}</button><button :aria-pressed="route==='capture/trajectory'" @click="navigate('capture/trajectory')">{{t('轨迹')}}</button></div>
-<CameraPreview v-show="route!=='capture/trajectory'" :preview="status?.preview||{}" :online="online" :recording="active" :active="page==='capture'&&route!=='capture/trajectory'&&visible&&status?.state!=='playback'" @notify="error=$event"/>
+<CameraPreview v-show="route!=='capture/trajectory'" :preview="status?.preview||{}" :online="online" :recording="active" :active="page==='capture'&&route!=='capture/trajectory'&&visible&&status?.state!=='playback'" @notify="previewError=$event" @recovered="previewError=''"/>
 <TrajectoryPanel v-if="route==='capture/trajectory'"/>
 <p class="settings-note">{{t('准备、录制和保存时暂停预览，保存完成后自动恢复。')}}</p>
 <section class="card calibration-card"><div class="section-title"><h2>{{t('校准与定位')}}</h2><button id="calibrate" class="secondary compact" :disabled="!online||!mapping||pending||['starting','saving','playback'].includes(status?.state)||!health[head?.name]?.ready" @click="calibrate">{{t('重新校准')}}</button></div>

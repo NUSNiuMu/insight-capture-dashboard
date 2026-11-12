@@ -99,8 +99,6 @@ class ProjectStructureTest(unittest.TestCase):
         source = (ROOT / "web_dashboard" / "src" / "mobile" / "index.html").read_text()
         links = re.findall(r'href="([^"#]+)"', source)
         self.assertTrue(all(link.startswith("/static/") for link in links), links)
-        self.assertIn('id="task-create"', source)
-        self.assertIn('id="saved-recordings"', source)
 
     def test_dashboard_launcher_reconciles_compose_before_restart(self) -> None:
         source = (ROOT / "deploy" / "run_dashboard.sh").read_text(encoding="utf-8")

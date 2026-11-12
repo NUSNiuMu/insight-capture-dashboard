@@ -5,7 +5,7 @@ import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { startWebRTC } from '../webrtc.js'
 import { appActive } from '../lifecycle.js'
 const props = defineProps({ preview: Object, online: Boolean, recording: Boolean, active: { type: Boolean, default: true } })
-const emit = defineEmits(['notify'])
+const emit = defineEmits(['notify', 'recovered'])
 const selected = ref(''), video = ref(null), failed = ref(false), ready = ref(false)
 const failure = ref('')
 const panel = ref(null), expanded = ref(false), hidden = ref(document.hidden)
@@ -39,7 +39,7 @@ function regionStyle(id) {
 }
 const fullscreenAvailable = Boolean(document.fullscreenEnabled)
 let previousFocus, previousOverflow, resizeObserver, returnToOverview = false
-let rtcSession
+let rtcSession, retryTimer
 let generation = 0, dead = false
 try { selected.value = localStorage.getItem('insight-preview-source') || '' } catch { /* storage may be disabled */ }
 watch([sources, () => overview.value?.id], ([list]) => {
@@ -50,6 +50,7 @@ watch([sources, () => overview.value?.id], ([list]) => {
     overview.value?.id || fallbackSource.value?.id || ''
 }, { immediate: true })
 function cleanup() {
+  clearTimeout(retryTimer)
   generation++
   rtcSession?.close(); rtcSession = null
   image.value = placeholder
@@ -63,6 +64,7 @@ function start() {
   cleanup()
   const id = selected.value, gen = generation
   if (!id || !props.online || previewPaused.value || paused.value) return
+  failed.value = false; failure.value = ''
   try { localStorage.setItem('insight-preview-source', id) } catch { /* optional */ }
   if (!rtc.value) return
   const fallback = reason => {
@@ -71,10 +73,13 @@ function start() {
     failure.value = reason
     cleanup()
     emit('notify', reason)
+    retryTimer = setTimeout(() => {
+      if (!dead && props.online && !previewPaused.value && !paused.value) start()
+    }, 3000)
   }
   if (props.preview?.video_error) { fallback(props.preview.video_error); return }
   rtcSession = startWebRTC({ video: video.value, source: id, onFailure: fallback,
-    onReady: () => { if (gen === generation) ready.value = true },
+    onReady: () => { if (gen === generation) { ready.value = true; emit('recovered') } },
     // Stats remain internal for decoded-frame stall detection; the capture UI hides them.
     onStats: () => {},
   })

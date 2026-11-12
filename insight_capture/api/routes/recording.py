@@ -23,6 +23,11 @@ from insight_capture.api.context import DashboardContext
 class RecordingRoutes:
     def __init__(self, context: DashboardContext) -> None:
         self.context = context
+        self._transition = asyncio.Lock()
+
+    @property
+    def busy(self) -> bool:
+        return self._transition.locked()
 
     def _bag_library(self) -> BagLibrary:
         library = getattr(self.context, "bag_library", None)
@@ -101,6 +106,12 @@ class RecordingRoutes:
         return await self.stop_recording()
 
     async def stop_recording(self, **stop_arguments) -> web.Response:
+        if self.busy:
+            raise RuntimeError("A recording operation is still running.")
+        async with self._transition:
+            return await self._stop_recording(**stop_arguments)
+
+    async def _stop_recording(self, **stop_arguments) -> web.Response:
         current = self.context.recording_manager.status()
         status = await asyncio.to_thread(self.context.recording_manager.stop, **stop_arguments)
         take_store = getattr(self.context, "take_store", None)
@@ -132,6 +143,12 @@ class RecordingRoutes:
         return web.json_response(await asyncio.to_thread(manager.start_merge, payload.get("session_id")), status=202)
 
     async def _start_with_preflight(self, **kwargs):
+        if self.busy:
+            raise RuntimeError("A recording operation is still running.")
+        async with self._transition:
+            return await self._start_with_preview_paused(**kwargs)
+
+    async def _start_with_preview_paused(self, **kwargs):
         gate = getattr(self.context.recording_manager, "preview_control", None)
         if gate is None:
             return await self._start_preflight_and_record(**kwargs)

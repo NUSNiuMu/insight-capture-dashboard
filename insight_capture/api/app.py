@@ -40,7 +40,7 @@ def create_app(context: DashboardContext) -> web.Application:
     runtime = RuntimeRoutes(context)
     sessions = SessionRoutes(context)
     takes = TakeRoutes(context)
-    tasks = TaskRoutes(context)
+    tasks = TaskRoutes(context, recording)
     playback = PlaybackRoutes(context)
     optimization = OptimizationRoutes(context)
     settings = SettingsRoutes(context)

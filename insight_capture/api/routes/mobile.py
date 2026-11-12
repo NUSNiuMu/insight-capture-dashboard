@@ -72,6 +72,12 @@ class MobileCaptureRoutes:
                 self.context.node, self.context.capture_preflight.camera_stale_sec
             )
             report = {**self._last_preflight, "camera_health": health}
+            monitor = getattr(manager, "clock_monitor", None)
+            if monitor:
+                report["clocks"] = monitor.status()
+            pipeline = getattr(self.context.node, "_image_pipeline", None)
+            if pipeline:
+                report["image_clocks"] = pipeline.clock_status()
         role_names = {"head": "Head", "right_hand": "Wrist A", "left_hand": "Wrist B"}
         devices = [{"name": pose.name, "role": pose.teleop_role,
                     "label": role_names[pose.teleop_role] + " · " + pose.name.split("_")[0].upper()}
@@ -110,8 +116,8 @@ class MobileCaptureRoutes:
         if origin and origin != f"{request.scheme}://{request.host}":
             raise web.HTTPForbidden(text="Cross-origin capture commands are not allowed")
         body = await read_json_body(request)
-        command_id = str(body.get("command_id", ""))
-        if not command_id or len(command_id) > 100:
+        command_id = body.get("command_id")
+        if not isinstance(command_id, str) or not command_id.strip() or len(command_id) > 100:
             raise ValueError("command_id is required (maximum 100 characters)")
         action = request.match_info["action"]
         if action not in {"start", "stop"}:

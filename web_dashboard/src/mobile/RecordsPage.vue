@@ -5,7 +5,7 @@ import { t } from './i18n.js';
 const props=defineProps({route:String,tasks:Array,busy:Boolean,online:Boolean,action:Function});
 const emit=defineEmits(['navigate']);const recordSet=ref(null),error=ref(''),loading=ref(false);let generation=0;
 watch(()=>props.route,async route=>{
- const taskId=route.split('/')[1];const gen=++generation;error.value='';
+ const taskId=route.split('/')[1];const gen=++generation;error.value='';recordSet.value=null;loading.value=false;
  if(!taskId){recordSet.value=null;return;}
  loading.value=true;
  try{const value=await api(`/api/tasks/${encodeURIComponent(taskId)}/recordings`);if(gen===generation)recordSet.value=value;}
