@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Check rosbag completeness by source stamp gaps or recorder timestamp aggregates."""
+"""Inspect rosbag presence, timestamp health, and estimated rate shortfall."""
 
 import argparse
 import json
@@ -14,6 +14,12 @@ from insight_capture.core.bag import iter_messages, read_metadata, single_mcap
 from insight_capture.quality.topic_rates import nominal_for
 
 DEFAULT_MAX_LOSS_PCT = 0.5
+RATE_INTERPRETATION = (
+    "missing/loss_pct estimate a count shortfall against the configured nominal rate; "
+    "they do not identify source, transport, or recorder loss. Attribution requires "
+    "paired source and recorded-message evidence. Duplicate timestamps still count "
+    "as received messages; inspect timestamp_diagnostics separately."
+)
 
 
 def is_latched_static_topic(topic: str) -> bool:
@@ -40,7 +46,10 @@ def latched_static_result(name: str, msgs: int) -> Dict[str, object]:
 
 def header_stamp_ns(blob: bytes) -> int:
     sec, nsec = struct.unpack_from("<iI", blob, 4)
-    return sec * 1_000_000_000 + nsec
+    stamp = sec * 1_000_000_000 + nsec
+    if nsec >= 1_000_000_000 or stamp <= 0:
+        raise ValueError("invalid or unset source timestamp")
+    return stamp
 
 
 def gap_stats(ts, nominal_hz):
@@ -51,8 +60,8 @@ def gap_stats(ts, nominal_hz):
     # VIO publishers are deliberately non-uniform: an 18-22 ms interval is
     # commonly followed by a shorter interval. Summing every long interval
     # therefore invents drops even when the source delivered the full count.
-    # Only a complete missing period is evidence of a lost sample. Rounding
-    # makes a stable 12.99 Hz source fail against its measured 13 Hz nominal
+    # This is a rate shortfall, not proof that a published message was lost.
+    # Rounding makes a stable 12.99 Hz source fail against its measured 13 Hz nominal
     # whenever the finite capture window lands just beyond half a period.
     expected = max(1, int((ts[-1] - ts[0]) / period_ns) + 1) if ts else 0
     missing = max(0, expected - len(ts))
@@ -162,6 +171,7 @@ def _analyze_fast(
             "name": name,
             "ok": loss_pct <= max_loss_pct,
             "audit": "timestamp_aggregate",
+            "loss_attribution": "undetermined",
             "msgs": msgs,
             "avg_hz": round(avg_hz, 2),
             "nominal_hz": nominal,
@@ -176,18 +186,22 @@ def _analyze_deep(
     bag_dir: Path, max_loss_pct: float,
 ) -> List[Dict[str, object]]:
     """Scan MCAP messages through the rosbag2 storage API."""
-    windows = _read_topic_windows(bag_dir)
-    names = sorted(windows)
+    single_mcap(bag_dir)
+    names = sorted(entry["topic_metadata"]["name"]
+                   for entry in read_metadata(bag_dir).get("topics_with_message_count", []))
     counts = {name: 0 for name in names}
     stamps = {name: [] for name in names if nominal_for(name) is not None}
-    for name, raw, record_stamp in iter_messages(bag_dir, names):
+    invalid_stamps = {name: 0 for name in stamps}
+    for name, raw, _record_stamp in iter_messages(bag_dir, names):
         counts[name] = counts.get(name, 0) + 1
         if name in stamps:
             try:
                 stamp = header_stamp_ns(raw)
-            except (struct.error, TypeError):
-                stamp = int(record_stamp)
-            stamps[name].append(stamp)
+            except (struct.error, TypeError, ValueError):
+                # A recorder clock cannot repair a malformed source header.
+                invalid_stamps[name] += 1
+            else:
+                stamps[name].append(stamp)
 
     topics: List[Dict[str, object]] = []
     for name in names:
@@ -210,10 +224,28 @@ def _analyze_deep(
             })
             continue
         values = stamps.get(name, [])
-        if len(values) < 2:
+        unique_count = len(set(values))
+        diagnostics = {
+            "valid_source_stamps": len(values),
+            "unique_source_stamps": unique_count,
+            "duplicate_source_stamps": len(values) - unique_count,
+            "backward_steps": sum(b < a for a, b in zip(values, values[1:])),
+            "invalid_source_stamps": invalid_stamps[name],
+        }
+        warnings = []
+        if diagnostics["duplicate_source_stamps"]:
+            warnings.append("repeated source timestamps; message count is not a count of distinct source instants")
+        if diagnostics["backward_steps"]:
+            warnings.append("source timestamps move backward in recorder order; inspect source clock and delivery ordering")
+        if invalid_stamps[name]:
+            warnings.append("invalid/unset source timestamps; not replaced with recorder timestamps")
+        if unique_count < 2:
             topics.append({
-                "name": name, "ok": False, "msgs": len(values),
-                "error": f"only {len(values)} message(s)",
+                "name": name, "ok": False, "msgs": msgs,
+                "audit": "header_stamp_gaps",
+                "timestamp_diagnostics": diagnostics,
+                "warnings": warnings,
+                "error": f"only {unique_count} distinct valid source timestamp(s); source rate cannot be assessed",
             })
             continue
         values.sort()
@@ -224,8 +256,11 @@ def _analyze_deep(
         loss_pct = missing / (len(settled) + missing) * 100 if missing else 0.0
         topics.append({
             "name": name,
-            "ok": loss_pct <= max_loss_pct,
+            "ok": loss_pct <= max_loss_pct and not invalid_stamps[name],
             "audit": "header_stamp_gaps",
+            "loss_attribution": "undetermined",
+            "timestamp_diagnostics": diagnostics,
+            "warnings": warnings,
             "msgs": msgs,
             "avg_hz": round(avg_hz, 2),
             "nominal_hz": nominal,
@@ -243,7 +278,7 @@ def analyze_bag(
     max_loss_pct: float = DEFAULT_MAX_LOSS_PCT,
     deep: bool = True,
 ) -> Dict[str, object]:
-    """Return a JSON-ready exact or fast integrity report for one bag."""
+    """Return presence, clock-health and rate estimates, without loss attribution."""
     bag_dir = Path(bag_dir)
     method = "deep_scan"
     if deep:
@@ -266,6 +301,8 @@ def analyze_bag(
         "topics": topics,
         "network_audit": network_audit,
         "method": method,
+        "source_timestamps_inspected": deep,
+        "interpretation": RATE_INTERPRETATION,
         "max_loss_pct": max_loss_pct,
         "checked_at_epoch_s": time.time(),
     }
@@ -289,7 +326,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("bag", nargs="?", help="bag directory (default: newest under rosbags/)")
     parser.add_argument("--max-loss", type=float, default=DEFAULT_MAX_LOSS_PCT,
-                        help=f"max tolerated loss %% per topic (default {DEFAULT_MAX_LOSS_PCT})")
+                        help=f"max estimated rate shortfall %% per topic (default {DEFAULT_MAX_LOSS_PCT})")
     parser.add_argument("--fast", action="store_true",
                         help="per-topic recorder timestamps without decoding message contents")
     args = parser.parse_args()
@@ -306,11 +343,15 @@ def main():
     for topic in report["topics"]:
         verdict = "ok  " if topic["ok"] else "FAIL"
         print(f"{verdict}  {topic['name']}")
+        if topic.get("timestamp_diagnostics"):
+            print(f"      timestamps={topic['timestamp_diagnostics']}")
+        for warning in topic.get("warnings", []):
+            print(f"      WARN: {warning}")
         if "error" in topic:
             print(f"      {topic['error']}")
             continue
         line = (f"      msgs={topic['msgs']} avg={topic['avg_hz']}Hz (nominal {topic['nominal_hz']:g})"
-                f" missing={topic['missing']} ({topic['loss_pct']}%)")
+                f" estimated_shortfall={topic['missing']} ({topic['loss_pct']}%)")
         if "gap_events" in topic:
             line += f" gap_events={topic['gap_events']}"
         if topic.get("worst_gaps"):
@@ -323,11 +364,14 @@ def main():
         print(f"WARN  kernel receive audit reported counter increments: {issues}")
 
     print()
+    print(f"NOTE: {report['interpretation']}")
+    if not report["source_timestamps_inspected"]:
+        print("NOTE: quick scan does not inspect source timestamp validity, duplicates, or ordering.")
     if not report["ok"]:
-        print(f"RESULT: FAIL -- {len(report['failed_topics'])} topic(s) above {args.max_loss}% loss.")
-        print("Triage: docs/USAGE.md §6.3 (dropped frames during recording)")
+        print(f"RESULT: FAIL -- {len(report['failed_topics'])} topic(s) failed presence, timestamp, or rate checks (shortfall limit {args.max_loss}%).")
+        print("Triage: docs/USAGE.md (recording integrity and source/transport attribution)")
         sys.exit(1)
-    print(f"RESULT: OK -- all checked topics within {args.max_loss}% loss.")
+    print(f"RESULT: OK -- checked presence/timestamp/rate criteria met (shortfall limit {args.max_loss}%). Not proof of loss-free transport.")
 
 
 if __name__ == "__main__":

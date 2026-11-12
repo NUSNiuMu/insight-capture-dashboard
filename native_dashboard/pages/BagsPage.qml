@@ -76,7 +76,7 @@ PageFrame {
                     Layout.fillWidth: true
                     spacing: 8
                     Ui.Badge {
-                        text: modelData.integrity === true ? "Integrity passed" : modelData.integrity === false ? "Incomplete" : "Unchecked"
+                        text: modelData.integrity === true ? "Checks passed" : modelData.integrity === false ? "Needs review" : "Unchecked"
                         tone: modelData.integrity === true ? "success" : modelData.integrity === false ? "danger" : "neutral"
                     }
                     Ui.Badge {

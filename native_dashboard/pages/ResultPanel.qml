@@ -28,7 +28,7 @@ Ui.Panel {
             "name": "Name",
             "topic": "Topic",
             "ok": "Pass",
-            "loss_pct": "Loss %",
+            "loss_pct": "Rate shortfall %",
             "msgs": "Messages",
             "avg_hz": "Measured Hz",
             "nominal_hz": "Nominal Hz",

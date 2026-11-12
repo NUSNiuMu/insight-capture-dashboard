@@ -24,7 +24,11 @@ Ui.Section {
             return "Message presence only";
         if (topic.error)
             return topic.error;
-        return number(topic.avg_hz, 2) + " / " + number(topic.nominal_hz, 0) + " Hz · Loss " + number(topic.loss_pct, 2) + "%";
+        let result = number(topic.avg_hz, 2) + " / " + number(topic.nominal_hz, 0) + " Hz · Rate shortfall " + number(topic.loss_pct, 2) + "%";
+        const stamps = topic.timestamp_diagnostics;
+        if (stamps && (stamps.duplicate_source_stamps || stamps.backward_steps || stamps.invalid_source_stamps))
+            result += "\nSource timestamps: " + number(stamps.duplicate_source_stamps, 0) + " repeated · " + number(stamps.backward_steps, 0) + " backward · " + number(stamps.invalid_source_stamps, 0) + " invalid";
+        return result;
     }
     RowLayout {
         Layout.fillWidth: true
@@ -36,7 +40,7 @@ Ui.Section {
         }
         Ui.Badge {
             visible: !panel.checking && !!panel.report && !panel.error
-            text: panel.report && panel.report.ok ? "Complete" : "Incomplete"
+            text: panel.report && panel.report.ok ? "Checks passed" : "Needs review"
             tone: panel.report && panel.report.ok ? "success" : "danger"
         }
         Label {
@@ -52,8 +56,20 @@ Ui.Section {
         Layout.fillWidth: true
         visible: !!panel.report && !panel.checking && !panel.error
         text: !panel.report ? "" : panel.report.ok
-              ? (panel.report.scope === "image_streams" ? "Image streams" : "Topics") + "Passed" + (panel.report.max_loss_pct !== undefined ? " · Loss limit " + panel.number(panel.report.max_loss_pct, 2) + "%" : "")
+              ? (panel.report.scope === "image_streams" ? "Image streams" : "Topics") + " passed" + (panel.report.max_loss_pct !== undefined ? " · Rate shortfall limit " + panel.number(panel.report.max_loss_pct, 2) + "%" : "")
               : "Failed: " + ((panel.report.failed_topics || []).join("、") || "See topic results")
+        textFormat: Text.PlainText
+        wrapMode: Text.WrapAnywhere
+        color: Ui.Theme.muted
+        font.pixelSize: 13
+    }
+    Label {
+        Layout.fillWidth: true
+        visible: !!panel.report && !panel.checking && !panel.error
+        text: "Rate shortfall compares message count with the configured rate; it does not identify source, transport, or recorder loss. "
+              + (panel.report && panel.report.source_timestamps_inspected === true
+                 ? "Source timestamps were inspected; repeated timestamps still count as received messages."
+                 : "Source timestamp health was not checked by this report. Run the current integrity check to inspect it.")
         textFormat: Text.PlainText
         wrapMode: Text.WrapAnywhere
         color: Ui.Theme.muted

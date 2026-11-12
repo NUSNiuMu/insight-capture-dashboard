@@ -353,10 +353,10 @@ class RecordingRoutes:
             return web.json_response({"error": str(exc)}, status=400)
         loop = asyncio.get_event_loop()
         try:
-            # SQLite aggregates provide each topic's count and active time
-            # window without reading any frame payloads.
+            # One MCAP pass checks source headers as well as counts. A recorder
+            # clock alone cannot reveal unset or repeated source timestamps.
             report = await loop.run_in_executor(
-                None, lambda: analyze_bag(bag_path, deep=False)
+                None, lambda: analyze_bag(bag_path, deep=True)
             )
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=422)
