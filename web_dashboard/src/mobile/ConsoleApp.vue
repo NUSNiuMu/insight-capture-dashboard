@@ -13,6 +13,8 @@ const page=computed(()=>route.value.split('/')[0]);
 const savedTake=computed(()=>status.value?.state==='saved' && status.value.current_take?.state==='complete' && status.value.current_take.bag_path===status.value.output_path ? status.value.current_take : null);
 const uiState=computed(()=>recordPending.value==='start'?'starting':recordPending.value==='stop'?'saving':status.value?.state==='saved'&&!savedTake.value?'idle':status.value?.state);
 const active=computed(()=>['starting','recording','saving'].includes(uiState.value));
+const liveAlerts=computed(()=>['recording','saving'].includes(uiState.value)?status.value?.live_alerts||[]:[]);
+const criticalAlert=computed(()=>liveAlerts.value.some(item=>item.severity==='critical'));
 const captureTake=computed(()=>active.value && (uiState.value!=='starting'||['reserved','starting','recording'].includes(status.value?.current_take?.state)) ? status.value?.current_take?.take_id : null);
 const captureError=computed(()=>uiState.value==='error'?status.value?.error:'');
 watch(active,value=>{if(value)previewError.value='';});
@@ -48,6 +50,19 @@ async function createTask(){if(busy.value||!name.value.trim()||!instruction.valu
 function leaveCreation(){if(leaveTaskCreation()){name.value='';instruction.value='';creating.value=false;loadTasks().catch(()=>{});}}
 async function diagnostics(){try{const value=await api('/api/diagnostics');value.mobile=status.value;value.client={user_agent:navigator.userAgent};const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='insight-diagnostics.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){error.value=e.message;}}
 function stage(d){return deviceStage(d,status.value);}
+function alertText(item){
+ const details=item.details||{};
+ if(item.code.startsWith('localization:')){
+  const device=devices.value.find(d=>d.name===details.service||(details.service==='insight9'&&d.role==='head'));
+  if(device)return t('{0}未完成公共地图定位，本条需要复检。',roleLabel(device.role));
+ }
+ if(item.code.startsWith('camera_stale:')){
+  const camera=status.value?.preview_cameras?.find(c=>c.name===details.camera);
+  if(camera)return t('{0}图像中断，本条已记录异常。',t(camera.label));
+ }
+ return t(item.message);
+}
+function showLiveAlerts(){const node=document.getElementById('live-alerts');node?.scrollIntoView({block:'start'});node?.focus({preventScroll:true});}
 let observer,layoutFrame;
 function updateLayout(){
  cancelAnimationFrame(layoutFrame);
@@ -75,6 +90,7 @@ watch(language,()=>document.title='Insight Capture');
 <div v-if="page==='capture' && !active" class="issues" :hidden="!status?.preflight?.failures?.length && !status?.preflight?.warnings?.length"><p v-for="issue in status?.preflight?.failures" :key="issue.code" class="issue error">{{t(issue.message)}}</p><p v-for="issue in status?.preflight?.warnings" :key="issue.code" class="issue warning">{{t(issue.message)}}</p></div></section>
 <p v-if="error||captureError||status?.operation?.error||(page==='capture'&&!active&&previewError)" role="alert" class="global-error">{{t(error||captureError||status?.operation?.error||previewError)}}</p>
 <p v-if="status?.state==='saving'" role="status" class="save-progress">{{t('正在保存，请保持设备供电。')}}</p>
+<section v-if="liveAlerts.length" id="live-alerts" class="card live-alerts" :class="{'has-critical':criticalAlert}" tabindex="-1" role="status" aria-live="polite"><h2>{{t('采集提醒')}}</h2><p v-for="item in liveAlerts" :key="item.code" class="issue" :class="item.severity==='critical'?'error':'warning'">{{alertText(item)}}</p><p v-if="!online" class="section-description">{{t('连接已断开，以下提醒来自最后一次设备状态。')}}</p></section>
 <div v-show="page==='capture'" class="capture-view-switch" role="group" :aria-label="t('采集视图')"><button :aria-pressed="route==='capture'" @click="navigate('capture')">{{t('画面')}}</button><button :aria-pressed="route==='capture/trajectory'" @click="navigate('capture/trajectory')">{{t('轨迹')}}</button></div>
 </div>
 <div v-show="page==='capture'">
@@ -100,6 +116,7 @@ watch(language,()=>document.title='Insight Capture');
 </div>
 </main>
 <footer ref="footer" class="console-footer">
+<button v-if="liveAlerts.length" id="show-live-alerts" class="live-alert-link" :class="{'has-critical':criticalAlert}" @click="showLiveAlerts">{{t('采集提醒（{0}） · 查看',liveAlerts.length)}}</button>
 <section v-if="showDock" class="capture-dock" :class="{'dock-recording':status?.state==='recording','dock-compact':page!=='capture'}">
 <div class="dock-status"><span></span><div>
 <strong>{{!online?t('连接中，录制状态待确认'):!active&&!task?t('请先创建或选择任务'):!active&&!status?.preflight?.ok?t('等待采集就绪'):stateLabel(uiState)}}</strong>

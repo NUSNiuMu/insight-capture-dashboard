@@ -16,6 +16,31 @@ from insight_capture.runtime.camera_health import evaluate_calibration_cameras
 from insight_capture.runtime.mobile_commands import MobileCommandStore
 
 
+def _live_alerts(take, output_path, state):
+    """Project open QC events for this recording, never a previous Take."""
+    if (state not in {"recording", "saving"} or not output_path
+            or not isinstance(take, dict) or take.get("bag_path") != output_path
+            or take.get("state") not in {"recording", "finalizing"}):
+        return []
+    timeline = take.get("anomaly_timeline")
+    if not isinstance(timeline, list):
+        return []
+    active = {}
+    for event in timeline:
+        if not isinstance(event, dict):
+            continue
+        code = event.get("code")
+        if not isinstance(code, str) or not code:
+            continue
+        if event.get("event") == "resolved":
+            active.pop(code, None)
+        elif event.get("event") == "started" and isinstance(event.get("message"), str):
+            active[code] = {key: event.get(key) for key in (
+                "code", "severity", "message", "epoch_s", "details"
+            )}
+    return sorted(active.values(), key=lambda item: item["severity"] != "critical")
+
+
 class MobileCaptureRoutes:
     def __init__(self, context, recording):
         self.context = context
@@ -51,6 +76,7 @@ class MobileCaptureRoutes:
             state = "idle"
         task_status = self.context.take_store.task_status()
         current_take = self.context.take_store.current()
+        live_alerts = _live_alerts(current_take, status.get("output_path"), "playback" if playing else state)
         if current_take is not None:
             current_take = {key: current_take.get(key) for key in (
                 "take_id", "task_id", "state", "bag_path", "start_epoch_s", "end_epoch_s", "recording_timing"
@@ -116,7 +142,7 @@ class MobileCaptureRoutes:
             "recording_timing": timing,
             "server_time": time.time(), "operation": self._operation,
             "preflight": report, "devices": devices, "task_status": task_status,
-            "current_take": current_take,
+            "current_take": current_take, "live_alerts": live_alerts,
             "preview": preview_description(self.context.node.cameras, self.context.node.poses, paused=self.context.node._preview_manager.paused),
             "preview_cameras": [{"name": c.name, "label": c.label} for c in preview_cameras],
             "distributed": status.get("distributed"),

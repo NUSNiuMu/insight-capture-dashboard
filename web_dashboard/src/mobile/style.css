@@ -152,6 +152,11 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 .dock-task { display: flex; min-width: 0; }
 .dock-task #task-name { overflow: hidden; text-overflow: ellipsis; }
 .dock-take { flex-shrink: 0; white-space: pre; }
+.live-alerts { border-left: 3px solid #dc8a05; scroll-margin-top: 12px; }
+.live-alerts.has-critical { border-left-color: #d92d20; }
+.live-alerts h2 { margin: 0 0 8px; }
+.live-alert-link { display: block; width: 100%; min-height: 44px; border: 0; border-radius: 0; padding: 8px 16px; background: #fff6df; color: #855000; font-size: 13px; font-weight: 650; text-align: left; }
+.live-alert-link.has-critical { background: #fff0ee; color: #b42318; }
 .capture-view-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 14px; background: #e7ebef; margin: 4px 0 12px; }
 .capture-view-switch button { background: transparent; color: #596273; min-height: 40px; padding: 8px; }
 .capture-view-switch button[aria-pressed="true"] { color: #111827; background: #fff; box-shadow: 0 1px 5px #11182712; }
