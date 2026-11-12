@@ -27,7 +27,7 @@ function taskDraftFromSession() {
   return value&&/^task_[a-f0-9]{32}$/.test(value.id)&&typeof value.name==='string'&&typeof value.instruction==='string'?value:null;
 }
 function sameTask(task,draft) { return task?.task_id===draft.id&&task.name===draft.name&&task.instruction===draft.instruction&&task.capture_profile===draft.capture_profile; }
-function confirmedRecord(command,current) { return current?.operation?.command_id===command.command_id&&current.operation.action===command.action; }
+function confirmedRecord(command,current) { return [current?.operation,current?.requested_operation].find(operation=>operation?.command_id===command.command_id&&operation.action===command.action); }
 export function useCapture() {
   const status=ref(null), mapping=ref(null), tasks=ref([]), tasksError=ref(''), online=ref(false), pending=ref(false), recordPending=ref(null), error=ref('');
   const taskDraft=ref(taskDraftFromSession()),unconfirmedRecord=ref(readSession('record-command'));
@@ -38,6 +38,13 @@ export function useCapture() {
     const generation=++statusGeneration;
     try {
       const value=await api('/api/mobile/status');
+      const command=unconfirmedRecord.value;
+      if(command&&!confirmedRecord(command,value)){
+        // Another client may have replaced the latest operation. Read this
+        // exact receipt; never repeat a write merely to discover its result.
+        const receipt=await api(`/api/mobile/commands/${encodeURIComponent(command.command_id)}`).catch(()=>null);
+        if(receipt)value.requested_operation=receipt.operation;
+      }
       if(alive&&generation===statusGeneration){status.value=value;online.value=true;}
       return value;
     }
@@ -53,11 +60,11 @@ export function useCapture() {
       throw e;
     }
   }
-  async function action(path,body={},reconcile) {
+  async function action(path,body={},reconcile,acknowledged) {
     if(pending.value || !online.value) return false;
     pending.value=true; error.value='';
     try {
-      try { await api(path,body); }
+      try { const result=await api(path,body);acknowledged?.(result); }
       catch(e) {
         const current=await refresh();
         if(!reconcile?.(e,current)){error.value=e.message;return false;}
@@ -75,21 +82,24 @@ export function useCapture() {
     const previous=unconfirmedRecord.value;
     const command=previous?.action===actionName&&previous.task_id===taskId&&previous.output_path===outputPath?previous:{command_id:id(),action:actionName,task_id:taskId,output_path:outputPath};
     unconfirmedRecord.value=command;writeSession('record-command',command);
-    let rejected=false;
+    let rejected=false,acknowledgedError='';
     recordPending.value=actionName;
     try {
       const ok=await action(`/api/mobile/${actionName}`, {command_id:command.command_id,output_path:command.output_path}, (e,current)=>{
         rejected=Boolean(e.status);
         if(!e.status){
-          e.message=confirmedRecord(command,current)&&current.operation.error?current.operation.error:t('连接中断，操作结果待确认；重连后会核对设备状态。');
-          return confirmedRecord(command,current)&&!current.operation.error;
+          const receipt=confirmedRecord(command,current);
+          rejected=Boolean(receipt?.error);
+          e.message=receipt?.error||t('连接中断，操作结果待确认；重连后会核对设备状态。');
+          return Boolean(receipt&&!receipt.error);
         }
         if(e.status!==409||!current)return false;
         if(actionName==='start')return Boolean(taskId)&&current.task_status?.task?.task_id===taskId&&['starting','recording'].includes(current.state);
         return Boolean(outputPath)&&current.output_path===outputPath&&['saving','saved'].includes(current.state);
-      });
+      },receipt=>{acknowledgedError=receipt?.error||'';});
       if(ok||rejected){unconfirmedRecord.value=null;writeSession('record-command',null);}
-      return ok;
+      if(acknowledgedError)error.value=acknowledgedError;
+      return ok&&!acknowledgedError;
     }
     finally { recordPending.value=null; }
   }
@@ -138,8 +148,9 @@ export function useCapture() {
     // A poll can acknowledge the command before the POST response disconnects.
     if(request)return;
     const command=unconfirmedRecord.value;
-    if(command&&confirmedRecord(command,current)){
-      error.value=current.operation.error||'';
+    const receipt=command&&confirmedRecord(command,current);
+    if(receipt){
+      error.value=receipt.error||'';
       unconfirmedRecord.value=null;writeSession('record-command',null);
     }
   });

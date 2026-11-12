@@ -65,6 +65,7 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/images/capabilities", cameras._handle_image_capabilities)
     app.router.add_get("/api/recording/status", recording._handle_recording_status)
     app.router.add_get("/api/mobile/status", mobile.status)
+    app.router.add_get("/api/mobile/commands/{command_id}", mobile.command_status)
     app.router.add_post("/api/mobile/{action}", mobile.command)
     app.router.add_get("/api/preflight", runtime._handle_preflight)
     app.router.add_get("/api/system/status", runtime._handle_system_status)

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
 import time
 import json
 from pathlib import Path
@@ -14,6 +13,7 @@ from aiohttp import web
 from insight_capture.media.preview_config import preview_description
 from insight_capture.api.support import read_disk_space, read_json_body
 from insight_capture.runtime.camera_health import evaluate_calibration_cameras
+from insight_capture.runtime.mobile_commands import MobileCommandStore
 
 
 class MobileCaptureRoutes:
@@ -23,7 +23,7 @@ class MobileCaptureRoutes:
         self._last_preflight = {}
         self._task = None
         self._operation = None
-        self._commands = OrderedDict()
+        self._commands = MobileCommandStore(context.results_root / "mobile_commands.sqlite3")
         self._last_status = {}
         self._next_discovery = 0.0
         self._command_lock = asyncio.Lock()
@@ -129,7 +129,19 @@ class MobileCaptureRoutes:
 
     async def command(self, request):
         async with self._command_lock:
-            return await self._accept(request)
+            acceptance = asyncio.create_task(self._accept(request))
+            try:
+                return await asyncio.shield(acceptance)
+            except asyncio.CancelledError:
+                # Persisting the receipt and scheduling its action must finish
+                # together, even when the HTTP client disappears in between.
+                await acceptance
+                raise
+
+    async def command_status(self, request):
+        previous = await asyncio.to_thread(self._commands.get, request.match_info["command_id"])
+        return web.json_response({"operation": previous[1] if previous else None},
+                                 headers={"Cache-Control": "no-store"})
 
     async def _accept(self, request):
         origin = request.headers.get("Origin")
@@ -143,7 +155,7 @@ class MobileCaptureRoutes:
         if action not in {"start", "stop"}:
             raise web.HTTPNotFound()
         fingerprint = (action, body.get("output_path"))
-        previous = self._commands.get(command_id)
+        previous = await asyncio.to_thread(self._commands.get, command_id)
         if previous is not None:
             if previous[0] != fingerprint:
                 raise RuntimeError("A command ID cannot be reused for a different operation.")
@@ -161,11 +173,10 @@ class MobileCaptureRoutes:
                 raise RuntimeError("No capture recording is running.")
             if not body.get("output_path") or body["output_path"] != status.get("output_path"):
                 raise RuntimeError("The recording has changed. Refresh before stopping it.")
+        operation = {"command_id": command_id, "action": action, "state": "running", "error": None, "accepted_at_epoch_s": time.time()}
+        await asyncio.to_thread(self._commands.reserve, fingerprint, operation)
         self._last_status = status
-        self._operation = {"command_id": command_id, "action": action, "state": "running", "error": None, "accepted_at_epoch_s": time.time()}
-        self._commands[command_id] = (fingerprint, self._operation)
-        while len(self._commands) > 100:
-            self._commands.popitem(last=False)
+        self._operation = operation
         self._task = asyncio.create_task(self._run(action, self._operation, status.get("output_path")))
         return web.json_response(self._operation, status=202)
 
@@ -186,12 +197,23 @@ class MobileCaptureRoutes:
                 raise RuntimeError(result.get("merge_error") or "Could not save the recording.")
             if action == "start":
                 self._last_preflight = result["preflight"]
-            operation["state"] = "complete"
+            operation.update(state="complete", output_path=result.get("output_path"))
         except Exception as exc:
             operation.update(state="error", error=str(exc))
             self.context.node.get_logger().error(f"Mobile capture {action} failed: {exc}")
+        finally:
+            operation["finished_at_epoch_s"] = time.time()
+            try:
+                await asyncio.to_thread(self._commands.finish, operation)
+            except Exception as exc:
+                # A receipt write failure cannot undo an already completed
+                # capture/save. The committed running receipt prevents replay;
+                # a restart will expose its result as interrupted/uncertain.
+                self.context.node.get_logger().error(f"Could not persist mobile command result: {exc}")
 
     async def shutdown(self, _app):
         # A disconnected browser must not cancel a writer start or its finalization.
+        async with self._command_lock:
+            pass
         if self._task is not None:
             await asyncio.shield(self._task)

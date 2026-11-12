@@ -146,7 +146,7 @@ def test_clock_result_expires_and_missing_camera_invalidates(monkeypatch):
     assert not monitor.status()['ok']
 
 @pytest.mark.parametrize('value', [None, False, 7, {}, [], '', '   ', 'x' * 101])
-def test_invalid_command_id_never_starts_capture(value):
+def test_invalid_command_id_never_starts_capture(value, tmp_path):
     from insight_capture.api.routes.mobile import MobileCaptureRoutes
 
     class Request:
@@ -156,7 +156,7 @@ def test_invalid_command_id_never_starts_capture(value):
 
         async def json(self):
             return {'command_id': value}
-    route = MobileCaptureRoutes(SimpleNamespace(), SimpleNamespace())
+    route = MobileCaptureRoutes(SimpleNamespace(results_root=tmp_path), SimpleNamespace())
     with pytest.raises(ValueError):
         asyncio.run(route.command(Request()))
 
@@ -165,7 +165,7 @@ def test_recording_status_uses_current_clock_not_start_snapshot(monkeypatch, tmp
     current = {'ok': False, 'checked_at_epoch_s': 12345, 'age_sec': 1}
     node = SimpleNamespace(cameras=[], poses=[], _preview_manager=SimpleNamespace(paused=True), _image_pipeline=SimpleNamespace(clock_status=lambda: {'ok': False}))
     manager = SimpleNamespace(rosbag_root=tmp_path, status=lambda: {'recording': True}, clock_monitor=SimpleNamespace(config={}, status=lambda: dict(current)))
-    context = SimpleNamespace(node=node, recording_manager=manager, prepared_playback_manager=SimpleNamespace(status=lambda: {'state': 'idle'}), take_store=SimpleNamespace(task_status=lambda: {'active': True}, current=lambda: None), capture_preflight=SimpleNamespace(camera_stale_sec=2))
+    context = SimpleNamespace(results_root=tmp_path, node=node, recording_manager=manager, prepared_playback_manager=SimpleNamespace(status=lambda: {'state': 'idle'}), take_store=SimpleNamespace(task_status=lambda: {'active': True}, current=lambda: None), capture_preflight=SimpleNamespace(camera_stale_sec=2))
     monkeypatch.setattr(mobile, 'evaluate_calibration_cameras', lambda *a: ({}, []))
     monkeypatch.setattr(mobile, 'resolved_cameras', lambda: [])
     route = mobile.MobileCaptureRoutes(context, None)
@@ -179,7 +179,7 @@ def test_recording_status_uses_current_clock_not_start_snapshot(monkeypatch, tmp
 def test_mobile_storage_is_live_without_rerunning_preflight(tmp_path, monkeypatch, phase):
     from insight_capture.api.routes import mobile
     node = SimpleNamespace(cameras=[], poses=[], _preview_manager=SimpleNamespace(paused=True))
-    context = SimpleNamespace(node=node,
+    context = SimpleNamespace(results_root=tmp_path, node=node,
         recording_manager=SimpleNamespace(rosbag_root=tmp_path, status=lambda: {'recording': True}),
         prepared_playback_manager=SimpleNamespace(status=lambda: {'state': 'idle'}),
         take_store=SimpleNamespace(task_status=lambda: {'active': True}, current=lambda: None),

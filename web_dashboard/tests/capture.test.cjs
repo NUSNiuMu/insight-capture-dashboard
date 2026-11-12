@@ -210,6 +210,72 @@ test('a retried unconfirmed recording uses the same command after page reload', 
   assert.equal(retried.command_id,first.command_id);
 });
 
+test('lost start ACK is reconciled by its receipt after another client already stopped', async()=>{
+  const c=await harness();let command,queries=0,posts=0;
+  global.fetch=async(url,options)=>{
+    if(options.method==='POST'){posts++;command=JSON.parse(options.body);throw new TypeError('lost ACK');}
+    if(url.startsWith('/api/mobile/commands/')){queries++;return response({operation:{command_id:command.command_id,action:'start',state:'complete',error:null}});}
+    return response(url==='/api/tasks'?{tasks:[]}:{...snapshot('saved'),operation:{command_id:'other-stop',action:'stop',state:'complete'}});
+  };
+  assert.equal(await c.record('start'),true);
+  assert.equal(posts,1);assert.ok(queries>=1);
+  assert.equal(c.error.value,'');assert.equal(sessionValues.has('insight-capture.record-command'),false);
+});
+
+test('a historical failed ACK is shown even if the device latest operation succeeded', async()=>{
+  const c=await harness();
+  global.fetch=async(url,options)=>options.method==='POST'
+    ?response({state:'error',error:'Camera was missing'})
+    :response(url==='/api/tasks'?{tasks:[]}:{...snapshot('saved'),operation:{command_id:'other-stop',action:'stop',state:'complete'}});
+  assert.equal(await c.record('start'),false);
+  assert.equal(c.error.value,'Camera was missing');
+  assert.equal(sessionValues.has('insight-capture.record-command'),false);
+});
+
+test('unavailable receipt lookup keeps current status online and the write unconfirmed', async()=>{
+  const c=await harness();let posts=0;
+  global.fetch=async(url,options)=>{
+    if(options.method==='POST'){posts++;throw new TypeError('lost ACK');}
+    if(url.startsWith('/api/mobile/commands/'))throw new TypeError('lookup unavailable');
+    return response(snapshot('saved'));
+  };
+  assert.equal(await c.record('start'),false);
+  assert.equal(posts,1);assert.equal(c.online.value,true);assert.equal(c.status.value.state,'saved');
+  assert.match(c.error.value,/待确认/);
+});
+
+test('interrupted receipt clears pending identity without claiming success or repeating start', async()=>{
+  const c=await harness();let command,posts=0;
+  global.fetch=async(url,options)=>{
+    if(options.method==='POST'){posts++;command=JSON.parse(options.body);throw new TypeError('lost ACK');}
+    if(url.startsWith('/api/mobile/commands/'))return response({operation:{command_id:command.command_id,action:'start',state:'interrupted',error:'Service restarted; check the recording'}});
+    return response(snapshot('saved'));
+  };
+  assert.equal(await c.record('start'),false);
+  assert.equal(posts,1);assert.equal(c.error.value,'Service restarted; check the recording');
+  await nextTick();
+  assert.equal(sessionValues.has('insight-capture.record-command'),false);
+});
+
+for(const state of ['complete','interrupted','error'])test(`page reload resolves an older ${state} receipt using reads only`,async()=>{
+  sessionValues.clear();
+  sessionValues.set('insight-capture.record-command',JSON.stringify({command_id:'old-command',action:'start',task_id:'qa',output_path:null}));
+  const receiptError=state==='complete'?null:`Previous operation ${state}`;
+  let reads=0;
+  global.fetch=async(url,options)=>{
+    assert.notEqual(options.method,'POST','Reopening a page must not repeat a mutation');
+    if(url.startsWith('/api/mobile/commands/')){reads++;return response({operation:{command_id:'old-command',action:'start',state,error:receiptError}});}
+    return response(url==='/api/tasks'?{tasks:[]}:{...snapshot('saved'),operation:{command_id:'later-stop',action:'stop',state:'complete',error:null}});
+  };
+  const live=liveCapture(),c=live.value;
+  try{
+    await new Promise(resolve=>setImmediate(resolve));await nextTick();
+    assert.ok(reads>=1);assert.equal(c.error.value,receiptError||'');
+    assert.equal(c.status.value.state,'saved');assert.equal(c.online.value,true);
+    assert.equal(sessionValues.has('insight-capture.record-command'),false);
+  }finally{live.unmount();}
+});
+
 test('lost creation ACK is recovered without creating a second task', async()=>{
   const c=await harness();let task,posts=0;
   global.fetch=async(url,options)=>{
