@@ -787,5 +787,18 @@
   "语言": "Language",
   "保存异常": "Save failed",
   "实时预览不可用：": "Live preview unavailable: ",
-  "等待重试": "Waiting to retry"
+  "等待重试": "Waiting to retry",
+  "连接中断，操作结果待确认；重连后会核对设备状态。": "Connection lost; the operation result is unconfirmed. Device status will be checked after reconnection.",
+  "任务创建结果待确认。重试会核对同一任务，不会重复新建。": "Task creation is unconfirmed. Retry checks the same task without creating a duplicate.",
+  "任务已创建，启用结果待确认。重连后可继续启用同一任务。": "Task created; activation is unconfirmed. Continue activating the same task after reconnecting.",
+  "任务操作尚未完成。重试会继续同一任务，不会重复新建。": "Task setup is unfinished. Retry continues the same task without creating a duplicate.",
+  "稍后继续": "Continue later",
+  "继续启用任务": "Continue activation",
+  "重试创建任务": "Retry creation",
+  "连接中，录制状态待确认": "Connecting; recording status unconfirmed",
+  "状态待确认": "Status unconfirmed",
+  "继续未完成任务": "Continue unfinished task",
+  "返回任务列表": "Back to task list",
+  "结束创建流程": "Leave task setup",
+  "已创建的任务仍保留在任务列表。": "Any task already created remains in the task list."
 }
