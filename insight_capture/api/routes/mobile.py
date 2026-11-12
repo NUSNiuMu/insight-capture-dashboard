@@ -12,7 +12,7 @@ from insight_capture.runtime.discovery import resolved_cameras, startup_ready
 from aiohttp import web
 
 from insight_capture.media.preview_config import preview_description
-from insight_capture.api.support import read_json_body
+from insight_capture.api.support import read_disk_space, read_json_body
 from insight_capture.runtime.camera_health import evaluate_calibration_cameras
 
 
@@ -90,6 +90,12 @@ class MobileCaptureRoutes:
             pipeline = getattr(self.context.node, "_image_pipeline", None)
             if pipeline:
                 report["image_clocks"] = pipeline.clock_status()
+        # Admission checks are a start-time snapshot; capacity is live operator
+        # information and must keep decreasing while the writer is running.
+        report = {**report, "storage": {
+            **(report.get("storage") or {}),
+            **read_disk_space(manager.rosbag_root),
+        }}
         role_names = {"head": "Head", "right_hand": "Wrist A", "left_hand": "Wrist B"}
         devices = [{"name": pose.name, "role": pose.teleop_role,
                     "label": role_names[pose.teleop_role] + " · " + pose.name.split("_")[0].upper()}

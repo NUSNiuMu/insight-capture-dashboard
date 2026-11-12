@@ -363,6 +363,8 @@ class SessionTakeStore:
         })
         if recording_status.get("recording_timing"):
             payload["recording_timing"] = deepcopy(recording_status["recording_timing"])
+        if recording_status.get("recorder_failure"):
+            payload["recorder_failure"] = deepcopy(recording_status["recorder_failure"])
         self._write_json(path, payload)
         return deepcopy(payload)
 

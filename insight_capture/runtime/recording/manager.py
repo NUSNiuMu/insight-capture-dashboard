@@ -94,6 +94,7 @@ class RecordingManager:
         # image callbacks provide only an independent live continuity audit.
         self.processes: Dict[str, subprocess.Popen] = {}
         self._process_exit_codes: Dict[str, int] = {}
+        self._recorder_failure: Optional[Dict[str, object]] = None
         self._staging_dir: Optional[Path] = None
         self.output_path: Optional[str] = None
         self.started_at: Optional[float] = None
@@ -177,7 +178,7 @@ class RecordingManager:
         """List safe server-side destination folders for the recording UI."""
         with self._lock:
             current_root = self.rosbag_root
-            recording = bool(self.processes) or self._image_writer_active
+            recording = self._recording_active_unlocked()
             roots = list(self._storage_browse_roots)
 
         target = Path(path).resolve() if path else current_root
@@ -240,7 +241,7 @@ class RecordingManager:
         callbacks: List[Callable[[Path], None]] = []
         with self._lock:
             self._cleanup_if_exited_unlocked()
-            if self.processes or self._image_writer_active:
+            if self._recording_active_unlocked():
                 raise RuntimeError("Cannot change the recording directory while recording.")
             if self.merge_state in {"merging", "finalizing"}:
                 raise RuntimeError("Cannot change the recording directory while finalizing.")
@@ -296,18 +297,34 @@ class RecordingManager:
 
     def _cleanup_if_exited_unlocked(self) -> None:
         running: Dict[str, subprocess.Popen] = {}
+        exited = {}
         for group, process in self.processes.items():
             return_code = process.poll()
             if return_code is None:
                 running[group] = process
             else:
                 self._process_exit_codes[group] = int(return_code)
+                exited[group] = int(return_code)
         self.processes = running
+        # An image audit can remain alive after the only file writer dies. It
+        # must not hide that failure, including an unsolicited zero exit code.
+        if exited and self.merge_state == "idle" and self._recorder_failure is None:
+            self._recorder_failure = {
+                "detected_at_epoch_s": time.time(),
+                "exit_codes": exited,
+                "output_path": self.output_path,
+            }
+            self._output_lines.append(f"[recording] Writer exited unexpectedly: {exited}")
+
+    def _recording_active_unlocked(self) -> bool:
+        return bool(self.processes) or self._image_writer_active or bool(
+            self._recorder_failure and self.merge_state == "idle"
+        )
 
     def is_recording(self) -> bool:
         """Cheap hot-path status for image workers; avoids building API JSON."""
         with self._lock:
-            return bool(self.processes) or self._image_writer_active
+            return self._recording_active_unlocked()
 
     def _drain_stdout(self, label: str, process: subprocess.Popen) -> None:
         stream = process.stdout
@@ -430,7 +447,7 @@ class RecordingManager:
                     raise RuntimeError("三台相机 NTP 校时尚未达到录制门槛，请等待校时完成。")
             return self._start(*args, **kwargs)
         except BaseException:
-            if self.preview_control and not self.processes and not self._image_writer_active and self.merge_state not in {"merging", "finalizing"}:
+            if self.preview_control and not self.is_recording() and self.merge_state not in {"merging", "finalizing"}:
                 self.preview_control.resume("recording")
             raise
 
@@ -438,7 +455,7 @@ class RecordingManager:
         try:
             return self._stop(*args, **kwargs)
         finally:
-            if self.preview_control and not self.processes and not self._image_writer_active and self.merge_state not in {"merging", "finalizing"}:
+            if self.preview_control and not self.is_recording() and self.merge_state not in {"merging", "finalizing"}:
                 self.preview_control.resume("recording")
 
     def _start(
@@ -455,7 +472,7 @@ class RecordingManager:
         with self._lock:
             lock_acquired = time.perf_counter()
             self._cleanup_if_exited_unlocked()
-            if self.processes or self._image_writer_active:
+            if self._recording_active_unlocked():
                 raise RuntimeError("Recording is already running.")
             if self.merge_state in {"merging", "finalizing"}:
                 raise RuntimeError(
@@ -601,6 +618,7 @@ class RecordingManager:
 
             self.processes = processes
             self._process_exit_codes = {}
+            self._recorder_failure = None
             self._stdout_threads = stdout_threads
             self._recorder_control_fds = control_fds
             self._staging_dir = staging_dir
@@ -691,7 +709,7 @@ class RecordingManager:
             self._network_audit = network_audit
             self._output_lines.append(f"[network] {format_network_audit(network_audit)}")
         if self._recording_manifest is not None:
-            stopped_at = time.time()
+            stopped_at = (self._recorder_failure or {}).get("detected_at_epoch_s", time.time())
             self._recording_manifest.update({
                 "stopped_at_epoch_s": stopped_at,
                 "duration_s": round(max(0.0, stopped_at - float(self.started_at or stopped_at)), 3),
@@ -772,6 +790,8 @@ class RecordingManager:
             self.merge_timings = {"recorder_stop_sec": stop_sec}
         self._output_lines.append(f"[stop] Recorder shutdown completed in {stop_sec:.2f}s")
         try:
+            if self._recorder_failure:
+                raise RuntimeError("录制意外中断，未完成数据已保留。请检查设备后重新开始。")
             if still_running:
                 raise RuntimeError(
                     f"recorder process(es) did not stop cleanly: {len(still_running)}"
@@ -869,7 +889,8 @@ class RecordingManager:
     def _status_unlocked(self) -> Dict[str, object]:
         manifest = self._recording_manifest or {}
         return {
-            "recording": bool(self.processes) or self._image_writer_active,
+            "recording": self._recording_active_unlocked(),
+            "recorder_failure": dict(self._recorder_failure) if self._recorder_failure else None,
             "recording_mode": self.recording_mode,
             "output_path": self.output_path,
             "recording_timing": {

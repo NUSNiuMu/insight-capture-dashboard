@@ -804,5 +804,6 @@
   "相机图像时间戳与 Jetson 不一致，请检查校时和相机采集进程": "Camera image timestamps disagree with Jetson. Check clock synchronization and camera capture processes.",
   "暂时无法验证图像时间戳，等待相机恢复图像": "Image timestamps cannot be verified yet. Waiting for camera images to resume.",
   "图像时间戳异常": "Image timestamp error",
-  "{0}图像曾中断，本条需要复检。": "{0} images were interrupted. This take needs review."
+  "{0}图像曾中断，本条需要复检。": "{0} images were interrupted. This take needs review.",
+  "录制意外中断，未完成数据已保留。请检查设备后重新开始。": "Recording stopped unexpectedly. Unfinished data has been preserved. Check the device before starting again."
 }

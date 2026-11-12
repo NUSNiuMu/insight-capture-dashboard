@@ -24,6 +24,42 @@ class RecordingRoutes:
     def __init__(self, context: DashboardContext) -> None:
         self.context = context
         self._transition = asyncio.Lock()
+        self._watchdog_stop = asyncio.Event()
+        self._watchdog_task = None
+
+    async def start_watchdog(self, _app) -> None:
+        self._watchdog_stop.clear()
+        self._watchdog_task = asyncio.create_task(self._watch_recorders())
+
+    async def stop_watchdog(self, _app) -> None:
+        self._watchdog_stop.set()
+        if self._watchdog_task:
+            # Let any in-progress finalization finish before app shutdown stops
+            # the manager again. Cancelling to_thread would leave it running.
+            await self._watchdog_task
+
+    async def _finalize_failed_recorder(self) -> None:
+        if self.busy:
+            return
+        status = await asyncio.to_thread(self.context.recording_manager.status)
+        if not status.get("recorder_failure") or status.get("merge_state") != "idle":
+            return
+        # The identity is checked under the manager lock, so a late observer
+        # cannot stop a newer Take after another caller finishes this one.
+        await self.stop_recording(expected_recording=(
+            status.get("output_path"), status.get("recording_mode")
+        ))
+
+    async def _watch_recorders(self) -> None:
+        while not self._watchdog_stop.is_set():
+            try:
+                await self._finalize_failed_recorder()
+            except Exception as exc:  # Retry independently of browser polling.
+                self.context.node.get_logger().warning(f"Recorder monitoring: {exc}")
+            try:
+                await asyncio.wait_for(self._watchdog_stop.wait(), timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
 
     @property
     def busy(self) -> bool:

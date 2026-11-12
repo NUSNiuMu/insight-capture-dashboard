@@ -139,7 +139,9 @@ def create_app(context: DashboardContext) -> web.Application:
         app.router.add_static("/optimization-runs/", str(runs_root), show_index=False)
 
     app.on_startup.append(websocket._on_startup)
+    app.on_startup.append(recording.start_watchdog)
     app.on_shutdown.append(mobile.shutdown)
+    app.on_shutdown.append(recording.stop_watchdog)
     app.on_shutdown.append(playback._on_shutdown)
     app.on_shutdown.append(websocket._on_shutdown)
     return app

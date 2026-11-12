@@ -100,10 +100,10 @@ def test_manager_exposes_recorder_timing_not_finalization_time(tmp_path):
         }
 
 
-def test_mobile_save_timer_freezes_while_worker_finalizes(monkeypatch):
+def test_mobile_save_timer_freezes_while_worker_finalizes(monkeypatch, tmp_path):
     from insight_capture.api.routes import mobile
     node = SimpleNamespace(cameras=[], poses=[], _preview_manager=SimpleNamespace(paused=True))
-    context = SimpleNamespace(node=node, recording_manager=SimpleNamespace(),
+    context = SimpleNamespace(node=node, recording_manager=SimpleNamespace(rosbag_root=tmp_path),
         prepared_playback_manager=SimpleNamespace(status=lambda: {"state": "idle"}),
         take_store=SimpleNamespace(task_status=lambda: {"active": True}, current=lambda: None),
         capture_preflight=SimpleNamespace(camera_stale_sec=2))

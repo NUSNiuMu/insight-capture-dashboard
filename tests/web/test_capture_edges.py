@@ -160,11 +160,11 @@ def test_invalid_command_id_never_starts_capture(value):
     with pytest.raises(ValueError):
         asyncio.run(route.command(Request()))
 
-def test_recording_status_uses_current_clock_not_start_snapshot(monkeypatch):
+def test_recording_status_uses_current_clock_not_start_snapshot(monkeypatch, tmp_path):
     from insight_capture.api.routes import mobile
     current = {'ok': False, 'checked_at_epoch_s': 12345, 'age_sec': 1}
     node = SimpleNamespace(cameras=[], poses=[], _preview_manager=SimpleNamespace(paused=True), _image_pipeline=SimpleNamespace(clock_status=lambda: {'ok': False}))
-    manager = SimpleNamespace(status=lambda: {'recording': True}, clock_monitor=SimpleNamespace(config={}, status=lambda: dict(current)))
+    manager = SimpleNamespace(rosbag_root=tmp_path, status=lambda: {'recording': True}, clock_monitor=SimpleNamespace(config={}, status=lambda: dict(current)))
     context = SimpleNamespace(node=node, recording_manager=manager, prepared_playback_manager=SimpleNamespace(status=lambda: {'state': 'idle'}), take_store=SimpleNamespace(task_status=lambda: {'active': True}, current=lambda: None), capture_preflight=SimpleNamespace(camera_stale_sec=2))
     monkeypatch.setattr(mobile, 'evaluate_calibration_cameras', lambda *a: ({}, []))
     monkeypatch.setattr(mobile, 'resolved_cameras', lambda: [])
@@ -174,3 +174,27 @@ def test_recording_status_uses_current_clock_not_start_snapshot(monkeypatch):
     assert value['preflight']['clocks'] == current
     assert value['preflight']['image_clocks']['ok'] is False
     assert value['recording'] is True
+
+@pytest.mark.parametrize('phase', ['recording', 'starting', 'saving'])
+def test_mobile_storage_is_live_without_rerunning_preflight(tmp_path, monkeypatch, phase):
+    from insight_capture.api.routes import mobile
+    node = SimpleNamespace(cameras=[], poses=[], _preview_manager=SimpleNamespace(paused=True))
+    context = SimpleNamespace(node=node,
+        recording_manager=SimpleNamespace(rosbag_root=tmp_path, status=lambda: {'recording': True}),
+        prepared_playback_manager=SimpleNamespace(status=lambda: {'state': 'idle'}),
+        take_store=SimpleNamespace(task_status=lambda: {'active': True}, current=lambda: None),
+        capture_preflight=SimpleNamespace(camera_stale_sec=2, evaluate=lambda **kw: pytest.fail('reran preflight')))
+    monkeypatch.setattr(mobile, 'evaluate_calibration_cameras', lambda *a: ({}, []))
+    monkeypatch.setattr(mobile, 'resolved_cameras', lambda: [])
+    route = mobile.MobileCaptureRoutes(context, None)
+    route._last_preflight = {'ok': True, 'storage': {'free_bytes': 20, 'minimum_free_bytes': 5}}
+    if phase != 'recording':
+        route._task = SimpleNamespace(done=lambda: False)
+        route._operation = {'action': 'start' if phase == 'starting' else 'stop', 'accepted_at_epoch_s': 100}
+    for free in [18, 10, None]:
+        monkeypatch.setattr(mobile, 'read_disk_space', lambda path: {'path': str(path), 'free_bytes': free})
+        value = route._snapshot()
+        assert value['preflight']['storage']['free_bytes'] == free
+        assert value['preflight']['storage']['minimum_free_bytes'] == 5
+        assert value['preflight']['ok'] is True
+    assert route._last_preflight['storage']['free_bytes'] == 20
