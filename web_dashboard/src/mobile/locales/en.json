@@ -805,5 +805,19 @@
   "暂时无法验证图像时间戳，等待相机恢复图像": "Image timestamps cannot be verified yet. Waiting for camera images to resume.",
   "图像时间戳异常": "Image timestamp error",
   "{0}图像曾中断，本条需要复检。": "{0} images were interrupted. This take needs review.",
-  "录制意外中断，未完成数据已保留。请检查设备后重新开始。": "Recording stopped unexpectedly. Unfinished data has been preserved. Check the device before starting again."
+  "录制意外中断，未完成数据已保留。请检查设备后重新开始。": "Recording stopped unexpectedly. Unfinished data has been preserved. Check the device before starting again.",
+  "查看恢复数据": "View recovered data",
+  "录制数据（MCAP）": "Recording data (MCAP)",
+  "回放元数据（YAML）": "Playback metadata (YAML)",
+  "恢复说明（JSON）": "Recovery details (JSON)",
+  "恢复数据": "Recovered data",
+  "已恢复可读取数据": "Readable data recovered",
+  "恢复数据时长": "Recovered data duration",
+  "{0} 条消息": "{0} messages",
+  "仅包含中断前已写入且可读取的数据，原始文件仍保留。本条仍需复检。": "Contains readable data written before the interruption. Original files are preserved. This take still needs review.",
+  "恢复位置": "Recovery location",
+  "下载": "Download",
+  "使用 ROS 工具回放时，请将录制数据和回放元数据保存到同一文件夹。": "For ROS playback, save the recording data and playback metadata in the same folder.",
+  "原始文件位置": "Original files location",
+  "预期保存位置": "Intended save location"
 }

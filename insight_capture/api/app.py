@@ -72,6 +72,7 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/sessions", sessions._handle_list)
     app.router.add_get("/api/tasks", tasks._handle_list)
     app.router.add_get("/api/tasks/{task_id}/recordings", tasks._handle_recordings)
+    app.router.add_get("/api/tasks/{task_id}/recordings/{take_id}/recovered/{kind}", tasks._handle_recovered_file)
     app.router.add_post("/api/tasks", tasks._handle_create)
     app.router.add_get("/api/tasks/current", tasks._handle_current)
     app.router.add_post("/api/tasks/current", tasks._handle_current)

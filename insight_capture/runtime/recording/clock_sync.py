@@ -14,6 +14,17 @@ from insight_capture.runtime.discovery import resolved_cameras
 
 
 NTP_EPOCH = 2_208_988_800
+CLOCK_SAMPLE_TOLERANCE_SEC = 0.005
+
+
+def _wall_clock_sample():
+    """Bracket a wall reading so scheduling gaps cannot look like clock steps."""
+    before = time.monotonic()
+    wall = time.time()
+    after = time.monotonic()
+    if after - before > CLOCK_SAMPLE_TOLERANCE_SEC:
+        raise ValueError("Local clock sampling was delayed; retry NTP measurement")
+    return wall, before, after
 
 
 def ntp_sample(host: str, timeout: float = 0.5) -> dict:
@@ -26,24 +37,26 @@ def ntp_sample(host: str, timeout: float = 0.5) -> dict:
         # Linux SO_TIMESTAMPNS removes Python scheduling delay after packet arrival.
         timestamp_option = getattr(socket, "SO_TIMESTAMPNS", 35)
         sock.setsockopt(socket.SOL_SOCKET, timestamp_option, 1)
-        sent = time.time()
-        mono = time.monotonic()
+        sent, mono_before_send, mono_after_send = _wall_clock_sample()
         ntp = sent + NTP_EPOCH
         struct.pack_into("!II", packet, 40, int(ntp), int(ntp % 1 * 2**32))
         sock.send(packet)
         reply, ancillary, _, _ = sock.recvmsg(512, 128)
-        wall_after = time.time()
+        wall_after, mono_before_receive, mono_after_receive = _wall_clock_sample()
         received = wall_after
         for level, kind, value in ancillary:
             if level == socket.SOL_SOCKET and kind == timestamp_option:
                 sec, ns = struct.unpack("@ll", value[:struct.calcsize("@ll")])
                 received = sec + ns / 1e9
-    elapsed = time.monotonic() - mono
     if len(reply) < 48 or reply[0] & 7 != 4 or reply[0] >> 6 == 3:
         raise ValueError("NTP server is unsynchronized or returned an invalid reply")
     if not 1 <= reply[1] <= 15 or reply[24:32] != packet[40:48]:
         raise ValueError("NTP stratum/origin validation failed")
-    if abs(wall_after - sent - elapsed) > 0.005:
+    elapsed_wall = wall_after - sent
+    elapsed_min = mono_before_receive - mono_after_send
+    elapsed_max = mono_after_receive - mono_before_send
+    if not (elapsed_min - CLOCK_SAMPLE_TOLERANCE_SEC <= elapsed_wall <=
+            elapsed_max + CLOCK_SAMPLE_TOLERANCE_SEC):
         raise ValueError("Jetson wall clock stepped during NTP measurement")
     values = struct.unpack("!12I", reply[:48])
     server_rx = values[8] - NTP_EPOCH + values[9] / 2**32

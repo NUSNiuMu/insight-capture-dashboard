@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from insight_capture.core.bag import iter_messages, read_metadata, single_mcap
+from insight_capture.core.timing import (
+    SOURCE_CLOCK_MIN_OFFSET_NS, SOURCE_CLOCK_MAX_OFFSET_NS, source_clock_consistent,
+)
 from insight_capture.quality.topic_rates import nominal_for
 
 DEFAULT_MAX_LOSS_PCT = 0.5
@@ -19,6 +22,8 @@ RATE_INTERPRETATION = (
     "they do not identify source, transport, or recorder loss. Attribution requires "
     "paired source and recorded-message evidence. Duplicate timestamps still count "
     "as received messages; inspect timestamp_diagnostics separately."
+    " Invalid or inconsistent source timestamps make rate metrics unavailable; "
+    "source-versus-recording bounds are clock-domain sanity checks, not NTP precision limits."
 )
 
 
@@ -45,7 +50,9 @@ def latched_static_result(name: str, msgs: int) -> Dict[str, object]:
 
 
 def header_stamp_ns(blob: bytes) -> int:
-    sec, nsec = struct.unpack_from("<iI", blob, 4)
+    if len(blob) < 12 or blob[:2] not in (b'\x00\x00', b'\x00\x01'):
+        raise ValueError("unsupported or truncated CDR header")
+    sec, nsec = struct.unpack_from("<iI" if blob[1] else ">iI", blob, 4)
     stamp = sec * 1_000_000_000 + nsec
     if nsec >= 1_000_000_000 or stamp <= 0:
         raise ValueError("invalid or unset source timestamp")
@@ -192,7 +199,9 @@ def _analyze_deep(
     counts = {name: 0 for name in names}
     stamps = {name: [] for name in names if nominal_for(name) is not None}
     invalid_stamps = {name: 0 for name in stamps}
-    for name, raw, _record_stamp in iter_messages(bag_dir, names):
+    mismatches = {name: 0 for name in stamps}
+    offset_ranges = {name: [None, None] for name in stamps}
+    for name, raw, record_stamp in iter_messages(bag_dir, names):
         counts[name] = counts.get(name, 0) + 1
         if name in stamps:
             try:
@@ -202,6 +211,12 @@ def _analyze_deep(
                 invalid_stamps[name] += 1
             else:
                 stamps[name].append(stamp)
+                offset = stamp - record_stamp
+                low, high = offset_ranges[name]
+                offset_ranges[name] = [offset if low is None else min(low, offset),
+                                       offset if high is None else max(high, offset)]
+                if not source_clock_consistent(stamp, record_stamp):
+                    mismatches[name] += 1
 
     topics: List[Dict[str, object]] = []
     for name in names:
@@ -231,6 +246,14 @@ def _analyze_deep(
             "duplicate_source_stamps": len(values) - unique_count,
             "backward_steps": sum(b < a for a, b in zip(values, values[1:])),
             "invalid_source_stamps": invalid_stamps[name],
+            "source_record_time_mismatches": mismatches[name],
+        }
+        low, high = offset_ranges[name]
+        diagnostics["source_minus_record_ms"] = {
+            "min": round(low / 1e6, 6) if low is not None else None,
+            "max": round(high / 1e6, 6) if high is not None else None,
+            "allowed_min": SOURCE_CLOCK_MIN_OFFSET_NS / 1e6,
+            "allowed_max": SOURCE_CLOCK_MAX_OFFSET_NS / 1e6,
         }
         warnings = []
         if diagnostics["duplicate_source_stamps"]:
@@ -239,10 +262,23 @@ def _analyze_deep(
             warnings.append("source timestamps move backward in recorder order; inspect source clock and delivery ordering")
         if invalid_stamps[name]:
             warnings.append("invalid/unset source timestamps; not replaced with recorder timestamps")
+        if mismatches[name] or invalid_stamps[name]:
+            topics.append({
+                "name": name, "ok": False, "msgs": msgs,
+                "audit": "source_clock_consistency", "rate_assessable": False,
+                "loss_attribution": "undetermined", "timestamp_diagnostics": diagnostics,
+                "warnings": warnings,
+                "error": (f"{mismatches[name]} source timestamps disagree with recording time; inspect clock domains and delivery latency; rate shortfall cannot be inferred"
+                          if mismatches[name] else f"{invalid_stamps[name]} invalid source timestamps; rate shortfall cannot be inferred"),
+                "nominal_hz": nominal, "avg_hz": None, "missing": None,
+                "loss_pct": None, "gap_events": None, "worst_gaps": [],
+            })
+            continue
         if unique_count < 2:
             topics.append({
                 "name": name, "ok": False, "msgs": msgs,
                 "audit": "header_stamp_gaps",
+                "rate_assessable": False,
                 "timestamp_diagnostics": diagnostics,
                 "warnings": warnings,
                 "error": f"only {unique_count} distinct valid source timestamp(s); source rate cannot be assessed",
@@ -258,6 +294,7 @@ def _analyze_deep(
             "name": name,
             "ok": loss_pct <= max_loss_pct and not invalid_stamps[name],
             "audit": "header_stamp_gaps",
+            "rate_assessable": True,
             "loss_attribution": "undetermined",
             "timestamp_diagnostics": diagnostics,
             "warnings": warnings,

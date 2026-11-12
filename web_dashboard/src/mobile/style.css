@@ -218,3 +218,9 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 textarea{font:inherit;width:100%;min-height:85px;border:1px solid #cbd2dc;border-radius:12px;padding:12px;resize:vertical}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:11px;max-height:50vh;overflow:auto}
 summary{cursor:pointer;min-height:44px;padding:14px 0}.calibration-card{margin-top:12px}
+
+.recovery-details { grid-column: 1 / -1; margin-top: 10px; padding: 12px; border-radius: 12px; background: #f3f6fa; overflow-wrap: anywhere; }
+.recovery-details p { font-size: 13px; }
+.recovery-downloads { display: grid; gap: 8px; margin: 12px 0; }
+.recovery-downloads a { display: block; padding: 12px; background: #e9edf2; color: #202939; border-radius: 10px; text-decoration: none; font-size: 13px; }
+.recovery-downloads a[aria-disabled="true"] { opacity: .5; }

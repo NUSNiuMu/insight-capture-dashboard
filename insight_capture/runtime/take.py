@@ -12,12 +12,17 @@ from typing import Dict, Mapping, Optional
 
 from insight_capture.core.bag import recording_timing
 from .tasks import CaptureTask, CaptureTaskCatalog
+from .recovered_take import recovered_take_info
 
 
 def _with_recording_timing(payload: Dict) -> Dict:
     """Enrich historical takes on read without rewriting their lifecycle dates."""
     if not isinstance(payload, dict):
         raise ValueError("Take metadata must be an object.")
+    payload.pop('recovery', None)
+    recovery = recovered_take_info(payload)
+    if recovery is not None:
+        payload['recovery'] = recovery
     bag_path = payload.get("bag_path")
     if isinstance(bag_path, str) and bag_path and payload.get("state") in {
         "complete", "saved", "finalization_failed"
@@ -417,6 +422,23 @@ class SessionTakeStore:
             task = self._task_catalog.get(task_id)
             root = self.sessions_root / self._task_set_id(task.task_id) / "takes"
             return {"task": task.as_dict(), "takes": self._list_takes_from(root)}
+
+    def recovered_file(self, task_id: str, take_id: int, kind: str) -> Path:
+        """Resolve only a known recovered Take's three published files."""
+        with self._lock:
+            task = self._task_catalog.get(task_id)
+            if take_id < 1 or kind not in {'data', 'metadata', 'manifest'}:
+                raise FileNotFoundError('Recovery file not found')
+            root = self.sessions_root / self._task_set_id(task.task_id) / 'takes'
+            payload = json.loads((root / f'take_{take_id:04d}.json').read_text())
+            if (not isinstance(payload, dict) or payload.get('task_id') != task_id or
+                    payload.get('take_id') != take_id):
+                raise FileNotFoundError('Recovery Take not found')
+            info = recovered_take_info(payload)
+            if info is None:
+                raise FileNotFoundError('Recovery file not available')
+            row = next(row for row in info['files'] if row['kind'] == kind)
+            return Path(info['bag_path']) / row['name']
 
     def list_takes(self) -> list[Dict]:
         return self._list_takes_from(self.takes_root)

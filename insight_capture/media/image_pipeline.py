@@ -13,6 +13,7 @@ except Exception:  # pragma: no cover - host-side tools may import without ROS
 from insight_capture.core.performance import track
 
 from insight_capture.core.models import CameraFrame
+from insight_capture.core.timing import source_clock_consistent
 from insight_capture.media.cdr import compressed_image_view
 
 
@@ -38,7 +39,7 @@ class ImagePipeline:
             age = now - received
             # An old sample cannot diagnose the current clock. Lost input is
             # unavailable evidence, even if its last timestamp was incorrect.
-            state = "stale" if age >= 2 else "ready" if -2 <= difference <= 1 else "invalid"
+            state = "stale" if age >= 2 else "ready" if source_clock_consistent(stamp_ns, wall_ns) else "invalid"
             devices[camera.name] = {"ok": state == "ready", "state": state,
                                     "source_minus_receipt_ms": round(difference * 1000, 3),
                                     "age_sec": round(age, 3)}

@@ -123,7 +123,7 @@ def test_ntp_reply_validation(monkeypatch, fault):
                 reply[1] = 16
             return (reply, [], 0, None)
     wall = iter([1000.0, 1000.02 if fault == 'host_clock_step' else 1000.004])
-    mono = iter([0.0, 0.004])
+    mono = iter([0.0, 0.0, 0.004, 0.004])
     monkeypatch.setattr(clocks.socket, 'socket', lambda *a: FakeSocket())
     monkeypatch.setattr(clocks.time, 'time', lambda: next(wall))
     monkeypatch.setattr(clocks.time, 'monotonic', lambda: next(mono))

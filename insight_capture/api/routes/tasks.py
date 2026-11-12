@@ -1,6 +1,7 @@
 """Capture-task selection and operator status routes."""
 
 import asyncio
+from urllib.parse import quote
 
 from aiohttp import web
 
@@ -44,6 +45,19 @@ class TaskRoutes:
             self.context.take_store.task_recordings, request.match_info["task_id"]
         )
         return web.json_response(payload, headers={"Cache-Control": "no-store"})
+
+    async def _handle_recovered_file(self, request: web.Request) -> web.FileResponse:
+        try:
+            path = await asyncio.to_thread(
+                self.context.take_store.recovered_file, request.match_info['task_id'],
+                int(request.match_info['take_id']), request.match_info['kind'],
+            )
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise web.HTTPNotFound(text='Recovered file unavailable') from exc
+        return web.FileResponse(path, headers={
+            'Content-Disposition': "attachment; filename*=UTF-8''" + quote(path.name, safe=''),
+            'Cache-Control': 'no-store',
+        })
 
     async def _handle_current(self, _request: web.Request) -> web.Response:
         status = await asyncio.to_thread(self.context.take_store.task_status)

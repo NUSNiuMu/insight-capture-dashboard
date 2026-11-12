@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { api, takeDuration, takeDisplayState, roleLabel } from './useCapture.js';
+import { api, takeDuration, takeDisplayState, roleLabel, duration } from './useCapture.js';
 import { t } from './i18n.js';
 const props=defineProps({route:String,tasks:Array,tasksError:String,status:Object,busy:Boolean,online:Boolean,action:Function});
 const emit=defineEmits(['navigate','refresh-tasks']);
@@ -41,6 +41,9 @@ async function merge(session_id){if(await props.action('/api/postprocessing/merg
 const date=value=>value?new Date(value*1000).toLocaleString(): '—';
 const takeState=s=>t({complete:'已保存',saved:'等待传输',finalization_failed:'保存异常',recording:'正在录制',finalizing:'正在保存',reserved:'正在准备',starting:'正在准备',start_failed:'录制失败',failed:'录制失败'}[s]||s);
 const quality=take=>t(take.operator_valid===false?'已作废':{pass:'快速检查通过',suspect:'需要复检',fail:'检查未通过',pending:'待检查'}[take.quick_qc?.state]||'未检查');
+const recoveryUrl=(take,file)=>`/api/tasks/${encodeURIComponent(recordSet.value.task.task_id)}/recordings/${take.take_id}/recovered/${file.kind}`;
+const fileLabel=kind=>t({data:'录制数据（MCAP）',metadata:'回放元数据（YAML）',manifest:'恢复说明（JSON）'}[kind]||kind);
+function fileSize(bytes){let value=bytes;for(const unit of ['B','KB','MB','GB']){if(value<1024||unit==='GB')return `${value.toFixed(unit==='B'?0:1)} ${unit}`;value/=1024;}}
 function qualityReasons(take){
  const anomalies=(take.anomaly_timeline||[]).filter(item=>item.event==='started'&&item.affects_quality!==false);
  const details=anomalies.map(item=>{
@@ -70,8 +73,10 @@ function qualityReasons(take){
 <article v-for="take in selectedTakes" :key="take.take_id" class="recording-row">
 <div><strong>Take {{String(take.take_id).padStart(4,'0')}}</strong><p><small>{{date(take.recording_timing?.started_at_epoch_s||take.start_epoch_s||take.reserved_at_epoch_s)}}</small></p></div><div class="meta"><span :class="take.state==='complete'?'state-complete':''">{{takeState(take.state)}}</span><p><small>{{takeDuration(take,status)}}</small></p></div>
 <p v-if="!['recording','reserved','starting','finalizing'].includes(take.state)" :class="{'issue warning':['suspect','fail'].includes(take.quick_qc?.state)}">{{t('质量检查')}}：{{quality(take)}}</p>
-<button v-if="!route.split('/')[2]" class="secondary compact" @click="emit('navigate',`${route}/${take.take_id}`)">{{t('查看详情')}}</button>
-<template v-else><p>{{t('任务说明')}}：{{recordSet.task.instruction}}</p><p>{{t('数据位置')}}：{{take.bag_path||'—'}}</p><p v-for="reason in qualityReasons(take)" :key="reason" class="issue warning">{{reason}}</p><p>{{t('已保存表示文件已写入，质量结论以检查和复检结果为准。')}}</p><p>{{t('校准和轨迹数据以本条录制内容为准。')}}</p></template>
+<button v-if="!route.split('/')[2]" class="secondary compact" @click="emit('navigate',`${route}/${take.take_id}`)">{{t(take.recovery?'查看恢复数据':'查看详情')}}</button>
+<template v-else>
+<section v-if="take.recovery" class="recovery-details" :aria-label="t('恢复数据')"><strong>{{t('已恢复可读取数据')}}</strong><p>{{t('恢复数据时长')}}：{{duration(take.recovery.recording_timing.duration_s)}} · {{t('{0} 条消息',take.recovery.message_count.toLocaleString())}}</p><p>{{t('仅包含中断前已写入且可读取的数据，原始文件仍保留。本条仍需复检。')}}</p><details><summary>{{t('数据位置')}}</summary><p>{{t('恢复位置')}}：{{take.recovery.bag_path}}</p><p>{{t('原始文件位置')}}：{{take.recovery.original_path}}</p></details><div class="recovery-downloads"><a v-for="file in take.recovery.files" :key="file.kind" :href="online?recoveryUrl(take,file):undefined" :download="file.name" :aria-disabled="!online" @click="!online&&$event.preventDefault()">{{t('下载')}} {{fileLabel(file.kind)}} · {{fileSize(file.size_bytes)}}</a></div><p class="settings-note">{{t('使用 ROS 工具回放时，请将录制数据和回放元数据保存到同一文件夹。')}}</p></section>
+<p>{{t('任务说明')}}：{{recordSet.task.instruction}}</p><p v-if="!take.recovery">{{t(take.state==='finalization_failed'?'预期保存位置':'数据位置')}}：{{take.bag_path||'—'}}</p><p v-for="reason in qualityReasons(take)" :key="reason" class="issue warning">{{reason}}</p><p v-if="['complete','saved'].includes(take.state)">{{t('已保存表示文件已写入，质量结论以检查和复检结果为准。')}}</p><p>{{t('校准和轨迹数据以本条录制内容为准。')}}</p></template>
 </article></section>
 <section v-if="transfers?.enabled" class="card"><h2>{{t('回传与合包')}}</h2><article v-for="item in transfers.recordings" :key="item.session_id" class="recording-row"><strong>{{item.task_name}} · Take {{item.take_id}}</strong><span>{{item.phase}}</span><p v-if="item.error" class="issue error">{{item.error}}</p><button v-if="['saved','error'].includes(item.phase)" class="secondary" :disabled="busy||!online||transfers.busy" @click="merge(item.session_id)">{{t('回传并合包')}}</button></article><p v-if="!transfers.recordings.length" class="empty">{{t('暂无待回传记录')}}</p></section>
 <p class="settings-note">{{t('浏览记录不会切换当前采集任务。原始数据保存在 Jetson，可在桌面端回放。')}}</p>
