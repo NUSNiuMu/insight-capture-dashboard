@@ -27,5 +27,6 @@ config/cameras.json
 config/post_processing.json
 config/runtime.json
 config/.device
+config/.capture-upgrade.lock
 
 .native-build/

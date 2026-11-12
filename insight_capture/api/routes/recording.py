@@ -18,6 +18,7 @@ from insight_capture.runtime.recording import (
 )
 
 from insight_capture.api.context import DashboardContext
+from insight_capture.runtime.upgrade import recording_start_lock
 
 
 class RecordingRoutes:
@@ -77,6 +78,8 @@ class RecordingRoutes:
 
     def _recording_status_snapshot(self) -> dict[str, object]:
         payload = self.context.recording_manager.status()
+        payload["operation_in_progress"] = self.busy
+        payload["upgrade_lock_supported"] = True
         payload["system_load"] = read_system_load()
         payload["disk_space"] = read_disk_space(self.context.recording_manager.rosbag_root)
         take_store = getattr(self.context, "take_store", None)
@@ -182,7 +185,23 @@ class RecordingRoutes:
         if self.busy:
             raise RuntimeError("A recording operation is still running.")
         async with self._transition:
-            return await self._start_with_preview_paused(**kwargs)
+            # Hold through preflight, Take reservation, recorder startup and
+            # status publication. The installer cannot stop this transition;
+            # once it owns the exclusive lock, new starts cannot enter it.
+            with recording_start_lock():
+                start = asyncio.create_task(self._start_with_preview_paused(**kwargs))
+                try:
+                    return await asyncio.shield(start)
+                except asyncio.CancelledError:
+                    # Cancelling a request cannot cancel to_thread's recorder
+                    # work. Retain both admission locks until it has finished.
+                    while not start.done():
+                        try:
+                            await asyncio.shield(start)
+                        except asyncio.CancelledError:
+                            continue
+                    start.result()
+                    raise
 
     async def _start_with_preview_paused(self, **kwargs):
         gate = getattr(self.context.recording_manager, "preview_control", None)

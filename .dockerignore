@@ -56,6 +56,7 @@ web_dashboard/package.json
 *.pdf
 
 .env
+config/.capture-upgrade.lock
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/

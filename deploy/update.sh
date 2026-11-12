@@ -18,6 +18,58 @@ SUPERGLUE_IMAGE="insight-superglue-validation:25.04"
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
+acquire_upgrade_lock() {
+    [[ -n "${upgrade_lock_fd:-}" ]] && return
+    # First installs must seed config/ from the image before creating the lock.
+    [[ -d config ]] || return 0
+    local lock_file=config/.capture-upgrade.lock
+    if [[ ! -e "${lock_file}" ]]; then
+        (umask 022; set -o noclobber; : > "${lock_file}") 2>/dev/null \
+            || [[ -e "${lock_file}" ]] || die "cannot create the upgrade lock"
+    fi
+    exec {upgrade_lock_fd}<"${lock_file}"
+    flock -n -x "${upgrade_lock_fd}" \
+        || die "a recording start or another upgrade is in progress; wait for it to finish"
+    # Keep this descriptor open until installer exit, including health checks.
+    # The empty lock file remains; process exit releases the actual kernel lock.
+}
+
+assert_capture_idle() {
+    local response verdict running
+    verdict=unknown
+    if response="$(curl --connect-timeout 2 --max-time 5 -sf "http://localhost:${PORT}/api/recording/status" 2>/dev/null)"; then
+        verdict="$(python3 -c '
+import json, sys
+try:
+    s = json.load(sys.stdin)
+    if not isinstance(s, dict) or not isinstance(s.get("recording"), bool):
+        raise ValueError("invalid recording status")
+    busy = (s["recording"] or s.get("operation_in_progress")
+            or s.get("state") in {"starting", "preparing", "saving", "finalizing", "merging", "stopping"}
+            or s.get("merge_state") in {"saving", "finalizing", "merging"}
+            or (s.get("current_take") or {}).get("state") in {"preparing", "recording", "saving"})
+    print("busy" if busy else "idle" if s.get("upgrade_lock_supported") else "legacy-idle")
+except (ValueError, TypeError, AttributeError):
+    print("unknown")
+' <<<"${response}")"
+    fi
+    if [[ "${verdict}" == busy ]]; then
+        [[ "${force}" == true ]] \
+            || die "a recording is in progress (including preparation or saving); finish it before upgrading"
+        log "WARNING: --force explicitly permits interrupting the current recording operation."
+    elif [[ "${verdict}" == unknown ]]; then
+        running="$(docker ps --quiet --filter 'name=^/insight-dashboard$')" \
+            || die "cannot determine whether the capture backend is running"
+        if [[ -n "${running}" ]]; then
+            [[ "${force}" == true ]] \
+                || die "the capture backend is running but its recording status is unavailable; retry after it responds"
+            log "WARNING: --force proceeds without knowing the running backend's recording state."
+        fi
+    elif [[ "${verdict}" == legacy-idle ]]; then
+        log "WARNING: the existing backend predates upgrade/start locking; do not start capture until this upgrade exits."
+    fi
+}
+
 sync_host_runtime() {
     local image="$1"
     local container temporary
@@ -93,16 +145,11 @@ cd "${SCRIPT_DIR}"
 HOST_RUNTIME_ROOT="${SCRIPT_DIR}"
 command -v docker >/dev/null || die "docker is not installed"
 docker compose version >/dev/null 2>&1 || die "docker compose (v2 plugin) is not available"
+command -v flock >/dev/null || die "flock is not installed"
 
 # ── Don't kill an in-flight recording ────────────────────────────────────────
-if curl -sf "http://localhost:${PORT}/api/recording/status" 2>/dev/null \
-        | python3 -c 'import json,sys; s=json.load(sys.stdin); sys.exit(0 if s.get("recording") or s.get("state") in {"starting", "saving"} or s.get("merge_state") in {"saving", "merging"} else 1)' 2>/dev/null; then
-    if [[ "${force}" == "true" ]]; then
-        log "WARNING: a recording is in progress; --force given, proceeding anyway (the recording will be cut short)."
-    else
-        die "a recording is in progress -- finish it first, or re-run with --force to interrupt it"
-    fi
-fi
+acquire_upgrade_lock
+assert_capture_idle
 
 # Keep the previous dependency ID before docker load replaces its stable tag.
 previous_inference="$(docker image inspect --format '{{.Id}}' "${SUPERGLUE_IMAGE}" 2>/dev/null || true)"
@@ -132,6 +179,11 @@ if [[ ! -d config ]]; then
     docker cp "${seed_ctr}:/workspaces/insight_capture/config" ./config
     docker rm "${seed_ctr}" >/dev/null
 fi
+
+# Image loading can take minutes. Recheck before changing .env, stopping any
+# service or migrating settings, including upgrades from pre-locking versions.
+acquire_upgrade_lock
+assert_capture_idle
 
 # ── Switch the installed version ───────────────────────────────────────────
 env_next=".env.next.$$"
