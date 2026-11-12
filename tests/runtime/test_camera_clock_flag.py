@@ -56,3 +56,24 @@ def test_invalid_existing_flag_is_replaced(clock):
     clock.SYNC_FLAG.write_bytes(b'\xff')
     clock.publish_sync_state(False)
     assert clock.SYNC_FLAG.read_bytes() == b'0\n'
+
+
+def test_new_daemon_failure_cannot_leave_previous_ready_flag(clock, tmp_path, monkeypatch):
+    clock.publish_sync_state(True)
+    monkeypatch.setattr(clock, 'RUN', tmp_path / 'run')
+    def fail(*args, **kwargs):
+        raise OSError('simulated daemon launch failure')
+    monkeypatch.setattr(clock.subprocess, 'Popen', fail)
+    with pytest.raises(OSError, match='daemon launch failure'):
+        clock.main()
+    assert clock.SYNC_FLAG.read_bytes() == b'0\n'
+
+
+def test_service_cleanup_clears_flag_without_starting_clock(clock, monkeypatch):
+    clock.publish_sync_state(True)
+    monkeypatch.setattr(clock, 'main', lambda: pytest.fail('cleanup must not start a daemon'))
+    clock.cli(['--clear-sync-state'])
+    assert clock.SYNC_FLAG.read_bytes() == b'0\n'
+    previous = clock.SYNC_FLAG.stat()
+    clock.cli(['--clear-sync-state'])
+    assert clock.SYNC_FLAG.stat().st_mtime_ns == previous.st_mtime_ns

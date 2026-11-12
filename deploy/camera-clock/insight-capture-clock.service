@@ -4,6 +4,7 @@ After=network.target
 
 [Service]
 ExecStart=/usr/bin/python3 /opt/insight-capture-clock/clock.py
+ExecStopPost=/usr/bin/python3 /opt/insight-capture-clock/clock.py --clear-sync-state
 Restart=always
 RestartSec=2
 RuntimeDirectory=insight-capture-clock

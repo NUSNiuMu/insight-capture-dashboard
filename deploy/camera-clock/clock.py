@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Own a single offline camera clock; follow the USB DHCP peer without steps."""
 import ipaddress
+import argparse
 import os
 from pathlib import Path
 import signal
@@ -51,6 +52,8 @@ def command(*args):
                           capture_output=True, text=True, timeout=4, check=True)
 
 def main():
+    # Readiness from a previous daemon must not survive a new service start.
+    publish_sync_state(False)
     RUN.mkdir(parents=True, exist_ok=True)
     RUN.chmod(0o700)
     # Stepping is confined to the acquisition pre-start gate. A low slew limit
@@ -101,5 +104,15 @@ def main():
             daemon.terminate()
             daemon.wait(timeout=5)
 
+def cli(arguments=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--clear-sync-state', action='store_true')
+    args = parser.parse_args(arguments)
+    if args.clear_sync_state:
+        publish_sync_state(False)
+    else:
+        main()
+
+
 if __name__ == '__main__':
-    main()
+    cli()
