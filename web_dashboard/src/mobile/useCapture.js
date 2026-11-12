@@ -1,5 +1,17 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { t } from './i18n.js';
+export function deviceStage(device, status) {
+  const name=device.name;
+  if(!status?.system?.camera_links?.some(link=>link.namespace===name))return t('等待 USB 连接');
+  if(!status?.preflight?.clocks?.devices?.[name]?.ok)return t('正在校时');
+  if(status.system.managed_camera_startup&&!status.system.camera_startup?.[name])return t('正在恢复采集');
+  if(!status?.preflight?.camera_health?.[name]?.image_fresh)return t('等待图像');
+  const imageClock=status?.preflight?.image_clocks?.devices?.[name];
+  if(imageClock?.state==='invalid')return t('图像时间戳异常');
+  if(imageClock&&!imageClock.ok)return t('等待图像');
+  if(!status?.preflight?.camera_health?.[name]?.vio_fresh)return t('等待 VIO');
+  return t('已就绪');
+}
 export async function api(path, body) {
   const response = await fetch(path, {cache:'no-store', signal:AbortSignal.timeout(12000),
     ...(body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})});

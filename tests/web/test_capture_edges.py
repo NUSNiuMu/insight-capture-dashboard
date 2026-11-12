@@ -41,12 +41,22 @@ from insight_capture.runtime.preflight import CapturePreflight
 from insight_capture.runtime.recording import clock_sync as clocks
 from insight_capture.media.image_pipeline import ImagePipeline
 
-@pytest.mark.parametrize('fault,code', [('healthy', None), ('image', 'camera_inputs_missing'), ('vio', 'camera_inputs_missing'), ('ntp', 'clock_not_ready'), ('epoch', 'image_clock_invalid'), ('disk_full', 'storage_low'), ('readonly', 'storage_unwritable'), ('publisher', 'recorder_topics_missing')])
+@pytest.mark.parametrize('fault,code', [('healthy', None), ('image', 'camera_inputs_missing'), ('vio', 'camera_inputs_missing'), ('ntp', 'clock_not_ready'), ('epoch', 'image_clock_invalid'), ('stale', 'image_clock_unavailable'), ('stale_epoch', 'image_clock_unavailable'), ('missing_stamp', 'image_clock_unavailable'), ('disk_full', 'storage_low'), ('readonly', 'storage_unwritable'), ('publisher', 'recorder_topics_missing')])
 def test_preflight_fault_matrix(tmp_path, monkeypatch, fault, code):
     now = time.monotonic()
     names = ['insight3_a', 'insight3_b', 'insight9_a']
     cameras = [SimpleNamespace(name=n, device_name=n, topic='/' + n + '/camera/image', label=n) for n in names]
-    node = SimpleNamespace(cameras=cameras, poses=[SimpleNamespace(name=n) for n in names], camera_input_lock=threading.Lock(), camera_input_times={n: deque([now - 0.03, now]) for n in names}, camera_liveness_times={n: now for n in names}, _image_pipeline=SimpleNamespace(clock_status=lambda: {'ok': fault != 'epoch'}))
+    node = SimpleNamespace(cameras=cameras, poses=[SimpleNamespace(name=n) for n in names], camera_input_lock=threading.Lock(), camera_input_times={n: deque([now - 0.03, now]) for n in names}, camera_liveness_times={n: now for n in names})
+    node._image_pipeline = ImagePipeline(node)
+    node._image_pipeline._clock_samples = {name: (100_000_000_000, 100_000_000_000, now) for name in names}
+    if fault in {'epoch', 'stale_epoch'}:
+        node._image_pipeline._clock_samples[names[0]] = (0, 100_000_000_000, now)
+    if fault in {'stale', 'stale_epoch'}:
+        stamp, wall, _ = node._image_pipeline._clock_samples[names[0]]
+        node._image_pipeline._clock_samples[names[0]] = (stamp, wall, now - 3)
+        node.camera_input_times[names[0]].clear()
+    if fault == 'missing_stamp':
+        node._image_pipeline._clock_samples.pop(names[0])
     if fault == 'image':
         node.camera_input_times[names[0]].clear()
     if fault == 'vio':
@@ -60,6 +70,8 @@ def test_preflight_fault_matrix(tmp_path, monkeypatch, fault, code):
     assert r['ok'] == (code is None)
     if code:
         assert code in {f['code'] for f in r['failures']}
+    if fault != 'epoch':
+        assert 'image_clock_invalid' not in {f['code'] for f in r['failures']}
 
 @pytest.mark.parametrize('difference,age,good', [(0, 0, True), (-2, 0, True), (1, 0, True), (-2.001, 0, False), (1.001, 0, False), (0, 2.1, False)])
 def test_image_epoch_boundaries(difference, age, good):

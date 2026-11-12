@@ -46,6 +46,8 @@ function qualityReasons(take){
  const details=anomalies.map(item=>{
   const device=props.status?.devices?.find(d=>d.name===item.details?.service);
   if(item.code?.startsWith('localization:')&&device)return t('{0}未完成公共地图定位，本条需要复检。',roleLabel(device.role));
+  const camera=props.status?.devices?.find(d=>d.name===item.details?.camera);
+  if(item.code?.startsWith('camera_stale:')&&camera)return t('{0}图像曾中断，本条需要复检。',roleLabel(camera.role));
   return t(item.message);
  }).filter(Boolean);
  const reasons=(take.quick_qc?.reasons||[]).filter(reason=>reason!=='critical live QC anomaly'||!details.length).map(reason=>t({

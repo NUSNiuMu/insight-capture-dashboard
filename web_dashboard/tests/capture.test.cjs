@@ -17,8 +17,8 @@ const outfile = path.join(temp, 'harness.cjs');
 buildSync({ stdin: { contents: `
   import { createSSRApp, createRenderer, nextTick } from 'vue';
   import { renderToString } from 'vue/server-renderer';
-  import { useCapture, takeDuration, takeDisplayState } from './src/mobile/useCapture.js';
-  export { takeDuration, takeDisplayState };
+  import { useCapture, takeDuration, takeDisplayState, deviceStage } from './src/mobile/useCapture.js';
+  export { takeDuration, takeDisplayState, deviceStage };
   export async function capture() {
     let result;
     await renderToString(createSSRApp({setup(){result=useCapture();return ()=>null;}}));
@@ -33,7 +33,7 @@ buildSync({ stdin: { contents: `
     return {value:result,unmount:()=>app.unmount()};
   }`, resolveDir: path.resolve(__dirname, '..') },
   bundle: true, platform: 'node', format: 'cjs', outfile });
-const { capture, liveCapture, nextTick, takeDuration, takeDisplayState } = require(outfile);
+const { capture, liveCapture, nextTick, takeDuration, takeDisplayState, deviceStage } = require(outfile);
 rmSync(temp, { recursive: true });
 const snapshot = (state='idle', task='qa', output='/take/1') => ({
   state, output_path: output, task_status: { task: { task_id: task } },
@@ -309,4 +309,22 @@ test('leaving unfinished setup clears only the browser draft and sends no delete
   assert.equal(c.leaveTaskCreation(),true);
   assert.equal(c.taskDraft.value,null);
   assert.equal(sessionValues.has('insight-capture.task-draft'),false);
+});
+
+
+test('camera stage separates missing images from a fresh wrong timestamp',()=>{
+  const device={name:'left'};
+  const status={system:{camera_links:[{namespace:'left'}]},preflight:{
+    clocks:{devices:{left:{ok:true}}},camera_health:{left:{image_fresh:true,vio_fresh:true}},
+    image_clocks:{devices:{left:{ok:true,state:'ready'}}},
+  }};
+  assert.equal(deviceStage(device,status),'已就绪');
+  status.preflight.image_clocks.devices.left={ok:false,state:'invalid'};
+  assert.equal(deviceStage(device,status),'图像时间戳异常');
+  status.preflight.image_clocks.devices.left={ok:false,state:'stale'};
+  assert.equal(deviceStage(device,status),'等待图像');
+  status.preflight.image_clocks.devices.left={ok:false,state:'missing'};
+  assert.equal(deviceStage(device,status),'等待图像');
+  status.system.camera_links=[];
+  assert.equal(deviceStage(device,status),'等待 USB 连接');
 });

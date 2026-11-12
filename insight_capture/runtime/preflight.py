@@ -49,7 +49,20 @@ class CapturePreflight:
         pipeline = getattr(self.node, "_image_pipeline", None)
         image_clocks = pipeline.clock_status() if pipeline else None
         if image_clocks and not image_clocks["ok"]:
-            failures.append(self._failure("image_clock_invalid", "相机图像时间戳未与 Jetson 对齐，请在校时完成后重启相机采集进程", clocks=image_clocks))
+            devices = image_clocks.get("devices", {})
+            invalid = [name for name, device in devices.items() if device.get("state") == "invalid"]
+            unavailable = [name for name, device in devices.items()
+                           if not device.get("ok") and device.get("state") != "invalid"]
+            if invalid:
+                failures.append(self._failure(
+                    "image_clock_invalid", "相机图像时间戳与 Jetson 不一致，请检查校时和相机采集进程",
+                    cameras=invalid, clocks=image_clocks,
+                ))
+            if unavailable or not invalid:
+                failures.append(self._failure(
+                    "image_clock_unavailable", "暂时无法验证图像时间戳，等待相机恢复图像",
+                    cameras=unavailable, clocks=image_clocks,
+                ))
         camera_health = {}
         configured_camera_names = {camera.name for camera in self.node.cameras}
         if calibration_mode:

@@ -3,7 +3,7 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import CameraPreview from '../preview/components/CameraPreview.vue';
 import RecordsPage from './RecordsPage.vue';
 import TrajectoryPanel from './TrajectoryPanel.vue';
-import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration } from './useCapture.js';
+import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration, deviceStage } from './useCapture.js';
 import { t, language, setLanguage } from './i18n.js';
 const {status,mapping,tasks,tasksError,taskDraft,online,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
@@ -44,7 +44,7 @@ async function createTask(){if(busy.value||!name.value.trim()||!instruction.valu
 }
 function leaveCreation(){if(leaveTaskCreation()){name.value='';instruction.value='';creating.value=false;loadTasks().catch(()=>{});}}
 async function diagnostics(){try{const value=await api('/api/diagnostics');value.mobile=status.value;value.client={user_agent:navigator.userAgent};const url=URL.createObjectURL(new Blob([JSON.stringify(value,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='insight-diagnostics.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){error.value=e.message;}}
-function stage(d){if(!status.value?.system?.camera_links?.some(p=>p.namespace===d.name))return t('等待 USB 连接');if(!clocks.value.devices?.[d.name]?.ok)return t('正在校时');if(status.value?.system?.managed_camera_startup&&!status.value.system.camera_startup?.[d.name])return t('正在恢复采集');if(!health.value[d.name]?.image_fresh)return t('等待图像');if(!health.value[d.name]?.vio_fresh)return t('等待 VIO');return t('已就绪');}
+function stage(d){return deviceStage(d,status.value);}
 let observer;
 onMounted(()=>{if(taskDraft.value)dialog.value.showModal();window.addEventListener('hashchange',hashChanged);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(()=>shell.value?.style.setProperty('--footer-height',`${footer.value.getBoundingClientRect().height}px`));observer.observe(footer.value);});
 onBeforeUnmount(()=>{window.removeEventListener('hashchange',hashChanged);document.removeEventListener('visibilitychange',visibility);observer?.disconnect();});
@@ -55,7 +55,7 @@ watch(language,()=>document.title='Insight Capture');
 <main>
 <section class="card readiness-card" :class="{'readiness-blocked':online&&!status?.preflight?.ok&&!active,'readiness-warning':!online||(status?.preflight?.ok&&status?.preflight?.warnings?.length)}">
 <div class="readiness-title"><i class="state-mark"></i><strong>{{!online?t('正在连接设备'):active?stateLabel(uiState):!task?t('请先创建或选择任务'):t(status?.preflight?.ok?'可以开始录制':'等待采集就绪')}}</strong><button class="text-link" v-if="page!=='settings'" @click="navigate('settings')">{{t('查看状态')}} ›</button></div>
-<div v-if="page==='capture'" class="health-summary"><span v-for="d in devices" :key="d.name" :class="{bad:!health[d.name]?.ready||!clocks.devices?.[d.name]?.ok}">{{roleLabel(d.role)}} · {{online?stage(d):t('离线')}}</span></div>
+<div v-if="page==='capture'" class="health-summary"><span v-for="d in devices" :key="d.name" :class="{bad:!online||stage(d)!==t('已就绪')}">{{roleLabel(d.role)}} · {{online?stage(d):t('离线')}}</span></div>
 <p v-if="!online" class="section-description">{{t('网页断开不会停止设备上的录制。')}}</p>
 <div v-if="page==='capture' && !active" class="issues" :hidden="!status?.preflight?.failures?.length && !status?.preflight?.warnings?.length"><p v-for="issue in status?.preflight?.failures" :key="issue.code" class="issue error">{{t(issue.message)}}</p><p v-for="issue in status?.preflight?.warnings" :key="issue.code" class="issue warning">{{t(issue.message)}}</p></div></section>
 <p v-if="error||status?.operation?.error||(page==='capture'&&!active&&previewError)" role="alert" class="global-error">{{error||status?.operation?.error||previewError}}</p>

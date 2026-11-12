@@ -31,13 +31,17 @@ class ImagePipeline:
         for camera in self.owner.cameras:
             sample = samples.get(camera.name)
             if sample is None:
-                devices[camera.name] = {"ok": False, "error": "No source timestamp"}
+                devices[camera.name] = {"ok": False, "state": "missing", "error": "No source timestamp"}
                 continue
             stamp_ns, wall_ns, received = sample
             difference = (stamp_ns - wall_ns) / 1e9
-            devices[camera.name] = {"ok": now - received < 2 and -2 <= difference <= 1,
+            age = now - received
+            # An old sample cannot diagnose the current clock. Lost input is
+            # unavailable evidence, even if its last timestamp was incorrect.
+            state = "stale" if age >= 2 else "ready" if -2 <= difference <= 1 else "invalid"
+            devices[camera.name] = {"ok": state == "ready", "state": state,
                                     "source_minus_receipt_ms": round(difference * 1000, 3),
-                                    "age_sec": round(now - received, 3)}
+                                    "age_sec": round(age, 3)}
         return {"ok": bool(devices) and all(d["ok"] for d in devices.values()), "devices": devices,
                 "method": "Image header versus Jetson receipt; detects wrong epochs, not NTP precision"}
 
