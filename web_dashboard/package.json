@@ -1,6 +1,6 @@
 {
   "name": "insight-capture-phone", "private": true,
-  "scripts": {"build": "node build.js"},
+  "scripts": {"build": "node build.js", "test": "node --test tests/*.test.cjs"},
   "dependencies": {"vue": "3.5.22"},
   "devDependencies": {"@vue/compiler-sfc": "3.5.22", "esbuild": "0.25.12"}
 }

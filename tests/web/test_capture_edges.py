@@ -153,7 +153,7 @@ def test_recording_status_uses_current_clock_not_start_snapshot(monkeypatch):
     current = {'ok': False, 'checked_at_epoch_s': 12345, 'age_sec': 1}
     node = SimpleNamespace(cameras=[], poses=[], _preview_manager=SimpleNamespace(paused=True), _image_pipeline=SimpleNamespace(clock_status=lambda: {'ok': False}))
     manager = SimpleNamespace(status=lambda: {'recording': True}, clock_monitor=SimpleNamespace(config={}, status=lambda: dict(current)))
-    context = SimpleNamespace(node=node, recording_manager=manager, prepared_playback_manager=SimpleNamespace(status=lambda: {'state': 'idle'}), take_store=SimpleNamespace(task_status=lambda: {'active': True}), capture_preflight=SimpleNamespace(camera_stale_sec=2))
+    context = SimpleNamespace(node=node, recording_manager=manager, prepared_playback_manager=SimpleNamespace(status=lambda: {'state': 'idle'}), take_store=SimpleNamespace(task_status=lambda: {'active': True}, current=lambda: None), capture_preflight=SimpleNamespace(camera_stale_sec=2))
     monkeypatch.setattr(mobile, 'evaluate_calibration_cameras', lambda *a: ({}, []))
     monkeypatch.setattr(mobile, 'resolved_cameras', lambda: [])
     route = mobile.MobileCaptureRoutes(context, None)

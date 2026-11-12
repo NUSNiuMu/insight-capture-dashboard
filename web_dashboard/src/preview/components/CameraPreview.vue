@@ -68,7 +68,7 @@ function start() {
   try { localStorage.setItem('insight-preview-source', id) } catch { /* optional */ }
   if (!rtc.value) return
   const fallback = reason => {
-    if (gen !== generation || dead) return
+    if (gen !== generation || dead || previewPaused.value || paused.value) return
     failed.value = true
     failure.value = reason
     cleanup()

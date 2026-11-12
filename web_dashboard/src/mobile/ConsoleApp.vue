@@ -5,14 +5,23 @@ import RecordsPage from './RecordsPage.vue';
 import TrajectoryPanel from './TrajectoryPanel.vue';
 import { useCapture, api, id, roleLabel, stateLabel, size, duration } from './useCapture.js';
 import { t, language, setLanguage } from './i18n.js';
-const {status,mapping,tasks,online,pending,error,busy,action,record,calibrate,loadTasks}=useCapture();
+const {status,mapping,tasks,tasksError,online,pending,recordPending,error,busy,action,record,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
 const previewError=ref('');
 const route=ref(location.hash.slice(1)||'capture'),visible=ref(!document.hidden),dialog=ref(null),creating=ref(false),name=ref(''),instruction=ref(''),shell=ref(null),footer=ref(null);
-const page=computed(()=>route.value.split('/')[0]);const active=computed(()=>['starting','recording','saving'].includes(status.value?.state));
+const page=computed(()=>route.value.split('/')[0]);
+const savedTake=computed(()=>status.value?.state==='saved' && status.value.current_take?.state==='complete' && status.value.current_take.bag_path===status.value.output_path ? status.value.current_take : null);
+const uiState=computed(()=>recordPending.value==='start'?'starting':recordPending.value==='stop'?'saving':status.value?.state==='saved'&&!savedTake.value?'idle':status.value?.state);
+const active=computed(()=>['starting','recording','saving'].includes(uiState.value));
+watch(active,value=>{if(value)previewError.value='';});
 const showDock=computed(()=>page.value==='capture'||active.value);
 const task=computed(()=>status.value?.task_status?.active?status.value.task_status.task:null);
-const elapsed=computed(()=>status.value?.state==='recording'?duration(status.value.server_time-status.value.started_at_epoch_s):'00:00');
+const elapsed=computed(()=>{
+ const take=status.value?.current_take;
+ if(['recording','saving','saved'].includes(uiState.value) && take?.start_epoch_s)
+  return duration((take.end_epoch_s||status.value.server_time)-take.start_epoch_s);
+ return '00:00';
+});
 const health=computed(()=>status.value?.preflight?.camera_health||{});
 const clocks=computed(()=>status.value?.preflight?.clocks||{});
 const devices=computed(()=>[...(status.value?.devices||[])].sort((a,b)=>({head:0,left_hand:1,right_hand:2}[a.role]-{head:0,left_hand:1,right_hand:2}[b.role])));
@@ -25,10 +34,10 @@ const calibration=computed(()=>{
  return {name:d.name,label:roleLabel(d.role),good,text:t(!online.value||!s.online?'离线':good?'已定位':s.tracking_mode==='vio_only'?'仅本地 VIO':'等待定位')};});
 });
 function navigate(value){location.hash=value;}
-function hashChanged(){route.value=location.hash.slice(1)||'capture';loadTasks().catch(e=>error.value=e.message);window.scrollTo(0,0);}
+function hashChanged(){route.value=location.hash.slice(1)||'capture';loadTasks().catch(()=>{});window.scrollTo(0,0);}
 function back(){const p=route.value.split('/');navigate(p.length>2?p.slice(0,-1).join('/'):page.value);}
 function visibility(){visible.value=!document.hidden;}
-async function openTasks(){await loadTasks().catch(e=>error.value=e.message);creating.value=!tasks.value.length;dialog.value.showModal();}
+async function openTasks(){await loadTasks().catch(()=>{});creating.value=!tasks.value.length;dialog.value.showModal();}
 async function selectTask(taskId){if(busy.value)return;if(await action(`/api/tasks/${encodeURIComponent(taskId)}/activate`))dialog.value.close();}
 async function createTask(){if(busy.value||!name.value.trim()||!instruction.value.trim())return;
  const taskId=`task_${id()}`;
@@ -46,11 +55,11 @@ watch(language,()=>document.title='Insight Capture');
 <header class="topbar"><button v-if="route.includes('/') && route!=='capture/trajectory'" class="icon-button" :aria-label="t('返回')" @click="back">‹</button><div class="topbar-title"><small>Insight Capture</small><h1>{{title}}</h1></div><span id="device-state" class="pill" :class="{online}"><i></i>{{t(online?'在线':status?'离线':'连接中')}}</span></header>
 <main>
 <section class="card readiness-card" :class="{'readiness-blocked':online&&!status?.preflight?.ok&&!active,'readiness-warning':!online||(status?.preflight?.ok&&status?.preflight?.warnings?.length)}">
-<div class="readiness-title"><i class="state-mark"></i><strong>{{!online?t('正在连接设备'):active?stateLabel(status.state):t(status?.preflight?.ok?'可以开始录制':'等待采集就绪')}}</strong><button class="text-link" v-if="page!=='settings'" @click="navigate('settings')">{{t('查看状态')}} ›</button></div>
+<div class="readiness-title"><i class="state-mark"></i><strong>{{!online?t('正在连接设备'):active?stateLabel(uiState):!task?t('请先创建或选择任务'):t(status?.preflight?.ok?'可以开始录制':'等待采集就绪')}}</strong><button class="text-link" v-if="page!=='settings'" @click="navigate('settings')">{{t('查看状态')}} ›</button></div>
 <div v-if="page==='capture'" class="health-summary"><span v-for="d in devices" :key="d.name" :class="{bad:!health[d.name]?.ready||!clocks.devices?.[d.name]?.ok}">{{roleLabel(d.role)}} · {{online?stage(d):t('离线')}}</span></div>
 <p v-if="!online" class="section-description">{{t('网页断开不会停止设备上的录制。')}}</p>
 <div v-if="page==='capture' && !active" class="issues" :hidden="!status?.preflight?.failures?.length && !status?.preflight?.warnings?.length"><p v-for="issue in status?.preflight?.failures" :key="issue.code" class="issue error">{{t(issue.message)}}</p><p v-for="issue in status?.preflight?.warnings" :key="issue.code" class="issue warning">{{t(issue.message)}}</p></div></section>
-<p v-if="error||status?.operation?.error||(page==='capture'&&previewError)" role="alert" class="global-error">{{error||status?.operation?.error||previewError}}</p>
+<p v-if="error||status?.operation?.error||(page==='capture'&&!active&&previewError)" role="alert" class="global-error">{{error||status?.operation?.error||previewError}}</p>
 <p v-if="status?.state==='saving'" role="status" class="save-progress">{{t('正在保存，请保持设备供电。')}}</p>
 <div v-show="page==='capture'">
 <section class="card task-current"><div><small>{{t('当前任务')}}</small><strong id="task-name">{{task?.name||t('请选择任务')}}</strong></div><button id="switch-task" class="secondary compact" :disabled="busy||!online" @click="openTasks">{{t(task?'切换':'选择任务')}}</button></section>
@@ -61,9 +70,9 @@ watch(language,()=>document.title='Insight Capture');
 <section class="card calibration-card"><div class="section-title"><h2>{{t('校准与定位')}}</h2><button id="calibrate" class="secondary compact" :disabled="!online||!mapping||pending||['starting','saving','playback'].includes(status?.state)||!health[head?.name]?.ready" @click="calibrate">{{t('重新校准')}}</button></div>
 <div v-for="item in calibration" :key="item.name" class="calibration-row"><span>{{item.label}}</span><strong :class="{bad:!item.good}">{{item.text}}</strong></div>
 <p class="section-description">{{t('重新校准会重建当前公共地图。先开始录制再校准，可将校准过程一同保存；原始采集不要求已定位。')}}</p></section>
-<section v-if="status?.state==='saved'" class="card save-result"><strong>{{t('保存完成')}}</strong><button class="secondary compact" @click="navigate('history')">{{t('查看记录')}}</button></section>
+<section v-if="savedTake" class="card save-result"><strong>Take {{savedTake.take_id}} · {{t('保存完成')}}</strong><button class="secondary compact" @click="navigate(`history/${savedTake.task_id}/${savedTake.take_id}`)">{{t('查看记录')}}</button></section>
 </div>
-<RecordsPage v-if="page==='history'" :route="route" :tasks="tasks" :busy="busy" :online="online" :action="action" @navigate="navigate"/>
+<RecordsPage v-if="page==='history'" :route="route" :tasks="tasks" :tasks-error="tasksError" :status="status" :busy="busy" :online="online" :action="action" @navigate="navigate" @refresh-tasks="loadTasks().catch(()=>{})"/>
 <div v-if="page==='settings'">
 <template v-if="route==='settings'">
 <section class="card device-hero"><span class="device-mark">I</span><h2>Insight Capture</h2><p class="section-description">Jetson · {{devices.map(d=>d.name.split('_')[0].toUpperCase()).join(' / ')}}</p></section>
@@ -76,7 +85,7 @@ watch(language,()=>document.title='Insight Capture');
 <section v-else class="card"><h2>{{t('诊断')}}</h2><p class="section-description">{{t('保存连接、相机、校时、校准和录制状态，便于排查问题。')}}</p><button id="save-diagnostics" class="secondary" @click="diagnostics">{{t('保存诊断')}}</button><details><summary>{{t('当前状态')}}</summary><pre>{{JSON.stringify({state:status?.state,clocks,mapping: mapping?.statuses},null,2)}}</pre></details></section>
 </div>
 </main>
-<footer ref="footer" class="console-footer"><section v-if="showDock" class="capture-dock" :class="{'dock-recording':status?.state==='recording','dock-compact':page!=='capture'}"><div class="dock-status"><span></span><div><strong>{{!active&&!status?.preflight?.ok?t('等待采集就绪'):stateLabel(status?.state)}}</strong><small>{{task?.name||t('请选择任务')}} · Take {{active && status?.state!=='starting' ? Math.max(1,(status?.task_status?.stats?.next_take_id||1)-1) : status?.task_status?.stats?.next_take_id||'—'}}</small></div><time>{{elapsed}}</time></div><div class="dock-actions"><button v-if="status?.state==='recording'" id="stop" class="danger" :disabled="pending||!online||status.recording_mode!=='capture'" @click="record('stop')">{{t('结束并保存')}}</button><button v-else id="start" class="primary" :disabled="busy||!online||!status?.preflight?.ok" @click="record('start')">{{t(status?.state==='starting'?'正在准备':status?.state==='saving'?'正在保存':'开始录制')}}</button></div></section>
+<footer ref="footer" class="console-footer"><section v-if="showDock" class="capture-dock" :class="{'dock-recording':status?.state==='recording','dock-compact':page!=='capture'}"><div class="dock-status"><span></span><div><strong>{{!active&&!task?t('请先创建或选择任务'):!active&&!status?.preflight?.ok?t('等待采集就绪'):stateLabel(uiState)}}</strong><small>{{task?.name||t('请选择任务')}}<template v-if="task"> · {{active && uiState!=='starting' ? 'Take '+(status?.current_take?.take_id||'—') : t('下一条 Take {0}',status?.task_status?.stats?.next_take_id||1)}}</template></small></div><time>{{elapsed}}</time></div><div class="dock-actions"><button v-if="status?.state==='recording'" id="stop" class="danger" :disabled="pending||!online||status.recording_mode!=='capture'" @click="record('stop')">{{t('结束并保存')}}</button><button v-else id="start" class="primary" :disabled="busy||!online||!status?.preflight?.ok" @click="record('start')">{{t(uiState==='starting'?'正在准备':uiState==='saving'?'正在保存':'开始录制')}}</button></div></section>
 <nav class="bottom-nav" :aria-label="t('主导航')"><button v-for="item in [{id:'capture',label:'采集'},{id:'history',label:'记录'},{id:'settings',label:'设备'}]" :key="item.id" :aria-current="page===item.id?'page':undefined" @click="navigate(item.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><template v-if="item.id==='capture'"><rect x="3" y="5" width="18" height="14" rx="4"/><circle cx="12" cy="12" r="3.5"/></template><template v-else-if="item.id==='history'"><path d="M4 7h6l2-3h8v16H4z"/><path d="M8 11h8M8 15h6"/></template><template v-else><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 18h4M10 6h4"/></template></svg><span>{{t(item.label)}}</span></button></nav></footer>
-<dialog id="task-dialog" ref="dialog" aria-labelledby="task-dialog-title"><div class="section-title"><h2 id="task-dialog-title">{{t(creating?'新建任务':'选择任务')}}</h2><button class="icon-button" :aria-label="t('关闭')" @click="dialog.close()">×</button></div><template v-if="!creating"><label for="task-select">{{t('切换当前采集任务')}}</label><select id="task-select" :value="task?.task_id||''" :disabled="busy" @change="selectTask($event.target.value)"><option value="" disabled>{{t('请选择任务')}}</option><option v-for="item in tasks" :key="item.task_id" :value="item.task_id">{{item.name}}</option></select><button v-if="task" class="secondary" :disabled="busy" @click="action('/api/tasks/current/end').then(ok=>ok&&dialog.close())">{{t('结束当前任务')}}</button><button id="new-task" class="secondary" :disabled="busy" @click="creating=true">{{t('新建任务')}}</button></template><form v-else @submit.prevent="createTask"><label for="task-input">{{t('任务名称')}}</label><input id="task-input" v-model="name" required maxlength="80" :disabled="busy"><label for="task-instruction">{{t('任务说明')}}</label><textarea id="task-instruction" v-model="instruction" required maxlength="2000" :disabled="busy"></textarea><div class="dialog-actions"><button type="button" class="secondary" @click="dialog.close()">{{t('取消')}}</button><button class="primary" :disabled="busy">{{t('创建任务')}}</button></div></form></dialog>
+<dialog id="task-dialog" ref="dialog" aria-labelledby="task-dialog-title"><div class="section-title"><h2 id="task-dialog-title">{{t(creating?'新建任务':'选择任务')}}</h2><button class="icon-button" :aria-label="t('关闭')" @click="dialog.close()">×</button></div><p v-if="tasksError" class="issue warning">{{tasksError}}</p><p v-if="error" class="issue error" role="alert">{{error}}</p><template v-if="!creating"><label for="task-select">{{t('切换当前采集任务')}}</label><select id="task-select" :value="task?.task_id||''" :disabled="busy" @change="selectTask($event.target.value)"><option value="" disabled>{{t('请选择任务')}}</option><option v-for="item in tasks" :key="item.task_id" :value="item.task_id">{{item.name}}</option></select><button v-if="task" class="secondary" :disabled="busy" @click="action('/api/tasks/current/end').then(ok=>ok&&dialog.close())">{{t('结束当前任务')}}</button><button id="new-task" class="secondary" :disabled="busy" @click="creating=true">{{t('新建任务')}}</button></template><form v-else @submit.prevent="createTask"><label for="task-input">{{t('任务名称')}}</label><input id="task-input" v-model="name" required maxlength="80" :disabled="busy"><label for="task-instruction">{{t('任务说明')}}</label><textarea id="task-instruction" v-model="instruction" required maxlength="2000" :disabled="busy"></textarea><div class="dialog-actions"><button type="button" class="secondary" @click="dialog.close()">{{t('取消')}}</button><button class="primary" :disabled="busy||!name.trim()||!instruction.trim()">{{t('创建任务')}}</button></div></form></dialog>
 </div></template>

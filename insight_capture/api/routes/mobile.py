@@ -50,6 +50,11 @@ class MobileCaptureRoutes:
         else:
             state = "idle"
         task_status = self.context.take_store.task_status()
+        current_take = self.context.take_store.current()
+        if current_take is not None:
+            current_take = {key: current_take.get(key) for key in (
+                "take_id", "task_id", "state", "bag_path", "start_epoch_s", "end_epoch_s"
+            )}
         if playing:
             state = "playback"
             report = {**self._last_preflight, "ok": False, "failures": [], "camera_health": {}}
@@ -61,7 +66,7 @@ class MobileCaptureRoutes:
             )
             if not task_status.get("active"):
                 self._last_preflight["failures"].append({
-                    "code": "task_inactive", "message": "Choose a task before recording."
+                    "code": "task_inactive", "message": "请先创建或选择任务"
                 })
                 self._last_preflight["ok"] = False
             if refresh:
@@ -97,6 +102,7 @@ class MobileCaptureRoutes:
             "started_at_epoch_s": getattr(manager, "started_at", None),
             "server_time": time.time(), "operation": self._operation,
             "preflight": report, "devices": devices, "task_status": task_status,
+            "current_take": current_take,
             "preview": preview_description(self.context.node.cameras, self.context.node.poses, paused=self.context.node._preview_manager.paused),
             "preview_cameras": [{"name": c.name, "label": c.label} for c in preview_cameras],
             "distributed": status.get("distributed"),

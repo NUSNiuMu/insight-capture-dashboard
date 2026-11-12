@@ -1,37 +1,76 @@
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
-import { api, duration } from './useCapture.js';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { api, duration, roleLabel } from './useCapture.js';
 import { t } from './i18n.js';
-const props=defineProps({route:String,tasks:Array,busy:Boolean,online:Boolean,action:Function});
-const emit=defineEmits(['navigate']);const recordSet=ref(null),error=ref(''),loading=ref(false);let generation=0;
-watch(()=>props.route,async route=>{
- const taskId=route.split('/')[1];const gen=++generation;error.value='';recordSet.value=null;loading.value=false;
- if(!taskId){recordSet.value=null;return;}
- loading.value=true;
- try{const value=await api(`/api/tasks/${encodeURIComponent(taskId)}/recordings`);if(gen===generation)recordSet.value=value;}
- catch(e){if(gen===generation)error.value=e.message;}
- finally{if(gen===generation)loading.value=false;}
-},{immediate:true});
-onBeforeUnmount(()=>generation++);
-const transfers=ref(null);let timer,alive=true;
-async function refreshTransfers(){try{transfers.value=await api('/api/postprocessing/recordings');}catch{}if(alive)timer=setTimeout(refreshTransfers,5000);}
-onMounted(refreshTransfers);onBeforeUnmount(()=>{alive=false;clearTimeout(timer);});
-async function merge(session_id){if(await props.action('/api/postprocessing/merge',{session_id})){transfers.value=await api('/api/postprocessing/recordings');}}
+const props=defineProps({route:String,tasks:Array,tasksError:String,status:Object,busy:Boolean,online:Boolean,action:Function});
+const emit=defineEmits(['navigate','refresh-tasks']);
+const recordSet=ref(null),error=ref(''),loading=ref(false),transfers=ref(null);
+let generation=0,timer,alive=true;
+const selectedTakes=computed(()=>{
+ const takeId=props.route.split('/')[2];
+ return (recordSet.value?.takes||[]).filter(take=>!takeId||String(take.take_id)===takeId);
+});
+async function refreshRecords(clear=false){
+ const taskId=props.route.split('/')[1],gen=++generation;
+ if(clear){recordSet.value=null;error.value='';}
+ if(!taskId){loading.value=false;return;}
+ if(clear)loading.value=true;
+ try{
+  const value=await api(`/api/tasks/${encodeURIComponent(taskId)}/recordings`);
+  if(alive&&gen===generation){recordSet.value=value;error.value='';}
+ }catch(e){if(alive&&gen===generation)error.value=e.message;}
+ finally{if(alive&&gen===generation)loading.value=false;}
+}
+watch(()=>props.route,(route,previous)=>refreshRecords(route.split('/')[1]!==previous?.split('/')[1]),{immediate:true});
+watch([()=>props.status?.state,()=>props.status?.output_path,()=>props.online],()=>{
+ if(props.online)refreshRecords();
+});
+async function refresh(){
+ if(props.online&&!document.hidden){
+  if(props.route.includes('/'))await refreshRecords();
+  else emit('refresh-tasks');
+  try{transfers.value=await api('/api/postprocessing/recordings');}catch{}
+ }
+ if(alive)timer=setTimeout(refresh,5000);
+}
+function visibility(){if(!document.hidden&&props.online)refreshRecords();}
+onMounted(()=>{refresh();document.addEventListener('visibilitychange',visibility);});
+onBeforeUnmount(()=>{alive=false;generation++;clearTimeout(timer);document.removeEventListener('visibilitychange',visibility);});
+async function merge(session_id){if(await props.action('/api/postprocessing/merge',{session_id})){transfers.value=await api('/api/postprocessing/recordings');refreshRecords();}}
 const date=value=>value?new Date(value*1000).toLocaleString(): '—';
-const takeState=s=>t({complete:'已保存',saved:'等待传输',finalization_failed:'保存异常',recording:'正在录制',finalizing:'正在保存'}[s]||s);
+const takeState=s=>t({complete:'已保存',saved:'等待传输',finalization_failed:'保存异常',recording:'正在录制',finalizing:'正在保存',reserved:'正在准备',failed:'录制失败'}[s]||s);
+const quality=take=>t(take.operator_valid===false?'已作废':{pass:'快速检查通过',suspect:'需要复检',fail:'检查未通过',pending:'待检查'}[take.quick_qc?.state]||'未检查');
+const takeDuration=take=>duration((take.end_epoch_s||(take.state==='recording'?props.status?.server_time:take.start_epoch_s))-take.start_epoch_s);
+function qualityReasons(take){
+ const anomalies=(take.anomaly_timeline||[]).filter(item=>item.event==='started'&&item.affects_quality!==false);
+ const details=anomalies.map(item=>{
+  const device=props.status?.devices?.find(d=>d.name===item.details?.service);
+  if(item.code?.startsWith('localization:')&&device)return t('{0}未完成公共地图定位，本条需要复检。',roleLabel(device.role));
+  return t(item.message);
+ }).filter(Boolean);
+ const reasons=(take.quick_qc?.reasons||[]).filter(reason=>reason!=='critical live QC anomaly'||!details.length).map(reason=>t({
+  'critical live QC anomaly':'录制期间出现质量异常，请复检。',
+  'recording network audit failed':'录制期间接收链路出现错误，请复检。',
+  'image continuity audit failed':'图像连续性检查未通过。',
+  'distributed clock synchronization audit failed':'分布式录制时间同步检查未通过。',
+ }[reason]||reason));
+ return [...new Set([...details,...reasons])];
+}
 </script>
 <template>
-<p v-if="error" class="global-error" role="alert">{{error}}</p><p v-if="loading" class="empty">{{t('正在读取记录')}}</p>
+<p v-if="online && (error||(!route.includes('/')&&tasksError))" class="global-error" role="alert">{{error?t('记录暂时无法更新，连接恢复后自动重试。'):tasksError}}</p>
+<p v-if="!online" class="issue warning">{{t('设备离线，已加载的记录仍可查看；重连后自动更新。')}}</p>
+<p v-if="loading" class="empty">{{t('正在读取记录')}}</p>
 <section v-else-if="!route.includes('/')" class="card"><div class="section-title"><h2>{{t('任务记录')}}</h2><span>{{tasks.length}} {{t('个任务')}}</span></div>
 <button v-for="task in tasks" :key="task.task_id" class="task-record-link" @click="emit('navigate',`history/${task.task_id}`)"><strong>{{task.name}}</strong><span>{{task.stats?.recorded_takes||0}} Take ›</span></button><p v-if="!tasks.length" class="empty">{{t('暂无记录')}}</p></section>
 <section v-else-if="recordSet" class="card"><div class="section-title"><h2>{{recordSet.task.name}}</h2></div>
-<p v-if="!recordSet.takes.length" class="empty">{{t('暂无记录')}}</p>
-<template v-for="take in recordSet.takes" :key="take.take_id">
-<article v-if="!route.split('/')[2] || Number(route.split('/')[2])===take.take_id" class="recording-row">
-<div><strong>Take {{String(take.take_id).padStart(4,'0')}}</strong><p><small>{{date(take.start_epoch_s||take.reserved_at_epoch_s)}}</small></p></div><div class="meta"><span :class="take.state==='complete'?'state-complete':''">{{takeState(take.state)}}</span><p><small>{{duration((take.end_epoch_s||take.start_epoch_s)-take.start_epoch_s)}}</small></p></div>
+<p v-if="!selectedTakes.length" class="empty">{{t(route.split('/')[2]?'找不到这条录制记录':'暂无记录')}}</p>
+<article v-for="take in selectedTakes" :key="take.take_id" class="recording-row">
+<div><strong>Take {{String(take.take_id).padStart(4,'0')}}</strong><p><small>{{date(take.start_epoch_s||take.reserved_at_epoch_s)}}</small></p></div><div class="meta"><span :class="take.state==='complete'?'state-complete':''">{{takeState(take.state)}}</span><p><small>{{takeDuration(take)}}</small></p></div>
+<p v-if="!['recording','reserved','finalizing'].includes(take.state)" :class="{'issue warning':['suspect','fail'].includes(take.quick_qc?.state)}">{{t('质量检查')}}：{{quality(take)}}</p>
 <button v-if="!route.split('/')[2]" class="secondary compact" @click="emit('navigate',`${route}/${take.take_id}`)">{{t('查看详情')}}</button>
-<template v-else><p>{{t('任务说明')}}：{{recordSet.task.instruction}}</p><p>{{t('数据位置')}}：{{take.bag_path||'—'}}</p><p>{{t('质量检查')}}：{{take.quick_qc?.state||t('未检查')}}</p><p v-for="reason in take.quick_qc?.reasons" :key="reason" class="issue warning">{{reason}}</p><p>{{t('校准和轨迹数据以本条录制内容为准。')}}</p></template>
-</article></template></section>
+<template v-else><p>{{t('任务说明')}}：{{recordSet.task.instruction}}</p><p>{{t('数据位置')}}：{{take.bag_path||'—'}}</p><p v-for="reason in qualityReasons(take)" :key="reason" class="issue warning">{{reason}}</p><p>{{t('已保存表示文件已写入，质量结论以检查和复检结果为准。')}}</p><p>{{t('校准和轨迹数据以本条录制内容为准。')}}</p></template>
+</article></section>
 <section v-if="transfers?.enabled" class="card"><h2>{{t('回传与合包')}}</h2><article v-for="item in transfers.recordings" :key="item.session_id" class="recording-row"><strong>{{item.task_name}} · Take {{item.take_id}}</strong><span>{{item.phase}}</span><p v-if="item.error" class="issue error">{{item.error}}</p><button v-if="['saved','error'].includes(item.phase)" class="secondary" :disabled="busy||!online||transfers.busy" @click="merge(item.session_id)">{{t('回传并合包')}}</button></article><p v-if="!transfers.recordings.length" class="empty">{{t('暂无待回传记录')}}</p></section>
 <p class="settings-note">{{t('浏览记录不会切换当前采集任务。原始数据保存在 Jetson，可在桌面端回放。')}}</p>
 </template>
