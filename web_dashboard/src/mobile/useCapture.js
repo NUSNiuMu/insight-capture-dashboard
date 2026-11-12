@@ -37,13 +37,16 @@ export function useCapture() {
   async function refresh() {
     const generation=++statusGeneration;
     try {
-      const value=await api('/api/mobile/status');
+      let value=await api('/api/mobile/status');
+      // Show authoritative live state immediately, even if an old receipt
+      // lookup is slow. A history lookup is not the device connection itself.
+      if(alive&&generation===statusGeneration){status.value=value;online.value=true;}
       const command=unconfirmedRecord.value;
       if(command&&!confirmedRecord(command,value)){
         // Another client may have replaced the latest operation. Read this
         // exact receipt; never repeat a write merely to discover its result.
         const receipt=await api(`/api/mobile/commands/${encodeURIComponent(command.command_id)}`).catch(()=>null);
-        if(receipt)value.requested_operation=receipt.operation;
+        if(receipt)value={...value,requested_operation:receipt.operation};
       }
       if(alive&&generation===statusGeneration){status.value=value;online.value=true;}
       return value;

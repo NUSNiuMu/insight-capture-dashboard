@@ -276,6 +276,24 @@ for(const state of ['complete','interrupted','error'])test(`page reload resolves
   }finally{live.unmount();}
 });
 
+test('a slow receipt lookup does not hide an already received device status',async()=>{
+  sessionValues.clear();
+  sessionValues.set('insight-capture.record-command',JSON.stringify({command_id:'slow-receipt',action:'start',task_id:'qa',output_path:null}));
+  let release;
+  global.fetch=async(url)=>{
+    if(url.startsWith('/api/mobile/commands/'))return new Promise(resolve=>{release=resolve;});
+    return response(url==='/api/tasks'?{tasks:[]}:snapshot('saved'));
+  };
+  const live=liveCapture(),c=live.value;
+  try{
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(c.online.value,true);assert.equal(c.status.value.state,'saved');
+  }finally{
+    release?.(response({operation:{command_id:'slow-receipt',action:'start',state:'complete',error:null}}));
+    await new Promise(resolve=>setImmediate(resolve));live.unmount();
+  }
+});
+
 test('lost creation ACK is recovered without creating a second task', async()=>{
   const c=await harness();let task,posts=0;
   global.fetch=async(url,options)=>{
