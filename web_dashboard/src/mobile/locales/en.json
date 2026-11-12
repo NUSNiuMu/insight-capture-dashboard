@@ -713,6 +713,7 @@
   "桌面回放中": "Desktop playback",
   "等待采集就绪": "Getting ready",
   "网页断开不会停止设备上的录制。": "Recording continues on Jetson if this page disconnects.",
+  "请检查手机是否切换了 Wi-Fi；使用采集热点时，系统提示无法上网也请选择保持连接。": "Check whether your phone switched Wi-Fi networks. When using the capture hotspot, choose to stay connected even if the phone reports no internet access.",
   "正在保存，请保持设备供电。": "Saving. Keep devices powered on.",
   "准备、录制和保存时暂停预览，保存完成后自动恢复。": "Preview pauses during preparation, recording and saving, then resumes automatically.",
   "重新校准会重建当前公共地图。先开始录制再校准，可将校准过程一同保存；原始采集不要求已定位。": "Recalibration resets the shared map. Start recording before calibrating to save the process. Raw capture does not require localization.",

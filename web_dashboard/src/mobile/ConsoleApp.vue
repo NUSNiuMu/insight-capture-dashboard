@@ -96,6 +96,7 @@ watch(language,()=>document.title='Insight Capture');
 <div class="readiness-title"><i class="state-mark"></i><strong><template v-if="page==='capture'&&attentionDevice">{{roleLabel(attentionDevice.role)}}<small :title="stage(attentionDevice)">{{stage(attentionDevice)}}</small></template><template v-else>{{!online?t('正在连接设备'):active||uiState==='error'?stateLabel(uiState):!task?t('请先创建或选择任务'):t(status?.preflight?.ok?'可以开始录制':'等待采集就绪')}}</template></strong><button id="view-device-status" class="text-link" v-if="page!=='settings'" @click="navigate('settings')">{{t(readinessIssues.length&&!active?'查看状态（{0}）':'查看状态',readinessIssues.length)}} ›</button></div>
 <p v-if="page==='capture'&&readinessSummary" class="readiness-summary" :class="status?.preflight?.ok?'warning':'bad'">{{readinessSummary}}</p>
 <p v-if="!online" class="section-description">{{t('网页断开不会停止设备上的录制。')}}</p>
+<p v-if="!online" class="section-description">{{t('请检查手机是否切换了 Wi-Fi；使用采集热点时，系统提示无法上网也请选择保持连接。')}}</p>
 </section>
 <p v-if="error||captureError||status?.operation?.error||(page==='capture'&&!active&&previewError)" role="alert" class="global-error">{{t(error||captureError||status?.operation?.error||previewError)}}</p>
 <p v-if="status?.state==='saving'" role="status" class="save-progress">{{t('正在保存，请保持设备供电。')}}</p>
