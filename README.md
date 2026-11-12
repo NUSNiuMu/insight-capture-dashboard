@@ -28,7 +28,7 @@ QC 为核心；采后才打开本机 Firefox/Kiosk 或 Web Dashboard 查看三�
 
 ### ArUco 数采的预标注推理服务
 
-ArUco 数采工作台的自动预标注依赖一个单独运行在 GPU 机器上的推理服务。默认模型 Qwen3.8-27B-FP8（约 30 GB 显存，需 RTX 4090 48 GB 这一级；权重可从 ModelScope `Qwen/Qwen3.8-27B-FP8` 下载），也兼容 Qwen2.5-VL-7B（约 17 GB）。目前放在 4090 那台 `10.198.1.220`。服务不启动时不做预标注，照常手动标注。
+ArUco 数采工作台的自动预标注依赖一个单独运行在 GPU 机器上的推理服务。默认模型 Qwen3.8-27B-FP8（约 30 GB 显存，需 RTX 4090 48 GB 这一级；权重可从 ModelScope `Qwen/Qwen3.8-27B-FP8` 下载），也兼容 Qwen2.5-VL-7B（约 17 GB）。目前运行在 229（`10.198.1.229:8780`）。服务不启动时不做预标注，照常手动标注。
 
 ```bash
 # GPU 机器上，首次：建 Python 环境（uv + 固定版本，见 deploy/vlm/requirements.txt），
@@ -47,7 +47,7 @@ deploy/vlm/vlm_service.sh stop
 deploy/vlm/vlm_service.sh run       # 前台运行（调试或交给 systemd）
 
 # 采集机上：设置默认的推理服务地址后重建采集容器
-echo ARUCO_ANNOTATION_URL=http://10.198.1.220:8780 > deploy/aruco/.env
+echo ARUCO_ANNOTATION_URL=http://10.198.1.229:8780 > deploy/aruco/.env
 docker compose -f deploy/aruco/compose.yml up -d
 ```
 

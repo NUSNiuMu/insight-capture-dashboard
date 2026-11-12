@@ -217,7 +217,7 @@ Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、
    导入后可用 `curl -s http://<采集机>:8770/api/action-table` 查看当前表；修改表格后重新导入会替换当前表，旧版本留在 `outputs/aruco-capture/_action_tables/`。
 
    导入后，task 和 subtask 输入框上方各出现一个下拉框：选中动作表条目时，文本框为空或仍是某条标准说法则预填所选条目的标准说法；已改写成自己措辞的文本保留不动。文本可以自由改写（同一动作用不同表达，用于训练语言理解），下拉框记录的是标准 id。subtask 下拉只列所选 task 下的条目。不选 task 即为表外动作，只填文本也能保存，但片段列表会标“表外”并统计“N 段未关联动作表”；片段引用的 id 已不在当前表中时同样标“表外”，下拉框保留该 id 并注明“当前动作表中已无”。“把此任务文本也填到其余未填写片段”会一并带上所选 task id。对应接口 `GET /api/action-table`、`POST /api/action-table`（请求体 `{"filename", "content"}`）。
-   预标注（可选）：在有 GPU 的机器上单独运行推理服务 `insight_capture.vlm_service`（默认 Qwen3.8-27B-FP8，约 30 GB 显存，放在 4090 48 GB 那台；也兼容 Qwen2.5-VL-7B，约 17 GB。216 的 RTX 3080 10 GB 都放不下），采集服务通过 `ARUCO_ANNOTATION_URL` 指向它：
+   预标注（可选）：在有 GPU 的机器上单独运行推理服务 `insight_capture.vlm_service`（默认 Qwen3.8-27B-FP8，约 30 GB 显存，目前运行在 229（`10.198.1.229:8780`，RTX 4090 48 GB）；也兼容 Qwen2.5-VL-7B，约 17 GB。216 的 RTX 3080 10 GB 都放不下），采集服务通过 `ARUCO_ANNOTATION_URL` 指向它：
 
    ```bash
    # GPU 机器上，首次：建环境（固定版本见 deploy/vlm/requirements.txt）并取 FP8 内核，下载权重，复制配置后按本机修改 MODEL / PYTHON
@@ -226,11 +226,11 @@ Docker 使用 `/dev:/host-dev:ro` 和设备 cgroup 规则允许视频（81）、
    cp deploy/vlm/vlm.env.example deploy/vlm/.env
    deploy/vlm/vlm_service.sh start    # 后台启动，加载并预热后返回；另有 stop / restart / status / logs / run
    # 采集机上：写入 deploy/aruco/.env 后重建容器
-   echo ARUCO_ANNOTATION_URL=http://10.198.1.220:8780 > deploy/aruco/.env
+   echo ARUCO_ANNOTATION_URL=http://10.198.1.229:8780 > deploy/aruco/.env
    docker compose -f deploy/aruco/compose.yml up -d
    ```
 
-   - **服务地址**：回放页预标注栏的“服务设置”可直接修改推理服务地址（主机与端口，如 `10.198.1.220:8780`，可省略 `http://`），点“保存并测试”立即生效并显示能否连上，保存在 `outputs/aruco-capture/_annotation.json`；页面上保存过之后以它为准，`ARUCO_ANNOTATION_URL` 只作为从未设置时的默认值。清空地址即停用预标注。推理服务自身的监听端口由 GPU 机器上 `deploy/vlm/.env` 的 `PORT` 决定，两边需一致。
+   - **服务地址**：回放页预标注栏的“服务设置”可直接修改推理服务地址（主机与端口，如 `10.198.1.229:8780`，可省略 `http://`），点“保存并测试”立即生效并显示能否连上，保存在 `outputs/aruco-capture/_annotation.json`；页面上保存过之后以它为准，`ARUCO_ANNOTATION_URL` 只作为从未设置时的默认值。清空地址即停用预标注。推理服务自身的监听端口由 GPU 机器上 `deploy/vlm/.env` 的 `PORT` 决定，两边需一致。
    - **只在服务可用时运行**：每次停止录制后，后台用几秒超时探测一次服务的 `/health`；没配置地址或连不上就直接跳过（日志一行 `pre-annotation skipped`），不重试、不影响录制和保存，照常手动标注。服务后来才启动的录制，可在回放页点编辑区底部的“预标注”补跑。预标注一次只跑一条（排队），不阻塞开始下一次录制。
    - **流程**（`preannotate.py`）：
      1. 静止分段切出 task 级的动作段（见上，复位停顿丢弃）。
