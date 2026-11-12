@@ -867,10 +867,17 @@ class RecordingManager:
             return self._status_unlocked()
 
     def _status_unlocked(self) -> Dict[str, object]:
+        manifest = self._recording_manifest or {}
         return {
             "recording": bool(self.processes) or self._image_writer_active,
             "recording_mode": self.recording_mode,
             "output_path": self.output_path,
+            "recording_timing": {
+                "source": "recorder",
+                "started_at_epoch_s": self.started_at,
+                "stopped_at_epoch_s": manifest.get("stopped_at_epoch_s"),
+                "duration_s": manifest.get("duration_s"),
+            } if self.started_at is not None else None,
             "topic_catalog": self.topic_catalog,
             "recent_output": list(self._output_lines),
             "network_audit": self._network_audit,

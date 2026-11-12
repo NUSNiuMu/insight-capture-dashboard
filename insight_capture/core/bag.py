@@ -14,6 +14,8 @@ MANIFEST_NAME = "recording_manifest.json"
 def _metadata(contents: bytes) -> dict:
     # Content keys also detect rewrites within one filesystem timestamp tick.
     payload = yaml.load(contents, Loader=yaml.CSafeLoader) or {}
+    if not isinstance(payload, dict):
+        return {}
     info = payload.get("rosbag2_bagfile_information", {})
     return info if isinstance(info, dict) else {}
 
@@ -44,6 +46,25 @@ def is_mcap_bag(bag: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def recording_timing(bag: Path) -> dict | None:
+    """Read the saved data span, not preparation or finalization wall time."""
+    try:
+        single_mcap(bag)
+        info = read_metadata(bag)
+        start_ns = int(info["starting_time"]["nanoseconds_since_epoch"])
+        duration_ns = int(info["duration"]["nanoseconds"])
+        if int(info["message_count"]) < 1 or start_ns <= 0 or duration_ns < 0:
+            return None
+    except (OSError, ValueError, TypeError, KeyError, OverflowError):
+        return None
+    return {
+        "source": "mcap_metadata",
+        "started_at_epoch_s": start_ns / 1e9,
+        "stopped_at_epoch_s": (start_ns + duration_ns) / 1e9,
+        "duration_s": duration_ns / 1e9,
+    }
 
 
 def topic_types(bag: Path) -> dict[str, str]:

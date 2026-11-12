@@ -144,3 +144,17 @@ export const roleLabel=role=>t({head:'头部相机',left_hand:'左腕相机',rig
 export const stateLabel=state=>t({idle:'准备就绪',starting:'正在准备',recording:'正在录制',saving:'正在保存',saved:'保存完成',error:'操作失败',playback:'桌面回放中'}[state]||'连接中');
 export const size=bytes=>bytes==null?'—':`${(bytes/1024**3).toFixed(1)} GB`;
 export function duration(seconds) {seconds=Math.max(0,Math.floor(seconds||0));return `${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;}
+export function takeDuration(take,status) {
+ const finite=value=>typeof value==='number'&&Number.isFinite(value);
+ const current=status?.current_take;
+ const same=Boolean(take?.bag_path&&take.bag_path===status?.output_path&&take.task_id===current?.task_id&&take.take_id===current?.take_id);
+ const live=same&&['recording','saving'].includes(status?.state);
+ const timing=(live?status?.recording_timing:null)||take?.recording_timing;
+ if(!timing)return '--:--';
+ if(finite(timing.duration_s)&&timing.duration_s>=0)return duration(timing.duration_s);
+ const start=timing.started_at_epoch_s,end=timing.stopped_at_epoch_s;
+ if(!finite(start)||start<=0)return '--:--';
+ if(finite(end)&&end>=start)return duration(end-start);
+ if(same&&status?.state==='recording'&&finite(status.server_time))return duration(status.server_time-start);
+ return '--:--';
+}

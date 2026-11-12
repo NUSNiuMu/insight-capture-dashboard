@@ -10,7 +10,22 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Mapping, Optional
 
+from insight_capture.core.bag import recording_timing
 from .tasks import CaptureTask, CaptureTaskCatalog
+
+
+def _with_recording_timing(payload: Dict) -> Dict:
+    """Enrich historical takes on read without rewriting their lifecycle dates."""
+    if not isinstance(payload, dict):
+        raise ValueError("Take metadata must be an object.")
+    bag_path = payload.get("bag_path")
+    if isinstance(bag_path, str) and bag_path and payload.get("state") in {
+        "complete", "saved", "finalization_failed"
+    }:
+        saved = recording_timing(Path(bag_path))
+        if saved is not None:
+            payload["recording_timing"] = saved
+    return payload
 
 
 def _slug(value: object, fallback: str) -> str:
@@ -270,6 +285,7 @@ class SessionTakeStore:
                 raise RuntimeError("No take is reserved.")
             payload["state"] = "recording"
             payload["bag_path"] = str(output_path or "") or None
+            payload["recording_timing"] = deepcopy((recording_status or {}).get("recording_timing"))
             if (recording_status or {}).get("distributed"):
                 payload["distributed"] = recording_status["distributed"]
             self._write_json(self._path(payload["take_id"]), payload)
@@ -345,6 +361,8 @@ class SessionTakeStore:
             },
             "distributed": distributed or None,
         })
+        if recording_status.get("recording_timing"):
+            payload["recording_timing"] = deepcopy(recording_status["recording_timing"])
         self._write_json(path, payload)
         return deepcopy(payload)
 
@@ -387,7 +405,7 @@ class SessionTakeStore:
                 except ValueError:
                     return None
             try:
-                return deepcopy(self._read(self._current_take_id))
+                return _with_recording_timing(deepcopy(self._read(self._current_take_id)))
             except (OSError, ValueError):
                 return None
 
@@ -402,11 +420,14 @@ class SessionTakeStore:
         return self._list_takes_from(self.takes_root)
 
     @staticmethod
-    def _list_takes_from(takes_root: Path) -> list[Dict]:
+    def _list_takes_from(takes_root: Path, *, include_timing: bool = True) -> list[Dict]:
         items = []
         for path in sorted(takes_root.glob("take_*.json"), reverse=True):
             try:
-                items.append(json.loads(path.read_text(encoding="utf-8")))
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    continue
+                items.append(_with_recording_timing(payload) if include_timing else payload)
             except (OSError, ValueError):
                 continue
         return items
@@ -468,7 +489,7 @@ class SessionTakeStore:
             cached = self._stats_cache.get(takes_root)
             # TTL covers external edits and coalesced filesystem timestamps.
             if cached is None or cached[0] != signature or now >= cached[1]:
-                stats = self._take_stats(self._list_takes_from(takes_root), takes_root=takes_root)
+                stats = self._take_stats(self._list_takes_from(takes_root, include_timing=False), takes_root=takes_root)
                 cached = (signature, now + 30.0, stats)
                 self._stats_cache[takes_root] = cached
             return dict(cached[2])

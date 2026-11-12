@@ -17,7 +17,8 @@ const outfile = path.join(temp, 'harness.cjs');
 buildSync({ stdin: { contents: `
   import { createSSRApp, createRenderer, nextTick } from 'vue';
   import { renderToString } from 'vue/server-renderer';
-  import { useCapture } from './src/mobile/useCapture.js';
+  import { useCapture, takeDuration } from './src/mobile/useCapture.js';
+  export { takeDuration };
   export async function capture() {
     let result;
     await renderToString(createSSRApp({setup(){result=useCapture();return ()=>null;}}));
@@ -32,12 +33,41 @@ buildSync({ stdin: { contents: `
     return {value:result,unmount:()=>app.unmount()};
   }`, resolveDir: path.resolve(__dirname, '..') },
   bundle: true, platform: 'node', format: 'cjs', outfile });
-const { capture, liveCapture, nextTick } = require(outfile);
+const { capture, liveCapture, nextTick, takeDuration } = require(outfile);
 rmSync(temp, { recursive: true });
 const snapshot = (state='idle', task='qa', output='/take/1') => ({
   state, output_path: output, task_status: { task: { task_id: task } },
 });
 const response = (value, status=200) => ({ ok: status < 400, status, json: async()=>value });
+
+test('elapsed time uses the recorder start and freezes during saving',()=>{
+  const take={task_id:'qa',take_id:1,bag_path:'/take/1',start_epoch_s:100};
+  const timing={source:'recorder',started_at_epoch_s:110,stopped_at_epoch_s:null,duration_s:null};
+  const status={state:'recording',current_take:take,output_path:take.bag_path,server_time:135.8,recording_timing:timing};
+  assert.equal(takeDuration(take,status),'00:25');
+  status.state='saving';status.recording_timing={...timing,stopped_at_epoch_s:135.8,duration_s:25.8};
+  status.server_time=500;
+  assert.equal(takeDuration(take,status),'00:25');
+});
+
+test('saved history uses MCAP duration even when task lifecycle lasted longer',()=>{
+  const take={task_id:'qa',take_id:1,bag_path:'/take/1',start_epoch_s:100,end_epoch_s:150,
+    recording_timing:{source:'mcap_metadata',started_at_epoch_s:110,duration_s:25.541367571}};
+  assert.equal(takeDuration(take,{state:'saved',current_take:take,output_path:take.bag_path,recording_timing:{duration_s:25.2}}),'00:25');
+});
+
+test('a stale unfinished take cannot borrow another recording clock',()=>{
+  const take={task_id:'qa',take_id:1,bag_path:'/take/1',state:'recording',start_epoch_s:100,
+    recording_timing:{source:'recorder',started_at_epoch_s:110}};
+  const status={state:'recording',current_take:{task_id:'other',take_id:1},output_path:'/take/2',server_time:500};
+  assert.equal(takeDuration(take,status),'--:--');
+});
+
+test('failed or missing timing stays unknown, while a zero-length saved span is valid',()=>{
+  assert.equal(takeDuration({state:'start_failed',start_epoch_s:100,end_epoch_s:120},{}),'--:--');
+  assert.equal(takeDuration({recording_timing:{duration_s:NaN}},{}),'--:--');
+  assert.equal(takeDuration({recording_timing:{duration_s:0}},{}),'00:00');
+});
 async function harness(initial=snapshot(),keepSession=false) {
   if(!keepSession)sessionValues.clear();
   const value=await capture();

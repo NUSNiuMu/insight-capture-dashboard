@@ -53,8 +53,15 @@ class MobileCaptureRoutes:
         current_take = self.context.take_store.current()
         if current_take is not None:
             current_take = {key: current_take.get(key) for key in (
-                "take_id", "task_id", "state", "bag_path", "start_epoch_s", "end_epoch_s"
+                "take_id", "task_id", "state", "bag_path", "start_epoch_s", "end_epoch_s", "recording_timing"
             )}
+        timing = dict(status.get("recording_timing") or {}) or None
+        # The saving worker may be draining/flushing with _last_status frozen.
+        # Freeze the provisional timer at stop acceptance until the saved file
+        # provides its authoritative data span.
+        if busy and self._operation["action"] == "stop" and timing and timing.get("started_at_epoch_s") is not None:
+            stopped = self._operation["accepted_at_epoch_s"]
+            timing.update(stopped_at_epoch_s=stopped, duration_s=max(0.0, stopped - timing["started_at_epoch_s"]))
         if playing:
             state = "playback"
             report = {**self._last_preflight, "ok": False, "failures": [], "camera_health": {}}
@@ -100,6 +107,7 @@ class MobileCaptureRoutes:
             "recording_mode": status.get("recording_mode"),
             "output_path": status.get("output_path"),
             "started_at_epoch_s": getattr(manager, "started_at", None),
+            "recording_timing": timing,
             "server_time": time.time(), "operation": self._operation,
             "preflight": report, "devices": devices, "task_status": task_status,
             "current_take": current_take,
@@ -148,7 +156,7 @@ class MobileCaptureRoutes:
             if not body.get("output_path") or body["output_path"] != status.get("output_path"):
                 raise RuntimeError("The recording has changed. Refresh before stopping it.")
         self._last_status = status
-        self._operation = {"command_id": command_id, "action": action, "state": "running", "error": None}
+        self._operation = {"command_id": command_id, "action": action, "state": "running", "error": None, "accepted_at_epoch_s": time.time()}
         self._commands[command_id] = (fingerprint, self._operation)
         while len(self._commands) > 100:
             self._commands.popitem(last=False)

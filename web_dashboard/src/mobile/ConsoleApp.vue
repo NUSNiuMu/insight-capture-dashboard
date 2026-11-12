@@ -3,7 +3,7 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import CameraPreview from '../preview/components/CameraPreview.vue';
 import RecordsPage from './RecordsPage.vue';
 import TrajectoryPanel from './TrajectoryPanel.vue';
-import { useCapture, api, roleLabel, stateLabel, size, duration } from './useCapture.js';
+import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration } from './useCapture.js';
 import { t, language, setLanguage } from './i18n.js';
 const {status,mapping,tasks,tasksError,taskDraft,online,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
@@ -18,8 +18,8 @@ const showDock=computed(()=>page.value==='capture'||active.value);
 const task=computed(()=>status.value?.task_status?.active?status.value.task_status.task:null);
 const elapsed=computed(()=>{
  const take=status.value?.current_take;
- if(['recording','saving','saved'].includes(uiState.value) && take?.start_epoch_s)
-  return duration((take.end_epoch_s||status.value.server_time)-take.start_epoch_s);
+ if(['recording','saving','saved'].includes(uiState.value))
+  return takeDuration(take,status.value);
  return '00:00';
 });
 const health=computed(()=>status.value?.preflight?.camera_health||{});
