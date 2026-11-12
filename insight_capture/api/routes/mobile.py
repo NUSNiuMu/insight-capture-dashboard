@@ -6,6 +6,8 @@ import asyncio
 from collections import OrderedDict
 import time
 import json
+from pathlib import Path
+from insight_capture.runtime.discovery import resolved_cameras, startup_ready
 
 from aiohttp import web
 
@@ -76,7 +78,13 @@ class MobileCaptureRoutes:
                    for pose in self.context.node.poses]
         heads = {pose.name for pose in self.context.node.poses if pose.teleop_role == "head"}
         preview_cameras = sorted(self.context.node.cameras, key=lambda camera: camera.device_name not in heads)
+        try:
+            links = resolved_cameras()
+        except (OSError, ValueError, KeyError):
+            links = []
         return {
+            "system": {"managed_camera_startup": bool(getattr(manager, "clock_monitor", None) and manager.clock_monitor.config.get("continuous_camera_clock")), "uptime_s": float(Path('/proc/uptime').read_text().split()[0]),
+                       "camera_links": links, "camera_startup": startup_ready()},
             "state": state, "recording": bool(status.get("recording")),
             "recording_mode": status.get("recording_mode"),
             "output_path": status.get("output_path"),

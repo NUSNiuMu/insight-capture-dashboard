@@ -83,11 +83,11 @@ def migrate(root: Path, templates: Path) -> dict:
         cameras['ros_transport'] = {'camera_usb_only': True}
         clocks = cameras['clock_sync']
         clocks['discover_usb'] = True
+        clocks['continuous_camera_clock'] = True
         for device in clocks.get('clock_devices', []):
-            device.pop('host', None)
-            device.pop('ntp_server', None)
-            if device.get('method') == 'ssh_ntpdate':
-                device['ssh_host_key_alias'] = 'insight-clock-' + device['name']
+            for key in ('host', 'ntp_server', 'method', 'ssh_identity',
+                        'ssh_host_key_alias', 'max_clock_bound_ms', 'max_ntp_rtt_ms'):
+                device.pop(key, None)
         write(config / 'cameras.json', cameras)
     runtime_defaults = read(templates / "devices" / profile / "runtime.json", {})
     runtime_path = config / "runtime.json"

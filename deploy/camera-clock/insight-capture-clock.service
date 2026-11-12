@@ -1,0 +1,14 @@
+[Unit]
+Description=InsightCapture offline USB camera clock
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/insight-capture-clock/clock.py
+Restart=always
+RestartSec=2
+RuntimeDirectory=insight-capture-clock
+RuntimeDirectoryPreserve=yes
+RuntimeDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

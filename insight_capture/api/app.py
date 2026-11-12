@@ -71,6 +71,7 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_post("/api/system/status", runtime._handle_system_status)
     app.router.add_get("/api/sessions", sessions._handle_list)
     app.router.add_get("/api/tasks", tasks._handle_list)
+    app.router.add_get("/api/tasks/{task_id}/recordings", tasks._handle_recordings)
     app.router.add_post("/api/tasks", tasks._handle_create)
     app.router.add_get("/api/tasks/current", tasks._handle_current)
     app.router.add_post("/api/tasks/current", tasks._handle_current)

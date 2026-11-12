@@ -1,1 +1,1 @@
-export const t = value => value;
+export { t } from "../mobile/i18n.js";

@@ -13,7 +13,8 @@ import struct
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
-from urllib.request import ProxyHandler, build_opener
+from urllib.request import ProxyHandler, build_opener, Request
+import threading
 
 SNAPSHOT = Path('/run/insight-capture-network/cameras.json')
 
@@ -49,8 +50,8 @@ def camera_links() -> set[CameraLink]:
     return links
 
 
-def discover_camera(link):
-    """Use the USB DHCP server and camera API, never a guessed .1 endpoint."""
+def dhcp_peer(link):
+    """Resolve the actual peer early, before the camera HTTP service starts."""
     result = subprocess.run(
         ['nmcli', '-t', '-f', 'DHCP4.OPTION', 'device', 'show', link.name],
         capture_output=True, text=True, check=True, timeout=3)
@@ -60,6 +61,12 @@ def discover_camera(link):
     network = ipaddress.IPv4Network(f"{link.address}/{options['subnet_mask']}", strict=False)
     if ipaddress.IPv4Address(host) not in network or host == link.address:
         raise ValueError('Camera DHCP server is not on its USB link')
+    return host
+
+
+def discover_camera(link):
+    """Use the USB DHCP server and camera API, never a guessed .1 endpoint."""
+    host = dhcp_peer(link)
     opener = build_opener(ProxyHandler({}))
     def get(path):
         with opener.open(f'http://{host}/api/{path}', timeout=1) as response:
@@ -100,20 +107,96 @@ def resolved_cameras(path=SNAPSHOT):
             if CameraLink(camera['name'], camera['index'], camera['address']) in links]
 
 
+STARTUP = SNAPSHOT.with_name('startup.json')
+
+def json_request(url, body=None, timeout=4):
+    data = None if body is None else json.dumps(body).encode()
+    request = Request(url, data=data, headers={'Content-Type': 'application/json'})
+    with build_opener(ProxyHandler({})).open(request, timeout=timeout) as response:
+        return json.load(response)
+
+def startup_ready():
+    try:
+        return json.loads(STARTUP.read_text())
+    except (OSError, ValueError):
+        return {}
+
+def recover_camera_startup():
+    """Once per host boot, repair only acquisition with stale/missing input.
+
+    ClockMonitor gates recording until this checkpoint exists. A service restart
+    preserves it in /run; it never restarts a camera during an active recording.
+    """
+    completed = startup_ready()
+    while True:
+        try:
+            status = json_request('http://127.0.0.1:8765/api/mobile/status')
+            if not status.get('system', {}).get('managed_camera_startup'):
+                time.sleep(5)
+                continue
+            if status['state'] in {'starting', 'recording', 'saving', 'playback'}:
+                time.sleep(2)
+                continue
+            expected = {d['name'] for d in status['devices']}
+            if expected and expected.issubset(completed):
+                return
+            peers = resolved_cameras()
+            def recover(camera):
+                name = camera['namespace']
+                if name not in expected or name in completed or sum(p['namespace'] == name for p in peers) != 1:
+                    return None
+                url = f"http://{camera['host']}/api/"
+                sync = json_request(url + 'time-sync-setting')['data']
+                health = status['preflight'].get('camera_health', {}).get(name, {})
+                epoch = status['preflight'].get('image_clocks', {}).get('devices', {}).get(name, {})
+                action = 'already_ready'
+                if not sync.get('synced') or not health.get('ready') or not epoch.get('ok'):
+                    for operation in ('insight-stop', 'insight-start'):
+                        response = json_request(url + operation, {}, timeout=165)
+                        if not response.get('success'):
+                            raise RuntimeError(str(response))
+                    action = 'acquisition_restarted'
+                return name, {'action': action, 'host': camera['host'], 'monotonic_s': time.monotonic()}
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                futures = [pool.submit(recover, camera) for camera in peers]
+                for future in futures:
+                    try:
+                        result = future.result()
+                        if result:
+                            completed[result[0]] = result[1]
+                            temp = STARTUP.with_suffix('.tmp')
+                            temp.write_text(json.dumps(completed))
+                            os.replace(temp, STARTUP)
+                            print('Camera startup:', result, flush=True)
+                    except Exception as exc:
+                        print('Camera startup waiting:', str(exc), flush=True)
+        except Exception as exc:
+            print('Camera startup waiting:', str(exc), flush=True)
+        time.sleep(2)
+
+
 def serve_discovery():
     """Publish verified USB peers and reconcile chrony's default-deny ACL."""
     SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['chronyc', 'deny', 'all', '0.0.0.0/0'], check=True, capture_output=True)
     allowed = set()
+    threading.Thread(target=recover_camera_startup, daemon=True).start()
     while True:
-        cameras, errors = discover_cameras()
-        current = {camera['host'] for camera in cameras}
+        # NTP must be available before the camera API/acquisition can start.
+        # Trust only current CDC-NCM DHCP leases, never STA/AP or guessed IPs.
+        current = set()
+        for link in camera_links():
+            try:
+                current.add(dhcp_peer(link))
+            except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+                pass
         for host in sorted(allowed - current):
             subprocess.run(['chronyc', 'deny', host], check=True, capture_output=True)
         # Reapply current peers so a chronyd restart needs no daemon restart.
         for host in sorted(current):
             subprocess.run(['chronyc', 'allow', host], check=True, capture_output=True)
         allowed = current
+        cameras, errors = discover_cameras()
         payload = {'monotonic_s': time.monotonic(), 'cameras': cameras, 'errors': errors}
         temporary = SNAPSHOT.with_suffix('.tmp')
         temporary.write_text(json.dumps(payload))

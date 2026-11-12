@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+from insight_capture.runtime.discovery import json_request, startup_ready
 import socket
 import re
 import ipaddress
@@ -107,6 +108,18 @@ def measure_clocks(config: dict) -> dict:
         if not samples:
             return device["name"], {"ok": False, "host": device["host"], "error": "; ".join(errors)}
         best = min(samples, key=lambda sample: sample["round_trip_ms"])
+        if config.get('continuous_camera_clock'):
+            # chronyd serves its corrected estimate, which can differ from the
+            # camera wall clock while slewing. Never accept NTP alone as proof.
+            try:
+                sync = json_request(f"http://{device['host']}/api/time-sync-setting")['data']
+                if not sync.get('synced'):
+                    return device['name'], {**best, 'ok': False, 'error': 'Camera system clock is still converging'}
+            except Exception as exc:
+                return device['name'], {**best, 'ok': False, 'error': str(exc)}
+            best['system_clock_correction_bound_ms'] = 5.0
+            best['offset_bound_ms'] = round(best['offset_bound_ms'] + 5.0, 4)
+            best['method'] = 'UDP NTP estimate plus verified system correction below 5 ms'
         best.update(ok=best["offset_bound_ms"] <= float(device.get("max_clock_bound_ms", limit))
                     and best["round_trip_ms"] <= float(device.get("max_ntp_rtt_ms", rtt_limit)))
         return device["name"], best
@@ -116,13 +129,15 @@ def measure_clocks(config: dict) -> dict:
     bounds = sorted((item.get("offset_bound_ms", float("inf")) for item in results.values()), reverse=True)
     pairwise_bound = sum(bounds[:2]) if bounds else None
     pairwise_limit = float(config.get("max_pairwise_clock_bound_ms", 20))
+    boot_ready = not config.get('continuous_camera_clock') or set(results).issubset(startup_ready())
     return {
+        "startup_ready": boot_ready,
         "method": "NTP measurement; device minus Jetson; method recorded per device",
         "checked_at_epoch_s": time.time(), "max_clock_bound_ms": limit,
         "max_ntp_rtt_ms": rtt_limit, "devices": results,
         "pairwise_clock_bound_ms": round(pairwise_bound, 4) if pairwise_bound is not None and pairwise_bound != float("inf") else None,
         "max_pairwise_clock_bound_ms": pairwise_limit,
-        "ok": bool(results) and all(item["ok"] for item in results.values()) and pairwise_bound <= pairwise_limit,
+        "ok": boot_ready and bool(results) and all(item["ok"] for item in results.values()) and pairwise_bound <= pairwise_limit,
     }
 
 

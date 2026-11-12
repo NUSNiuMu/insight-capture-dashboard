@@ -2,8 +2,8 @@
 
 [Unit]
 Description=Configure Insight camera USB network receive steering
-# Camera reboots can recreate cdc_ncm interfaces and reset rps_cpus to 00.
-After=network.target insight-camera-reboot.service
+# USB hotplug also reapplies receive steering via the udev rule.
+After=network.target
 
 [Service]
 Type=oneshot

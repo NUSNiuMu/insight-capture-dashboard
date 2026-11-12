@@ -90,24 +90,12 @@ else
     log "WARNING: camera network steering files missing; skipping RPS setup."
 fi
 
-# ── boot-time camera reboot unit ─────────────────────────────────────────────
-# Reboot cameras after host links exist to refresh their DDS participants.
-UNIT_SRC="${ROOT_DIR}/deploy/systemd/insight-camera-reboot.service"
-UNIT_DST=/etc/systemd/system/insight-camera-reboot.service
-if [[ -f "${UNIT_SRC}" ]]; then
-    rendered_unit="$(sed \
-        -e "s#^WorkingDirectory=.*#WorkingDirectory=${ROOT_DIR}#" \
-        -e "s#^ExecStart=.*#ExecStart=${ROOT_DIR}/scripts/reboot_cameras.sh#" \
-        "${UNIT_SRC}")"
-    if [[ "$(cat "${UNIT_DST}" 2>/dev/null || true)" != "${rendered_unit}" ]]; then
-        log "installing boot-time camera reboot unit (root: ${ROOT_DIR})..."
-        echo "${rendered_unit}" | sudo tee "${UNIT_DST}" >/dev/null
-        sudo systemctl daemon-reload
-    fi
-    sudo systemctl enable insight-camera-reboot.service >/dev/null 2>&1
-    log "camera boot-reboot unit: enabled"
-else
-    log "WARNING: ${UNIT_SRC} missing; skipping boot-time camera reboot setup."
+# DDS follows USB link generations. Never reboot cameras or restart Dashboard
+# merely because the Jetson booted. Remove the previous automatic boot chain.
+if systemctl cat insight-camera-reboot.service >/dev/null 2>&1; then
+    sudo systemctl disable insight-camera-reboot.service
+    sudo rm -f /etc/systemd/system/insight-camera-reboot.service
+    sudo systemctl daemon-reload
 fi
 
 # ── CPU power mode ────────────────────────────────────────────────────────────

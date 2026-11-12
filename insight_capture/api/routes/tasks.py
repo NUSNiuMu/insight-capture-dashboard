@@ -38,6 +38,12 @@ class TaskRoutes:
             }
         return web.json_response(await asyncio.to_thread(snapshot))
 
+    async def _handle_recordings(self, request: web.Request) -> web.Response:
+        payload = await asyncio.to_thread(
+            self.context.take_store.task_recordings, request.match_info["task_id"]
+        )
+        return web.json_response(payload, headers={"Cache-Control": "no-store"})
+
     async def _handle_current(self, _request: web.Request) -> web.Response:
         status = await asyncio.to_thread(self.context.take_store.task_status)
         return web.json_response({**status, "message": task_status_message(status)})

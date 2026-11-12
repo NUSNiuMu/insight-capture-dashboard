@@ -13,3 +13,10 @@ fi
 systemctl daemon-reload
 systemctl enable --now insight-capture-camera-discovery.service
 systemctl restart insight-capture-camera-discovery.service
+
+# Migrate existing installs away from the obsolete camera reboot chain.
+if systemctl cat insight-camera-reboot.service >/dev/null 2>&1; then
+    systemctl disable insight-camera-reboot.service
+    rm -f /etc/systemd/system/insight-camera-reboot.service
+    systemctl daemon-reload
+fi

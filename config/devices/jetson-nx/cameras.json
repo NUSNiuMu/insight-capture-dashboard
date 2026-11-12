@@ -119,18 +119,15 @@
         "name": "insight3_b"
       },
       {
-        "name": "insight9_a",
-        "method": "ssh_ntpdate",
-        "max_clock_bound_ms": 20,
-        "max_ntp_rtt_ms": 35,
-        "ssh_host_key_alias": "insight-clock-insight9_a"
+        "name": "insight9_a"
       }
     ],
     "ntp_samples": 3,
     "max_clock_bound_ms": 10,
     "max_pairwise_clock_bound_ms": 20,
     "max_ntp_rtt_ms": 10,
-    "discover_usb": true
+    "discover_usb": true,
+    "continuous_camera_clock": true
   },
   "ros_transport": {
     "camera_usb_only": true

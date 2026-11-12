@@ -391,6 +391,13 @@ class SessionTakeStore:
             except (OSError, ValueError):
                 return None
 
+    def task_recordings(self, task_id: str) -> Dict:
+        """Browse a catalog task without activating it or touching its files."""
+        with self._lock:
+            task = self._task_catalog.get(task_id)
+            root = self.sessions_root / self._task_set_id(task.task_id) / "takes"
+            return {"task": task.as_dict(), "takes": self._list_takes_from(root)}
+
     def list_takes(self) -> list[Dict]:
         return self._list_takes_from(self.takes_root)
 
