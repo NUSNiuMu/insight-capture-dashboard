@@ -54,9 +54,11 @@ function alertText(item){
  const details=item.details||{};
  if(item.code.startsWith('localization:')){
   const device=devices.value.find(d=>d.name===details.service||(details.service==='insight9'&&d.role==='head'));
-  if(device)return t('{0}未完成公共地图定位，本条需要复检。',roleLabel(device.role));
+  if(device)return t('{0}定位异常，本条已标记复检。',roleLabel(device.role));
  }
  if(item.code.startsWith('camera_stale:')){
+  const device=devices.value.find(d=>d.name===details.camera);
+  if(device)return t('{0}图像中断，本条已记录异常。',roleLabel(device.role));
   const camera=status.value?.preview_cameras?.find(c=>c.name===details.camera);
   if(camera)return t('{0}图像中断，本条已记录异常。',t(camera.label));
  }
