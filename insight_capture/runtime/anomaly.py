@@ -22,6 +22,7 @@ class ActiveQcMonitor:
         self._pending_since: Dict[str, float] = {}
         self._active: set[str] = set()
         self._frame_missing_seen: Dict[str, int] = {}
+        self._recording_path = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
@@ -88,8 +89,16 @@ class ActiveQcMonitor:
             self._pending_since.clear()
             self._active.clear()
             self._frame_missing_seen.clear()
+            self._recording_path = None
             return
         status = self.recording_manager.status()
+        if status.get("output_path") != self._recording_path:
+            # A new Take can begin between polls without an observed idle
+            # state. Its warnings and sustain windows must start independently.
+            self._pending_since.clear()
+            self._active.clear()
+            self._frame_missing_seen.clear()
+            self._recording_path = status.get("output_path")
         clock_monitor = getattr(self.recording_manager, "clock_monitor", None)
         if clock_monitor is not None:
             clocks = clock_monitor.status()

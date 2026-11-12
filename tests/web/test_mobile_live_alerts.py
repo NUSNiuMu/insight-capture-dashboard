@@ -88,6 +88,28 @@ def test_ntp_failure_during_capture_is_visible_and_retained_after_recovery(captu
     assert take["anomaly_timeline"][0]["details"]["clocks"]["ok"] is False
 
 
+def test_next_take_keeps_persistent_warning_when_qc_misses_the_idle_interval(capture, monkeypatch):
+    now = 100.0
+    monkeypatch.setattr("insight_capture.runtime.anomaly.time.monotonic", lambda: now)
+    capture.state["storage"] = {"using_fallback": True}
+    capture.monitor.poll()
+    now += 4
+    capture.monitor.poll()
+    first = capture.store.complete_current({"output_path": capture.state["output_path"], "merge_state": "done"})
+    assert [e["code"] for e in first["anomaly_timeline"]] == ["storage_fallback"]
+    capture.store.reserve_take()
+    capture.state["output_path"] += "-next"
+    capture.store.mark_recording(capture.state["output_path"])
+    # A polling monitor can miss the short idle interval between Takes.
+    capture.monitor.poll()
+    assert capture.store.current()["anomaly_timeline"] == []
+    now += 4
+    capture.monitor.poll()
+    events = capture.store.current()["anomaly_timeline"]
+    assert len(events) == 1 and events[0]["code"] == "storage_fallback"
+    assert events[0]["event"] == "started"
+
+
 @pytest.mark.parametrize("phase,expected", [("recording", True), ("saving", True),
     ("starting", False), ("idle", False), ("saved", False), ("playback", False),
     ("different_bag", False), ("missing_bag", False), ("different_take", False)])
