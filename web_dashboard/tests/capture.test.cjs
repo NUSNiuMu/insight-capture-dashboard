@@ -17,8 +17,8 @@ const outfile = path.join(temp, 'harness.cjs');
 buildSync({ stdin: { contents: `
   import { createSSRApp, createRenderer, nextTick } from 'vue';
   import { renderToString } from 'vue/server-renderer';
-  import { useCapture, takeDuration } from './src/mobile/useCapture.js';
-  export { takeDuration };
+  import { useCapture, takeDuration, takeDisplayState } from './src/mobile/useCapture.js';
+  export { takeDuration, takeDisplayState };
   export async function capture() {
     let result;
     await renderToString(createSSRApp({setup(){result=useCapture();return ()=>null;}}));
@@ -33,7 +33,7 @@ buildSync({ stdin: { contents: `
     return {value:result,unmount:()=>app.unmount()};
   }`, resolveDir: path.resolve(__dirname, '..') },
   bundle: true, platform: 'node', format: 'cjs', outfile });
-const { capture, liveCapture, nextTick, takeDuration } = require(outfile);
+const { capture, liveCapture, nextTick, takeDuration, takeDisplayState } = require(outfile);
 rmSync(temp, { recursive: true });
 const snapshot = (state='idle', task='qa', output='/take/1') => ({
   state, output_path: output, task_status: { task: { task_id: task } },
@@ -67,6 +67,27 @@ test('failed or missing timing stays unknown, while a zero-length saved span is 
   assert.equal(takeDuration({state:'start_failed',start_epoch_s:100,end_epoch_s:120},{}),'--:--');
   assert.equal(takeDuration({recording_timing:{duration_s:NaN}},{}),'--:--');
   assert.equal(takeDuration({recording_timing:{duration_s:0}},{}),'00:00');
+});
+
+test('current history follows saving and completion without relabelling another take',()=>{
+  const take={task_id:'qa',take_id:1,bag_path:'/take/1',state:'recording'};
+  const status={state:'saving',current_take:take,output_path:take.bag_path};
+  assert.equal(takeDisplayState(take,status),'finalizing');
+  assert.equal(takeDisplayState({...take,task_id:'other'},status),'recording');
+  status.state='saved';status.current_take={...take,state:'complete'};
+  assert.equal(takeDisplayState(take,status),'complete');
+  status.current_take.state='saved';
+  assert.equal(takeDisplayState(take,status),'saved');
+  assert.equal(take.state,'recording');
+});
+
+test('saved timing is already correct when the history request still has the live take',()=>{
+  const take={task_id:'qa',take_id:1,bag_path:'/take/1',state:'recording',
+    recording_timing:{source:'recorder',started_at_epoch_s:110,duration_s:null}};
+  const status={state:'saved',output_path:take.bag_path,current_take:{...take,state:'complete',
+    recording_timing:{source:'mcap_metadata',started_at_epoch_s:110,duration_s:25.541367571}}};
+  assert.equal(takeDisplayState(take,status),'complete');
+  assert.equal(takeDuration(take,status),'00:25');
 });
 async function harness(initial=snapshot(),keepSession=false) {
   if(!keepSession)sessionValues.clear();

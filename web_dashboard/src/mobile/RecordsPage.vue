@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { api, takeDuration, roleLabel } from './useCapture.js';
+import { api, takeDuration, takeDisplayState, roleLabel } from './useCapture.js';
 import { t } from './i18n.js';
 const props=defineProps({route:String,tasks:Array,tasksError:String,status:Object,busy:Boolean,online:Boolean,action:Function});
 const emit=defineEmits(['navigate','refresh-tasks']);
@@ -8,7 +8,8 @@ const recordSet=ref(null),error=ref(''),loading=ref(false),transfers=ref(null);
 let generation=0,timer,alive=true;
 const selectedTakes=computed(()=>{
  const takeId=props.route.split('/')[2];
- return (recordSet.value?.takes||[]).filter(take=>!takeId||String(take.take_id)===takeId);
+ return (recordSet.value?.takes||[]).filter(take=>!takeId||String(take.take_id)===takeId)
+  .map(take=>({...take,state:takeDisplayState(take,props.status)}));
 });
 async function refreshRecords(clear=false){
  const taskId=props.route.split('/')[1],gen=++generation;
