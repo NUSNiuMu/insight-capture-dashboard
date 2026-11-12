@@ -1,14 +1,44 @@
 #!/usr/bin/env python3
 """Own a single offline camera clock; follow the USB DHCP peer without steps."""
 import ipaddress
+import os
 from pathlib import Path
 import signal
 import subprocess
+import tempfile
 import time
 
 ROOT = Path('/opt/insight-capture-clock')
 RUN = Path('/run/insight-capture-clock')
 SOCKET = str(RUN / 'chronyd.sock')
+SYNC_FLAG = Path('/etc/init.d/looper/setting/is_time_sync')
+
+
+def publish_sync_state(synced):
+    """Readers must see a complete flag, including when readiness is unchanged.
+
+    The camera publisher treats an empty file as sync loss and switches its
+    headers to CLOCK_MONOTONIC. Truncating this file can therefore change the
+    timestamp domain even while chronyd remains synchronized.
+    """
+    value = '1\n' if synced else '0\n'
+    try:
+        if SYNC_FLAG.read_bytes() == value.encode():
+            return
+    except FileNotFoundError:
+        pass
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', dir=SYNC_FLAG.parent,
+                                         prefix='.is_time_sync-', delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(value)
+            stream.flush()
+            os.fchmod(stream.fileno(), 0o644)
+        os.replace(temporary, SYNC_FLAG)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 def peer():
     for line in Path('/etc/dnsmasq.conf').read_text().splitlines():
@@ -60,9 +90,9 @@ def main():
                     print(f'USB clock source: {target}', flush=True)
                 # Export live readiness for the camera's existing API.
                 synced = command('waitsync', '1', '0.005', '0', '0.1').returncode == 0
-                Path('/etc/init.d/looper/setting/is_time_sync').write_text('1\n' if synced else '0\n')
+                publish_sync_state(synced)
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
-                Path('/etc/init.d/looper/setting/is_time_sync').write_text('0\n')
+                publish_sync_state(False)
                 print(str(exc), flush=True)
             time.sleep(2)
         raise SystemExit(daemon.returncode or 1)

@@ -1,12 +1,14 @@
 """Recover interrupted recordings into validated copies while retaining originals."""
 
 from collections import Counter
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import struct
 import tempfile
 from typing import Sequence
 
@@ -14,7 +16,7 @@ from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 import yaml
 
-from insight_capture.core.bag import MANIFEST_NAME, read_metadata
+from insight_capture.core.bag import MANIFEST_NAME, iter_messages, read_metadata
 
 RECORDING_TARGET_NAME = ".recording_target.json"
 
@@ -50,7 +52,10 @@ class RecordingRecovery:
             if len(list(source.glob("*.mcap"))) != 1 or list(source.glob("*.db3")):
                 raise RuntimeError("recovery requires one MCAP data file")
             self._run(["ros2", "bag", "reindex", "-s", "mcap", str(source)])
-            expected, types = self._validate(source)
+            # A crashed writer has no footer. Reindex supplies metadata but
+            # does not repair the MCAP, so a strict seekable reader would reject
+            # it here. The ROS storage reader scans its readable records.
+            expected, types, fingerprints = self._scan_readable(source)
             generated = workspace / "output"
             config = workspace / "convert.yaml"
             config.write_text(yaml.safe_dump({"output_bags": [
@@ -59,19 +64,47 @@ class RecordingRecovery:
             self._run(["ros2", "bag", "convert", "-i", str(source), "-o", str(config)])
             actual, actual_types = self._validate(generated)
             if actual != expected or actual_types != types:
-                raise RuntimeError("recovered topic counts or types do not match the complete source")
+                raise RuntimeError("recovered topic counts or types do not match readable source records")
+            if self._scan_readable(generated)[2] != fingerprints:
+                raise RuntimeError("recovered timestamps or payloads differ from readable source records")
             manifest = json.loads((source / MANIFEST_NAME).read_text()) if (source / MANIFEST_NAME).is_file() else {}
             manifest.update({
                 "version": 3, "format": "rosbag2", "storage_id": "mcap",
                 "bag_name": output.name, "recovered": True,
                 "recovery_source": str(archive), "recovery_method": "reindex_and_convert",
+                "recovery_scope": "readable_messages_only",
+                "recovery_warning": "Interrupted recording: incomplete tail and unwritten messages cannot be recovered.",
                 "message_count": sum(actual.values()), "topic_count": len(actual),
             })
             (generated / MANIFEST_NAME).write_text(json.dumps(manifest, indent=2) + "\n")
             os.rename(generated, output)
             os.rename(staging, archive)
-        self._recovery_log(f"{staging.name}: complete recovery -> {output.name}; originals retained at {archive}")
+        self._recovery_log(f"{staging.name}: recovered readable records -> {output.name}; originals retained at {archive}")
         self.owner._notify_recording_completed(output)
+
+    @staticmethod
+    def _scan_readable(bag: Path):
+        """Validate reindexed counts and fingerprint actual CDR bytes + times.
+
+        Sum per-message SHA-256 values modulo 2**256, per topic. This preserves
+        multiplicity while allowing conversion to index messages in time order.
+        No message deserialization, header repair, or source modification occurs.
+        """
+        metadata = read_metadata(bag)
+        expected = Counter({row['topic_metadata']['name']: int(row['message_count'])
+                            for row in metadata.get('topics_with_message_count', [])})
+        types = {row['topic_metadata']['name']: row['topic_metadata']['type']
+                 for row in metadata.get('topics_with_message_count', [])}
+        counts, fingerprints = Counter(), {}
+        for topic, data, stamp in iter_messages(bag, types):
+            counts[topic] += 1
+            digest = hashlib.sha256(struct.pack('<QQ', stamp, len(data)))
+            digest.update(data)
+            fingerprints[topic] = (fingerprints.get(topic, 0) +
+                                   int.from_bytes(digest.digest(), 'big')) % (1 << 256)
+        if not sum(counts.values()) or counts != expected:
+            raise RuntimeError(f"readable recording contents do not match reindexed metadata: {bag}")
+        return counts, types, fingerprints
 
     @staticmethod
     def _validate(bag: Path):
