@@ -23,7 +23,9 @@
 
 ## 离线网络与时间
 
-`sudo deploy/configure_capture_network.sh` 升级已安装驱动的热点，不替换驱动。它保留 SSID/密码，关闭旧热点管理服务，安装独立 DHCP、本地域名解析和禁止转发规则。只向手机提供采集网段，不向办公室网络或相机 USB 网段转发。USB 调试 `192.168.55.1` 独立保留。
+日常客户升级会同步已配置热点的宿主机脚本、服务和 DHCP / NTP 配置。公共安装入口 `deploy/install_network_services.py` 先校验依赖及配置，再按内容差异写入；只启动未运行的服务或更新受影响的服务。重复执行不改写相同文件、不重启正常服务；保持现场 Wi-Fi 驱动、SSID、密码、NetworkManager 连接和现有 DHCP 租约。
+
+`sudo deploy/configure_capture_network.sh` 用于将旧热点迁移到独立采集网络，不替换驱动。它保留 SSID/密码，但会关闭旧热点管理服务并调整采集网段，因此在空闲时通过独立 USB 调试通道执行。日常升级不运行这项迁移。采集热点只向手机提供采集网段，不向办公室网络或相机 USB 网段转发。USB 调试 `192.168.55.1` 独立保留。
 
 WebRTC 媒体与页面使用同一条直连链路。服务端从 HTTP socket 取得本机和客户端地址，为该本机地址绑定媒体端口，并限制本次信令候选；因此从 AP 打开的页面不会绕到办公室 Wi-Fi，USB 调试预览也不会串网。不同入口的轻量媒体转发共用每个视角的一份编码，新连接从带参数集的关键帧开始。没有固定的相机或客户端 IP 列表，也不需要公网 ICE 服务。
 
@@ -62,4 +64,6 @@ DDS 数据面动态发现当前相机 USB 链路，仅发布这些链路和 loop
 
 新设备接入后的在线校准仍由本项目自己的 LooperVIO 建图/重定位完成。IP 不是校准身份；仅改地址不会改变逻辑角色，但相机采集进程重启、VIO 重置和实际更换/移动相机后，需要重新确认校准结果。当前实现并未增加基于实体序列号的完整自动换机校准流程。
 
-安装/升级独立发现服务使用 `sudo bash deploy/install_camera_discovery.sh`；已有采集热点的客户升级入口会更新该服务。客户镜像构建会编译本项目的 Fast DDS 适配库。源码挂载开发部署还需执行 `docker compose run --rm --no-deps insight-dashboard bash deploy/build_dds_network.sh`，将同一份库生成到本项目 `.native-build/`，不访问任何其他项目。
+安装/升级独立发现服务使用 `sudo bash deploy/install_camera_discovery.sh`；该入口调用公共安装器，并在本机已有 `/etc/insight-capture-hotspot.conf` 时一并刷新采集热点的实际服务。公共安装器不会凭空创建 SSID、密码或驱动；首次硬件准备仍使用 `install_capture_hotspot.sh DRIVER.ko UPLINK SSID`，驱动须与当前内核匹配，并准备宿主机 chrony、dnsmasq、NetworkManager、iw、wpa_cli 和 iptables。首次驱动安装只写入并启用服务，重启后应用；普通升级按需更新已运行的服务。
+
+客户镜像构建会编译本项目的 Fast DDS 适配库。源码挂载开发部署还需执行 `docker compose run --rm --no-deps insight-dashboard bash deploy/build_dds_network.sh`，将同一份库生成到本项目 `.native-build/`，不访问任何其他项目。
