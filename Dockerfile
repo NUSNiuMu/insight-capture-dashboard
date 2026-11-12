@@ -272,7 +272,8 @@ RUN chmod +x /entrypoint.sh
 # layer: code-only changes rebuild in seconds, everything above stays cached.
 # .dockerignore keeps runtime data, .git, and release/ tarballs out.
 COPY . /workspaces/insight_capture
-RUN bash /workspaces/insight_capture/deploy/build_dds_network.sh
+RUN bash /workspaces/insight_capture/deploy/build_dds_network.sh \
+    && rm -rf /workspaces/insight_capture/.native-build/fastdds-build
 COPY .native-build/insight-native .native-build/qt-runtime.tar /opt/insight/native/
 
 # ── Working directory matches docker-compose source mount path
