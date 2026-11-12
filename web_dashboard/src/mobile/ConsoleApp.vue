@@ -13,6 +13,7 @@ const page=computed(()=>route.value.split('/')[0]);
 const savedTake=computed(()=>status.value?.state==='saved' && status.value.current_take?.state==='complete' && status.value.current_take.bag_path===status.value.output_path ? status.value.current_take : null);
 const uiState=computed(()=>recordPending.value==='start'?'starting':recordPending.value==='stop'?'saving':status.value?.state==='saved'&&!savedTake.value?'idle':status.value?.state);
 const active=computed(()=>['starting','recording','saving'].includes(uiState.value));
+const captureError=computed(()=>uiState.value==='error'?status.value?.error:'');
 watch(active,value=>{if(value)previewError.value='';});
 const showDock=computed(()=>page.value==='capture'||active.value);
 const task=computed(()=>status.value?.task_status?.active?status.value.task_status.task:null);
@@ -58,7 +59,7 @@ watch(language,()=>document.title='Insight Capture');
 <div v-if="page==='capture'" class="health-summary"><span v-for="d in devices" :key="d.name" :class="{bad:!online||stage(d)!==t('已就绪')}">{{roleLabel(d.role)}} · {{online?stage(d):t('离线')}}</span></div>
 <p v-if="!online" class="section-description">{{t('网页断开不会停止设备上的录制。')}}</p>
 <div v-if="page==='capture' && !active" class="issues" :hidden="!status?.preflight?.failures?.length && !status?.preflight?.warnings?.length"><p v-for="issue in status?.preflight?.failures" :key="issue.code" class="issue error">{{t(issue.message)}}</p><p v-for="issue in status?.preflight?.warnings" :key="issue.code" class="issue warning">{{t(issue.message)}}</p></div></section>
-<p v-if="error||status?.error||status?.operation?.error||(page==='capture'&&!active&&previewError)" role="alert" class="global-error">{{t(error||status?.error||status?.operation?.error||previewError)}}</p>
+<p v-if="error||captureError||status?.operation?.error||(page==='capture'&&!active&&previewError)" role="alert" class="global-error">{{t(error||captureError||status?.operation?.error||previewError)}}</p>
 <p v-if="status?.state==='saving'" role="status" class="save-progress">{{t('正在保存，请保持设备供电。')}}</p>
 <div v-show="page==='capture'">
 <section class="card task-current"><div><small>{{t('当前任务')}}</small><strong id="task-name">{{task?.name||t('请选择任务')}}</strong></div><button id="switch-task" class="secondary compact" :disabled="busy||!online" @click="openTasks">{{t(task?'切换':'选择任务')}}</button></section>
