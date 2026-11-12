@@ -90,6 +90,18 @@ class ActiveQcMonitor:
             self._frame_missing_seen.clear()
             return
         status = self.recording_manager.status()
+        clock_monitor = getattr(self.recording_manager, "clock_monitor", None)
+        if clock_monitor is not None:
+            clocks = clock_monitor.status()
+            # Start/stop clock snapshots cannot describe an outage that
+            # recovers within one Take. Preserve it without stopping capture;
+            # a failed measurement means precision is unverified, not that
+            # the recorded timestamps necessarily jumped.
+            self._observe(
+                "clock_sync", not clocks.get("ok", False),
+                "NTP 校时测量未通过，同步精度待复检；录制继续。",
+                severity="warning", clocks=clocks,
+            )
         calibration_mode = status.get("recording_mode") == "vio_calibration"
         now = time.monotonic()
         if calibration_mode:

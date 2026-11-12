@@ -828,6 +828,7 @@
   "连接已断开，以下提醒来自最后一次设备状态。": "Disconnected. These alerts reflect the last received device status.",
   "录制存储空间不足，请尽快停止采集。": "Recording storage is running low. Stop capture soon.",
   "当前正在使用备用存储。": "Recording is using fallback storage.",
+  "NTP 校时测量未通过，同步精度待复检；录制继续。": "NTP measurement failed. Time synchronization needs review; recording continues.",
   "录制写入出现异常，本条已标记复检。": "A recording write error occurred. This take is marked for review.",
   "检测到持续丢帧，本条已标记复检。": "Sustained frame loss detected. This take is marked for review.",
   "{0}图像中断，本条已记录异常。": "{0} images are interrupted. An issue has been recorded for this take.",

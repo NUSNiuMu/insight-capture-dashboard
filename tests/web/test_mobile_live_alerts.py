@@ -56,6 +56,38 @@ def test_sustained_low_disk_reaches_phone_and_resolution_keeps_history(capture, 
     assert [e["event"] for e in capture.store.current()["anomaly_timeline"]] == ["started", "resolved"]
 
 
+def test_ntp_failure_during_capture_is_visible_and_retained_after_recovery(capture, monkeypatch):
+    now = 100.0
+    clock = {"ok": True, "checked_at_epoch_s": 123.0, "devices": {}}
+    capture.manager.clock_monitor = SimpleNamespace(config={}, status=lambda: dict(clock))
+    monkeypatch.setattr("insight_capture.runtime.anomaly.time.monotonic", lambda: now)
+    capture.monitor.poll()
+    clock.update(ok=False, devices={"head": {"ok": False, "error": "timed out"}})
+    capture.monitor.poll()
+    now += 1
+    clock["ok"] = True
+    capture.monitor.poll()
+    assert capture.store.current()["anomaly_timeline"] == []  # Brief loss is not sustained.
+    clock["ok"] = False
+    capture.monitor.poll()
+    now += 4
+    capture.monitor.poll()  # No browser polling is needed to preserve the fault.
+    history = capture.store.current()["anomaly_timeline"]
+    assert len(history) == 1 and history[0]["code"] == "clock_sync"
+    assert history[0]["details"]["clocks"]["devices"]["head"]["error"] == "timed out"
+    alert = capture.route._snapshot()["live_alerts"][0]
+    assert alert["code"] == "clock_sync" and alert["severity"] == "warning"
+    assert capture.manager.is_recording()  # Never discard raw data on a failed measurement.
+    clock.update(ok=True, devices={"head": {"ok": True, "offset_bound_ms": 1.0}})
+    capture.monitor.poll()
+    assert capture.route._snapshot()["live_alerts"] == []
+    take = capture.store.complete_current({"output_path": capture.state["output_path"], "merge_state": "done"})
+    assert [e["event"] for e in take["anomaly_timeline"]] == ["started", "resolved"]
+    assert take["quick_qc"]["state"] == "suspect"
+    # The start sample must survive recovery, not alias the current clock report.
+    assert take["anomaly_timeline"][0]["details"]["clocks"]["ok"] is False
+
+
 @pytest.mark.parametrize("phase,expected", [("recording", True), ("saving", True),
     ("starting", False), ("idle", False), ("saved", False), ("playback", False),
     ("different_bag", False), ("missing_bag", False), ("different_take", False)])
