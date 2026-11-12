@@ -37,6 +37,14 @@ class CameraInputs:
         self.specs.append((args, kwargs))
         return self.node.create_subscription(*args, **kwargs)
 
+    def published_topics(self):
+        """Read the live input participant, including after a USB/IP renewal."""
+        with self.lock:
+            if self.closed.is_set():
+                raise RuntimeError("Camera input participant is closed")
+            return [name for name, _ in self.node.get_topic_names_and_types()
+                    if self.node.count_publishers(name) > 0]
+
     def _spin(self):
         try:
             self.executor.spin()

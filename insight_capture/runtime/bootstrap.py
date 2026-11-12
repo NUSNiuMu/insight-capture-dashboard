@@ -143,7 +143,7 @@ def build_recording_manager(
         rosbag_root=settings.rosbag_root,
         max_cache_size=int(runtime_config.get("max_cache_size", 2147483648)),
         default_topics=settings.default_record_topics,
-        publisher_checker=None,
+        topic_provider=node.camera_inputs.published_topics,
         image_topics=[camera.topic for camera in node.cameras] + [
             topic + "/h264" for topic in settings.raw_config.get("recording_h264", {}).get("input_topics", [])
         ],

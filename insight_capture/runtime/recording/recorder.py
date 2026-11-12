@@ -1,8 +1,6 @@
-"""Recording topic normalization, grouping, and live discovery."""
+"""Recording topic normalization and grouping of published ROS topics."""
 
-import os
-import subprocess
-from typing import Callable, Dict, List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set
 
 from insight_capture.core.config import camera_base, dashboard_streams, enabled_cameras
 
@@ -204,55 +202,3 @@ def build_recording_topic_catalog(
         "topics": normalized_topics,
         "default_selected_topics": [topic for topic in normalized_topics if topic in default_selected],
     }
-
-
-def _parse_topic_list_with_types(output: str) -> List[str]:
-    topics: List[str] = []
-    for raw_line in output.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if " [" in line:
-            name = line.split(" [", 1)[0].strip()
-        else:
-            name = line
-        if name:
-            topics.append(name)
-    return topics
-
-
-def discover_live_topics(
-    raw_config: Dict,
-    ros_domain_id: int,
-    publisher_checker: Optional[Callable[[str], bool]] = None,
-) -> Dict[str, object]:
-    env = os.environ.copy()
-    env["ROS_DOMAIN_ID"] = str(int(ros_domain_id))
-    try:
-        result = subprocess.run(
-            ["ros2", "topic", "list", "-t", "--no-daemon", "--spin-time", "0.5"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=5.0,
-            env=env,
-            check=False,
-        )
-    except Exception:
-        return build_recording_topic_catalog(raw_config, [], build_default_topics(raw_config))
-
-    discovered = _parse_topic_list_with_types(result.stdout or "")
-    filtered = filter_recordable_live_topics(raw_config, discovered)
-    if publisher_checker is not None:
-        with_publishers = []
-        for topic in filtered:
-            if topic == "/tf_static":
-                with_publishers.append(topic)
-                continue
-            try:
-                if publisher_checker(topic):
-                    with_publishers.append(topic)
-            except Exception:
-                continue
-        filtered = with_publishers
-    return build_recording_topic_catalog(raw_config, filtered, build_default_topics(raw_config))

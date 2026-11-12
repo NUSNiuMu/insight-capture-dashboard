@@ -21,7 +21,7 @@ from .storage import probe_recording_root
 from .recorder import (
     _normalize_topics,
     build_recording_topic_catalog,
-    discover_live_topics,
+    filter_recordable_live_topics,
 )
 from .recovery import RECORDING_TARGET_NAME, RecordingRecovery
 from .network_audit import (
@@ -46,7 +46,7 @@ class RecordingManager:
         rosbag_root: Path,
         max_cache_size: int,
         default_topics: Sequence[str],
-        publisher_checker: Optional[Callable[[str], bool]] = None,
+        topic_provider: Optional[Callable[[], Sequence[str]]] = None,
         image_topics: Optional[Sequence[str]] = None,
         start_image_recording: Optional[Callable[[Dict[str, str]], None]] = None,
         stop_image_recording: Optional[Callable[[], Dict[str, object]]] = None,
@@ -79,7 +79,7 @@ class RecordingManager:
         self._manual_storage_selected = False
         self._storage_changed_callbacks: List[Callable[[Path], None]] = []
         self.default_topics = _normalize_topics(default_topics)
-        self.publisher_checker = publisher_checker
+        self.topic_provider = topic_provider
         # Reuse dashboard image subscriptions for a continuity audit.
         self._image_topics: Set[str] = set(_normalize_topics(image_topics or []))
         self._start_image_recording = start_image_recording
@@ -111,6 +111,7 @@ class RecordingManager:
         self._recorder_control_fds: Dict[str, int] = {}
         self._stdout_threads: List[threading.Thread] = []
         self._lock = threading.Lock()
+        self._topic_refresh_lock = threading.Lock()
         self._merge_thread: Optional[threading.Thread] = None
         self._recording_completed_callbacks: List[Callable[[Path], None]] = []
         self.merge_state: str = "idle"  # idle | finalizing | merging | done | error
@@ -358,28 +359,41 @@ class RecordingManager:
                 stream.close()
 
     def refresh_topic_catalog(self, force: bool = False) -> Dict[str, object]:
-        now = time.monotonic()
-        with self._lock:
-            if (
-                not force
-                and self.topic_catalog.get("topics")
-                and (now - self._last_topic_refresh_monotonic) < 1.0
-            ):
-                return self.topic_catalog
-        catalog = discover_live_topics(
-            self.raw_config,
-            self.ros_domain_id,
-            publisher_checker=self.publisher_checker,
-        )
-        with self._lock:
-            self.topic_catalog = catalog
-            self._last_topic_refresh_monotonic = now
-        return catalog
+        # Multiple browser clients share one graph snapshot. Never hold the
+        # recording lifecycle lock while waiting for an input-node renewal.
+        with self._topic_refresh_lock:
+            with self._lock:
+                if (
+                    not force
+                    and "error" not in self.topic_catalog
+                    and self._last_topic_refresh_monotonic > 0
+                    and (time.monotonic() - self._last_topic_refresh_monotonic) < 1.0
+                ):
+                    return self.topic_catalog
+            try:
+                if self.topic_provider is None:
+                    raise RuntimeError("Live ROS topic provider is unavailable")
+                topics = filter_recordable_live_topics(self.raw_config, self.topic_provider())
+                catalog = build_recording_topic_catalog(self.raw_config, topics, self.default_topics)
+            except Exception as exc:
+                with self._lock:
+                    self.topic_catalog = {
+                        **build_recording_topic_catalog(self.raw_config, [], self.default_topics),
+                        "error": str(exc),
+                    }
+                    self._last_topic_refresh_monotonic = 0.0
+                raise
+            with self._lock:
+                self.topic_catalog = catalog
+                self._last_topic_refresh_monotonic = time.monotonic()
+            return catalog
 
     def current_topic_catalog(self, refresh: bool = True) -> Dict[str, object]:
         if refresh:
             return self.refresh_topic_catalog()
         with self._lock:
+            if "error" in self.topic_catalog:
+                raise RuntimeError(self.topic_catalog["error"])
             return self.topic_catalog
 
     def probe_topic_payloads(

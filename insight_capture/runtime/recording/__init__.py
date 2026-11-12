@@ -5,7 +5,6 @@ from .recorder import (
     build_default_topics,
     build_recording_topic_catalog,
     build_vio_calibration_topics,
-    discover_live_topics,
     filter_recordable_live_topics,
     vio_calibration_raw_image_topics,
 )
@@ -17,7 +16,6 @@ __all__ = [
     "build_default_topics",
     "build_recording_topic_catalog",
     "build_vio_calibration_topics",
-    "discover_live_topics",
     "filter_recordable_live_topics",
     "load_post_processing_config",
     "vio_calibration_raw_image_topics",
