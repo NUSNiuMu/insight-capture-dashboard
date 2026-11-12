@@ -1,5 +1,23 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { t } from './i18n.js';
+const vioStages={NOT_INITED:'定位尚未初始化',RESTARTING:'正在恢复定位',STOPPED:'定位已停止',TRACKING_LOST:'定位跟踪丢失',DATA_LOST:'定位输入中断',NO_CALIBRATION:'缺少相机标定'};
+const vioHints={
+ NOT_INITED:'请确认镜头未遮挡、光线充足且画面有纹理；必要时缓慢移动设备，观察定位是否恢复。',
+ RESTARTING:'相机正在恢复定位，请保持供电并等待状态更新。',
+ STOPPED:'相机定位已停止，请检查设备工作模式；持续异常时保存诊断。',
+ TRACKING_LOST:'请让相机朝向光线充足、有纹理的场景，缓慢移动并观察定位是否恢复。',
+ DATA_LOST:'相机报告定位输入中断，请检查供电和连接；持续异常时保存诊断。',
+ NO_CALIBRATION:'相机内部标定文件缺失，请恢复相机标定。页面上的重新校准只重建公共地图。',
+};
+export function deviceHint(device,status) {
+ const health=status?.preflight?.camera_health?.[device.name];
+ if(!health||health.vio_fresh||!health.image_fresh||!status?.preflight?.clocks?.devices?.[device.name]?.ok||!status?.system?.camera_links?.some(link=>link.namespace===device.name))return '';
+ if(status.system.managed_camera_startup&&!status.system.camera_startup?.[device.name])return '';
+ const imageClock=status?.preflight?.image_clocks?.devices?.[device.name];
+ if(imageClock&&!imageClock.ok)return '';
+ if(!health.vio_status_fresh)return t('暂未收到新的相机定位状态，请检查连接；持续异常时保存诊断。');
+ return t(vioHints[health.vio_status]||'尚未收到新的定位数据，当前状态不能确认原因；持续异常时保存诊断。');
+}
 export function deviceStage(device, status) {
   const name=device.name;
   if(!status?.system?.camera_links?.some(link=>link.namespace===name))return t('等待 USB 连接');
@@ -9,7 +27,8 @@ export function deviceStage(device, status) {
   const imageClock=status?.preflight?.image_clocks?.devices?.[name];
   if(imageClock?.state==='invalid')return t('图像时间戳异常');
   if(imageClock&&!imageClock.ok)return t('等待图像');
-  if(!status?.preflight?.camera_health?.[name]?.vio_fresh)return t('等待 VIO');
+  const health=status?.preflight?.camera_health?.[name];
+  if(!health?.vio_fresh)return t(health?.vio_status_fresh&&vioStages[health.vio_status]||'等待定位数据');
   return t('已就绪');
 }
 export async function api(path, body) {

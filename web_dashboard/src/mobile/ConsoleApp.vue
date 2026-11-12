@@ -3,7 +3,7 @@ import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import CameraPreview from '../preview/components/CameraPreview.vue';
 import RecordsPage from './RecordsPage.vue';
 import TrajectoryPanel from './TrajectoryPanel.vue';
-import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration, deviceStage } from './useCapture.js';
+import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration, deviceStage, deviceHint } from './useCapture.js';
 import { t, language, setLanguage } from './i18n.js';
 const {status,mapping,tasks,tasksError,taskDraft,online,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
@@ -30,6 +30,13 @@ const health=computed(()=>status.value?.preflight?.camera_health||{});
 const clocks=computed(()=>status.value?.preflight?.clocks||{});
 const devices=computed(()=>[...(status.value?.devices||[])].sort((a,b)=>({head:0,left_hand:1,right_hand:2}[a.role]-{head:0,left_hand:1,right_hand:2}[b.role])));
 const attentionDevices=computed(()=>devices.value.filter(d=>!online.value||stage(d)!==t('已就绪')));
+const attentionDevice=computed(()=>online.value&&!active.value&&task.value?attentionDevices.value[0]:null);
+const readinessIssues=computed(()=>[...(status.value?.preflight?.failures||[]),...(status.value?.preflight?.warnings||[])]);
+const readinessSummary=computed(()=>{
+ if(!online.value||active.value)return '';
+ if(attentionDevice.value)return '';
+ return t(readinessIssues.value[0]?.message||'');
+});
 const head=computed(()=>devices.value.find(d=>d.role==='head'));
 const title=computed(()=>t(page.value==='capture'?'采集':page.value==='history'?'记录':route.value==='settings/language'?'语言':route.value==='settings/diagnostics'?'诊断':'设备'));
 const calibration=computed(()=>{
@@ -73,7 +80,7 @@ function updateLayout(){
   shell.value.style.setProperty('--footer-height',`${footerHeight}px`);
   // The intro is independent of the video height. Keep scroll position out of
   // this measurement so scrolling does not resize the picture under the user.
-  if(page.value==='capture')previewHeight.value=Math.max(280,window.innerHeight-(intro.value.getBoundingClientRect().bottom+window.scrollY)-footerHeight-12);
+  if(page.value==='capture')previewHeight.value=Math.max(144,window.innerHeight-(intro.value.getBoundingClientRect().bottom+window.scrollY)-footerHeight-12);
  });
 }
 onMounted(()=>{if(taskDraft.value)dialog.value.showModal();window.addEventListener('hashchange',hashChanged);window.addEventListener('resize',updateLayout);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(updateLayout);[footer.value,header.value,intro.value].forEach(node=>observer.observe(node));});
@@ -86,10 +93,10 @@ watch(language,()=>document.title='Insight Capture');
 <main>
 <div ref="intro" class="capture-intro">
 <section class="card readiness-card" :class="{'readiness-blocked':online&&!status?.preflight?.ok&&!active,'readiness-warning':!online||(status?.preflight?.ok&&status?.preflight?.warnings?.length)}">
-<div class="readiness-title"><i class="state-mark"></i><strong>{{!online?t('正在连接设备'):active||uiState==='error'?stateLabel(uiState):!task?t('请先创建或选择任务'):t(status?.preflight?.ok?'可以开始录制':'等待采集就绪')}}</strong><button class="text-link" v-if="page!=='settings'" @click="navigate('settings')">{{t('查看状态')}} ›</button></div>
-<div v-if="page==='capture'&&attentionDevices.length" class="health-summary"><span v-for="d in attentionDevices" :key="d.name" class="bad">{{roleLabel(d.role)}} · {{online?stage(d):t('离线')}}</span></div>
+<div class="readiness-title"><i class="state-mark"></i><strong><template v-if="page==='capture'&&attentionDevice">{{roleLabel(attentionDevice.role)}}<small :title="stage(attentionDevice)">{{stage(attentionDevice)}}</small></template><template v-else>{{!online?t('正在连接设备'):active||uiState==='error'?stateLabel(uiState):!task?t('请先创建或选择任务'):t(status?.preflight?.ok?'可以开始录制':'等待采集就绪')}}</template></strong><button id="view-device-status" class="text-link" v-if="page!=='settings'" @click="navigate('settings')">{{t(readinessIssues.length&&!active?'查看状态（{0}）':'查看状态',readinessIssues.length)}} ›</button></div>
+<p v-if="page==='capture'&&readinessSummary" class="readiness-summary" :class="status?.preflight?.ok?'warning':'bad'">{{readinessSummary}}</p>
 <p v-if="!online" class="section-description">{{t('网页断开不会停止设备上的录制。')}}</p>
-<div v-if="page==='capture' && !active" class="issues" :hidden="!status?.preflight?.failures?.length && !status?.preflight?.warnings?.length"><p v-for="issue in status?.preflight?.failures" :key="issue.code" class="issue error">{{t(issue.message)}}</p><p v-for="issue in status?.preflight?.warnings" :key="issue.code" class="issue warning">{{t(issue.message)}}</p></div></section>
+</section>
 <p v-if="error||captureError||status?.operation?.error||(page==='capture'&&!active&&previewError)" role="alert" class="global-error">{{t(error||captureError||status?.operation?.error||previewError)}}</p>
 <p v-if="status?.state==='saving'" role="status" class="save-progress">{{t('正在保存，请保持设备供电。')}}</p>
 <section v-if="liveAlerts.length" id="live-alerts" class="card live-alerts" :class="{'has-critical':criticalAlert}" tabindex="-1" role="status" aria-live="polite"><h2>{{t('采集提醒')}}</h2><p v-for="item in liveAlerts" :key="item.code" class="issue" :class="item.severity==='critical'?'error':'warning'">{{alertText(item)}}</p><p v-if="!online" class="section-description">{{t('连接已断开，以下提醒来自最后一次设备状态。')}}</p></section>
@@ -108,7 +115,8 @@ watch(language,()=>document.title='Insight Capture');
 <div v-if="page==='settings'">
 <template v-if="route==='settings'">
 <section class="card device-hero"><span class="device-mark">I</span><h2>Insight Capture</h2><p class="section-description">Jetson · {{devices.map(d=>d.name.split('_')[0].toUpperCase()).join(' / ')}}</p></section>
-<section class="card"><div class="section-title"><h2>{{t('连接与启动')}}</h2><span>{{t('运行时间')}} {{duration(status?.system?.uptime_s)}}</span></div><div v-for="d in devices" :key="d.name" class="device-row"><div><strong>{{roleLabel(d.role)}}</strong><small>{{status?.system?.camera_links?.find(p=>p.namespace===d.name)?.host||'—'}}</small></div><span>{{online?stage(d):t('离线')}}</span></div><p class="section-description">{{t('USB 连接 → 时钟就绪 → 图像 / VIO 就绪')}}</p><p class="section-description">{{t('当前访问地址')}}：{{endpoint}}</p></section>
+<section class="card"><div class="section-title"><h2>{{t('连接与启动')}}</h2><span>{{t('运行时间')}} {{duration(status?.system?.uptime_s)}}</span></div><div v-for="d in devices" :key="d.name" class="device-status-item"><div class="device-row"><div><strong>{{roleLabel(d.role)}}</strong><small>{{status?.system?.camera_links?.find(p=>p.namespace===d.name)?.host||'—'}}</small></div><span>{{online?stage(d):t('离线')}}</span></div><p v-if="online&&deviceHint(d,status)" class="device-hint">{{deviceHint(d,status)}}</p></div><p class="section-description">{{t('USB 连接 → 时钟就绪 → 图像 / VIO 就绪')}}</p><p class="section-description">{{t('当前访问地址')}}：{{endpoint}}</p></section>
+<section v-if="!active&&readinessIssues.length" id="readiness-details" class="card"><h2>{{t('采集前检查')}}</h2><p v-if="!online" class="section-description">{{t('连接已断开，以下提醒来自最后一次设备状态。')}}</p><p v-for="(issue,index) in status?.preflight?.failures" :key="`failure-${index}`" class="issue error">{{t(issue.message)}}</p><p v-for="(issue,index) in status?.preflight?.warnings" :key="`warning-${index}`" class="issue warning">{{t(issue.message)}}</p></section>
 <section class="card"><div class="section-title"><h2>{{t('存储')}}</h2><strong>{{size(status?.preflight?.storage?.free_bytes)}} {{t('可用')}}</strong></div><p :class="status?.storage?.using_fallback?'issue warning':'section-description'">{{t(status?.storage?.using_fallback?'录制盘未连接，当前使用备用存储。':'使用采集存储。')}}</p><p class="storage-path">{{status?.storage?.active_path||'—'}}</p></section>
 <section class="card"><div class="section-title"><h2>{{t('时间同步')}}</h2><span :class="{bad:!clocks.ok}">{{t(clocks.ok?'已就绪':'测量中')}}</span></div><div v-for="d in devices" :key="d.name" class="device-row"><strong>{{roleLabel(d.role)}}</strong><span v-if="clocks.devices?.[d.name]?.offset_ms!=null">{{clocks.devices[d.name].offset_ms.toFixed(3)}} ms</span><span v-else>—</span></div><p class="section-description">{{t('相机相对 Jetson 的 NTP 偏差；不代表曝光同步精度。')}}</p><p class="section-description">{{t('两机误差保守上界')}}：{{clocks.pairwise_clock_bound_ms?.toFixed(2)||'—'}} / {{clocks.max_pairwise_clock_bound_ms||20}} ms</p></section>
 <section class="card settings-links"><button class="settings-link" @click="navigate('settings/language')"><span>{{t('语言')}}</span><small>{{language==='en'?'English':'简体中文'}}</small><b>›</b></button><button class="settings-link" @click="navigate('settings/diagnostics')"><span>{{t('诊断')}}</span><small>{{t('设备与采集状态')}}</small><b>›</b></button></section>

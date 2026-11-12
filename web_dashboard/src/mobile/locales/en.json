@@ -831,5 +831,22 @@
   "录制写入出现异常，本条已标记复检。": "A recording write error occurred. This take is marked for review.",
   "检测到持续丢帧，本条已标记复检。": "Sustained frame loss detected. This take is marked for review.",
   "{0}图像中断，本条已记录异常。": "{0} images are interrupted. An issue has been recorded for this take.",
-  "{0}定位异常，本条已标记复检。": "{0} localization failed. This take is marked for review."
+  "{0}定位异常，本条已标记复检。": "{0} localization failed. This take is marked for review.",
+  "定位尚未初始化": "Localization not initialized",
+  "正在恢复定位": "Recovering localization",
+  "定位已停止": "Localization stopped",
+  "定位跟踪丢失": "Tracking lost",
+  "定位输入中断": "Localization input interrupted",
+  "缺少相机标定": "Camera calibration missing",
+  "等待定位数据": "Waiting for pose data",
+  "采集前检查": "Capture checks",
+  "查看状态（{0}）": "View status ({0})",
+  "请确认镜头未遮挡、光线充足且画面有纹理；必要时缓慢移动设备，观察定位是否恢复。": "Check that the lenses are clear and the scene is well lit with visible texture. If needed, move the device slowly and check whether localization recovers.",
+  "相机正在恢复定位，请保持供电并等待状态更新。": "The camera is recovering localization. Keep it powered and wait for the status to update.",
+  "相机定位已停止，请检查设备工作模式；持续异常时保存诊断。": "Camera localization has stopped. Check the device mode and save diagnostics if the problem persists.",
+  "请让相机朝向光线充足、有纹理的场景，缓慢移动并观察定位是否恢复。": "Point the camera at a well-lit scene with visible texture, move slowly and check whether tracking recovers.",
+  "相机报告定位输入中断，请检查供电和连接；持续异常时保存诊断。": "The camera reports interrupted localization input. Check power and connections, and save diagnostics if the problem persists.",
+  "相机内部标定文件缺失，请恢复相机标定。页面上的重新校准只重建公共地图。": "Internal camera calibration is missing. Restore the camera calibration. Recalibrate on this page only rebuilds the shared map.",
+  "暂未收到新的相机定位状态，请检查连接；持续异常时保存诊断。": "No recent camera localization status has arrived. Check the connection and save diagnostics if the problem persists.",
+  "尚未收到新的定位数据，当前状态不能确认原因；持续异常时保存诊断。": "No recent pose data has arrived. The current status does not identify the cause. Save diagnostics if the problem persists."
 }

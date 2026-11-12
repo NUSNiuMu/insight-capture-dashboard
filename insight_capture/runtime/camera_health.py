@@ -52,6 +52,8 @@ def evaluate_calibration_cameras(
     health: Dict[str, Dict] = {}
     unavailable: list[Dict] = []
     liveness_times = getattr(node, "camera_liveness_times", {})
+    with node.camera_input_lock:
+        vio_statuses = dict(getattr(node, "camera_vio_status", {}))
 
     for name in required_names:
         streams = groups.get(name, [])
@@ -64,6 +66,9 @@ def evaluate_calibration_cameras(
         vio_seen = max((float(liveness_times.get(stream.name, 0.0)) for stream in streams), default=0.0)
         vio_age = None if vio_seen <= 0.0 else max(0.0, current - vio_seen)
         vio_fresh = vio_age is not None and vio_age <= stale_sec
+        native_status = vio_statuses.get(name)
+        status_age = None if native_status is None else max(0.0, current - native_status[1])
+        status_fresh = status_age is not None and status_age <= stale_sec
         missing = []
         if camera is None:
             missing.append("configuration")
@@ -80,6 +85,11 @@ def evaluate_calibration_cameras(
             "image_fps": image_fps,
             "vio_fresh": vio_fresh,
             "vio_age_sec": vio_age,
+            # Status is diagnostic only; actual pose/image freshness remains
+            # the readiness contract, including on firmware without this topic.
+            "vio_status": native_status[0] if status_fresh else None,
+            "vio_status_age_sec": status_age,
+            "vio_status_fresh": status_fresh,
         }
         health[name] = entry
         if missing:

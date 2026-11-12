@@ -143,7 +143,15 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 .readiness-card { padding: 10px 12px; border-left-width: 3px; }
 .health-summary { margin-top: 0; gap: 5px; }
 .health-summary span { background: transparent; padding: 5px; }
-.readiness-title strong { font-size: 14px; flex: 1; }
+.readiness-title strong { font-size: 14px; flex: 1; min-width: 0; }
+.readiness-title strong small { display: block; margin-top: 2px; font-size: 12px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.readiness-title .text-link { min-height: 44px; flex-shrink: 0; }
+.readiness-summary { margin: 4px 0 0; font-size: 12px; line-height: 1.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.readiness-summary.warning { color: #996000; }
+.device-status-item .device-row { gap: 10px; }
+.device-status-item .device-row > span { max-width: 55%; text-align: right; }
+.device-hint { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: #fff6df; color: #855000; font-size: 12px; line-height: 1.6; }
+#readiness-details h2 { font-size: 16px; margin: 0 0 10px; }
 .capture-intro { display: flow-root; }
 .capture-page .topbar { min-height: 56px; padding-top: calc(10px + var(--safe-area-inset-top, env(safe-area-inset-top))); padding-bottom: 10px; }
 .capture-page .topbar-title { display: flex; align-items: baseline; gap: 10px; }

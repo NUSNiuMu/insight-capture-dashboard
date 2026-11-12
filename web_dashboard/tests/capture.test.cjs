@@ -17,8 +17,8 @@ const outfile = path.join(temp, 'harness.cjs');
 buildSync({ stdin: { contents: `
   import { createSSRApp, createRenderer, nextTick } from 'vue';
   import { renderToString } from 'vue/server-renderer';
-  import { useCapture, takeDuration, takeDisplayState, deviceStage } from './src/mobile/useCapture.js';
-  export { takeDuration, takeDisplayState, deviceStage };
+  import { useCapture, takeDuration, takeDisplayState, deviceStage, deviceHint } from './src/mobile/useCapture.js';
+  export { takeDuration, takeDisplayState, deviceStage, deviceHint };
   export async function capture() {
     let result;
     await renderToString(createSSRApp({setup(){result=useCapture();return ()=>null;}}));
@@ -33,7 +33,7 @@ buildSync({ stdin: { contents: `
     return {value:result,unmount:()=>app.unmount()};
   }`, resolveDir: path.resolve(__dirname, '..') },
   bundle: true, platform: 'node', format: 'cjs', outfile });
-const { capture, liveCapture, nextTick, takeDuration, takeDisplayState, deviceStage } = require(outfile);
+const { capture, liveCapture, nextTick, takeDuration, takeDisplayState, deviceStage, deviceHint } = require(outfile);
 rmSync(temp, { recursive: true });
 const snapshot = (state='idle', task='qa', output='/take/1') => ({
   state, output_path: output, task_status: { task: { task_id: task } },
@@ -411,4 +411,41 @@ test('camera stage separates missing images from a fresh wrong timestamp',()=>{
   assert.equal(deviceStage(device,status),'等待图像');
   status.system.camera_links=[];
   assert.equal(deviceStage(device,status),'等待 USB 连接');
+});
+
+function cameraStatus(state='NOT_INITED') {
+ return {system:{camera_links:[{namespace:'head'}]},preflight:{
+  clocks:{devices:{head:{ok:true}}},image_clocks:{devices:{head:{ok:true,state:'ready'}}},
+  camera_health:{head:{image_fresh:true,vio_fresh:false,vio_status:state,vio_status_fresh:true}},
+ }};
+}
+test('native VIO states distinguish initialization, tracking, calibration and recovery',()=>{
+ for(const [state,label] of Object.entries({NOT_INITED:'定位尚未初始化',NO_CALIBRATION:'缺少相机标定',TRACKING_LOST:'定位跟踪丢失',RESTARTING:'正在恢复定位',STOPPED:'定位已停止',DATA_LOST:'定位输入中断'})){
+  const status=cameraStatus(state);
+  assert.equal(deviceStage({name:'head'},status),label);
+  assert(deviceHint({name:'head'},status).length>10);
+ }
+ assert.match(deviceHint({name:'head'},cameraStatus('NO_CALIBRATION')),/只重建公共地图/);
+});
+test('expired and unknown VIO status never become a specific diagnosis',()=>{
+ const status=cameraStatus();status.preflight.camera_health.head.vio_status_fresh=false;
+ assert.equal(deviceStage({name:'head'},status),'等待定位数据');
+ assert.match(deviceHint({name:'head'},status),/暂未收到新的/);
+ assert.doesNotMatch(deviceHint({name:'head'},status),/光线/);
+ status.preflight.camera_health.head.vio_status_fresh=true;
+ status.preflight.camera_health.head.vio_status='FUTURE_STATE';
+ assert.equal(deviceStage({name:'head'},status),'等待定位数据');
+ assert.match(deviceHint({name:'head'},status),/不能确认原因/);
+});
+test('earlier connection and clock failures take priority over VIO troubleshooting',()=>{
+ for(const change of [s=>s.system.camera_links=[],s=>s.preflight.clocks.devices.head.ok=false,
+  s=>s.preflight.camera_health.head.image_fresh=false,s=>s.preflight.image_clocks.devices.head={ok:false,state:'invalid'},
+  s=>s.system.managed_camera_startup=true]){
+  const status=cameraStatus();change(status);assert.equal(deviceHint({name:'head'},status),'');
+  assert.notEqual(deviceStage({name:'head'},status),'定位尚未初始化');
+ }
+});
+test('new pose data clears the diagnostic even before the next status heartbeat',()=>{
+ const status=cameraStatus();status.preflight.camera_health.head.vio_fresh=true;
+ assert.equal(deviceStage({name:'head'},status),'已就绪');assert.equal(deviceHint({name:'head'},status),'');
 });

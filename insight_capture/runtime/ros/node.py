@@ -21,6 +21,7 @@ try:
     from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
     from rclpy.qos_event import SubscriptionEventCallbacks
     from sensor_msgs.msg import CompressedImage, Image as RosImage
+    from std_msgs.msg import String
     from tf2_msgs.msg import TFMessage
 except Exception:  # pragma: no cover - host-side tools may import without ROS
     rclpy = None
@@ -36,6 +37,7 @@ except Exception:  # pragma: no cover - host-side tools may import without ROS
     CompressedImage = None
     RosImage = None
     TFMessage = None
+    String = None
 
 from insight_capture.core.config import (
     build_dashboard_config,
@@ -184,6 +186,7 @@ class PoseBridgeNode(Node):
         self.camera_liveness_times: Dict[str, float] = {
             camera.name: 0.0 for camera in self.cameras
         }
+        self.camera_vio_status: Dict[str, Tuple[str, float]] = {}
         self.pose_lock = threading.Lock()
         self.camera_frame_lock = threading.Lock()
         self.camera_input_lock = threading.Lock()
@@ -255,6 +258,7 @@ class PoseBridgeNode(Node):
         self.camera_inputs = CameraInputs(self)
         self._create_tf_static_relay()
         self._create_pose_subscriptions()
+        self._create_camera_status_subscriptions()
         self._create_dashboard_image_subscriptions()
         self.camera_inputs.start()
         threading.Thread(
@@ -343,6 +347,28 @@ class PoseBridgeNode(Node):
             self.get_logger().info(
                 f"Camera liveness: {', '.join(camera_names)} <- {native_vio_topic}"
             )
+
+    def _create_camera_status_subscriptions(self) -> None:
+        topics = {}
+        for camera in self.cameras:
+            topics.setdefault(f"/{camera.namespace}/camera/vio_status", set()).add(
+                camera.device_name or camera.name
+            )
+        for topic, devices in topics.items():
+            self.camera_inputs.create_subscription(
+                String, topic, self._make_camera_status_callback(devices),
+                make_image_qos(depth=1), callback_group=self.ros_callback_group,
+                event_callbacks=self.subscription_event_callbacks,
+            )
+
+    def _make_camera_status_callback(self, devices):
+        def callback(msg) -> None:
+            if not self._playback_mode:
+                received = time.monotonic()
+                with self.camera_input_lock:
+                    for device in devices:
+                        self.camera_vio_status[device] = (msg.data, received)
+        return callback
 
     def _create_dashboard_image_subscriptions(self) -> None:
         # Depth 20 absorbs executor stalls without overwriting recording frames.
