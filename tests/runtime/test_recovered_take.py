@@ -1,6 +1,8 @@
 """Failed history exposes recovery data without relabelling or rewriting Takes."""
 import asyncio
 import json
+import io
+from zipfile import ZipFile
 from types import SimpleNamespace
 
 import pytest
@@ -86,6 +88,16 @@ def test_download_is_resumable_and_limited_to_known_recovered_take_files(recover
             response = await client.head(base + 'data')
             assert response.status == 200
             assert int(response.headers['Content-Length']) == len(data)
+            response = await client.get(base + 'bundle')
+            assert response.status == 200
+            assert bag.name + '.zip' in response.headers['Content-Disposition']
+            with ZipFile(io.BytesIO(await response.read())) as archive:
+                assert archive.testzip() is None
+                assert sorted(archive.namelist()) == sorted(bag.name + '/' + name for name in (
+                    'data.mcap', 'metadata.yaml', 'recording_manifest.json'))
+                for name in archive.namelist():
+                    assert archive.read(name) == (bag / name.split('/')[-1]).read_bytes()
+            assert (await client.head(base + 'bundle')).status == 200
             for kind, name in [('metadata', 'metadata.yaml'), ('manifest', 'recording_manifest.json')]:
                 response = await client.get(base + kind)
                 assert await response.read() == (bag / name).read_bytes()
@@ -95,3 +107,19 @@ def test_download_is_resumable_and_limited_to_known_recovered_take_files(recover
                 assert (await client.get(url)).status == 404
     asyncio.run(scenario())
     assert store.task_status()['task']['task_id'] == 'other'
+
+
+def test_bundle_keeps_large_reads_bounded_and_closes_after_cancel(tmp_path):
+    from insight_capture.runtime.recovered_bundle import recovered_bundle
+    path = tmp_path / 'large.mcap'
+    path.write_bytes(bytes(range(256)) * 1024)
+    chunks = recovered_bundle([path], chunk_size=4096)
+    parts = list(chunks)
+    assert max(map(len, parts)) <= 4096
+    with ZipFile(io.BytesIO(b''.join(parts))) as archive:
+        assert archive.read(tmp_path.name + '/' + path.name) == path.read_bytes()
+    chunks = recovered_bundle([path], chunk_size=4096)
+    next(chunks)
+    next(chunks)
+    chunks.close()
+    assert chunks.gi_frame is None

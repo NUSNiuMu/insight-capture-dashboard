@@ -7,6 +7,7 @@ from aiohttp import web
 
 from insight_capture.api.context import DashboardContext
 from insight_capture.api.support import read_json_body
+from insight_capture.runtime.recovered_bundle import recovered_bundle
 
 
 def task_status_message(status: dict) -> str:
@@ -46,14 +47,45 @@ class TaskRoutes:
         )
         return web.json_response(payload, headers={"Cache-Control": "no-store"})
 
-    async def _handle_recovered_file(self, request: web.Request) -> web.FileResponse:
+    async def _handle_recovered_file(self, request: web.Request) -> web.StreamResponse:
+        kind = request.match_info['kind']
         try:
-            path = await asyncio.to_thread(
-                self.context.take_store.recovered_file, request.match_info['task_id'],
-                int(request.match_info['take_id']), request.match_info['kind'],
-            )
+            def resolve():
+                return [self.context.take_store.recovered_file(
+                    request.match_info['task_id'], int(request.match_info['take_id']), item
+                ) for item in (('data', 'metadata', 'manifest') if kind == 'bundle' else (kind,))]
+            paths = await asyncio.to_thread(resolve)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             raise web.HTTPNotFound(text='Recovered file unavailable') from exc
+        if kind == 'bundle':
+            response = web.StreamResponse(headers={
+                'Content-Type': 'application/zip',
+                'Content-Disposition': "attachment; filename*=UTF-8''" + quote(paths[0].parent.name + '.zip', safe=''),
+                'Cache-Control': 'no-store',
+            })
+            await response.prepare(request)
+            if request.method != 'HEAD':
+                chunks = recovered_bundle(paths)
+                try:
+                    while True:
+                        pending = asyncio.create_task(asyncio.to_thread(next, chunks, None))
+                        try:
+                            data = await asyncio.shield(pending)
+                        except asyncio.CancelledError:
+                            # Finish the bounded read before closing its generator.
+                            await pending
+                            raise
+                        if data is None:
+                            break
+                        await response.write(data)
+                except ConnectionError:
+                    # Cancelling a browser download is a normal client action.
+                    return response
+                finally:
+                    chunks.close()
+            await response.write_eof()
+            return response
+        path = paths[0]
         return web.FileResponse(path, headers={
             'Content-Disposition': "attachment; filename*=UTF-8''" + quote(path.name, safe=''),
             'Cache-Control': 'no-store',

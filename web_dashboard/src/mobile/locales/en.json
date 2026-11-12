@@ -819,5 +819,8 @@
   "下载": "Download",
   "使用 ROS 工具回放时，请将录制数据和回放元数据保存到同一文件夹。": "For ROS playback, save the recording data and playback metadata in the same folder.",
   "原始文件位置": "Original files location",
-  "预期保存位置": "Intended save location"
+  "预期保存位置": "Intended save location",
+  "下载恢复数据包（ZIP）": "Download recovered take (ZIP)",
+  "数据包按 Take 命名，包含录制数据、回放元数据和恢复说明。解压后即可使用 ROS 工具读取。": "The Take-named archive includes recording data, playback metadata and recovery details. Extract it to read with ROS tools.",
+  "单独下载文件": "Download individual files"
 }
