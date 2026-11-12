@@ -21,7 +21,7 @@ import sqlite3
 import threading
 import time
 from bisect import bisect_left
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 
 import cv2
 import numpy as np
@@ -35,6 +35,10 @@ from .pose import DirectPose, marker_detector
 SETTINGS = "pose.json"
 OFFLINE_DB = "pose_offline.sqlite3"
 OFFLINE_REFINEMENT = "apriltag"
+# Opt-in fast mode: AprilTag refinement only around markers a coarse pass
+# found. ~2-4x faster, but on atom_action_set_1-1 it missed ~14% of the
+# markers the full-frame pass found, so it is never the default.
+FAST_REFINEMENT = "roi_apriltag"
 DEFAULT_FILTER_HZ = 6.0
 # Same bracket limit as the live PoseBuffer: never interpolate VIO across a gap.
 MAX_VIO_GAP_NS = 50_000_000
@@ -125,12 +129,50 @@ def smooth_arm(block, mask, fps, cutoff_hz):
 
 def _worker_init():
     # Parallelism comes from the process pool; keep each worker single
-    # threaded and below the capture/web process in scheduling priority.
+    # threaded and at the lowest scheduling priority, so recording running
+    # at the same time always gets the CPU first.
     cv2.setNumThreads(1)
     try:
-        os.nice(10)
+        os.nice(19)
     except OSError:
         pass
+
+
+_pool, _pool_size = None, 0
+_pool_lock = threading.Lock()
+
+
+def max_workers():
+    """Three quarters of the logical CPUs (ARUCO_RECOMPUTE_WORKERS overrides): detection
+    is the whole cost and scales with cores; workers run at nice 19."""
+    configured = os.environ.get("ARUCO_RECOMPUTE_WORKERS")
+    if configured:
+        return max(1, int(configured))
+    return max(1, (os.cpu_count() or 4) * 3 // 4)
+
+
+def shared_pool():
+    """One worker pool kept for the service's lifetime: spawning a dozen
+    workers (each importing OpenCV) took ~10 s per recompute, as long as
+    detecting a short recording."""
+    global _pool, _pool_size
+    with _pool_lock:
+        if _pool is None:
+            _pool_size = max_workers()
+            # spawn: the service process runs ROS and aiohttp threads, which
+            # a fork would copy mid-flight.
+            _pool = ProcessPoolExecutor(
+                _pool_size, mp_context=multiprocessing.get_context("spawn"), initializer=_worker_init
+            )
+        return _pool, _pool_size
+
+
+def shutdown_pool():
+    global _pool
+    with _pool_lock:
+        if _pool is not None:
+            _pool.shutdown(cancel_futures=True)
+            _pool = None
 
 
 def _detect_chunk(job):
@@ -197,8 +239,12 @@ def _vio_lookup(db):
     return lookup
 
 
-def recompute(path, progress=lambda done, total: None, workers=None):
-    """Re-detect every head frame and write ``pose_offline.sqlite3``."""
+def recompute(path, progress=lambda done, total: None, limit=None, fast=False):
+    """Re-detect every head frame and write ``pose_offline.sqlite3``.
+
+    ``limit()`` gives how many chunks may run at once and is asked again
+    as each one finishes, so the caller can shrink it while a recording is
+    in progress and widen it again afterwards."""
     started = time.monotonic()
     meta = json.loads((path / "session.json").read_text())
     if meta["status"] != "stopped":
@@ -220,26 +266,44 @@ def recompute(path, progress=lambda done, total: None, workers=None):
     if not frames:
         raise ValueError("录制中没有 Insight9 画面，无法离线重算")
     dictionary = config["cube_marker_relative_localization"].get("dictionary", "DICT_4X4_50")
+    refinement = FAST_REFINEMENT if fast else OFFLINE_REFINEMENT
     chunks = [
-        (str(database), [f[0] for f in frames[i : i + CHUNK]], size, dictionary, OFFLINE_REFINEMENT)
+        (str(database), [f[0] for f in frames[i : i + CHUNK]], size, dictionary, refinement)
         for i in range(0, len(frames), CHUNK)
     ]
-    workers = workers or max(1, min((os.cpu_count() or 2) - 1, 12))
-    detections = []
+    pool, size = shared_pool()
+    limit = limit or (lambda: size)
+    results, pending, submitted, done = [None] * len(chunks), {}, 0, 0
     progress(0, len(frames))
-    # spawn: the service process runs ROS and aiohttp threads, which a fork
-    # would copy mid-flight.
-    with ProcessPoolExecutor(
-        workers, mp_context=multiprocessing.get_context("spawn"), initializer=_worker_init
-    ) as pool:
-        for result in pool.map(_detect_chunk, chunks):
-            detections.extend(result)
-            progress(len(detections), len(frames))
+    while submitted < len(chunks) or pending:
+        allowed = max(1, min(size, int(limit())))
+        while submitted < len(chunks) and len(pending) < allowed:
+            pending[pool.submit(_detect_chunk, chunks[submitted])] = submitted
+            submitted += 1
+        finished, _ = wait(pending, return_when=FIRST_COMPLETED)
+        for future in finished:
+            index = pending.pop(future)
+            results[index] = future.result()
+            done += len(results[index])
+            progress(done, len(frames))
+    detections = [d for chunk in results for d in chunk]
 
-    pose = DirectPose(config, OFFLINE_REFINEMENT)
+    # Live poses, by head-frame stamp: a target the offline pass could not
+    # solve falls back to the live result for the same frame when that one
+    # was valid (it may have seen the markers on a less refined detection).
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as db:
+        live = {
+            stamp: json.loads(payload)
+            for stamp, payload in db.execute(
+                "SELECT stamp_ns,payload FROM samples WHERE kind='pose' AND name='arms' AND stamp_ns IS NOT NULL"
+            )
+        }
+
+    pose = DirectPose(config, refinement)
     pose.reference = np.array(meta.get("reference_from_vio_world", np.eye(4)), float)
     targets = list(pose.config.targets)
     valid = dict.fromkeys(targets, 0)
+    filled = dict.fromkeys(targets, 0)
     rows = []
     for (_, seconds, stamp), markers in zip(frames, detections):
         head = lookup(int(stamp)) if lookup and stamp else None
@@ -251,7 +315,11 @@ def recompute(path, progress=lambda done, total: None, workers=None):
             }
         else:
             observation = pose.observe(None, intrinsic, head, imu_from_rgb, seconds, markers)
+        fallback = live.get(stamp) or {}
         for x in targets:
+            if not observation[x].get("valid") and fallback.get(x, {}).get("valid"):
+                observation[x] = {**fallback[x], "source": "live"}
+                filled[x] += 1
             valid[x] += bool(observation[x].get("valid"))
         rows.append(("pose", "arms", seconds, stamp, json.dumps(observation)))
 
@@ -264,9 +332,10 @@ def recompute(path, progress=lambda done, total: None, workers=None):
     temporary.replace(path / OFFLINE_DB)
     info = {
         "created_unix_ns": time.time_ns(),
-        "corner_refinement": OFFLINE_REFINEMENT,
+        "corner_refinement": refinement,
         "frames": len(frames),
         "valid_ratios": {x: round(valid[x] / len(frames), 4) for x in targets},
+        "filled_from_live": filled,
         "elapsed_s": round(time.monotonic() - started, 1),
     }
     with settings_lock:

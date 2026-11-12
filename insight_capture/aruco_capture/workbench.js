@@ -478,12 +478,12 @@ function changeMode() {
   $("pageTitle").textContent = {
     capture: "实时采集",
     review: "回放与标注",
-    quality: "质量与导出",
+    quality: "处理与导出",
   }[mode];
   $("contextHint").textContent = {
     capture: "检查视频、定位和开合度，准备一次完整采集。",
     review: "在同一时间轴检查画面与位姿，划分动作并填写任务。",
-    quality: "定位无效时段，确认可用数据，再导出训练集。",
+    quality: "选择录制和导出内容，生成或追加 LeRobot 训练集。",
   }[mode];
   $("readiness").hidden = mode !== "capture";
   $("devicePanel").hidden = mode !== "capture";
@@ -496,7 +496,9 @@ function changeMode() {
   $("stage").hidden = mode === "quality";
   $("armCards").hidden = mode === "quality";
   $("reviewPanel").hidden = mode !== "review";
-  $("qualityPanel").hidden = mode !== "quality";
+  $("qualityPanel").hidden = mode !== "review";
+  $("exportPanel").hidden = mode !== "quality";
+  $("batchBar").hidden = mode !== "review";
   $("cameraTitle").textContent = mode === "capture" ? "相机画面" : "同步视频";
   scene.setVisible(mode !== "quality");
   if (mode === "capture") {
@@ -517,6 +519,11 @@ function changeMode() {
   if (mode === "quality") {
     renderQualitySessions();
     refreshDatasets().catch((e) => notice(e.message, true));
+    loadExportCatalog().catch((e) => notice(e.message, true));
+  }
+  if (mode === "review") {
+    pollRecomputeAll();
+    pollDraftAll();
   }
   updateControls();
 }
@@ -744,7 +751,9 @@ function renderPose(pose) {
   $("poseStatus").textContent = !pose
     ? ""
     : running
-      ? `离线重算中 ${job.done} / ${job.total || "…"} 帧`
+      ? job.queued
+        ? "离线重算排队中…"
+        : `离线重算中 ${job.done} / ${job.total || "…"} 帧`
       : job?.error
         ? `离线重算失败：${job.error}`
         : pose.offline
@@ -834,7 +843,7 @@ bind("poseRecompute", async () => {
   if (!review) throw Error("请先选择一条已停止的录制");
   renderPose(await api(base() + "/pose/recompute", "POST"));
   notice(
-    "已开始离线重算，完成后自动切换为离线轨迹；重算期间不能开始新的录制",
+    "已开始离线重算，完成后自动切换为离线轨迹；录制可照常进行，期间重算自动降速",
   );
 });
 function seek(t) {
@@ -1295,25 +1304,31 @@ function renderQualitySessions() {
         "small",
         `${sessionTimestamp(r)} · ${seconds(r.duration_s, 1)}` +
           sessionStatusSuffix(r) +
+          (r.pose_offline ? " · 已离线重算" : "") +
+          (r.drafted && !r.annotated ? " · 有预标注草稿" : "") +
           (r.exported_to.length
             ? ` · 已导出到：${r.exported_to.join(", ")}`
             : " · 尚未导出"),
       ),
     );
     row.append(check, info);
-    row.onclick = () =>
-      selectSession(r.name).catch((e) => notice(e.message, true));
+    row.onclick = () => {
+      check.checked = !check.checked;
+      check.onchange();
+    };
     list.append(row);
   }
   updateBatchExport();
 }
 function updateBatchExport() {
+  updateSelectionCount();
   $("batchExport").disabled =
     exportSelection.size === 0 || exportBusy || !!status?.recording;
   $("deleteSelected").disabled = exportSelection.size === 0 || exportBusy;
 }
 $("datasetTarget").onchange = () => {
   $("newDatasetName").hidden = $("datasetTarget").value !== "__new__";
+  adoptDatasetViews($("datasetTarget").value).catch((e) => notice(e.message, true));
 };
 async function refreshDatasets() {
   datasets = await api("/api/datasets");
@@ -1579,7 +1594,12 @@ $("cancelEdit").onclick = resetEditor;
 $("segmentForm").addEventListener("input", (e) => {
   // Picking an action-table file or typing the service address is not an
   // edit of the open segment.
-  if (e.target === $("actionFile") || e.target === $("serviceUrl")) return;
+  if (
+    e.target === $("actionFile") ||
+    e.target === $("serviceUrl") ||
+    e.target.closest("#segParams")
+  )
+    return;
   editorDirty = true;
 });
 // Validate the editor and write it into `parts`; returns the stored part, or
@@ -2090,6 +2110,213 @@ bind("qc", async () => {
     updateControls();
   }
 });
+// ---- 处理与导出: export image picker, selection helpers -------------------
+let exportCatalog = null,
+  exportChoice = new Map(), // view id -> { on, key }
+  recomputeAllTimer = null,
+  draftAllTimer = null;
+async function loadExportCatalog() {
+  exportCatalog = await api("/api/export/catalog");
+  if (!exportChoice.size)
+    for (const v of exportCatalog.views)
+      exportChoice.set(v.id, { on: v.default, key: v.key });
+  $("handCropM").value = $("handCropM").value || exportCatalog.hand_crop_m;
+  $("exportFields").replaceChildren(
+    ...exportCatalog.fields.map((f) => {
+      const li = el("li");
+      li.append(el("code", f.key), el("span", " " + f.label));
+      return li;
+    }),
+  );
+  renderExportViews();
+}
+function renderExportViews() {
+  const wrap = $("exportViews");
+  wrap.replaceChildren();
+  if (!exportCatalog) return;
+  let group = "";
+  for (const v of exportCatalog.views) {
+    if (v.group !== group) {
+      group = v.group;
+      wrap.append(el("h4", group));
+    }
+    const choice = exportChoice.get(v.id),
+      row = el("div", undefined, "export-view-row" + (choice.on ? " on" : "")),
+      check = document.createElement("input"),
+      key = document.createElement("input");
+    check.type = "checkbox";
+    check.checked = choice.on;
+    check.setAttribute("aria-label", "导出 " + v.label);
+    check.onchange = () => {
+      choice.on = check.checked;
+      renderExportViews();
+    };
+    key.value = choice.key;
+    key.disabled = !choice.on;
+    key.setAttribute("aria-label", v.label + " 的视频名称");
+    key.oninput = () => {
+      choice.key = key.value.trim();
+      updateExportSummary();
+    };
+    const info = el("div", undefined, "export-view-info");
+    info.append(el("strong", v.label), el("small", v.description));
+    row.append(check, info, key);
+    wrap.append(row);
+  }
+  updateExportSummary();
+}
+function selectedViews() {
+  return exportCatalog.views
+    .filter((v) => exportChoice.get(v.id).on)
+    .map((v) => ({ id: v.id, key: exportChoice.get(v.id).key }));
+}
+function updateExportSummary() {
+  if (!exportCatalog) return;
+  const views = selectedViews();
+  $("exportViewsSummary").textContent = `· ${views.length} 路图像：${views.map((v) => v.key).join("、") || "未选择"}`;
+}
+// Appending to an existing dataset needs the same videos: adopt its set.
+async function adoptDatasetViews(name) {
+  if (!exportCatalog || name === "__new__") return;
+  const detail = await api(`/api/datasets/${encodeURIComponent(name)}`);
+  if (!detail.video_keys?.length) return;
+  for (const choice of exportChoice.values()) choice.on = false;
+  const missing = [];
+  for (const key of detail.video_keys) {
+    const id =
+      detail.video_views?.[key]?.view ||
+      (key === "head" ? "head_raw" : `rgb_raw:${key}`);
+    const choice = exportChoice.get(id);
+    if (choice) Object.assign(choice, { on: true, key });
+    else missing.push(key);
+  }
+  renderExportViews();
+  notice(
+    `已按数据集 ${name} 套用导出图像：${detail.video_keys.join("、")}` +
+      (missing.length ? `（无法识别：${missing.join("、")}）` : ""),
+    missing.length > 0,
+  );
+}
+function updateSelectionCount() {
+  const unexported = stoppedRecords().filter((r) => !r.exported_to.length).length;
+  $("selectionCount").textContent = `已勾选 ${exportSelection.size} 条 · 尚未导出 ${unexported} 条`;
+}
+$("selectUnexported").onclick = () => {
+  exportSelection = new Set(
+    stoppedRecords().filter((r) => !r.exported_to.length && r.annotated).map((r) => r.name),
+  );
+  renderQualitySessions();
+  const skipped = stoppedRecords().filter((r) => !r.exported_to.length && !r.annotated).length;
+  if (skipped) notice(`已勾选尚未导出且已标注的录制；另有 ${skipped} 条尚未标注，未勾选`);
+};
+$("selectAllSessions").onclick = () => {
+  exportSelection = new Set(stoppedRecords().map((r) => r.name));
+  renderQualitySessions();
+};
+$("clearSelection").onclick = () => {
+  exportSelection.clear();
+  renderQualitySessions();
+};
+
+// ---- 回放与标注: batch processing ----------------------------------------
+async function pollRecomputeAll() {
+  clearTimeout(recomputeAllTimer);
+  let s;
+  try {
+    s = await api("/api/pose/recompute-all");
+  } catch {
+    return;
+  }
+  const job = s.job;
+  $("recomputeAll").disabled = s.running;
+  $("recomputeAllStatus").className = s.failed.length ? "muted error" : "muted";
+  $("recomputeAllStatus").textContent = s.running
+    ? `离线重算 ${s.done + 1} / ${s.total}：${s.current}` +
+      (job ? (job.queued ? "（排队中）" : ` ${job.done} / ${job.total || "…"} 帧`) : "") +
+      (status?.recording ? " · 录制中，已降速" : "")
+    : s.total
+      ? `离线重算完成 ${s.total - s.failed.length} / ${s.total} 条` +
+        (s.skipped ? `，跳过 ${s.skipped} 条` : "") +
+        (s.failed.length ? `；失败：${s.failed.map((f) => `${f.name}（${f.error}）`).join("；")}` : "")
+      : "";
+  if (s.running) recomputeAllTimer = setTimeout(pollRecomputeAll, 2000);
+  else if (s.total) {
+    await refresh().catch(() => {});
+    if (selectedName && !dirty && !editorDirty) await reloadReview().catch(() => {});
+  }
+}
+bind("recomputeAll", async () => {
+  const s = await api("/api/pose/recompute-all", "POST", {
+    only_missing: $("recomputeOnlyMissing").checked,
+    fast: $("recomputeFast").checked,
+  });
+  notice(
+    s.total
+      ? `开始依次离线重算 ${s.total} 条录制` + (s.skipped ? `（跳过 ${s.skipped} 条）` : "") +
+          "；录制可照常进行，期间重算自动降速"
+      : `没有需要离线重算的录制（跳过 ${s.skipped} 条）`,
+  );
+  pollRecomputeAll();
+});
+async function pollDraftAll() {
+  clearTimeout(draftAllTimer);
+  let s;
+  try {
+    s = await api("/api/drafts");
+  } catch {
+    return;
+  }
+  if (s.running) {
+    const running = Object.entries(s.jobs).find(([, j]) => !j.queued);
+    $("draftAllStatus").textContent =
+      `预标注进行中，剩 ${s.running} 条` + (running ? `：${running[0]} ${running[1].done} / ${running[1].total || "…"} 段` : "");
+    draftAllTimer = setTimeout(pollDraftAll, 3000);
+  } else if ($("draftAllStatus").textContent) {
+    $("draftAllStatus").textContent = "预标注全部完成，打开录制即可载入草稿核对";
+    refresh().catch(() => {});
+  }
+}
+bind("draftAll", async () => {
+  const s = await api("/api/drafts/run-all", "POST", {
+    only_missing: $("draftOnlyMissing").checked,
+  });
+  $("draftAllStatus").textContent = s.queued.length ? `已排队 ${s.queued.length} 条` : "";
+  notice(
+    s.queued.length
+      ? `已为 ${s.queued.length} 条录制排队预标注` + (s.skipped ? `（跳过 ${s.skipped} 条）` : "") + "，完成后打开录制即可载入草稿核对"
+      : `没有需要预标注的录制（跳过 ${s.skipped} 条）`,
+  );
+  pollDraftAll();
+});
+
+// ---- 静止分段参数 ---------------------------------------------------------
+async function loadSegParams(values) {
+  const d = values || (await api("/api/segment-settings"));
+  $("segParamFields").replaceChildren(
+    ...d.fields.map((f) => {
+      const label = el("label", undefined, "seg-param");
+      const input = document.createElement("input");
+      Object.assign(input, { type: "number", min: f.min, max: f.max, step: "any", value: f.value });
+      input.dataset.key = f.key;
+      label.title = `默认 ${f.default} ${f.unit}，范围 ${f.min}–${f.max}`;
+      label.append(el("span", f.label), input, el("small", f.unit));
+      return label;
+    }),
+  );
+  const changed = d.fields.filter((f) => f.value !== f.default).length;
+  $("segParamsSummary").textContent = changed ? `· 已修改 ${changed} 项` : "· 默认";
+}
+bind("saveSegParams", async () => {
+  const values = {};
+  for (const input of $("segParamFields").querySelectorAll("input"))
+    values[input.dataset.key] = Number(input.value);
+  await loadSegParams(await api("/api/segment-settings", "POST", values));
+  notice("静止分段参数已保存，之后的“静止分段”和预标注都按新参数切分");
+});
+bind("resetSegParams", async () => {
+  await loadSegParams(await api("/api/segment-settings", "POST", { reset: true }));
+  notice("静止分段参数已恢复默认");
+});
 bind("batchExport", async () => {
   const target = $("datasetTarget").value;
   let name = target;
@@ -2107,8 +2334,13 @@ bind("batchExport", async () => {
   updateBatchExport();
   $("exportResult").textContent = `正在导出 ${chosen.length} 条记录，请稍候…`;
   try {
+    if (!exportCatalog) await loadExportCatalog();
+    const views = selectedViews();
+    if (!views.length) throw Error("请至少勾选一路导出图像");
     const r = await api(`/api/datasets/${encodeURIComponent(name)}/export`, "POST", {
       sessions: chosen,
+      views,
+      hand_crop_m: Number($("handCropM").value) || undefined,
     });
     $("exportResult").replaceChildren(
       el("strong", "导出完成"),
@@ -2221,3 +2453,4 @@ refresh()
     }
   })
   .catch((e) => notice(e.message, true));
+loadSegParams().catch(() => {});

@@ -26,7 +26,7 @@
         ><a href="#review" data-mode="review"
           ><span aria-hidden="true">▷</span>回放与标注</a
         ><a href="#quality" data-mode="quality"
-          ><span aria-hidden="true">▥</span>质量与导出</a
+          ><span aria-hidden="true">▥</span>处理与导出</a
         >
       </nav>
       <div class="rail-bottom">
@@ -110,6 +110,31 @@
           ><button id="deleteSession" class="quiet delete-action">
             删除录制</button
           ><span id="sessionMeta" class="muted"></span>
+        </div>
+        <div id="batchBar" class="batch-bar" hidden>
+          <strong>批量处理</strong
+          ><button
+            id="recomputeAll"
+            class="quiet"
+            title="对所有已停止的录制依次离线重算（录制进行中也可运行，会自动降速让出 CPU）"
+          >
+            全部离线重算</button
+          ><label title="勾选后跳过已有离线结果的录制"
+            ><input id="recomputeOnlyMissing" type="checkbox" checked />只算尚未重算的</label
+          ><label
+            title="只在粗检出的标记附近做 AprilTag 精化，约快 2–4 倍；实测会漏掉约 14% 的标记，精度略低"
+            ><input id="recomputeFast" type="checkbox" />快速模式</label
+          ><span id="recomputeAllStatus" class="muted"></span
+          ><span class="batch-sep"></span
+          ><button
+            id="draftAll"
+            class="quiet"
+            title="用推理服务为录制生成预标注草稿，完成后打开录制即可载入核对"
+          >
+            全部预标注</button
+          ><label title="勾选后跳过已有标注或草稿的录制"
+            ><input id="draftOnlyMissing" type="checkbox" checked />只标尚未标注的</label
+          ><span id="draftAllStatus" class="muted"></span>
         </div>
         <div id="stage" class="stage">
           <section class="panel cameras-panel">
@@ -467,10 +492,21 @@
                   保存全部标注
                 </button>
               </div>
+              <details id="segParams" class="seg-params">
+                <summary>静止分段参数 <span id="segParamsSummary" class="muted"></span></summary>
+                <p class="muted">
+                  双臂线速度、角速度、开合速度同时低于上限并持续“最短停顿时长”以上，视为一次停顿并在此切分。所有录制共用，“静止分段”和预标注都按这里的参数切分。
+                </p>
+                <div id="segParamFields" class="seg-param-fields"></div>
+                <div class="form-actions">
+                  <button id="saveSegParams" type="button" class="quiet">保存参数</button
+                  ><button id="resetSegParams" type="button" class="quiet">恢复默认</button>
+                </div>
+              </details>
             </form>
           </div>
         </section>
-        <section id="qualityPanel" hidden>
+        <section id="qualityPanel" class="quality-in-review" hidden>
           <div class="quality-header">
             <div>
               <h2>采集质量</h2>
@@ -484,7 +520,7 @@
           <section class="panel">
             <div class="panel-heading">
               <h3>各维度有效率</h3>
-              <span class="muted">点击缺失时段进入回放；点击一条录制查看其质量</span>
+              <span class="muted">点击缺失时段跳到对应时刻</span>
             </div>
             <div id="quality"></div>
             <details>
@@ -492,6 +528,8 @@
               <div id="dimensions"></div>
             </details>
           </section>
+        </section>
+        <section id="exportPanel" hidden>
           <section class="panel quality-sessions-panel">
             <div class="panel-heading">
               <h3>录制记录 · 导出到 LeRobot v3</h3>
@@ -502,9 +540,29 @@
               </div>
             </div>
             <p class="muted">
-              点击一条记录查看其采集质量；勾选复选框选择要批量导出或删除的录制。导出只保留标注范围内，视频、双臂位姿和开合度同时有效的连续片段。
+              按录制时间倒序排列；勾选要批量导出或删除的录制（点整行也可勾选），采集质量在“回放与标注”页查看。导出只保留标注范围内，视频、双臂位姿和开合度同时有效的连续片段。
             </p>
+            <div class="selection-tools">
+              <button id="selectUnexported" class="quiet">勾选全部尚未导出</button
+              ><button id="selectAllSessions" class="quiet">全选</button
+              ><button id="clearSelection" class="quiet">清空勾选</button
+              ><span id="selectionCount" class="muted"></span>
+            </div>
             <div id="qualitySessions" class="quality-session-list"></div>
+            <details id="exportViewsBox" class="export-views" open>
+              <summary>导出内容 <span id="exportViewsSummary" class="muted"></span></summary>
+              <p class="muted">
+                勾选要导出的图像，名称即 LeRobot 中的视频键（<code>observation.images.&lt;名称&gt;</code>），可直接修改。追加到已有数据集时，图像与名称必须与该数据集一致，选好目标文件夹后会自动套用。
+              </p>
+              <div id="exportViews" class="export-view-list"></div>
+              <label class="hand-crop-setting"
+                >手部裁剪范围
+                <input id="handCropM" type="number" min="0.05" max="1" step="0.01" value="0.25" />
+                m（裁剪框覆盖的实际宽度，随距离自动换算像素）</label
+              >
+              <h4>每次都会导出的数据</h4>
+              <ul id="exportFields" class="export-fields"></ul>
+            </details>
             <div class="export-controls">
               <label for="datasetTarget">导出到文件夹</label>
               <select id="datasetTarget">

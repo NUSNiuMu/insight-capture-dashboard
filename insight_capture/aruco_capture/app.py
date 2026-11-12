@@ -11,7 +11,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from . import action_table, preannotate
+from . import action_table, export_views, preannotate, segment_settings
 from .capture import Capture, write_json
 from .dataset import (
     align,
@@ -27,7 +27,8 @@ from .dataset import (
     validate_segments,
 )
 from .pose import camera_view
-from .pose_track import pose_settings, recompute, update_pose_settings
+from .pose_track import pose_settings, recompute, shutdown_pool, update_pose_settings
+from . import pose_track
 
 
 def create_app(capture, annotation_url=""):
@@ -35,6 +36,12 @@ def create_app(capture, annotation_url=""):
     # since both saturate the CPU.
     busy = set()
     pose_jobs, pose_tasks = {}, set()
+    # Offline recomputes run one at a time, alongside recording if need be:
+    # their workers sit at nice 19 and shrink to a quarter of the CPUs
+    # while a recording is in progress.
+    recomputing = set()
+    recompute_lock = asyncio.Lock()
+    recompute_batch = {"running": False, "done": 0, "total": 0, "current": None, "failed": [], "skipped": 0}
     # Pre-annotation runs one session at a time (one GPU behind the service)
     # and never blocks recording: it is mostly waiting on the service.
     draft_jobs, draft_tasks = {}, set()
@@ -221,8 +228,9 @@ def create_app(capture, annotation_url=""):
                 async with draft_lock:
                     job["queued"] = False
                     table = await asyncio.to_thread(action_table.load, capture.root)
+                    segmentation = await asyncio.to_thread(segment_settings.load, capture.root)
                     await asyncio.to_thread(
-                        preannotate.run, path, url, table, job["model"], progress
+                        preannotate.run, path, url, table, job["model"], progress, segmentation
                     )
             except Exception as exc:  # reported to the page, not raised
                 job["error"] = str(exc) or type(exc).__name__
@@ -264,7 +272,7 @@ def create_app(capture, annotation_url=""):
             dataset_export_index, capture.root.parent / "lerobot_datasets"
         )
         rows = []
-        for path in sorted(capture.root.glob("*/session.json"), reverse=True):
+        for path in capture.root.glob("*/session.json"):
             value = json.loads(path.read_text())
             segments = json.loads((path.parent / "segments.json").read_text())
             rows.append(
@@ -278,8 +286,11 @@ def create_app(capture, annotation_url=""):
                     "annotated": bool(segments),
                     "drafted": (path.parent / preannotate.DRAFT).is_file(),
                     "exported_to": exported_index.get(path.parent.name, []),
+                    "pose_offline": (path.parent / pose_track.OFFLINE_DB).is_file(),
+                    "_order": value.get("started_unix_ns") or int(path.stat().st_mtime * 1e9),
                 }
             )
+        rows.sort(key=lambda r: r.pop("_order"), reverse=True)
         return web.json_response(rows)
 
     async def preview(request):
@@ -350,7 +361,8 @@ def create_app(capture, annotation_url=""):
         def compute():
             meta, grid, state, video, good, report, _reasons = align(path)
             return suggest_pause_segments(
-                grid, state, good, report["fps"], duration_s=meta["duration_s"]
+                grid, state, good, report["fps"], duration_s=meta["duration_s"],
+                **segment_settings.load(capture.root),
             )
 
         return web.json_response(await asyncio.to_thread(compute))
@@ -428,20 +440,24 @@ def create_app(capture, annotation_url=""):
     async def pose(request):
         path = session(request)
         if request.method == "POST":
-            if path.name in busy:
+            if path.name in busy or path.name in recomputing:
                 raise ValueError("请等待导出或离线重算完成，再切换轨迹")
             await asyncio.to_thread(update_pose_settings, path, await request.json())
         return web.json_response(await asyncio.to_thread(pose_state, path))
 
-    async def pose_recompute(request):
-        path = session(request)
-        if capture.active or capture.reconfiguring:
-            raise ValueError("请先停止录制再离线重算：重算会占满 CPU，影响实时采集")
-        if path.name in busy:
+    def recompute_limit():
+        size = pose_track.max_workers()
+        return max(1, size // 4) if capture.active else size
+
+    def queue_recompute(path, fast):
+        """Start (or queue behind the one running) an offline recompute."""
+        if path.name == capture.active:
+            raise ValueError("这条录制还在进行中，停止后才能离线重算")
+        if path.name in busy or path.name in recomputing:
             raise ValueError("这条录制正在导出或离线重算，请稍候")
-        busy.add(path.name)
+        recomputing.add(path.name)
         job = pose_jobs[path.name] = {
-            "running": True, "done": 0, "total": 0, "error": None,
+            "running": True, "queued": True, "done": 0, "total": 0, "error": None, "fast": bool(fast),
         }
 
         def progress(done, total):
@@ -449,23 +465,118 @@ def create_app(capture, annotation_url=""):
 
         async def run():
             try:
-                await asyncio.to_thread(recompute, path, progress)
+                async with recompute_lock:
+                    job["queued"] = False
+                    await asyncio.to_thread(recompute, path, progress, recompute_limit, bool(fast))
             except Exception as exc:  # reported to the page, not raised
                 job["error"] = str(exc) or type(exc).__name__
             finally:
                 job["running"] = False
-                busy.discard(path.name)
+                recomputing.discard(path.name)
 
         task = asyncio.get_running_loop().create_task(run())
         pose_tasks.add(task)
         task.add_done_callback(pose_tasks.discard)
+        return task
+
+    async def pose_recompute(request):
+        path = session(request)
+        if capture.reconfiguring:
+            raise ValueError("正在切换设备配置，请稍候再离线重算")
+        text = await request.text()
+        queue_recompute(path, bool(text and json.loads(text).get("fast")))
         return web.json_response(pose_state(path))
+
+    def stopped_sessions():
+        rows = []
+        for file in capture.root.glob("*/session.json"):
+            value = json.loads(file.read_text())
+            if value.get("status") == "stopped" and file.parent.name != capture.active:
+                rows.append((value.get("started_unix_ns") or 0, file.parent))
+        return [path for _, path in sorted(rows, key=lambda r: r[0], reverse=True)]
+
+    async def recompute_all(request):
+        if request.method == "POST":
+            if recompute_batch["running"]:
+                raise ValueError("一键离线重算正在进行，请等待完成")
+            body = await request.json()
+            only_missing, fast = bool(body.get("only_missing", True)), bool(body.get("fast"))
+            todo, skipped = [], 0
+            for path in await asyncio.to_thread(stopped_sessions):
+                if (only_missing and (path / pose_track.OFFLINE_DB).is_file()) or path.name in busy or path.name in recomputing:
+                    skipped += 1
+                    continue
+                todo.append(path)
+            recompute_batch.update(running=bool(todo), done=0, total=len(todo), current=None, failed=[], skipped=skipped, fast=fast)
+
+            async def run_all():
+                try:
+                    for path in todo:
+                        recompute_batch["current"] = path.name
+                        try:
+                            await queue_recompute(path, fast)
+                        except ValueError as exc:
+                            recompute_batch["failed"].append({"name": path.name, "error": str(exc)})
+                        error = pose_jobs.get(path.name, {}).get("error")
+                        if error:
+                            recompute_batch["failed"].append({"name": path.name, "error": error})
+                        recompute_batch["done"] += 1
+                finally:
+                    recompute_batch.update(running=False, current=None)
+
+            if todo:
+                task = asyncio.get_running_loop().create_task(run_all())
+                pose_tasks.add(task)
+                task.add_done_callback(pose_tasks.discard)
+        current = recompute_batch.get("current")
+        return web.json_response({**recompute_batch, "job": pose_jobs.get(current) if current else None})
+
+    async def drafts_all(request):
+        body = await request.json()
+        only_missing = bool(body.get("only_missing", True))
+        if await asyncio.to_thread(preannotate.probe, service["url"]) is None:
+            raise ValueError("推理服务未配置或无法连接，不能一键预标注" + (f"（{service['url']}）" if service["url"] else ""))
+        queued, skipped = [], 0
+        for path in await asyncio.to_thread(stopped_sessions):
+            annotated = json.loads((path / "segments.json").read_text()) if (path / "segments.json").is_file() else []
+            if only_missing and (annotated or (path / preannotate.DRAFT).is_file()):
+                skipped += 1
+                continue
+            if await start_draft(path, required=False):
+                queued.append(path.name)
+        return web.json_response({"queued": queued, "skipped": skipped})
+
+    async def drafts_status(request):
+        jobs = {name: job for name, job in draft_jobs.items() if job.get("running")}
+        return web.json_response({"running": len(jobs), "jobs": jobs})
+
+    async def segmentation(request):
+        if request.method == "POST":
+            await asyncio.to_thread(segment_settings.save, capture.root, await request.json())
+        return web.json_response(await asyncio.to_thread(segment_settings.describe, capture.root))
+
+    async def export_catalog(request):
+        names = [n for n in request.query.get("sessions", "").split(",") if n]
+        rgb = []
+        for name in names or [p.name for p in await asyncio.to_thread(stopped_sessions)]:
+            try:
+                meta = json.loads((session_path(name) / "session.json").read_text())
+            except web.HTTPNotFound:
+                continue
+            for x in meta["config"].get("rgb", []):
+                if x["name"] not in rgb:
+                    rgb.append(x["name"])
+        return web.json_response({
+            "views": export_views.catalog(rgb),
+            "fields": export_views.describe_fields(),
+            "hand_crop_m": export_views.HAND_CROP_M,
+        })
 
     async def delete_session(request):
         path = session(request)
         if path.name == capture.active:
             raise ValueError("正在录制这条记录，请先停止录制")
-        if path.name in busy:
+        if path.name in busy or path.name in recomputing:
             raise ValueError("这条录制正在导出或离线重算，请等待完成")
         if draft_jobs.get(path.name, {}).get("running"):
             raise ValueError("这条录制正在预标注，请等待完成")
@@ -492,16 +603,20 @@ def create_app(capture, annotation_url=""):
         names = body.get("sessions")
         if not isinstance(names, list) or not names:
             raise ValueError("请至少选择一条录制记录")
+        views = body.get("views") or None
+        hand_crop_m = float(body["hand_crop_m"]) if body.get("hand_crop_m") else None
+        if hand_crop_m is not None and not 0.05 <= hand_crop_m <= 1.0:
+            raise ValueError("手部裁剪范围须在 0.05–1 m 之间")
         done = []
         try:
             for name in names:
                 path = session_path(name)
-                if path.name in busy:
-                    raise ValueError(f"{name} 正在使用中，请稍后重试")
+                if path.name in busy or path.name in recomputing:
+                    raise ValueError(f"{name} 正在导出或离线重算，请稍后重试")
                 busy.add(path.name)
                 try:
                     done.append(
-                        await asyncio.to_thread(export_to_dataset, path, output_root)
+                        await asyncio.to_thread(export_to_dataset, path, output_root, views, hand_crop_m)
                     )
                 finally:
                     busy.remove(path.name)
@@ -536,6 +651,7 @@ def create_app(capture, annotation_url=""):
 
     async def cleanup(app):
         capture.close()
+        await asyncio.to_thread(shutdown_pool)
 
     app.on_cleanup.append(cleanup)
     app.add_routes(
@@ -568,6 +684,13 @@ def create_app(capture, annotation_url=""):
             web.get("/api/sessions/{name}/pose", pose),
             web.post("/api/sessions/{name}/pose", pose),
             web.post("/api/sessions/{name}/pose/recompute", pose_recompute),
+            web.get("/api/pose/recompute-all", recompute_all),
+            web.post("/api/pose/recompute-all", recompute_all),
+            web.get("/api/drafts", drafts_status),
+            web.post("/api/drafts/run-all", drafts_all),
+            web.get("/api/segment-settings", segmentation),
+            web.post("/api/segment-settings", segmentation),
+            web.get("/api/export/catalog", export_catalog),
             web.delete("/api/sessions/{name}", delete_session),
             web.get("/api/datasets", datasets_list),
             web.get("/api/datasets/{name}", datasets_detail),

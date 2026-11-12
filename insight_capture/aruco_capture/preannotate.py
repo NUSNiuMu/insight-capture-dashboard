@@ -236,14 +236,14 @@ def pose_check(subtask_id, state, good, first, last, hands, gravity):
     return []
 
 
-def run(path, url, table=None, model="", progress=lambda done, total: None):
+def run(path, url, table=None, model="", progress=lambda done, total: None, segmentation=None):
     """Pre-annotate one stopped session and write its draft; returns the draft."""
     started = time.monotonic()
     meta, grid, state, video, good, report, _reasons = align(path)
     fps, duration = report["fps"], float(meta["duration_s"])
     stretches = [
         (s["start_s"], s["end_s"])
-        for s in suggest_pause_segments(grid, state, good, fps, duration_s=duration)
+        for s in suggest_pause_segments(grid, state, good, fps, duration_s=duration, **(segmentation or {}))
     ]
     pair_good = good[:-1] & good[1:]
     moving = {

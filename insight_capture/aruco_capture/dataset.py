@@ -24,6 +24,7 @@ from insight_capture.postprocess.datasets.lerobot import (
 )
 from insight_capture.runtime.mapping.geometry import rotation_distance_deg
 from .capture import write_json
+from . import export_views
 from .pose_track import OFFLINE_DB, pose_settings, smooth_arm
 
 # Ported from the auto_pause episode splitter in
@@ -289,6 +290,8 @@ def segment_label(segment):
         "subtask": segment.get("subtask", "").strip(),
         "task_id": segment.get("task_id", "").strip(),
         "subtask_id": segment.get("subtask_id", "").strip(),
+        "start_s": float(segment["start_s"]),
+        "end_s": float(segment["end_s"]),
     }
 
 
@@ -456,7 +459,7 @@ def _capture_role(name):
     return name
 
 
-def _modality(video_names):
+def _modality(video_names, views=None):
     """meta/modality.json for a fixed left+right session (offsets 0/10 into
     the 20-dim state, matching ARM_STATE_NAMES). Adapted from the merged
     UMI pipeline's ``_modality()`` in postprocess/datasets/lerobot.py, which
@@ -484,8 +487,9 @@ def _modality(video_names):
         "video": {
             name: {
                 "original_key": "observation.images." + name,
-                "source_camera": name,
-                "capture_role": _capture_role(name),
+                "source_camera": (views or {}).get(name, {}).get("source", name),
+                "capture_role": _capture_role((views or {}).get(name, {}).get("source", name)),
+                **({"view": views[name]["id"]} if views and name in views else {}),
             }
             for name in video_names
         },
@@ -785,14 +789,18 @@ def list_datasets(root):
     if not root.is_dir():
         return []
     result = []
-    for folder in sorted(root.iterdir()):
+    for folder in root.iterdir():
         manifest_path = folder / "meta/manifest.json"
         if not manifest_path.is_file():
             continue
         manifest = json.loads(manifest_path.read_text())
+        # Creation time: the first session written into it (meta/sessions/*).
+        exports = list((folder / "meta/sessions").glob("*.json"))
+        created = min((f.stat().st_mtime for f in exports), default=folder.stat().st_mtime)
         result.append(
             {
                 "name": folder.name,
+                "created_unix": created,
                 "episode_count": manifest["episode_count"],
                 "total_frames": manifest["total_frames"],
                 "duration_s": manifest["duration_s"],
@@ -800,6 +808,7 @@ def list_datasets(root):
                 "size_bytes": manifest.get("size_bytes", 0),
             }
         )
+    result.sort(key=lambda r: r["created_unix"], reverse=True)
     return result
 
 
@@ -834,7 +843,10 @@ def dataset_detail(output_root):
         "total_frames": manifest["total_frames"],
         "duration_s": manifest["duration_s"],
         "size_bytes": manifest.get("size_bytes", 0),
-        "sessions": manifest["source_datasets"],
+        # Newest export first, like every other list on the page.
+        "sessions": list(reversed(manifest["source_datasets"])),
+        "video_keys": [k.removeprefix("observation.images.") for k in manifest.get("video_keys", [])],
+        "video_views": manifest.get("video_views", {}),
     }
 
 
@@ -1011,7 +1023,7 @@ def _remove_placed_file(path):
         path.parent.rmdir()
 
 
-def export_to_dataset(path, output_root):
+def export_to_dataset(path, output_root, views=None, hand_crop_m=None):
     """Append this session's episodes into a persistent, growing LeRobot v3
     dataset at ``output_root`` (created on first use). Unlike export(),
     which always makes a fresh throwaway ``<session>/lerobot/`` dir, this
@@ -1030,6 +1042,17 @@ def export_to_dataset(path, output_root):
         raise ValueError(
             "没有可导出片段：先标注任务，且每段至少连续 3 帧的视频、双臂位姿与开合度均有效"
         )
+    selection = (
+        export_views.validate_selection(views, list(video))
+        if views
+        else export_views.default_selection(list(video))
+    )
+    for item in selection:
+        source = item["id"].split(":", 1)[1] if ":" in item["id"] else "head"
+        if source not in video:
+            raise ValueError(f"{path.name} 没有录制 {source}，不能导出 {item['key']}")
+        item["source"] = source
+    keys = [item["key"] for item in selection]
     output_root = Path(output_root)
     lock = _dataset_lock(output_root)
     try:
@@ -1039,6 +1062,16 @@ def export_to_dataset(path, output_root):
             json.loads(info_path.read_text()) if info_path.is_file() else None
         )
         if existing_info is not None:
+            existing_keys = sorted(
+                k.removeprefix("observation.images.")
+                for k, v in existing_info["features"].items()
+                if v.get("dtype") == "video"
+            )
+            if existing_keys != sorted(keys):
+                raise ValueError(
+                    f"目标数据集已有的视频 {', '.join(existing_keys)} 与本次选择的 "
+                    f"{', '.join(sorted(keys))} 不一致，不能累加到同一目录；请选择相同的图像与名称，或导出到新文件夹"
+                )
             state_dim = existing_info["features"]["observation.state"]["shape"][0]
             if state_dim != 20 or existing_info["fps"] != fps:
                 raise ValueError(
@@ -1109,6 +1142,10 @@ def export_to_dataset(path, output_root):
             connect(path) as db,
         ):
             build_root = Path(temporary)
+            renderer = export_views.Renderer(
+                path, meta, db, video, grid, state,
+                **({"hand_crop_m": hand_crop_m} if hand_crop_m else {}),
+            )
             try:
                 for local_episode, (run, label) in enumerate(runs):
                     indices, following = run[:-1], run[1:]
@@ -1146,19 +1183,11 @@ def export_to_dataset(path, output_root):
                     for key in ("observation.state", "action"):
                         for stat, value in _feature_stats(values[key]).items():
                             row["stats/" + key + "/" + stat] = value
-                    for name, (rowids, _) in video.items():
+                    for item in selection:
+                        name = item["key"]
                         key = "observation.images." + name
                         for i in indices:
-                            payload = db.execute(
-                                "SELECT payload FROM samples WHERE rowid=?",
-                                (int(rowids[i]),),
-                            ).fetchone()[0]
-                            bgr = cv2.imdecode(
-                                np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR
-                            )
-                            if bgr is None:
-                                raise ValueError("无法解码已录制图像: " + name)
-                            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                            rgb = renderer.frame(item["id"], i, label)
                             if name not in writers:
                                 writers[name] = FfmpegVideoWriter(
                                     build_root / f"{name}.mp4", rgb.shape[:2], fps
@@ -1202,7 +1231,7 @@ def export_to_dataset(path, output_root):
                 row["data/chunk_index"] = data_chunk
                 row["data/file_index"] = data_file
 
-            for name in video:
+            for name in keys:
                 built = build_root / f"{name}.mp4"
                 if not built.is_file():
                     continue
@@ -1302,7 +1331,10 @@ def export_to_dataset(path, output_root):
                 },
             ),
         )
-        write_json(output_root / "meta/modality.json", _modality(list(video)))
+        write_json(
+            output_root / "meta/modality.json",
+            _modality(keys, {item["key"]: item for item in selection}),
+        )
         source_datasets.append(
             {
                 "source_session": path.name,
@@ -1323,8 +1355,9 @@ def export_to_dataset(path, output_root):
                 "total_frames": total_frames,
                 "duration_s": round(total_frames / fps, 3),
                 "fps": float(fps),
-                "camera_order": list(video),
-                "video_keys": [f"observation.images.{name}" for name in video],
+                "camera_order": keys,
+                "video_keys": [f"observation.images.{name}" for name in keys],
+                "video_views": {item["key"]: {"view": item["id"], "source": item["source"]} for item in selection},
                 "state_dimension": 20,
                 "action_semantics": "absolute_next_state",
                 "openpi_action_key": "action",

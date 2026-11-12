@@ -1912,3 +1912,150 @@ dialog p {
     display: none;
   }
 }
+
+/* ---- batch processing (回放与标注) ---- */
+.batch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: -6px 0 18px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 12px;
+}
+.batch-bar strong {
+  font-size: 12px;
+  color: var(--muted);
+}
+.batch-bar label {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--muted);
+}
+.batch-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--line);
+}
+.quality-in-review {
+  margin-top: 18px;
+}
+#exportPanel > .panel {
+  margin-bottom: 18px;
+}
+
+/* ---- 静止分段参数 ---- */
+.seg-params {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  font-size: 12px;
+}
+.seg-params summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.seg-param-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 6px 12px;
+  margin: 8px 0;
+}
+.seg-param {
+  display: grid;
+  grid-template-columns: 1fr 80px 34px;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+}
+.seg-param input {
+  font-size: 12px;
+  padding: 3px 6px;
+}
+
+/* ---- 处理与导出 ---- */
+.selection-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0 10px;
+  font-size: 12px;
+}
+.export-views {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.export-views summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.export-views h4 {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.export-view-list {
+  display: grid;
+  gap: 4px;
+}
+.export-view-row {
+  display: grid;
+  grid-template-columns: auto 1fr minmax(160px, 220px);
+  gap: 10px;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 6px;
+  opacity: 0.65;
+}
+.export-view-row.on {
+  background: var(--surface);
+  opacity: 1;
+}
+.export-view-info strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+}
+.export-view-info small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.export-view-row input[type="text"],
+.export-view-row input:not([type]) {
+  font-size: 12px;
+  font-family: monospace;
+}
+.hand-crop-setting {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.hand-crop-setting input {
+  width: 70px;
+  margin: 0 4px;
+}
+.export-fields {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.export-fields code {
+  color: var(--text);
+}
+@media (max-width: 720px) {
+  .export-view-row {
+    grid-template-columns: auto 1fr;
+  }
+  .export-view-row > input:last-child {
+    grid-column: 2;
+  }
+}
