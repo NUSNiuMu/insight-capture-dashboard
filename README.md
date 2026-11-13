@@ -251,6 +251,20 @@ Bags 列表页扫描 `metadata.yaml`，展示递归文件大小、duration、mes
 
 新增功能和迁移规则见 [项目结构规范](docs/PROJECT_STRUCTURE.md)。
 
+### ArUco 数采在 Jetson Orin 上接 4 路 USB 摄像头
+
+Orin 的 USB 2.0 控制器严格按摄像头申请的等时带宽放行，DECXIN 摄像头 720p MJPEG 每路申请 24.5 MB/s，
+默认只能同时开 2 路（内核报 `Not enough bandwidth for altsetting 3`）。实际码率每路只有约 4–5 MB/s，
+用打了补丁的 uvcvideo 把申请值封顶后 4 路都能 720p@60 同时采集：
+
+```bash
+cd deploy/jetson/uvcvideo-bw
+./uvcvideo-bw.sh build && ./uvcvideo-bw.sh try    # 先停采集容器；临时加载验证
+./uvcvideo-bw.sh install                          # 开机自动加载；升级 JetPack 后需重新 build + install
+```
+
+原理、验证数据和注意事项见 [deploy/jetson/uvcvideo-bw/README.md](deploy/jetson/uvcvideo-bw/README.md)。
+
 ## 部署
 
 打包发布镜像、给设备升级、全新设备首次部署的完整步骤见

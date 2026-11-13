@@ -9,6 +9,8 @@ import shutil
 import sqlite3
 from pathlib import Path
 
+import cv2
+import numpy as np
 from aiohttp import web
 
 from . import action_table, export_views, preannotate, segment_settings
@@ -308,13 +310,32 @@ def create_app(capture, annotation_url=""):
         rows.sort(key=lambda r: r.pop("_order"), reverse=True)
         return web.json_response(rows)
 
+    # Live previews are downscaled before they reach the browser: the page polls
+    # every camera at the capture fps, and decoding four or five full-size JPEGs
+    # that often swamps a weak browser (Firefox on the Jetson itself). libjpeg
+    # decodes straight to half size (IMREAD_REDUCED_COLOR_2, cheap DCT scaling),
+    # and each frame is shrunk once however many tabs ask for it. Recordings,
+    # review frames and exports keep the full-resolution JPEG.
+    preview_small = {}
+
+    def shrink(payload):
+        image = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_REDUCED_COLOR_2)
+        if image is None:
+            return payload
+        ok, jpeg = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return jpeg.tobytes() if ok else payload
+
     async def preview(request):
         name = request.match_info["stream"]
         payload = capture.preview.get(name)
         if payload is None:
             raise web.HTTPNotFound(text="尚无图像")
+        source, small = preview_small.get(name, (None, None))
+        if source is not payload:
+            small = await asyncio.to_thread(shrink, payload)
+            preview_small[name] = (payload, small)
         return web.Response(
-            body=payload,
+            body=small,
             content_type="image/jpeg",
             headers={"Cache-Control": "no-store"},
         )
