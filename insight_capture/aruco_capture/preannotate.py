@@ -238,6 +238,22 @@ def pose_check(subtask_id, state, good, first, last, hands, gravity):
 
 OTHER = "other"
 UNSURE_FLAG = "不确定或无法标注，标为 other"
+MERGED_FLAG = "含模型未识别的时段，已并入本段"
+
+
+def fold_unsure(segments):
+    """Within one stretch of motion: a stretch of time the model could not label
+    joins the subtask before it, and one at the start (nothing before it to
+    join) is dropped, so a draft holds no "other" segments."""
+    out = []
+    for segment in segments:
+        if segment["subtask"] != OTHER:
+            out.append(segment)
+        elif out:
+            out[-1]["end_s"] = segment["end_s"]
+            if MERGED_FLAG not in out[-1]["flags"]:
+                out[-1]["flags"].append(MERGED_FLAG)
+    return out
 
 
 def cover(start, end, items, min_s):
@@ -368,6 +384,7 @@ def run(path, url, table=None, model="", progress=lambda done, total: None, segm
                 if b > a:
                     snapped.append({**item, "start": a, "end": b})
                     previous = b
+            stretch_drafts = []
             for a, b, item in cover(start, end, snapped, MIN_DRAFT_S):
                 unsure = item is None
                 item = item or {"subtask_id": "", "subtask": "", "flags": ["模型未覆盖此时段"]}
@@ -380,7 +397,7 @@ def run(path, url, table=None, model="", progress=lambda done, total: None, segm
                     item.get("subtask_id", ""), state, good, first, last, hands, gravity)
                 if not task_text.strip() or not subtask_text.strip():
                     flags.append(UNSURE_FLAG)
-                drafts.append({
+                stretch_drafts.append({
                     "start_s": round(a, 3),
                     "end_s": math.floor(min(b, duration) * 1000) / 1000,
                     "task": task_text.strip() or OTHER,
@@ -391,6 +408,7 @@ def run(path, url, table=None, model="", progress=lambda done, total: None, segm
                     "description": "",
                     "flags": list(dict.fromkeys(flags)),
                 })
+            drafts += fold_unsure(stretch_drafts)
     draft = {
         "created_unix_ns": time.time_ns(),
         "elapsed_s": round(time.monotonic() - started, 1),

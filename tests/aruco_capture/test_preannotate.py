@@ -192,3 +192,23 @@ class CoverTests(unittest.TestCase):
         self.assertEqual(cover(0, 4, [], 0.5), [(0, 4, None)])
         out = cover(0, 4, [{"start": 0.2, "end": 3.8}], 0.5)
         self.assertEqual([(a, b) for a, b, _ in out], [(0, 4)])
+
+
+def test_unlabelled_time_joins_previous_subtask_and_leading_is_dropped():
+    from insight_capture.aruco_capture.preannotate import MERGED_FLAG, OTHER, fold_unsure
+
+    def seg(a, b, subtask):
+        return {"start_s": a, "end_s": b, "subtask": subtask, "flags": []}
+
+    out = fold_unsure([
+        seg(0, 1, OTHER),          # leading: dropped
+        seg(1, 3, "pick"),
+        seg(3, 4, OTHER),          # joins "pick"
+        seg(4, 6, "place"),
+        seg(6, 7, OTHER),          # trailing: joins "place"
+    ])
+    assert [(s["start_s"], s["end_s"], s["subtask"]) for s in out] == [
+        (1, 4, "pick"), (4, 7, "place"),
+    ]
+    assert out[0]["flags"] == [MERGED_FLAG] and out[1]["flags"] == [MERGED_FLAG]
+    assert fold_unsure([seg(0, 5, OTHER)]) == []
