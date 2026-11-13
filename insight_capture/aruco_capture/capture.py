@@ -1,4 +1,12 @@
-"""Bounded input queue and one SQLite recording writer."""
+"""Bounded input queue and one SQLite recording writer.
+
+Head frames are heavy (JPEG decode, 90° rotation, re-encode, ArUco detection:
+~70 ms on an Orin NX) while everything else only needs an INSERT. The stateless
+part of each head frame therefore starts on a thread pool the moment it is
+submitted, and the queue carries a future in its place; the single writer thread
+keeps every stateful step (pose filter, reference, SQLite) in arrival order and
+just collects the result. OpenCV releases the GIL, so the pool runs in parallel.
+"""
 
 import json
 import queue
@@ -7,12 +15,13 @@ import sqlite3
 import threading
 import time
 from collections import defaultdict, deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from .pose import GRAVITY_FRAME, DirectPose, camera_view
+from .pose import GRAVITY_FRAME, DirectPose, camera_view, marker_detector
 
 
 def write_json(path, value):
@@ -56,7 +65,9 @@ class Capture:
             raise ValueError("fps 或同步容差超出范围")
         self.pose = DirectPose(self.config)
         self.lock = threading.RLock()
-        self.queue = queue.Queue(maxsize=128)
+        # ~370 samples/s with four 60 fps USB cameras: 512 rides out the
+        # writer briefly waiting on a head frame without dropping samples.
+        self.queue = queue.Queue(maxsize=512)
         self.stop_event = threading.Event()
         self.stop_lock = threading.Lock()
         self.draining = False
@@ -89,6 +100,9 @@ class Capture:
         self.session_generation = 0
         self.last_commit = 0.0
         self.reference_pending = False
+        # Four workers keep up with a 30 fps head stream at ~70 ms per frame.
+        self.head_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="head")
+        self.head_local = threading.local()
         self.worker = threading.Thread(target=self._work, daemon=True)
         self.worker.start()
 
@@ -105,12 +119,57 @@ class Capture:
                 "message": "",
                 "device": self.source_states.get(key, {}).get("device"),
             }
+        if kind == "image" and name != "head":
+            # USB camera JPEGs are previewed as they arrive. They need no
+            # processing, and routing them through the queue made the live view
+            # trail by however long the queue was backed up behind head frames.
+            self.preview[name] = value
+        if kind == "image" and name == "head":
+            value = self.head_pool.submit(self._prepare_head, int(stamp_ns), value)
         try:
             session = self.active if now >= self.started else None
             self.queue.put_nowait((session, kind, name, now, int(stamp_ns), value))
         except queue.Full:
+            if isinstance(value, Future):
+                value.cancel()
             key = kind + "/" + name
             self.drops[key] = self.drops.get(key, 0) + 1
+
+    def _prepare_head(self, stamp, value):
+        """Everything about one head frame that does not depend on earlier frames."""
+        head = None
+        if self.config.get("vio_enabled", True):
+            # The VIO sample bracketing this frame may still be in flight.
+            deadline = time.monotonic() + 0.05
+            head = self.pose.buffer.lookup(stamp)
+            while head is None and time.monotonic() < deadline:
+                time.sleep(0.002)
+                head = self.pose.buffer.lookup(stamp)
+        # Insight9 is mounted rotated; rotate only the copy that gets
+        # recorded/previewed/exported. ArUco detection keeps the un-rotated
+        # decode, so the intrinsics/extrinsic calibration (tied to the camera's
+        # physical, un-rotated frame) stays valid.
+        display, detections = value, None
+        bgr = cv2.imdecode(np.frombuffer(value, np.uint8), cv2.IMREAD_COLOR)
+        if bgr is not None:
+            ok, jpeg = cv2.imencode(".jpg", cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE))
+            if ok:
+                display = jpeg.tobytes()
+            detections = self._head_detector().detectMarkers(
+                cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            )
+        return head, display, detections
+
+    def _head_detector(self):
+        """A per-thread ArUco detector, rebuilt when the refinement setting changes."""
+        key = (id(self.pose), self.pose.refinement)
+        local = self.head_local
+        if getattr(local, "key", None) != key:
+            local.detector = marker_detector(
+                self.pose._detector.getDictionary(), self.pose.refinement
+            )
+            local.key = key
+        return local.detector
 
     def source_state(self, key, state, message="", device=None):
         old = self.source_states.get(key, {})
@@ -263,6 +322,7 @@ class Capture:
             except queue.Empty:
                 continue
             try:
+                converted = kind == "raw_image"
                 if kind == "raw_image":
                     from insight_capture.postprocess.gripper.extraction import (
                         decode_color_image,
@@ -275,28 +335,16 @@ class Capture:
                     if not ok:
                         raise ValueError("JPEG 编码失败")
                     kind, value = "image", jpeg.tobytes()
-                # Future VIO samples arrive independently of this processing thread.
-                head = None
+                head, display_value, raw = None, value, None
                 vio_enabled = self.config.get("vio_enabled", True)
-                if kind == "image" and name == "head" and vio_enabled:
-                    deadline = time.monotonic() + 0.05
-                    head = self.pose.buffer.lookup(stamp)
-                    while head is None and time.monotonic() < deadline:
-                        time.sleep(0.002)
-                        head = self.pose.buffer.lookup(stamp)
-                # Insight9 is mounted rotated; rotate only the copy that gets
-                # recorded/previewed/exported. ArUco pose detection below keeps
-                # using the un-rotated `bgr` decode, so the intrinsics/extrinsic
-                # calibration (tied to the camera's physical, un-rotated frame)
-                # stays valid.
-                display_value, bgr = value, None
-                if kind == "image" and name == "head":
-                    bgr = cv2.imdecode(np.frombuffer(value, np.uint8), cv2.IMREAD_COLOR)
-                    if bgr is not None:
-                        rotated = cv2.rotate(bgr, cv2.ROTATE_90_CLOCKWISE)
-                        ok, jpeg = cv2.imencode(".jpg", rotated)
-                        if ok:
-                            display_value = jpeg.tobytes()
+                if kind == "image" and name == "head" and converted:
+                    # A raw ROS head image only became a JPEG just above.
+                    head, display_value, raw = self._prepare_head(stamp, value)
+                elif isinstance(value, Future):
+                    # Usually finished already: it started when the frame arrived.
+                    head, display_value, raw = value.result()
+                    if not vio_enabled:
+                        head = None
                 with self.lock:
                     payload = (
                         display_value
@@ -306,7 +354,7 @@ class Capture:
                     self._save(session, kind, name, seconds, stamp, payload)
                     if kind == "gripper":
                         self.grippers[name] = {**value, "received": seconds}
-                    if kind == "image":
+                    if kind == "image" and (name == "head" or converted):
                         self.preview[name] = display_value
                     if kind == "image" and name == "head":
                         if self.history_generation != self.pose.generation:
@@ -340,18 +388,25 @@ class Capture:
                                 for x in self.pose.config.targets
                             }
                         else:
-                            # Reuse the colour decode above: one JPEG decode
-                            # per head frame leaves time for corner refinement.
-                            gray = (
-                                cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-                                if bgr is not None
-                                else None
-                            )
-                            if gray is None:
+                            if raw is None:
                                 raise ValueError("无法解码头部图像")
+                            corners, ids, _ = raw
+                            detections = (
+                                {}
+                                if ids is None
+                                else {
+                                    int(i): np.asarray(c, np.float64).reshape(4, 2)
+                                    for c, i in zip(corners, ids.reshape(-1))
+                                }
+                            )
                             generation = self.pose.generation
                             self.observation = self.pose.observe(
-                                gray, self.intrinsic, head, self.imu_from_rgb, seconds
+                                None,
+                                self.intrinsic,
+                                head,
+                                self.imu_from_rgb,
+                                seconds,
+                                detections=detections,
                             )
                             if vio_enabled and generation != self.pose.generation:
                                 self.observation = {

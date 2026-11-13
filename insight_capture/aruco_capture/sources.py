@@ -572,6 +572,16 @@ def usb_worker(capture, item, stop=None):
             if not os.path.exists(path):
                 raise OSError("相机未连接")
             if item.get("auto_exposure") is False:
+                # exposure_dynamic_framerate=0 keeps the configured fps: when it is
+                # on, the camera may stretch frame intervals to fit the exposure.
+                # Set on its own: v4l2-ctl applies one -c list atomically, so a
+                # camera without this control would also reject the others.
+                subprocess.run(
+                    ["v4l2-ctl", "-d", path, "-c", "exposure_dynamic_framerate=0"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                )
                 ctrl_args = ["v4l2-ctl", "-d", path, "-c", "auto_exposure=1"]
                 if "exposure_time_absolute" in item:
                     ctrl_args += [
