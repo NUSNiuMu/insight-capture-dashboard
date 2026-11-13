@@ -60,7 +60,7 @@ docker run -d --name insight-aruco-capture --network host --init \
   insight-aruco-capture:local
 ```
 
-镜像默认使用 USTC pip 源、Aliyun apt 源和 USTC ROS 2 apt 源，x86（amd64）和 Jetson（arm64）都适用。如需更换，可在构建命令中添加 `--build-arg PIP_INDEX_URL=...`、`--build-arg APT_MIRROR=...`（只写主机，如 `http://archive.ubuntu.com`，路径自动保留）或 `--build-arg ROS_MIRROR=...`，仅影响镜像构建，不修改主机全局配置。不要把 pip 源设为 Aliyun：它对 HTTP/1.1 限速约 160 KB/s，而 pip 只使用 HTTP/1.1。
+镜像默认使用腾讯云 pip 源、Aliyun apt 源和 USTC ROS 2 apt 源，x86（amd64）和 Jetson（arm64）都适用。如需更换，可在构建命令中添加 `--build-arg PIP_INDEX_URL=...`、`--build-arg APT_MIRROR=...`（只写主机，如 `http://archive.ubuntu.com`，路径自动保留）或 `--build-arg ROS_MIRROR=...`，仅影响镜像构建，不修改主机全局配置。不要把 pip 源设为 Aliyun：它对 HTTP/1.1 限速约 160 KB/s，而 pip 只使用 HTTP/1.1。也不要用 USTC：它把大文件重定向到清华，部分网络（如 Jetson 所在网络）会被返回 403。
 
 停止用 `docker stop insight-aruco-capture`，再次启动用 `docker start insight-aruco-capture`，日志用 `docker logs --tail=100 insight-aruco-capture`。代码修改后重新构建镜像并重建容器，录制数据保留在宿主机目录；配置修改只需停录后重启容器。
 

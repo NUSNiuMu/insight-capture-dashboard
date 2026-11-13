@@ -21,8 +21,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends python3-pip ffmpeg v4l-utils ros-humble-tf2-ros ros-humble-rmw-cyclonedds-cpp
 # Not Aliyun for pip: it throttles HTTP/1.1 downloads to ~160 KB/s, and pip
-# only speaks HTTP/1.1, so the wheels alone took 20+ minutes.
-ARG PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/simple
+# only speaks HTTP/1.1, so the wheels alone took 20+ minutes. Not USTC either:
+# it redirects large wheels to Tsinghua, which answers 403 to some networks
+# (a Jetson build died on the opencv aarch64 wheel). Tencent serves HTTP/1.1
+# at full speed and holds the files itself.
+ARG PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip3 install --index-url "$PIP_INDEX_URL" 'numpy>=1.26,<2' 'opencv-contrib-python-headless==4.11.0.86' 'scipy>=1.10,<1.16' 'pyarrow>=17,<18' 'aiohttp>=3.13,<4' 'pyserial==3.5' 'PyYAML>=6,<7'
 WORKDIR /app
