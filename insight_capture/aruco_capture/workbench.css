@@ -930,8 +930,14 @@ input[type="range"] {
 .segments-list {
   padding: 20px;
   min-width: 0;
-  max-height: 380px;
-  overflow: auto;
+  /* Size from the editor column, not from its own rows, so the list fills
+     the whole height beside the editor and scrolls inside it. */
+  contain: size;
+  min-height: 380px;
+  /* Title and guide stay put; only the rows below them scroll. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border-right: 1px solid var(--line);
 }
 .segment-row {
@@ -2058,4 +2064,198 @@ dialog p {
   .export-view-row > input:last-child {
     grid-column: 2;
   }
+}
+
+/* Playback controls and timeline stay at the top while the page scrolls. */
+.review-panel {
+  overflow: clip;
+}
+.playbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+#segments {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ---- 录制记录侧边栏（回放与标注） ---- */
+.session-drawer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: var(--rail-w, 204px);
+  width: var(--drawer-w, 280px);
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 12px 12px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  transition: transform 0.2s;
+}
+body.drawer-closed .session-drawer {
+  transform: translateX(-100%);
+}
+body[data-mode="review"]:not(.drawer-closed) .shell {
+  margin-left: calc(var(--rail-w, 204px) + var(--drawer-w, 280px));
+}
+.drawer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0 4px;
+}
+.drawer-head .muted {
+  font-size: 11px;
+}
+#drawerFilter {
+  font-size: 12px;
+  padding: 5px 8px;
+}
+.drawer-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+}
+.drawer-item {
+  display: grid;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  padding: 7px 9px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.drawer-item:hover {
+  background: var(--surface);
+}
+.drawer-item.active {
+  background: #22344d;
+  border-left-color: var(--cyan);
+}
+.drawer-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.drawer-item strong {
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.drawer-item small {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+.drawer-item .tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.drawer-item .tags i {
+  font-style: normal;
+  font-size: 10px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+}
+.drawer-item .tags i.todo {
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.drawer-toggle {
+  position: fixed;
+  top: 50%;
+  left: calc(var(--rail-w, 204px) + var(--drawer-w, 280px));
+  z-index: 11;
+  width: 18px;
+  height: 56px;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 1px solid var(--line);
+  border-left: 0;
+  border-radius: 0 6px 6px 0;
+  background: var(--panel);
+  color: var(--muted);
+  transition: left 0.2s;
+}
+body.drawer-closed .drawer-toggle {
+  left: var(--rail-w, 204px);
+}
+@media (max-width: 1200px) {
+  :root { --rail-w: 170px; }
+}
+@media (max-width: 960px) {
+  :root { --rail-w: 76px; }
+}
+@media (max-width: 600px) {
+  /* The rail becomes a top bar: the list overlays the page instead. */
+  :root { --rail-w: 0px; }
+  body[data-mode="review"]:not(.drawer-closed) .shell {
+    margin-left: 0;
+  }
+  .session-drawer {
+    width: min(var(--drawer-w, 280px), 85vw);
+    z-index: 30;
+  }
+  .drawer-toggle {
+    z-index: 31;
+    left: min(var(--drawer-w, 280px), 85vw);
+  }
+}
+.drawer-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+.drawer-tools button {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.drawer-row {
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  align-items: start;
+}
+.drawer-row input {
+  margin: 9px 0 0 4px;
+}
+.drawer-row.checked .drawer-item {
+  background: rgba(105, 205, 228, 0.08);
+}
+.drawer-resize {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.drawer-resize:hover,
+body.drawer-resizing .drawer-resize {
+  background: rgba(105, 205, 228, 0.35);
+}
+body.drawer-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+body.drawer-resizing .session-drawer,
+body.drawer-resizing .drawer-toggle,
+body.drawer-resizing .shell {
+  transition: none;
 }

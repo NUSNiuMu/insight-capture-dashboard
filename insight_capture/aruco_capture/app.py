@@ -501,8 +501,11 @@ def create_app(capture, annotation_url=""):
                 raise ValueError("一键离线重算正在进行，请等待完成")
             body = await request.json()
             only_missing, fast = bool(body.get("only_missing", True)), bool(body.get("fast"))
+            chosen = set(body.get("sessions") or [])
             todo, skipped = [], 0
             for path in await asyncio.to_thread(stopped_sessions):
+                if chosen and path.name not in chosen:
+                    continue
                 if (only_missing and (path / pose_track.OFFLINE_DB).is_file()) or path.name in busy or path.name in recomputing:
                     skipped += 1
                     continue
@@ -534,10 +537,13 @@ def create_app(capture, annotation_url=""):
     async def drafts_all(request):
         body = await request.json()
         only_missing = bool(body.get("only_missing", True))
+        chosen = set(body.get("sessions") or [])
         if await asyncio.to_thread(preannotate.probe, service["url"]) is None:
             raise ValueError("推理服务未配置或无法连接，不能一键预标注" + (f"（{service['url']}）" if service["url"] else ""))
         queued, skipped = [], 0
         for path in await asyncio.to_thread(stopped_sessions):
+            if chosen and path.name not in chosen:
+                continue
             annotated = json.loads((path / "segments.json").read_text()) if (path / "segments.json").is_file() else []
             if only_missing and (annotated or (path / preannotate.DRAFT).is_file()):
                 skipped += 1

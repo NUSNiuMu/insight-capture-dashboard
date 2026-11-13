@@ -37,6 +37,21 @@
         <span class="version">x86 工作台</span>
       </div>
     </aside>
+    <aside id="sessionDrawer" class="session-drawer" aria-label="录制记录" hidden>
+      <div class="drawer-head">
+        <strong>录制记录</strong>
+        <span id="drawerCount" class="muted"></span>
+      </div>
+      <input id="drawerFilter" type="search" placeholder="筛选录制名…" aria-label="筛选录制名" />
+      <div class="drawer-tools">
+        <button id="drawerSelectShown" type="button" class="quiet">全选</button
+        ><button id="drawerSelectNone" type="button" class="quiet">清空</button
+        ><span id="drawerSelected" class="muted">勾选录制可批量处理</span>
+      </div>
+      <div id="drawerList" class="drawer-list" role="listbox"></div>
+      <div id="drawerResize" class="drawer-resize" title="拖动调整宽度，双击恢复默认" aria-hidden="true"></div>
+    </aside>
+    <button id="drawerToggle" class="drawer-toggle" type="button" hidden title="展开 / 收起录制列表" aria-label="展开或收起录制列表">‹</button>
     <div class="shell">
       <header class="topbar">
         <div>
@@ -264,6 +279,7 @@
               >选择录制后查看视频与轨迹</span
             >
           </div>
+          <div class="playbar">
           <div class="transport">
             <button id="play" class="primary" aria-label="播放或暂停">
               ▶ 播放</button
@@ -330,6 +346,7 @@
                 <i class="invalid-dot"></i>缺失 / 无效</span
               ><span>点击缺失区间检查</span>
             </div>
+          </div>
           </div>
           <div class="annotation-grid">
             <div class="segments-list">

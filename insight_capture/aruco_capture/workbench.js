@@ -490,6 +490,7 @@ function changeMode() {
   $("sourceAlerts").hidden =
     mode !== "capture" || !$("sourceAlerts").textContent;
   $("sessionBar").hidden = mode !== "review";
+  $("sessionDrawer").hidden = $("drawerToggle").hidden = mode !== "review";
   $("poseTools").hidden = mode !== "review";
   $("trailToggle").hidden = mode !== "capture";
   $("clearTrail").hidden = mode !== "capture";
@@ -551,7 +552,120 @@ async function refresh() {
   $("sessions").value = selectedName;
   updateSessionNav();
   renderQualitySessions();
+  renderDrawer();
 }
+// ---- 录制记录侧边栏 ----
+let drawerOpen = true,
+  drawerSelection = new Set(); // recordings ticked for batch processing
+try {
+  drawerOpen = localStorage.getItem("sessionDrawer") !== "closed";
+} catch {}
+function applyDrawer() {
+  document.body.classList.toggle("drawer-closed", !drawerOpen);
+  $("drawerToggle").textContent = drawerOpen ? "‹" : "›";
+}
+$("drawerToggle").onclick = () => {
+  drawerOpen = !drawerOpen;
+  try {
+    localStorage.setItem("sessionDrawer", drawerOpen ? "open" : "closed");
+  } catch {}
+  applyDrawer();
+};
+$("drawerFilter").oninput = () => renderDrawer();
+function drawerShown() {
+  const filter = $("drawerFilter").value.trim().toLowerCase();
+  return records.filter((r) => !filter || r.name.toLowerCase().includes(filter));
+}
+$("drawerSelectShown").onclick = () => {
+  for (const r of drawerShown()) if (r.status === "stopped") drawerSelection.add(r.name);
+  renderDrawer();
+};
+$("drawerSelectNone").onclick = () => {
+  drawerSelection.clear();
+  renderDrawer();
+};
+function updateBatchLabels() {
+  const n = drawerSelection.size;
+  $("drawerSelected").textContent = n ? `已选 ${n} 条` : "勾选录制可批量处理";
+  $("recomputeAll").textContent = n ? `离线重算选中 ${n} 条` : "全部离线重算";
+  $("draftAll").textContent = n ? `预标注选中 ${n} 条` : "全部预标注";
+}
+function renderDrawer() {
+  const shown = drawerShown();
+  for (const name of [...drawerSelection])
+    if (!records.some((r) => r.name === name)) drawerSelection.delete(name);
+  $("drawerCount").textContent =
+    shown.length < records.length ? `${shown.length} / ${records.length}` : `${records.length} 条`;
+  updateBatchLabels();
+  $("drawerList").replaceChildren(
+    ...shown.map((r) => {
+      const b = el("button", undefined, "drawer-item" + (r.name === selectedName ? " active" : ""));
+      b.type = "button";
+      b.disabled = r.status !== "stopped";
+      const tags = el("span", undefined, "tags");
+      const tag = (text, cls) => tags.append(el("i", text, cls));
+      if (r.status !== "stopped") tag("录制中", "todo");
+      else if (r.annotated) tag("已标注");
+      else tag(r.drafted ? "有草稿" : "未标注", "todo");
+      if (r.pose_offline) tag("已重算");
+      if (r.exported_to?.length) tag("已导出");
+      b.append(el("strong", r.name), el("small", `${sessionTimestamp(r)} · ${seconds(r.duration_s, 1)}`), tags);
+      b.onclick = (e) => {
+        if (e.ctrlKey || e.metaKey) return toggle(!drawerSelection.has(r.name));
+        selectSession(r.name).catch((err) => notice(err.message, true));
+      };
+      const row = el("div", undefined, "drawer-row" + (drawerSelection.has(r.name) ? " checked" : "")),
+        check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = drawerSelection.has(r.name);
+      check.disabled = r.status !== "stopped";
+      check.setAttribute("aria-label", "勾选批量处理 " + r.name);
+      const toggle = (on) => {
+        if (on) drawerSelection.add(r.name);
+        else drawerSelection.delete(r.name);
+        renderDrawer();
+      };
+      check.onchange = () => toggle(check.checked);
+      row.append(check, b);
+      return row;
+    }),
+  );
+  $("drawerList").querySelector(".active")?.scrollIntoView({ block: "nearest" });
+}
+// Drag the drawer's right edge to resize it; the width is remembered.
+const DRAWER_MIN = 200,
+  DRAWER_MAX = 640,
+  DRAWER_DEFAULT = 280;
+function setDrawerWidth(px, save) {
+  const w = Math.round(Math.max(DRAWER_MIN, Math.min(DRAWER_MAX, px)));
+  document.documentElement.style.setProperty("--drawer-w", w + "px");
+  if (save)
+    try {
+      localStorage.setItem("sessionDrawerWidth", String(w));
+    } catch {}
+}
+try {
+  const saved = Number(localStorage.getItem("sessionDrawerWidth"));
+  if (saved) setDrawerWidth(saved, false);
+} catch {}
+$("drawerResize").addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  const left = $("sessionDrawer").getBoundingClientRect().left,
+    handle = $("drawerResize");
+  handle.setPointerCapture(e.pointerId);
+  document.body.classList.add("drawer-resizing");
+  const move = (ev) => setDrawerWidth(ev.clientX - left, false);
+  const up = (ev) => {
+    setDrawerWidth(ev.clientX - left, true);
+    document.body.classList.remove("drawer-resizing");
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", up);
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", up);
+});
+$("drawerResize").ondblclick = () => setDrawerWidth(DRAWER_DEFAULT, true);
+applyDrawer();
 function stoppedRecords() {
   return records.filter((r) => r.status === "stopped");
 }
@@ -641,6 +755,7 @@ async function selectSession(name) {
   frameVersion++;
   selectedName = name;
   $("sessions").value = name;
+  renderDrawer();
   editorDirty = false;
   review = null;
   parts = [];
@@ -1077,7 +1192,8 @@ function renderParts() {
     row.dataset.index = i;
     row.classList.toggle("unfilled", unfilled(p));
     b.type = "button";
-    const heading = el("p", p.task || "未填写任务");
+    // The subtask is what the row is about; the task it belongs to goes below.
+    const heading = el("p", p.subtask || p.task || "未填写任务");
     if (offTable(p)) {
       const tag = el("span", "表外", "off-table");
       tag.title = p.task_id
@@ -1097,7 +1213,7 @@ function renderParts() {
         `#${i + 1} · ${seconds(p.start_s)} — ${seconds(p.end_s)} · ${title(p.hands || "both")}`,
       ),
     );
-    if (p.subtask) b.append(el("small", "subtask：" + p.subtask, "subtask"));
+    if (p.subtask && p.task) b.append(el("small", "task：" + p.task, "subtask"));
     if (p.note) b.append(el("small", "模型：" + p.note, "note"));
     if (p.task_id)
       b.append(
@@ -2249,6 +2365,7 @@ bind("recomputeAll", async () => {
   const s = await api("/api/pose/recompute-all", "POST", {
     only_missing: $("recomputeOnlyMissing").checked,
     fast: $("recomputeFast").checked,
+    sessions: [...drawerSelection],
   });
   notice(
     s.total
@@ -2279,6 +2396,7 @@ async function pollDraftAll() {
 bind("draftAll", async () => {
   const s = await api("/api/drafts/run-all", "POST", {
     only_missing: $("draftOnlyMissing").checked,
+    sessions: [...drawerSelection],
   });
   $("draftAllStatus").textContent = s.queued.length ? `已排队 ${s.queued.length} 条` : "";
   notice(
