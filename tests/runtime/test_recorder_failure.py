@@ -126,3 +126,45 @@ def test_calibration_writer_failure_does_not_complete_a_capture_take(tmp_path, m
     asyncio.run(routes._finalize_failed_recorder())
     assert manager.status()["merge_state"] == "error"
     store.complete_current.assert_not_called()
+
+@pytest.mark.parametrize("audit", [False, True])
+def test_full_disk_with_live_writer_fails_take_and_retains_originals(tmp_path, monkeypatch, audit):
+    from insight_capture.runtime.recording import manager as module
+    manager, store, routes, raw = failed_capture(tmp_path, monkeypatch, 0, audit=audit)
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    manager.processes = {"single": process}
+    before = (raw.read_bytes(), raw.stat().st_mtime_ns)
+    original_statvfs = module.os.statvfs
+    empty = list(original_statvfs(raw.parent)); empty[3] = empty[4] = 0
+    monkeypatch.setattr(module.os, "statvfs", lambda path: module.os.statvfs_result(empty))
+    try:
+        failure = manager.status()["recorder_failure"]
+        assert failure is not None and failure["reason"] == "storage_exhausted"
+        assert process.poll() is None
+        # Releasing space cannot retrospectively make the lost tail complete.
+        monkeypatch.setattr(module.os, "statvfs", original_statvfs)
+        asyncio.run(routes._finalize_failed_recorder())
+        assert process.poll() is not None
+        assert manager.status()["merge_state"] == "error"
+        assert store.current()["state"] == "finalization_failed"
+        assert store.current()["recorder_failure"]["reason"] == "storage_exhausted"
+        assert "存储空间已耗尽" in manager.status()["merge_error"]
+        assert (raw.read_bytes(), raw.stat().st_mtime_ns) == before
+        assert not Path(manager.output_path).exists()
+    finally:
+        if process.poll() is None:process.kill()
+        process.wait(timeout=3)
+
+
+def test_low_but_nonzero_disk_space_does_not_force_stop(tmp_path, monkeypatch):
+    from insight_capture.runtime.recording import manager as module
+    manager = RecordingManager({}, 20, tmp_path, 1024, ["/camera"])
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+    manager.processes = {"single": process}
+    space = list(module.os.statvfs(tmp_path)); space[3] = space[4] = 1
+    monkeypatch.setattr(module.os, "statvfs", lambda path: module.os.statvfs_result(space))
+    try:
+        assert manager.status()["recorder_failure"] is None
+        assert manager.status()["recording"]
+    finally:
+        process.kill();process.wait(timeout=3)

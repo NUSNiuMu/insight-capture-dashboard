@@ -850,5 +850,7 @@
   "相机报告定位输入中断，请检查供电和连接；持续异常时保存诊断。": "The camera reports interrupted localization input. Check power and connections, and save diagnostics if the problem persists.",
   "相机内部标定文件缺失，请恢复相机标定。页面上的重新校准只重建公共地图。": "Internal camera calibration is missing. Restore the camera calibration. Recalibrate on this page only rebuilds the shared map.",
   "暂未收到新的相机定位状态，请检查连接；持续异常时保存诊断。": "No recent camera localization status has arrived. Check the connection and save diagnostics if the problem persists.",
-  "尚未收到新的定位数据，当前状态不能确认原因；持续异常时保存诊断。": "No recent pose data has arrived. The current status does not identify the cause. Save diagnostics if the problem persists."
+  "尚未收到新的定位数据，当前状态不能确认原因；持续异常时保存诊断。": "No recent pose data has arrived. The current status does not identify the cause. Save diagnostics if the problem persists.",
+  "录制存储空间已耗尽，采集已停止，未完成数据已保留。请释放空间后重新开始。": "Recording storage is full. Capture has stopped and incomplete data is retained. Free space before starting again.",
+  "MCAP 文件未完整保存，原始数据已保留。": "The MCAP file was not saved completely. The original data is retained."
 }

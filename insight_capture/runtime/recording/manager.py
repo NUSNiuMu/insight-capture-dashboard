@@ -14,6 +14,7 @@ from collections import deque
 from pathlib import Path
 from typing import Callable, Deque, Dict, List, Optional, Sequence, Set
 
+from rosbags.rosbag2 import Reader
 
 from insight_capture.core.bag import MANIFEST_NAME, read_metadata
 from .clock_sync import ClockMonitor
@@ -316,6 +317,23 @@ class RecordingManager:
                 "output_path": self.output_path,
             }
             self._output_lines.append(f"[recording] Writer exited unexpectedly: {exited}")
+        if running and self.merge_state == "idle" and self._recorder_failure is None:
+            # The native MCAP writer can remain alive after ENOSPC without
+            # reporting a write error. Process liveness cannot prove capture.
+            # Latch the failure even if space is subsequently released.
+            try:
+                space = os.statvfs(self._staging_dir or self.rosbag_root)
+            except OSError:
+                return
+            if space.f_bavail <= 0:
+                self._recorder_failure = {
+                    "detected_at_epoch_s": time.time(),
+                    "reason": "storage_exhausted",
+                    "exit_codes": {},
+                    "output_path": self.output_path,
+                    "free_bytes": max(0, space.f_bavail * space.f_frsize),
+                }
+                self._output_lines.append("[recording] Recording storage exhausted; stopping incomplete capture")
 
     def _recording_active_unlocked(self) -> bool:
         return bool(self.processes) or self._image_writer_active or bool(
@@ -805,6 +823,8 @@ class RecordingManager:
         self._output_lines.append(f"[stop] Recorder shutdown completed in {stop_sec:.2f}s")
         try:
             if self._recorder_failure:
+                if self._recorder_failure.get("reason") == "storage_exhausted":
+                    raise RuntimeError("录制存储空间已耗尽，采集已停止，未完成数据已保留。请释放空间后重新开始。")
                 raise RuntimeError("录制意外中断，未完成数据已保留。请检查设备后重新开始。")
             if still_running:
                 raise RuntimeError(
@@ -849,6 +869,15 @@ class RecordingManager:
             raise RuntimeError(
                 f"Single MCAP writer unexpectedly produced {len(mcap_files)} data files."
             )
+        # A successful native process and metadata.yaml are insufficient after
+        # ENOSPC. Validate the actual footer/index before exposing the bag. This
+        # reads the finalized summary, not every recorded payload.
+        try:
+            with Reader(mcap_files[0]) as reader:
+                if reader.message_count != int(info.get("message_count", 0) or 0):
+                    raise ValueError("MCAP summary count differs from metadata")
+        except Exception as exc:
+            raise RuntimeError("MCAP 文件未完整保存，原始数据已保留。") from exc
         if self._image_header_audit is not None:
             (staging_dir / "image_header_audit.json").write_text(
                 json.dumps(self._image_header_audit, indent=2, sort_keys=True)

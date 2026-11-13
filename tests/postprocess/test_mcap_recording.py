@@ -34,27 +34,16 @@ def _write_part(
     root: Path, name: str, topic: str, *, start_ns: int, duration_ns: int,
     messages: int,
 ) -> Path:
+    from rosbags.rosbag2 import Writer, StoragePlugin
+    from rosbags.typesys import Stores, get_typestore
     part = root / name
-    part.mkdir(parents=True)
-    (part / f"{name}_0.mcap").write_bytes(b"mcap")
-    info = {
-        "storage_identifier": "mcap",
-        "starting_time": {"nanoseconds_since_epoch": start_ns},
-        "duration": {"nanoseconds": duration_ns},
-        "message_count": messages,
-        "topics_with_message_count": [{
-            "topic_metadata": {
-                "name": topic,
-                "type": "std_msgs/msg/String",
-                "serialization_format": "cdr",
-                "offered_qos_profiles": "",
-            },
-            "message_count": messages,
-        }],
-    }
-    (part / "metadata.yaml").write_text(
-        yaml.safe_dump({"rosbag2_bagfile_information": info}), encoding="utf-8"
-    )
+    typestore = get_typestore(Stores.ROS2_HUMBLE)
+    with Writer(part, version=9, storage_plugin=StoragePlugin.MCAP) as writer:
+        connection = writer.add_connection(topic, 'std_msgs/msg/String', typestore=typestore)
+        message = typestore.types['std_msgs/msg/String']('sample')
+        for i in range(messages):
+            stamp = start_ns + i * duration_ns // max(1, messages - 1)
+            writer.write(connection, stamp, typestore.serialize_cdr(message, connection.msgtype))
     return part
 
 
@@ -299,15 +288,37 @@ class McapRecordingTest(unittest.TestCase):
             manager._output_lines = deque(maxlen=20)
             manager._recording_completed_callbacks = []
 
+            raw_name = single_mcap(staging).name
             manager._publish_single_mcap_session(staging, output)
 
             self.assertFalse(staging.exists())
-            self.assertTrue((output / "capture_0.mcap").is_file())
+            self.assertTrue((output / raw_name).is_file())
             self.assertTrue((output / "metadata.yaml").is_file())
-            self.assertEqual(single_mcap(output), output / "capture_0.mcap")
+            self.assertEqual(single_mcap(output), output / raw_name)
             manifest = json.loads((output / "recording_manifest.json").read_text())
             self.assertNotIn("parts", manifest)
             self.assertEqual(manager.merge_timings["method"], "single_mcap_publish")
+
+
+    def test_incomplete_or_mismatched_mcap_is_not_published(self) -> None:
+        for fault in ('truncated_footer', 'wrong_count'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                staging = _write_part(root / '_staging', 'capture', '/camera', start_ns=1000, duration_ns=500, messages=5)
+                raw = single_mcap(staging)
+                if fault == 'truncated_footer':
+                    raw.write_bytes(raw.read_bytes()[:-20])
+                else:
+                    metadata = staging / 'metadata.yaml'
+                    value = yaml.safe_load(metadata.read_text())
+                    value['rosbag2_bagfile_information']['message_count'] = 100
+                    metadata.write_text(yaml.safe_dump(value))
+                before = raw.read_bytes()
+                manager = RecordingManager({}, 20, root, 1024, ['/camera'])
+                with self.assertRaisesRegex(RuntimeError, 'MCAP'):
+                    manager._publish_single_mcap_session(staging, root / 'capture')
+                self.assertFalse((root / 'capture').exists())
+                self.assertEqual(raw.read_bytes(), before)
 
 
 if __name__ == "__main__":
