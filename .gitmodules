@@ -1,0 +1,3 @@
+[submodule "ego-annotation"]
+	path = ego-annotation
+	url = https://github.com/NUSNiuMu/ego-annotation.git
