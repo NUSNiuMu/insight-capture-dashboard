@@ -190,14 +190,29 @@ def create_app(capture, annotation_url=""):
 
     async def stop(request):
         name = await asyncio.to_thread(capture.stop)
-        if name and service["url"]:
-            # Probe in the background so stopping never waits on the network.
-            task = asyncio.get_running_loop().create_task(
-                start_draft(session_path(name), required=False)
-            )
+        if name:
+            # In the background so stopping never waits on alignment or the network.
+            task = asyncio.get_running_loop().create_task(after_stop(session_path(name)))
             draft_tasks.add(task)
             task.add_done_callback(draft_tasks.discard)
         return web.json_response({"stopped": name})
+
+    async def after_stop(path):
+        """Pause detection into a draft every time; then model pre-annotation
+        replaces it if the service answers."""
+        job = draft_jobs[path.name] = {
+            "running": True, "queued": False, "done": 0, "total": 0,
+            "error": None, "model": "", "stage": "pause",
+        }
+        try:
+            segmentation = await asyncio.to_thread(segment_settings.load, capture.root)
+            await asyncio.to_thread(preannotate.pause_draft, path, segmentation)
+        except Exception as exc:  # reported to the page, not raised
+            job["error"] = "静止检测失败：" + (str(exc) or type(exc).__name__)
+        finally:
+            job["running"] = False
+        if service["url"]:
+            await start_draft(path, required=False)
 
     async def start_draft(path, required):
         """Queue pre-annotation if the service answers; otherwise skip (or refuse)."""
@@ -545,7 +560,8 @@ def create_app(capture, annotation_url=""):
             if chosen and path.name not in chosen:
                 continue
             annotated = json.loads((path / "segments.json").read_text()) if (path / "segments.json").is_file() else []
-            if only_missing and (annotated or (path / preannotate.DRAFT).is_file()):
+            # A pause-only draft (written on every stop) still lacks labels.
+            if only_missing and (annotated or preannotate.has_model_draft(path)):
                 skipped += 1
                 continue
             if await start_draft(path, required=False):

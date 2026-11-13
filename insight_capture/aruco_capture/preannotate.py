@@ -264,6 +264,38 @@ def cover(start, end, items, min_s):
     return out
 
 
+def pause_draft(path, segmentation=None):
+    """Draft of pause-detection boundaries only (no labels), written right after a
+    recording stops; a model pre-annotation, when a service answers, replaces it."""
+    started = time.monotonic()
+    meta, grid, state, video, good, report, _reasons = align(path)
+    segments = suggest_pause_segments(
+        grid, state, good, report["fps"], duration_s=float(meta["duration_s"]), **(segmentation or {})
+    )
+    draft = {
+        "created_unix_ns": time.time_ns(),
+        "elapsed_s": round(time.monotonic() - started, 1),
+        "source": "pause",
+        "model": "",
+        "service_url": "",
+        "action_table_version": "",
+        "segments": [{**segment, "description": "", "flags": []} for segment in segments],
+    }
+    write_json(path / DRAFT, draft)
+    return draft
+
+
+def has_model_draft(path):
+    """A draft written by the labelling model (not just pause boundaries)."""
+    file = path / DRAFT
+    if not file.is_file():
+        return False
+    try:
+        return json.loads(file.read_text()).get("source") != "pause"
+    except ValueError:
+        return False
+
+
 def run(path, url, table=None, model="", progress=lambda done, total: None, segmentation=None):
     """Pre-annotate one stopped session and write its draft; returns the draft."""
     started = time.monotonic()

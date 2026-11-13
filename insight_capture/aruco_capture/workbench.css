@@ -2259,3 +2259,90 @@ body.drawer-resizing .drawer-toggle,
 body.drawer-resizing .shell {
   transition: none;
 }
+/* Quality scope: all segments / one pinned segment / whole recording. */
+.quality-header {
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.quality-scope {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.scope-switch {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.scope-switch button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 6px 12px;
+}
+.scope-switch button + button {
+  border-left: 1px solid var(--line);
+}
+.scope-switch button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--cyan);
+}
+.scope-switch button:disabled {
+  opacity: 0.45;
+}
+#qualitySegment {
+  font-size: 12px;
+  max-width: 260px;
+}
+.segment-quality {
+  display: grid;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.segment-quality-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.4fr) auto minmax(80px, 1fr) 56px minmax(120px, 1fr);
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.segment-quality-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.segment-quality-row small {
+  color: var(--muted);
+}
+.segment-quality-row:hover,
+.segment-quality-row.active {
+  border-color: var(--line);
+  background: var(--surface);
+}
+.segment-quality-row.low .bar i {
+  background: var(--amber);
+}
+.quality-session-row > button.quiet {
+  flex: none;
+  font-size: 11px;
+  padding: 3px 8px;
+}
+@media (max-width: 760px) {
+  .segment-quality-row {
+    grid-template-columns: 1fr 56px;
+  }
+  .segment-quality-row small,
+  .segment-quality-row .bar {
+    display: none;
+  }
+}

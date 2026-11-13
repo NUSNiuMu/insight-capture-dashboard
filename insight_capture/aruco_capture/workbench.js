@@ -497,7 +497,7 @@ function changeMode() {
   $("stage").hidden = mode === "quality";
   $("armCards").hidden = mode === "quality";
   $("reviewPanel").hidden = mode !== "review";
-  $("qualityPanel").hidden = mode !== "review";
+  $("qualityPanel").hidden = mode === "capture";
   $("exportPanel").hidden = mode !== "quality";
   $("batchBar").hidden = mode !== "review";
   $("cameraTitle").textContent = mode === "capture" ? "相机画面" : "同步视频";
@@ -1258,6 +1258,7 @@ function renderParts() {
   });
   highlightParts();
   renderGuide();
+  renderQuality();
 }
 function metricLabel(key) {
   return (
@@ -1327,30 +1328,162 @@ function qualityPairRow(label, leftKey, leftV, rightKey, rightV, q) {
   );
   return row;
 }
+// Quality scope: all segments (default), one pinned segment, or the whole recording.
+let qualityScope = "segments",
+  qualitySegment = 0;
+function mergeRanges(ranges) {
+  const out = [];
+  for (const [a, b] of [...ranges].sort((x, y) => x[0] - y[0])) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+// The report restricted to `ranges` (seconds): missing intervals clipped to
+// them and every valid ratio recomputed over their total length.
+function scopeQuality(q, ranges) {
+  ranges = mergeRanges(ranges);
+  const span = ranges.reduce((n, [a, b]) => n + b - a, 0),
+    missing = {},
+    ratios = { ...q.valid_ratios };
+  for (const [key, intervals] of Object.entries(q.missing_intervals)) {
+    const clipped = [];
+    for (const [a, b] of intervals)
+      for (const [lo, hi] of ranges) {
+        const x = Math.max(a, lo),
+          y = Math.min(b, hi);
+        if (y > x) clipped.push([x, y]);
+      }
+    clipped.sort((x, y) => x[0] - y[0]);
+    missing[key] = clipped;
+    if (key in ratios)
+      ratios[key] = span
+        ? Math.max(0, 1 - clipped.reduce((n, [a, b]) => n + b - a, 0) / span)
+        : 0;
+  }
+  return { ...q, valid_ratios: ratios, missing_intervals: missing, span_s: span };
+}
+function partName(p, i) {
+  return `#${i + 1} ${p.subtask || p.task || "未填写"}`;
+}
+// The weakest metric of a scoped report, for the per-segment list.
+function weakest(sq) {
+  let worst = null;
+  for (const [key, v] of Object.entries(sq.valid_ratios))
+    if (key !== "all_required" && (!worst || v < worst[1])) worst = [key, v];
+  return worst;
+}
+for (const b of document.querySelectorAll(".scope-switch button"))
+  b.onclick = () => {
+    if (b.dataset.scope === "segment" && qualityScope !== "segment" && editing >= 0)
+      qualitySegment = editing;
+    qualityScope = b.dataset.scope;
+    renderQuality();
+  };
+$("qualitySegment").onchange = () => {
+  qualitySegment = Number($("qualitySegment").value);
+  renderQuality();
+};
+function renderSegmentQuality(q, segs) {
+  $("segmentQuality").replaceChildren(
+    ...segs.map(([p, i]) => {
+      const sq = scopeQuality(q, [[p.start_s, p.end_s]]),
+        v = sq.valid_ratios.all_required,
+        worst = weakest(sq),
+        b = el("button", undefined, "segment-quality-row" + (v < 0.95 ? " low" : ""));
+      b.type = "button";
+      b.classList.toggle("active", qualityScope === "segment" && i === qualitySegment);
+      b.append(
+        el("span", partName(p, i)),
+        el("small", `${seconds(p.start_s)} — ${seconds(p.end_s)}`),
+        qualityBar(v),
+        el("strong", (v * 100).toFixed(1) + "%"),
+        el("small", worst && worst[1] < 1 ? `最低：${metricLabel(worst[0])} ${(worst[1] * 100).toFixed(0)}%` : "全部有效"),
+      );
+      b.onclick = () => {
+        qualityScope = "segment";
+        qualitySegment = i;
+        seek(p.start_s);
+        renderQuality();
+      };
+      return b;
+    }),
+  );
+}
 function renderQuality() {
-  const q = review?.quality;
+  const full = review?.quality;
   $("quality").replaceChildren();
   $("qualitySummary").replaceChildren();
   $("dimensions").replaceChildren();
   $("validityTrack").replaceChildren();
-  if (!q) {
+  $("segmentQualityPanel").hidden = true;
+  $("qualitySegment").hidden = true;
+  if (!full) {
     $("quality").append(
-      el("div", "选择一条录制，查看质量报告。", "empty-state"),
+      el(
+        "div",
+        mode === "quality"
+          ? "在下方录制列表点「查看质量」，或在回放页选择录制。"
+          : "选择一条录制，查看质量报告。",
+        "empty-state",
+      ),
     );
     return;
   }
+  const segs = parts.map((p, i) => [p, i]).filter(([p]) => p.end_s > p.start_s);
+  let scope = qualityScope;
+  if (scope !== "video" && !segs.length) scope = "video";
+  qualitySegment = Math.min(Math.max(0, qualitySegment), Math.max(0, parts.length - 1));
+  for (const b of document.querySelectorAll(".scope-switch button")) {
+    b.classList.toggle("active", b.dataset.scope === scope);
+    b.setAttribute("aria-checked", String(b.dataset.scope === scope));
+    b.disabled = b.dataset.scope !== "video" && !segs.length;
+  }
+  const pinned = parts[qualitySegment];
+  const q =
+    scope === "video"
+      ? full
+      : scopeQuality(
+          full,
+          scope === "segment"
+            ? [[pinned.start_s, pinned.end_s]]
+            : segs.map(([p]) => [p.start_s, p.end_s]),
+        );
+  $("qualityScopeNote").textContent =
+    scope === "video"
+      ? (qualityScope !== "video" ? "这条录制还没有分段，显示全部视频；" : "") +
+        "按整次录制的预期帧数评估；无效数据不会补齐成有效帧。"
+      : scope === "segments"
+        ? `只统计 ${segs.length} 个分段覆盖的时间（${dirty ? "含未保存的修改" : "已保存的分段"}），分段之外的时段不计入。`
+        : `只统计 ${partName(pinned, qualitySegment)}（${seconds(pinned.start_s)} — ${seconds(pinned.end_s)}）。`;
+  if (scope === "segment") {
+    $("qualitySegment").hidden = false;
+    $("qualitySegment").replaceChildren(
+      ...segs.map(([p, i]) => new Option(`${partName(p, i)} · ${seconds(p.start_s)}`, String(i))),
+    );
+    $("qualitySegment").value = String(qualitySegment);
+  }
+  if (scope !== "video") {
+    $("segmentQualityPanel").hidden = false;
+    renderSegmentQuality(full, segs);
+  }
+  $("dimensionsBox").hidden = scope !== "video";
+  const span = scope === "video" ? q.duration_s : q.span_s;
   const metrics = [
     [
       "完整有效率",
       (q.valid_ratios.all_required * 100).toFixed(1) + "%",
       "全部必需维度同时有效",
     ],
-    ["预期采样帧", q.expected_frames.toLocaleString(), "包含缺失时段"],
-    ["录制时长", seconds(q.duration_s, 1), `${q.fps} Hz 统一采样`],
+    scope === "video"
+      ? ["预期采样帧", q.expected_frames.toLocaleString(), "包含缺失时段"]
+      : ["分段采样帧", Math.round(span * q.fps).toLocaleString(), scope === "segments" ? `${segs.length} 个分段合计` : "本分段"],
+    [scope === "video" ? "录制时长" : "分段时长", seconds(span, 1), `${q.fps} Hz 统一采样`],
     [
       "可导出帧",
       q.export_plan.frames.toLocaleString(),
-      `${q.export_plan.episodes} 个连续片段`,
+      `${q.export_plan.episodes} 个连续片段（按已保存分段）`,
     ],
   ];
   for (const [label, value, sub] of metrics) {
@@ -1377,12 +1510,12 @@ function renderQuality() {
     d.append(el("span", key), el("span", (v * 100).toFixed(1) + "%"));
     $("dimensions").append(d);
   }
-  for (const [start, end] of q.missing_intervals.all_required) {
+  for (const [start, end] of full.missing_intervals.all_required) {
     const b = el("button");
-    b.style.left = (start / q.duration_s) * 100 + "%";
+    b.style.left = (start / full.duration_s) * 100 + "%";
     b.style.width =
-      (Math.min(end - start, q.duration_s - start) / q.duration_s) * 100 + "%";
-    b.title = `缺失 ${seconds(start)} 至 ${seconds(Math.min(end, q.duration_s))}`;
+      (Math.min(end - start, full.duration_s - start) / full.duration_s) * 100 + "%";
+    b.title = `缺失 ${seconds(start)} 至 ${seconds(Math.min(end, full.duration_s))}`;
     b.setAttribute("aria-label", b.title);
     b.onclick = () => seek(start);
     $("validityTrack").append(b);
@@ -1427,7 +1560,15 @@ function renderQualitySessions() {
             : " · 尚未导出"),
       ),
     );
-    row.append(check, info);
+    const view = el("button", "查看质量", "quiet");
+    view.type = "button";
+    view.onclick = (e) => {
+      e.stopPropagation();
+      selectSession(r.name)
+        .then(() => $("qualityPanel").scrollIntoView({ behavior: "smooth", block: "start" }))
+        .catch((err) => notice(err.message, true));
+    };
+    row.append(check, info, view);
     row.onclick = () => {
       check.checked = !check.checked;
       check.onchange();
@@ -2029,10 +2170,19 @@ function renderDraft() {
   let text;
   if (!review) text = "预标注：选择录制后显示";
   else if (running)
-    text = job.queued
-      ? "预标注排队中…"
-      : `预标注中 ${job.done} / ${job.total || "…"} 段`;
+    text =
+      job.stage === "pause"
+        ? "录制已结束，静止检测中…"
+        : job.queued
+          ? "预标注排队中…"
+          : `预标注中 ${job.done} / ${job.total || "…"} 段`;
   else if (job?.error) text = "预标注失败：" + job.error;
+  else if (draft?.source === "pause")
+    text =
+      `静止分段草稿 ${draft.segments.length} 段（任务待填写）` +
+      (up ? " · 可点「预标注」生成任务文本" : "") +
+      " · " +
+      new Date(draft.created_unix_ns / 1e6).toLocaleString("zh-CN", { hour12: false });
   else if (draft) {
     const flagged = draft.segments.filter((s) => s.flags?.length).length;
     text =
@@ -2053,7 +2203,7 @@ function renderDraft() {
   $("loadDraft").disabled = reviewBusy;
   $("runDraft").hidden = !configured;
   $("runDraft").disabled = !review || reviewBusy || running || !up;
-  $("runDraft").textContent = draft ? "重新预标注" : "预标注";
+  $("runDraft").textContent = draft && draft.source !== "pause" ? "重新预标注" : "预标注";
   $("runDraft").title = up
     ? `用推理服务（${service.health.model}）重新生成这条录制的预标注草稿`
     : `推理服务未启动或连不上：${service?.url || ""}`;
@@ -2105,9 +2255,11 @@ function applyDraft(auto) {
   renderParts();
   const flagged = parts.filter((p) => p.flags.length).length;
   notice(
-    `${auto ? "已自动载入" : "已载入"}预标注草稿 ${parts.length} 段` +
-      (flagged ? `，其中 ${flagged} 段存疑（红色标记）` : "") +
-      "。逐段核对，打开并「更新片段」即视为确认；全部核对后点「保存全部标注」才生效。",
+    draft.source === "pause"
+      ? `${auto ? "已自动载入" : "已载入"}录制结束时静止检测的分段草稿 ${parts.length} 段：逐段填写任务，全部填完后点「保存全部标注」才生效。`
+      : `${auto ? "已自动载入" : "已载入"}预标注草稿 ${parts.length} 段` +
+          (flagged ? `，其中 ${flagged} 段存疑（红色标记）` : "") +
+          "。逐段核对，打开并「更新片段」即视为确认；全部核对后点「保存全部标注」才生效。",
   );
   offerUndo("撤销载入草稿", previous);
 }
@@ -2527,7 +2679,39 @@ window.addEventListener("beforeunload", (e) => {
     e.returnValue = "";
   }
 });
+// Del removes the picked segments (or the one open in the editor). Checked
+// before the button guard below: a clicked segment leaves focus on its button.
+function deletePickedParts() {
+  const targets = selection.size ? selectedParts() : editing >= 0 ? [parts[editing]] : [];
+  if (!targets.length) {
+    notice("先点击要删除的片段（Ctrl / Shift 点击可多选），再按 Del", true);
+    return;
+  }
+  const previous = parts.map((p) => ({ ...p })),
+    numbers = targets.map((p) => parts.indexOf(p) + 1);
+  parts = parts.filter((p) => !targets.includes(p));
+  selection = new Set();
+  anchor = null;
+  setDirty(true);
+  resetEditor();
+  renderParts();
+  notice(`已删除第 ${numbers.join("、")} 段，保存后生效。`);
+  offerUndo("撤销删除", previous);
+}
 document.addEventListener("keydown", (e) => {
+  if (
+    e.key === "Delete" &&
+    mode === "review" &&
+    review &&
+    !reviewBusy &&
+    !["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName) &&
+    !e.target.isContentEditable &&
+    !$("discardDialog").open
+  ) {
+    e.preventDefault();
+    deletePickedParts();
+    return;
+  }
   if (
     mode !== "review" ||
     !review ||

@@ -51,12 +51,31 @@ class StopTriggersPreannotationTests(unittest.TestCase):
                 stop_and_read_draft(fake_capture(root, "s1"), "http://127.0.0.1:9")
             )
         self.assertEqual(stopped, {"stopped": "s1"})
-        self.assertEqual(state, {"draft": None, "job": None})
+        self.assert_pause_only(state)
 
     def test_skipped_when_not_configured(self):
         with tempfile.TemporaryDirectory() as root:
             _, state = asyncio.run(stop_and_read_draft(fake_capture(root, "s1"), ""))
-        self.assertIsNone(state["job"])
+        self.assert_pause_only(state)
+
+    def assert_pause_only(self, state):
+        # Every stop runs pause detection (it fails on this data-less fake
+        # session and says so on the job); the model step never starts.
+        job = state["job"]
+        self.assertEqual((job["stage"], job["model"], job["running"]), ("pause", "", False))
+        self.assertIn("静止检测失败", job["error"])
+        self.assertIsNone(state["draft"])
+
+    def test_model_draft_vs_pause_draft(self):
+        from insight_capture.aruco_capture import preannotate
+
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root)
+            self.assertFalse(preannotate.has_model_draft(path))
+            (path / preannotate.DRAFT).write_text(json.dumps({"source": "pause", "segments": []}))
+            self.assertFalse(preannotate.has_model_draft(path))
+            (path / preannotate.DRAFT).write_text(json.dumps({"model": "x", "segments": []}))
+            self.assertTrue(preannotate.has_model_draft(path))
 
     def test_queued_when_service_up(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Health)

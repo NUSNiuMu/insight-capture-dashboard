@@ -331,7 +331,7 @@
                   合并
                 </button></span
               ><span
-                >点击片段定位并编辑 · Ctrl / Shift 点击多选 ·
+                >点击片段定位并编辑 · Ctrl / Shift 点击多选 · Del 删除选中 ·
                 <i class="unfilled-dot"></i>虚线为未填写任务</span
               >
             </div>
@@ -527,20 +527,35 @@
           <div class="quality-header">
             <div>
               <h2>采集质量</h2>
-              <p class="muted">
+              <p id="qualityScopeNote" class="muted">
                 按整次录制的预期帧数评估；无效数据不会补齐成有效帧。
               </p>
             </div>
-            <button id="qc">重新评估</button>
+            <div class="quality-scope">
+              <div class="scope-switch" role="radiogroup" aria-label="质量统计范围">
+                <button type="button" data-scope="segments" role="radio">全部分段</button
+                ><button type="button" data-scope="segment" role="radio">固定分段</button
+                ><button type="button" data-scope="video" role="radio">全部视频</button>
+              </div>
+              <select id="qualitySegment" aria-label="选择分段" hidden></select>
+              <button id="qc">重新评估</button>
+            </div>
           </div>
           <div id="qualitySummary" class="quality-summary"></div>
+          <section id="segmentQualityPanel" class="panel" hidden>
+            <div class="panel-heading">
+              <h3>各分段质量</h3>
+              <span class="muted">点击分段查看其质量并跳到起点</span>
+            </div>
+            <div id="segmentQuality" class="segment-quality"></div>
+          </section>
           <section class="panel">
             <div class="panel-heading">
               <h3>各维度有效率</h3>
               <span class="muted">点击缺失时段跳到对应时刻</span>
             </div>
             <div id="quality"></div>
-            <details>
+            <details id="dimensionsBox">
               <summary>查看全部 20 个状态维度</summary>
               <div id="dimensions"></div>
             </details>
