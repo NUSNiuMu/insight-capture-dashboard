@@ -1857,6 +1857,14 @@ $("segmentForm").addEventListener("input", (e) => {
     e.target.closest("#segParams")
   )
     return;
+  // Labels apply to the open segment as typed; only times wait for 更新片段.
+  if (
+    editing >= 0 &&
+    ["task", "subtask", "taskId", "subtaskId", "hands"].includes(e.target.id)
+  ) {
+    applyLabels();
+    return;
+  }
   editorDirty = true;
 });
 // Validate the editor and write it into `parts`; returns the stored part, or
@@ -2029,6 +2037,47 @@ $("mergeParts").onclick = () => {
   );
   offerUndo("撤销合并", previous);
 };
+// M merges the current segment (open in the editor, else under the playhead)
+// into the previous one, Shift+M with the next one. The merged segment keeps
+// the current segment's labels when it has a task, else the neighbour's.
+function mergeNeighbour(forward) {
+  if (!review || reviewBusy) return;
+  if (editorDirty) {
+    notice("请先更新正在编辑的片段的起止时间，再合并", true);
+    return;
+  }
+  const i =
+    editing >= 0
+      ? editing
+      : parts.findIndex((p) => currentTime >= p.start_s && currentTime < p.end_s);
+  if (i < 0) {
+    notice("播放头不在任何片段上：先点选一段，或把播放头移到片段内", true);
+    return;
+  }
+  const j = forward ? i - 1 : i + 1;
+  if (j < 0 || j >= parts.length) {
+    notice(forward ? "已是第一段，前面没有可合并的片段" : "已是最后一段，后面没有可合并的片段", true);
+    return;
+  }
+  const previous = parts.map((p) => ({ ...p })),
+    [first, last] = forward ? [j, i] : [i, j],
+    keep = unfilled(parts[i]) ? parts[j] : parts[i];
+  const merged = {
+    ...keep,
+    start_s: parts[first].start_s,
+    end_s: parts[last].end_s,
+  };
+  parts.splice(first, 2, merged);
+  selection = new Set();
+  setDirty(true);
+  resetEditor();
+  renderParts();
+  editPart(first);
+  notice(
+    `已把第 ${first + 1}、${last + 1} 段合并（${forward ? "向前" : "向后"}），保存后生效。`,
+  );
+  offerUndo("撤销合并", previous);
+}
 function tableTask(id) {
   return id ? actionTable.tasks.find((t) => t.id === id) : undefined;
 }
@@ -2089,20 +2138,39 @@ function renderActionTable() {
   fillSubtaskOptions();
   renderParts();
 }
-// Picking an entry writes its canonical text, unless the box already holds
-// wording of the annotator's own, which is kept for language variety.
-function prefill(input, entry, canonical) {
-  const text = input.value.trim();
-  if (entry && (!text || canonical.includes(text))) input.value = entry.text;
+// Picking an entry always writes its text into the box, replacing whatever was
+// typed: the pick is the annotator's latest choice.
+function prefill(input, entry) {
+  if (entry) input.value = entry.text;
+}
+// The segment open in the editor follows its task / subtask / hands fields as
+// they change: no "更新片段" click needed. Start and end still go through
+// 更新片段, which checks them against the other segments.
+function applyLabels() {
+  if (editing < 0 || !parts[editing] || !review || reviewBusy) return;
+  const p = parts[editing],
+    next = {
+      task: $("task").value.trim(),
+      subtask: $("subtask").value.trim(),
+      task_id: $("taskId").value,
+      subtask_id: $("subtaskId").value,
+      hands: $("hands").value,
+    };
+  if (Object.keys(next).every((k) => (p[k] || "") === next[k])) return;
+  Object.assign(p, next);
+  setDirty(true);
+  const keep = editing;
+  renderParts();
+  editing = keep;
+  highlightParts();
+  renderGuide();
 }
 $("taskId").onchange = () => {
-  const task = tableTask($("taskId").value),
-    allSubtasks = actionTable.tasks.flatMap((t) => t.subtasks);
-  prefill($("task"), task, actionTable.tasks.map((t) => t.text));
+  const task = tableTask($("taskId").value);
+  prefill($("task"), task);
   if (!task?.subtasks.some((x) => x.id === $("subtaskId").value)) {
-    // The old subtask belonged to another task; drop its canonical text too.
-    if (allSubtasks.some((x) => x.text === $("subtask").value.trim()))
-      $("subtask").value = "";
+    // The old subtask belonged to another task; drop its text too.
+    $("subtask").value = "";
     fillSubtaskOptions("");
   } else {
     fillSubtaskOptions();
@@ -2110,19 +2178,17 @@ $("taskId").onchange = () => {
     prefill(
       $("subtask"),
       task.subtasks.find((x) => x.id === $("subtaskId").value),
-      allSubtasks.map((x) => x.text),
     );
   }
-  editorDirty = true;
+  applyLabels();
 };
 $("subtaskId").onchange = () => {
   const task = tableTask($("taskId").value);
   prefill(
     $("subtask"),
     task?.subtasks.find((x) => x.id === $("subtaskId").value),
-    actionTable.tasks.flatMap((t) => t.subtasks.map((x) => x.text)),
   );
-  editorDirty = true;
+  applyLabels();
 };
 $("importActions").onclick = () => $("actionFile").click();
 $("actionFile").onchange = async () => {
@@ -2698,6 +2764,19 @@ function deletePickedParts() {
   notice(`已删除第 ${numbers.join("、")} 段，保存后生效。`);
   offerUndo("撤销删除", previous);
 }
+// Text entry, where Space and letters belong to the field.
+function typing(target) {
+  if (target.isContentEditable || target.tagName === "TEXTAREA") return true;
+  return (
+    target.tagName === "INPUT" &&
+    !["range", "checkbox", "radio", "button", "submit", "file", "color"].includes(target.type)
+  );
+}
+// A focused button activates on Space keyup; swallow that so the keydown
+// handler's play / pause is not followed by a stray click.
+document.addEventListener("keyup", (e) => {
+  if (e.code === "Space" && mode === "review" && !typing(e.target)) e.preventDefault();
+});
 document.addEventListener("keydown", (e) => {
   if (
     e.key === "Delete" &&
@@ -2712,16 +2791,21 @@ document.addEventListener("keydown", (e) => {
     deletePickedParts();
     return;
   }
-  if (
-    mode !== "review" ||
-    !review ||
-    ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(e.target.tagName) ||
-    $("discardDialog").open
-  )
-    return;
-  if (e.code === "Space") {
+  if (mode !== "review" || !review || $("discardDialog").open) return;
+  // Space plays / pauses even when a button, select or slider has focus (after
+  // a click it usually does): there Space would otherwise press that control
+  // instead. Only text fields keep Space for typing.
+  if (e.code === "Space" && !typing(e.target)) {
     e.preventDefault();
+    if (e.repeat) return;
+    if (e.target !== document.body) e.target.blur?.();
     $("play").click();
+    return;
+  }
+  if (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(e.target.tagName)) return;
+  if (e.key.toLowerCase() === "m" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    mergeNeighbour(!e.shiftKey);
   } else if (e.key === "ArrowLeft") {
     e.preventDefault();
     $("prevFrame").click();
