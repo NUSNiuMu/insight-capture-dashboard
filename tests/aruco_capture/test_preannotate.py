@@ -173,3 +173,22 @@ class ServiceUrlTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CoverTests(unittest.TestCase):
+    def test_tiles_whole_stretch(self):
+        from insight_capture.aruco_capture.preannotate import cover
+        items = [{"start": 1.0, "end": 3.0}, {"start": 3.1, "end": 5.0}, {"start": 7.0, "end": 7.2}]
+        out = cover(0.0, 10.0, items, 0.5)
+        self.assertEqual(out[0][:2], (0.0, 1.0)); self.assertIsNone(out[0][2])        # leading gap -> other
+        self.assertEqual(out[1][:2], (1.0, 3.1))                                        # tiny gap absorbed
+        self.assertEqual(out[2][:2], (3.1, 5.0))
+        self.assertEqual(out[-1][:2], (5.0, 10.0)); self.assertIsNone(out[-1][2])       # short item dropped, tail other
+        for (a, b, _), (c, d, _) in zip(out, out[1:]):
+            self.assertEqual(b, c)
+
+    def test_empty_and_tiny_tail(self):
+        from insight_capture.aruco_capture.preannotate import cover
+        self.assertEqual(cover(0, 4, [], 0.5), [(0, 4, None)])
+        out = cover(0, 4, [{"start": 0.2, "end": 3.8}], 0.5)
+        self.assertEqual([(a, b) for a, b, _ in out], [(0, 4)])

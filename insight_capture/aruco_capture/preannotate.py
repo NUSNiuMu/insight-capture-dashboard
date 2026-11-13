@@ -236,6 +236,34 @@ def pose_check(subtask_id, state, good, first, last, hands, gravity):
     return []
 
 
+OTHER = "other"
+UNSURE_FLAG = "不确定或无法标注，标为 other"
+
+
+def cover(start, end, items, min_s):
+    """Tile [start, end] completely with ``items`` (dicts with "start"/"end",
+    sorted, non-overlapping): gaps of at least ``min_s`` become ``None``
+    placeholders, shorter ones are absorbed by the neighbouring item."""
+    out, cursor = [], start
+    for item in items:
+        a, b = max(item["start"], cursor), min(item["end"], end)
+        if b - a < min_s:
+            continue
+        if a - cursor >= min_s:
+            out.append((cursor, a, None))
+        elif out and out[-1][2] is not None:
+            out[-1] = (out[-1][0], a, out[-1][2])   # tiny gap: extend previous
+        else:
+            a = cursor                               # tiny gap at the start
+        out.append((a, b, item))
+        cursor = b
+    if end - cursor >= min_s or not out:
+        out.append((cursor, end, None))
+    else:
+        out[-1] = (out[-1][0], end, out[-1][2])
+    return out
+
+
 def run(path, url, table=None, model="", progress=lambda done, total: None, segmentation=None):
     """Pre-annotate one stopped session and write its draft; returns the draft."""
     started = time.monotonic()
@@ -298,30 +326,39 @@ def run(path, url, table=None, model="", progress=lambda done, total: None, segm
             if not found:
                 found = [{"start": start, "end": end, "subtask_id": "", "subtask": "",
                           "flags": ["模型未切分出子任务，整段保留"] + failures}]
-            # 3. Snap to motion onsets / offsets, keep order, check with the pose.
+            # 3. Snap to motion onsets / offsets, keep order, then tile the
+            # whole stretch: time the model left out becomes "other".
             found.sort(key=lambda x: x["start"])
-            previous = start
+            snapped, previous = [], start
             for item in found:
                 a = max(previous, snap(item["start"], onsets, start, end))
                 b = min(end, snap(item["end"], offsets, start, end))
-                if b - a < MIN_DRAFT_S:
-                    continue
+                if b > a:
+                    snapped.append({**item, "start": a, "end": b})
+                    previous = b
+            for a, b, item in cover(start, end, snapped, MIN_DRAFT_S):
+                unsure = item is None
+                item = item or {"subtask_id": "", "subtask": "", "flags": ["模型未覆盖此时段"]}
                 first, last = (int(i) for i in np.searchsorted(grid, [a, b]))
                 last = max(first, min(last, len(grid)) - 1)
                 hands = segment_hands(moving, first, max(first, last))
+                task_text = "" if unsure else task.get("task", "")
+                subtask_text = "" if unsure else item.get("subtask", "")
+                flags = task_flags + item.get("flags", []) + pose_check(
+                    item.get("subtask_id", ""), state, good, first, last, hands, gravity)
+                if not task_text.strip() or not subtask_text.strip():
+                    flags.append(UNSURE_FLAG)
                 drafts.append({
                     "start_s": round(a, 3),
                     "end_s": math.floor(min(b, duration) * 1000) / 1000,
-                    "task": task.get("task", ""),
-                    "task_id": task.get("task_id", ""),
-                    "subtask": item.get("subtask", ""),
-                    "subtask_id": item.get("subtask_id", ""),
+                    "task": task_text.strip() or OTHER,
+                    "task_id": "" if not task_text.strip() else task.get("task_id", ""),
+                    "subtask": subtask_text.strip() or OTHER,
+                    "subtask_id": "" if not subtask_text.strip() else item.get("subtask_id", ""),
                     "hands": hands,
                     "description": "",
-                    "flags": task_flags + item.get("flags", [])
-                    + pose_check(item.get("subtask_id", ""), state, good, first, last, hands, gravity),
+                    "flags": list(dict.fromkeys(flags)),
                 })
-                previous = b
     draft = {
         "created_unix_ns": time.time_ns(),
         "elapsed_s": round(time.monotonic() - started, 1),
