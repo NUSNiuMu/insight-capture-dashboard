@@ -8,7 +8,7 @@ import { t, language, setLanguage } from './i18n.js';
 const {status,mapping,tasks,tasksError,taskDraft,online,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
 const previewError=ref('');
-const route=ref(location.hash.slice(1)||'capture'),visible=ref(!document.hidden),dialog=ref(null),creating=ref(Boolean(taskDraft.value)),name=ref(taskDraft.value?.name||''),instruction=ref(taskDraft.value?.instruction||''),shell=ref(null),footer=ref(null),header=ref(null),intro=ref(null),previewHeight=ref(0);
+const route=ref(location.hash.slice(1)||'capture'),visible=ref(!document.hidden),dialog=ref(null),creating=ref(Boolean(taskDraft.value)),name=ref(taskDraft.value?.name||''),instruction=ref(taskDraft.value?.instruction||''),shell=ref(null),footer=ref(null),header=ref(null),intro=ref(null),viewport=ref(null),previewHeight=ref(0);
 const page=computed(()=>route.value.split('/')[0]);
 const savedTake=computed(()=>status.value?.state==='saved' && status.value.current_take?.state==='complete' && status.value.current_take.bag_path===status.value.output_path ? status.value.current_take : null);
 const uiState=computed(()=>recordPending.value==='start'?'starting':recordPending.value==='stop'?'saving':status.value?.state==='saved'&&!savedTake.value?'idle':status.value?.state);
@@ -78,17 +78,19 @@ function updateLayout(){
  layoutFrame=requestAnimationFrame(()=>{
   const footerHeight=footer.value.getBoundingClientRect().height;
   shell.value.style.setProperty('--footer-height',`${footerHeight}px`);
-  // The intro is independent of the video height. Keep scroll position out of
-  // this measurement so scrolling does not resize the picture under the user.
-  if(page.value==='capture')previewHeight.value=Math.max(144,window.innerHeight-(intro.value.getBoundingClientRect().bottom+window.scrollY)-footerHeight-12);
+  // The small viewport stays fixed while mobile browser toolbars retract.
+  // Measure the intro in document coordinates so scrolling cannot resize video.
+  const viewportHeight=viewport.value.getBoundingClientRect().height;
+  if(page.value==='capture')previewHeight.value=Math.max(144,viewportHeight-(intro.value.getBoundingClientRect().bottom+window.scrollY)-footerHeight-12);
  });
 }
-onMounted(()=>{if(taskDraft.value)dialog.value.showModal();window.addEventListener('hashchange',hashChanged);window.addEventListener('resize',updateLayout);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(updateLayout);[footer.value,header.value,intro.value].forEach(node=>observer.observe(node));});
+onMounted(()=>{if(taskDraft.value)dialog.value.showModal();window.addEventListener('hashchange',hashChanged);window.addEventListener('resize',updateLayout);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(updateLayout);[footer.value,header.value,intro.value,viewport.value].forEach(node=>observer.observe(node));});
 onBeforeUnmount(()=>{window.removeEventListener('hashchange',hashChanged);window.removeEventListener('resize',updateLayout);document.removeEventListener('visibilitychange',visibility);observer?.disconnect();cancelAnimationFrame(layoutFrame);});
 watch(page,updateLayout,{flush:'post'});
 watch(language,()=>document.title='Insight Capture');
 </script>
 <template><div ref="shell" class="console-shell" :class="{'has-capture-dock':showDock,'compact-capture-dock':page!=='capture','capture-page':page==='capture'}">
+<div ref="viewport" class="layout-viewport" aria-hidden="true"></div>
 <header ref="header" class="topbar"><button v-if="route.includes('/') && route!=='capture/trajectory'" class="icon-button" :aria-label="t('返回')" @click="back">‹</button><div class="topbar-title"><small>Insight Capture</small><h1>{{title}}</h1></div><span id="device-state" class="pill" :class="{online}"><i></i>{{t(online?'在线':status?'离线':'连接中')}}</span></header>
 <main>
 <div ref="intro" class="capture-intro">
