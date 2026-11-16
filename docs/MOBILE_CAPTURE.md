@@ -62,3 +62,9 @@ EgoHalo 配置默认录制八路 H.264 图像：头部四路直接保存原始�
 - 现场腕部配置为持续向 Jetson 校时，保留原有 NTP 门槛。没有通过删除时钟检查绕过起录限制。
 
 验证脚本和证据：`~/workspaces/insight_capture_tests/mobile_egohalo_20261029/`。
+
+### 3D trajectory
+
+The phone trajectory view preserves XYZ in the shared localization frame (meters), with Z up. Drag to orbit; pinch to zoom and pan, or select Pan mode for one-finger panning. Arrow keys orbit, Shift+arrows pan, +/- zoom and Home fits the view. Head and wrist traces retain their separate colors and line patterns. Only localized devices are shown.
+
+The orbit/projection convention was copied and adapted from the locally reviewed EgoHalo TrajectoryPanel at d190cd4e7a8bf950284c625c45bbab2c3478dd26. InsightCapture owns this implementation; build, runtime and upgrade require no EgoHalo directory, service or resources.

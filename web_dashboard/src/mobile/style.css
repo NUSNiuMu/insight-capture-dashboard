@@ -275,3 +275,7 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 .take-list > li:nth-child(n + 11) { content-visibility: auto; contain-intrinsic-block-size: auto 9rem; }
 
 .bottom-nav .route-link, .capture-view-switch button { min-width: 0; overflow-wrap: anywhere; }
+
+.trajectory-3d{touch-action:none;user-select:none;aspect-ratio:1;cursor:grab}
+.trajectory-3d:active{cursor:grabbing}
+.trajectory-controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}

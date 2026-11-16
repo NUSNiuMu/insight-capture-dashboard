@@ -36,3 +36,20 @@ test('a reset snapshot replaces old points, including an empty map reset',async(
 test('the existing 1500-point display bound remains correct after overlapping updates',async()=>{
  const{v,socket}=await scenario();send(socket,{mode:'snapshot',from:1,to:1600});send(socket,{from:1599,to:1602});assert.equal(xs(v).length,1500);assert.equal(xs(v)[0],103);assert.equal(xs(v).at(-1),1602);
 });
+
+test('the 3D view displays vertical motion with identical X/Y and fits all three dimensions',async()=>{
+ const{v,socket}=await scenario();socket.onmessage({data:JSON.stringify({type:'pose_update',poses:[{name:'cam',role:'head',visible:true,trace_update:{mode:'snapshot',generation:1,from_seq:1,to_seq:2,drop_before_seq:1,points:[[0,0,0],[0,0,2]]}}]})});
+ const line=v.plotted.value[0].line.split(' ').map(p=>p.split(',').map(Number));assert.notDeepEqual(line[0],line[1]);assert.equal(v.bounds.value.span,2);assert.equal(v.axes.value.length,3);assert.ok(line.flat().every(Number.isFinite));
+});
+test('3D touch orbit, pinch/pan, capture loss and view reset preserve source coordinates',async()=>{
+ const{v,socket}=await scenario();send(socket,{mode:'snapshot',from:1,to:3});const raw=JSON.stringify(v.poses.value),before=v.plotted.value[0].line;
+ const target={setPointerCapture(){},getBoundingClientRect:()=>({width:320})};const e=(id,x,y)=>({pointerId:id,clientX:x,clientY:y,pointerType:'touch',button:0,currentTarget:target});
+ v.pointerDown(e(1,50,50));v.pointerMove(e(1,80,70));assert.notEqual(v.plotted.value[0].line,before);
+ v.pointerDown(e(2,150,70));v.pointerMove(e(2,200,70));assert.ok(v.zoom.value>1);assert.notDeepEqual(v.pan.value,[0,0]);
+ v.pointerEnd(e(1,80,70));v.pointerEnd(e(2,200,70));const last=v.plotted.value[0].line;v.pointerMove(e(1,300,300));assert.equal(v.plotted.value[0].line,last);
+ v.reset();assert.equal(v.plotted.value[0].line,before);assert.equal(JSON.stringify(v.poses.value),raw);
+});
+test('3D keyboard controls include pan, zoom, and reset without consuming unrelated keys',async()=>{
+ const{v}=await scenario();let prevented=0;const e=(key,shiftKey=false)=>({key,shiftKey,preventDefault(){prevented++;}});
+ v.keydown(e('ArrowRight'));assert.notEqual(v.yaw.value,-.7);v.keydown(e('ArrowDown',true));assert.equal(v.pan.value[1],12);v.keydown(e('+'));assert.ok(v.zoom.value>1);v.keydown(e('Home'));assert.equal(v.zoom.value,1);assert.deepEqual(v.pan.value,[0,0]);v.keydown(e('Tab'));assert.equal(prevented,4);
+});
