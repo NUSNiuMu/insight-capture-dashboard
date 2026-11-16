@@ -8,9 +8,9 @@
 body { margin: 0; min-height: 100vh; }
 .topbar, main { width: min(100%, 520px); margin: auto; }
 .topbar { min-height: 76px; padding: calc(14px + var(--safe-area-inset-top, env(safe-area-inset-top))) 14px 12px; display: flex; align-items: center; gap: 10px; }
-.topbar-title { flex: 1; min-width: 0; }
+.topbar-title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .topbar small, .section-title span, .page-heading small { color: #596273; font-size: 0.75rem; }
-.topbar h1 { font-size: 1.375rem; margin: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar h1 { font-size: 1.375rem; margin: 2px 0; overflow-wrap: anywhere; }
 .topbar-actions { display: flex; align-items: center; gap: 7px; }
 .pill { display: flex; align-items: center; gap: 7px; padding: 8px 11px; border-radius: 99px; background: #e3e6eb; color: #4b5563; font-size: 0.75rem; white-space: nowrap; }
 .pill i, .preview-head i { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }
@@ -19,7 +19,7 @@ body { margin: 0; min-height: 100vh; }
 main { padding: 0 14px calc(132px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom))); }
 .card, .history { background: #fff; border: 1px solid #dfe3e8; border-radius: 18px; padding: 16px; margin-bottom: 12px; box-shadow: 0 3px 15px rgba(15, 23, 42, .035); }
 .section-title { display: flex; align-items: center; justify-content: space-between; }
-.section-title h2 { font-size: 1.125rem; margin: 3px 0 12px; }
+.section-title h2 { font-size: 1.125rem; margin: 3px 0 12px; min-width: 0; overflow-wrap: anywhere; }
 .section-actions { display: flex; gap: 7px; align-items: center; }
 .page-heading { padding: 6px 2px 12px; }
 .page-heading h2 { font-size: 1.5625rem; margin: 3px 0; }
@@ -62,7 +62,7 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 .voice-card .voice-hint { color: #374151; }
 .voice-card .voice-event { padding-top: 9px; border-top: 1px solid #e5e7eb; color: #263143; }
 .capture-dock { position: fixed; z-index: 15; left: 50%; bottom: 0; transform: translateX(-50%); width: min(100%, 520px); padding: 10px 14px calc(10px + var(--safe-area-inset-bottom, env(safe-area-inset-bottom))); background: rgba(255, 255, 255, .97); border-top: 1px solid #d6dbe3; box-shadow: 0 -8px 30px rgba(15, 23, 42, .1); backdrop-filter: blur(12px); }
-.dock-status { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
+.dock-status { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-bottom: 8px; }
 .dock-status > span { width: 9px; height: 9px; border-radius: 50%; background: #6b7280; }
 .dock-recording .dock-status > span { background: #d92d20; box-shadow: 0 0 0 5px #fee4e2; }
 .dock-stopping .dock-status > span, .dock-preparing .dock-status > span { background: #dc8a05; }
@@ -127,14 +127,14 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 .console-footer { position: fixed; z-index: 15; left: 50%; bottom: 0; transform: translateX(-50%); width: min(100%, 520px); background: rgba(255,255,255,.98); border-top: 1px solid #dfe3e8; box-shadow: 0 -5px 24px rgba(15,23,42,.06); padding-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom)); }
 .console-footer .capture-dock { position: static; transform: none; width: 100%; padding: 12px 16px; border: 0; border-bottom: 1px solid #e9edf2; box-shadow: none; background: transparent; }
 .dock-actions { grid-template-columns: 1fr; }
-.dock-status div { display: grid; gap: 3px; }
-.dock-status strong { font-size: 0.8125rem; }
+.dock-status div { display: grid; gap: 3px; min-width: min(100%, 8rem); }
+.dock-status strong { font-size: 0.8125rem; overflow-wrap: anywhere; }
 .dock-status small { font-size: 0.6875rem; }
-.dock-status time { font-size: 1.125rem; }
-.dock-compact { display: flex; align-items: center; gap: 12px; }
-.dock-compact .dock-status { flex: 1; min-width: 0; margin: 0; flex-wrap: wrap; }
+.dock-status time { font-size: 1.125rem; flex-shrink: 0; white-space: nowrap; }
+.dock-compact { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.dock-compact .dock-status { flex: 1 1 10rem; min-width: 0; margin: 0; }
 .dock-compact .dock-status time { font-size: 0.875rem; }
-.dock-compact .dock-actions { flex: 0 0 auto; max-width: 46%; }
+.dock-compact .dock-actions { flex: 0 0 auto; max-width: 46%; margin-inline-start: auto; }
 .dock-compact .dock-actions button { font-size: 0.75rem; padding: 10px; }
 .bottom-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 5px 12px; }
 .bottom-nav .route-link { display: grid; justify-items: center; gap: 4px; padding: 7px; background: transparent; color: #697386; font-size: 0.75rem; border-radius: 12px; }
@@ -144,7 +144,7 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 .readiness-card { padding: 10px 12px; border-left-width: 3px; }
 .health-summary { margin-top: 0; gap: 5px; }
 .health-summary span { background: transparent; padding: 5px; }
-.readiness-title strong { font-size: 0.875rem; flex: 1; min-width: 0; }
+.readiness-title strong { font-size: 0.875rem; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .readiness-title strong small { display: block; margin-top: 2px; font-size: 0.75rem; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .readiness-title .text-link { min-height: 44px; flex-shrink: 0; }
 .readiness-summary { margin: 4px 0 0; font-size: 0.75rem; line-height: 1.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -155,7 +155,7 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 #readiness-details h2 { font-size: 1rem; margin: 0 0 10px; }
 .capture-intro { display: flow-root; }
 .capture-page .topbar { min-height: 56px; padding-top: calc(10px + var(--safe-area-inset-top, env(safe-area-inset-top))); padding-bottom: 10px; }
-.capture-page .topbar-title { display: flex; align-items: baseline; gap: 10px; }
+.capture-page .topbar-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
 .capture-page .topbar h1 { font-size: 1.125rem; }
 .dock-status #switch-task { flex-shrink: 0; min-height: 44px; }
 .dock-task { display: flex; min-width: 0; }
@@ -193,7 +193,7 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 #task-dialog label, #task-dialog p { font-size: 0.8125rem; color: #596273; }
 #task-dialog label { display: block; margin: 12px 0; }
 #task-dialog #new-task { width: 100%; margin-top: 12px; }
-.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 20px; }
 
 .save-progress { padding: 12px; background: #fff7e6; color: #865500; border-radius: 12px; font-size: 0.8125rem; }
 .language-options { display: flex; flex-wrap: wrap; gap: 10px; }
