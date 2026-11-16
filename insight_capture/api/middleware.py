@@ -36,3 +36,18 @@ def create_static_cache_middleware():
         return response
 
     return static_cache_middleware
+
+
+def create_browser_write_origin_middleware():
+    @web.middleware
+    async def browser_write_origin_middleware(request, handler):
+        origin = request.headers.get('Origin')
+        if (request.method not in {'GET', 'HEAD', 'OPTIONS'}
+                and origin is not None
+                and origin != f'{request.scheme}://{request.host}'):
+            return web.json_response({
+                'error': 'cross_origin_request',
+                'message': '请从设备采集页面执行操作。',
+            }, status=403)
+        return await handler(request)
+    return browser_write_origin_middleware

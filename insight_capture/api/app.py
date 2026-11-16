@@ -3,7 +3,10 @@
 from aiohttp import web
 
 from .context import DashboardContext
-from .middleware import create_json_error_middleware, create_static_cache_middleware
+from .middleware import (
+    create_browser_write_origin_middleware,
+    create_json_error_middleware, create_static_cache_middleware,
+)
 from .routes.preview import PreviewRoutes
 from .routes.cameras import CameraRoutes
 from .routes.diagnostics import DiagnosticRoutes
@@ -26,6 +29,7 @@ def create_app(context: DashboardContext) -> web.Application:
     app = web.Application(
         middlewares=[
             create_json_error_middleware(context),
+            create_browser_write_origin_middleware(),
             create_static_cache_middleware(),
         ]
     )

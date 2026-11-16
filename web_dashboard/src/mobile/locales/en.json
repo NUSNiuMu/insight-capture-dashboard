@@ -857,5 +857,6 @@
   "请输入任务说明。": "Enter task instructions.",
   "跳到主导航": "Skip to main navigation",
   "当前任务已变化，请重新打开任务列表后操作。": "The active task changed. Reopen the task list before continuing.",
-  "页面已更新，请刷新后再结束任务。": "The page has been updated. Refresh before ending a task."
+  "页面已更新，请刷新后再结束任务。": "The page has been updated. Refresh before ending a task.",
+  "请选择任务。": "Select a task."
 }
