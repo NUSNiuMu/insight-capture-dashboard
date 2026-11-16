@@ -68,3 +68,5 @@ EgoHalo 配置默认录制八路 H.264 图像：头部四路直接保存原始�
 The phone trajectory view preserves XYZ in the shared localization frame (meters), with Z up. Drag to orbit; pinch to zoom and pan, or select Pan mode for one-finger panning. Arrow keys orbit, Shift+arrows pan, +/- zoom and Home fits the view. Head and wrist traces retain their separate colors and line patterns. Only localized devices are shown.
 
 The orbit/projection convention was copied and adapted from the locally reviewed EgoHalo TrajectoryPanel at d190cd4e7a8bf950284c625c45bbab2c3478dd26. InsightCapture owns this implementation; build, runtime and upgrade require no EgoHalo directory, service or resources.
+
+The phone replaces each received pose snapshot/delta result as a complete array. Its point arrays are treated as immutable display data rather than deeply reactive objects; all three 1500-point traces, updates, coordinate values and orbit controls remain unchanged.

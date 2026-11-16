@@ -1,8 +1,8 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { shallowRef, ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { t } from './i18n.js';
 import { roleLabel } from './useCapture.js';
-const poses=ref([]), connected=ref(false), traces=new Map(); let socket,timer,alive=true;
+const poses=shallowRef([]), connected=ref(false), traces=new Map(); let socket,timer,alive=true;
 const styles={head:{color:'#1d4ed8',dash:''},left_hand:{color:'#9a4800',dash:'8 4'},right_hand:{color:'#11754f',dash:'2 3'}};
 function updateTrace(old,u){
  let points,lastSeq;
