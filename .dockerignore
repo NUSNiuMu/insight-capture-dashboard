@@ -51,6 +51,8 @@ docs/
 web_dashboard/src/
 web_dashboard/build.js
 web_dashboard/package.json
+web_dashboard/package-lock.json
+web_dashboard/tests/
 
 # PDFs are documentation or user attachments, never backend runtime inputs.
 *.pdf
