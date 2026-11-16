@@ -9,11 +9,14 @@ const {parse,compileScript}=require('@vue/compiler-sfc');
 // Compile the actual script setup so these tests exercise the same openTasks
 // continuation that the button uses, including useCapture's async task read.
 global.document={hidden:false,documentElement:{},createElement:()=>({})};
-global.location={hash:'#capture',host:'fixture'};
+let hash='#capture';
+global.location={host:'fixture'};
+Object.defineProperty(location,'hash',{get:()=>hash,set:value=>{hash=value.startsWith('#')?value:'#'+value;}});
 global.window={addEventListener(){},removeEventListener(){},scrollTo(){}};
 global.localStorage={getItem:()=>null};
 global.sessionStorage={getItem:()=>null};
 global.cancelAnimationFrame=()=>{};
+global.history={state:null};
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mobile-dialog-'));
 const outfile=path.join(dir,'component.cjs');
 const ready=build({stdin:{contents:`
@@ -78,4 +81,49 @@ test('a recording started elsewhere while tasks load prevents the modal opening'
 test('normal task selection still opens with the displayed task identity',async()=>{
  const {v,shown}=await scenario();global.fetch=async()=>response();
  await v.openTasks();assert.equal(shown(),1);assert.equal(v.selectedTask.value,'fixture_a');
+});
+
+function navigationFixture(v){
+ let backs=0;const storage=new Map();global.sessionStorage={getItem:key=>storage.get(key)||null,setItem:(key,value)=>storage.set(key,value)};
+ global.history={state:null,replaceState(state){this.state=state;},pushState(state,_,url){this.state=state;location.hash=url;},back(){backs++;}};
+ window.scrollX=0;window.scrollY=0;window.scrollTo=(x,y)=>{window.scrollX=x;window.scrollY=y;};
+ window.scrollBy=(x,y)=>{window.scrollX+=x;window.scrollY+=y;};
+ let focused='';
+ const link={dataset:{historyRoute:'history/fixture_a/80'},getBoundingClientRect:()=>({top:200}),focus(){focused='take80';}};
+ const heading={focus(){focused='heading';}};
+ v.shell.value={querySelector:()=>heading,querySelectorAll:()=>[link]};
+ return{backs:()=>backs,focused:()=>focused};
+}
+async function go(v,value){await v.navigate(value);if(v.route.value!==value)await v.hashChanged();}
+test('page Back uses the existing parent history entry',async()=>{
+ const{v}=await scenario();global.fetch=async()=>response();const nav=navigationFixture(v);
+ await go(v,'history/fixture_a');await go(v,'history/fixture_a/80');v.back();
+ assert.equal(nav.backs(),1,'Page Back pushed another list entry instead of traversing history');
+});
+test('page Back from a direct deep link stays in the app',async()=>{
+ const{v}=await scenario();global.fetch=async()=>response();const nav=navigationFixture(v);
+ location.hash='#history/fixture_a/80';await v.hashChanged();v.back();
+ assert.equal(nav.backs(),0);assert.equal(location.hash,'#history/fixture_a');
+});
+test('returning to a loaded history list restores its Take control and position',async()=>{
+ const{v}=await scenario();global.fetch=async()=>response();const nav=navigationFixture(v);
+ await go(v,'history/fixture_a');window.scrollY=12000;
+ await go(v,'history/fixture_a/80');location.hash='#history/fixture_a';await v.hashChanged();
+ if(v.restoreView)await v.restoreView(true);
+ assert.equal(window.scrollY,12000);assert.equal(nav.focused(),'take80');
+});
+test('leaving before a restored list loads does not replace its saved position with zero',async()=>{
+ const{v}=await scenario();global.fetch=async()=>response();const nav=navigationFixture(v);
+ await go(v,'history/fixture_a');window.scrollY=12000;await go(v,'history/fixture_a/80');
+ location.hash='#history/fixture_a';await v.hashChanged();await go(v,'settings');
+ await go(v,'history/fixture_a');await v.restoreView(true);
+ assert.equal(window.scrollY,12000);assert.equal(nav.focused(),'take80');
+});
+
+test('page hide saves this history entry for reload without losing its parent',async()=>{
+ const{v}=await scenario();global.fetch=async()=>response();navigationFixture(v);
+ await go(v,'history/fixture_a');window.scrollY=12000;
+ v.savePagePosition();assert.equal(history.state.insightCapture.from,'capture');
+ assert.equal(v.pagePosition().y,12000);assert.equal(v.pagePosition().route,'history/fixture_a');
+ location.hash='#settings';await v.hashChanged();assert.equal(v.pagePosition(),null);
 });

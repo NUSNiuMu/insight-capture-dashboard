@@ -75,9 +75,60 @@ const calibration=computed(()=>{
  const good=online.value&&s.online&&s.localized&&s.clock_ready&&s.state!=='error'&&(d.role==='head'?s.state==='mapping'&&mapping.value?.map_point_count>0:s.map_revision===h.map_revision&&s.tracking_mode!=='vio_only');
  return {name:d.name,label:roleLabel(d.role),good,text:t(!online.value||!s.online?'离线':good?'已定位':s.tracking_mode==='vio_only'?'仅本地 VIO':'等待定位')};});
 });
-function navigate(value){location.hash=value;}
-function hashChanged(){taskOpenGeneration++;dialog.value?.close();route.value=location.hash.slice(1)||'capture';loadTasks().catch(()=>{});window.scrollTo(0,0);}
-function back(){const p=route.value.split('/');navigate(p.length>2?p.slice(0,-1).join('/'):page.value);}
+const viewPositions=new Map();
+let pendingView,viewGeneration=0,previousScrollRestoration;
+function historyLink(value){return [...(shell.value?.querySelectorAll('[data-history-route]')||[])].find(node=>node.dataset.historyRoute===value);}
+function rememberView(destination){
+ // A cancelled loading view has not yet replaced its saved content position.
+ if(pendingView?.saved&&page.value==='history')return;
+ const focus=destination||document.activeElement?.dataset?.historyRoute;
+ const link=focus&&historyLink(focus);
+ viewPositions.delete(route.value);
+ viewPositions.set(route.value,{x:window.scrollX||0,y:window.scrollY||0,focus:link?focus:null,top:link?.getBoundingClientRect().top});
+ if(viewPositions.size>64)viewPositions.delete(viewPositions.keys().next().value);
+}
+function pagePosition(){
+ try{const saved=JSON.parse(sessionStorage.getItem('insight-capture.view-position'));return saved?.route===route.value?saved:null;}catch{return null;}
+}
+function savePagePosition(){
+ rememberView();
+ try{sessionStorage.setItem('insight-capture.view-position',JSON.stringify({...(pendingView?.saved||viewPositions.get(route.value)),route:route.value}));}catch{ /* In-page return still works without browser storage. */ }
+}
+async function restoreView(recordsReady=false){
+ const plan=pendingView;
+ if(!plan)return;
+ await nextTick();
+ if(pendingView!==plan||plan.generation!==viewGeneration)return;
+ // A remounted history list may still be loading; do not clamp its saved
+ // position to the temporary empty page or steal focus again on every poll.
+ if(plan.saved&&page.value==='history'&&!recordsReady){shell.value?.querySelector('h1')?.focus({preventScroll:true});return;}
+ pendingView=null;
+ const saved=plan.saved,link=saved?.focus&&historyLink(saved.focus);
+ window.scrollTo(saved?.x||0,saved?.y||0);
+ (link||shell.value?.querySelector('h1'))?.focus({preventScroll:true});
+ // Offscreen rows can have estimated heights. Restore the actual Take's
+ // viewport position as well as the scroll offset once its layout is known.
+ if(link&&Number.isFinite(saved.top))window.scrollBy(0,link.getBoundingClientRect().top-saved.top);
+}
+function navigate(value){
+ if(value===route.value)return;
+ rememberView(value);
+ history.pushState({...history.state,insightCapture:{from:route.value}},'',`#${value}`);
+ return hashChanged(true);
+}
+function hashChanged(remembered=false){
+ if(remembered!==true)rememberView();
+ taskOpenGeneration++;dialog.value?.close();
+ const value=location.hash.slice(1)||'capture';
+ pendingView={generation:++viewGeneration,saved:viewPositions.get(value)};
+ route.value=value;loadTasks().catch(()=>{});
+ return restoreView();
+}
+function back(){
+ const p=route.value.split('/'),parent=p.length>2?p.slice(0,-1).join('/'):page.value;
+ if(history.state?.insightCapture?.from===parent)history.back();
+ else navigate(parent);
+}
 function visibility(){visible.value=!document.hidden;if(!visible.value)taskOpenGeneration++;}
 function canOpenTasks(generation){return generation===taskOpenGeneration&&page.value==='capture'&&visible.value&&!busy.value&&online.value;}
 async function openTasks(){
@@ -122,11 +173,10 @@ function updateLayout(){
   shell.value.style.setProperty('--footer-height',`${footerHeight}px`);
  });
 }
-onMounted(()=>{if(taskDraft.value)dialog.value.showModal();window.addEventListener('hashchange',hashChanged);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(updateLayout);observer.observe(footer.value);});
-onBeforeUnmount(()=>{taskOpenGeneration++;window.removeEventListener('hashchange',hashChanged);document.removeEventListener('visibilitychange',visibility);observer?.disconnect();cancelAnimationFrame(layoutFrame);cancelAnimationFrame(fieldFrame);clearTimeout(announceTimer);});
+onMounted(()=>{previousScrollRestoration=history.scrollRestoration;history.scrollRestoration='manual';const saved=pagePosition();if(saved){pendingView={generation:++viewGeneration,saved};restoreView();}window.addEventListener('pagehide',savePagePosition);if(taskDraft.value)dialog.value.showModal();window.addEventListener('hashchange',hashChanged);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(updateLayout);observer.observe(footer.value);});
+onBeforeUnmount(()=>{viewGeneration++;pendingView=null;history.scrollRestoration=previousScrollRestoration;window.removeEventListener('pagehide',savePagePosition);taskOpenGeneration++;window.removeEventListener('hashchange',hashChanged);document.removeEventListener('visibilitychange',visibility);observer?.disconnect();cancelAnimationFrame(layoutFrame);cancelAnimationFrame(fieldFrame);clearTimeout(announceTimer);});
 watch(page,updateLayout,{flush:'post'});
 watch(title,value=>document.title=`${value} · Insight Capture`,{immediate:true});
-watch(route,async()=>{await nextTick();shell.value?.querySelector('h1')?.focus({preventScroll:true});});
 watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=task.value?.task_id||'';fieldErrors.value={};fieldAnnouncement.value='';clearTimeout(announceTimer);await nextTick();(dialog.value?.querySelector('input:not(:disabled),select:not(:disabled)')||dialog.value?.querySelector('button'))?.focus();});
 </script>
 <template><div ref="shell" class="console-shell" :class="{'has-capture-dock':showDock,'compact-capture-dock':page!=='capture','capture-page':page==='capture'}">
@@ -153,7 +203,7 @@ watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=tas
 <p class="section-description">{{t('重新校准会重建当前公共地图。先开始录制再校准，可将校准过程一同保存；原始采集不要求已定位。')}}</p></section>
 <section v-if="savedTake" class="card save-result"><strong>Take {{savedTake.take_id}} · {{t('保存完成')}}</strong><button class="secondary compact" @click="navigate(`history/${savedTake.task_id}/${savedTake.take_id}`)">{{t('查看记录')}}</button></section>
 </div>
-<RecordsPage v-if="page==='history'" :route="route" :tasks="tasks" :tasks-error="tasksError" :status="status" :busy="busy" :online="online" :action="action" @navigate="navigate" @refresh-tasks="loadTasks().catch(()=>{})"/>
+<RecordsPage v-if="page==='history'" :route="route" :tasks="tasks" :tasks-error="tasksError" :status="status" :busy="busy" :online="online" :action="action" @navigate="navigate" @ready="restoreView(true)" @refresh-tasks="loadTasks().catch(()=>{})"/>
 <div v-if="page==='settings'">
 <template v-if="route==='settings'">
 <section class="card device-hero"><span class="device-mark">I</span><h2>Insight Capture</h2><p class="section-description">Jetson · {{devices.map(d=>d.name.split('_')[0].toUpperCase()).join(' / ')}}</p></section>
