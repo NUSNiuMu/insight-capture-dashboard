@@ -34,7 +34,7 @@ button:focus-visible, .route-link:focus-visible, select:focus-visible, input:foc
 .secondary { background: #e9edf2; color: #202939; }
 .compact { min-height: 40px; padding: 8px 12px; font-size: 0.8125rem; }
 .icon-button { width: 44px; min-width: 44px; padding: 0; border-radius: 50%; background: #e9edf2; color: #263143; font-size: 1.5rem; }
-select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border-radius: 12px; background: #fff; padding: 12px 13px; color: #111827; outline: none; }
+select, input { width: 100%; min-height: 46px; border: 1px solid #7b8494; border-radius: 12px; background: #fff; padding: 12px 13px; color: #111827; outline: none; }
 .readiness-card { padding: 15px 16px; border-left: 5px solid #22a05a; }
 .readiness-card.readiness-blocked { border-left-color: #d92d20; }
 .readiness-card.readiness-warning { border-left-color: #dc8a05; }
@@ -232,7 +232,7 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 .device-row>span {color:#596273;text-align:right}.storage-path {font-size: 0.75rem;overflow-wrap:anywhere;color:#596273}
 .device-hero{text-align:center}.device-hero .device-mark{margin:0 auto}.device-hero h2{font-size: 1.25rem;margin:10px 0 0}
 .trajectory-map{display:block;width:100%;border-radius:12px;background:#f4f6f8}
-textarea{font:inherit;width:100%;min-height:85px;border:1px solid #cbd2dc;border-radius:12px;padding:12px;resize:vertical}
+textarea{font:inherit;width:100%;min-height:85px;border:1px solid #7b8494;border-radius:12px;padding:12px;resize:vertical}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size: 0.6875rem;max-height:50vh;overflow:auto}
 summary{cursor:pointer;min-height:44px;padding:14px 0}.calibration-card{margin-top:12px}
 
