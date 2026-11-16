@@ -84,8 +84,12 @@ function rememberView(destination){
  if(pendingView?.saved&&page.value==='history')return;
  const focus=destination||document.activeElement?.dataset?.historyRoute;
  const link=focus&&historyLink(focus);
+ // Section navigation has no originating Take control. Keep a visible record
+ // as the scroll anchor while retaining the section heading as the focus target.
+ const target=!link&&page.value==='history'?document.elementFromPoint?.(window.innerWidth/2,(footer.value?.getBoundingClientRect().top??window.innerHeight)/2):null;
+ const anchor=link||target?.closest('[data-history-route]')||target?.closest('.record-list > li')?.querySelector('[data-history-route]');
  viewPositions.delete(route.value);
- viewPositions.set(route.value,{x:window.scrollX||0,y:window.scrollY||0,focus:link?focus:null,top:link?.getBoundingClientRect().top});
+ viewPositions.set(route.value,{x:window.scrollX||0,y:window.scrollY||0,focus:link?focus:null,anchor:anchor?.dataset.historyRoute,top:anchor?.getBoundingClientRect().top});
  if(viewPositions.size>64)viewPositions.delete(viewPositions.keys().next().value);
 }
 function pagePosition(){
@@ -104,12 +108,23 @@ async function restoreView(recordsReady=false){
  // position to the temporary empty page or steal focus again on every poll.
  if(plan.saved&&page.value==='history'&&!recordsReady){shell.value?.querySelector('h1')?.focus({preventScroll:true});return;}
  pendingView=null;
- const saved=plan.saved,link=saved?.focus&&historyLink(saved.focus);
+ const saved=plan.saved,origin=saved?.focus&&historyLink(saved.focus),link=historyLink(saved?.anchor||saved?.focus);
  window.scrollTo(saved?.x||0,saved?.y||0);
- (link||shell.value?.querySelector('h1'))?.focus({preventScroll:true});
+ (origin||shell.value?.querySelector('h1'))?.focus({preventScroll:true});
  // Offscreen rows can have estimated heights. Restore the actual Take's
  // viewport position as well as the scroll offset once its layout is known.
- if(link&&Number.isFinite(saved.top))window.scrollBy(0,link.getBoundingClientRect().top-saved.top);
+ if(link&&Number.isFinite(saved.top)){
+  const align=()=>window.scrollBy(0,link.getBoundingClientRect().top-saved.top);
+  align();
+  // Deferred rows can reveal their real heights on the next painted frame.
+  // A later route or user gesture owns the viewport instead of this restore.
+  const input=new AbortController();let interrupted=false;
+  for(const type of ['pointerdown','wheel','keydown'])document.addEventListener(type,()=>{interrupted=true;},{capture:true,passive:true,signal:input.signal});
+  try{
+   await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+   if(!interrupted&&!document.hidden&&plan.generation===viewGeneration&&link.isConnected)align();
+  }finally{input.abort();}
+ }
 }
 function navigate(value,event){
  if(event){

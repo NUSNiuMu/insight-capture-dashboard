@@ -16,6 +16,7 @@ global.window={addEventListener(){},removeEventListener(){},scrollTo(){}};
 global.localStorage={getItem:()=>null};
 global.sessionStorage={getItem:()=>null};
 global.cancelAnimationFrame=()=>{};
+global.requestAnimationFrame=callback=>setImmediate(()=>callback(performance.now()));
 global.history={state:null};
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mobile-dialog-'));
 const outfile=path.join(dir,'component.cjs');
@@ -92,10 +93,10 @@ function navigationFixture(v){
  window.scrollX=0;window.scrollY=0;window.scrollTo=(x,y)=>{window.scrollX=x;window.scrollY=y;};
  window.scrollBy=(x,y)=>{window.scrollX+=x;window.scrollY+=y;};
  let focused='';
- const link={dataset:{historyRoute:'history/fixture_a/80'},getBoundingClientRect:()=>({top:200}),focus(){focused='take80';}};
+ const link={isConnected:true,dataset:{historyRoute:'history/fixture_a/80'},getBoundingClientRect:()=>({top:200}),focus(){focused='take80';}};
  const heading={focus(){focused='heading';}};
  v.shell.value={querySelector:()=>heading,querySelectorAll:()=>[link]};
- return{backs:()=>backs,focused:()=>focused};
+ return{backs:()=>backs,focused:()=>focused,link};
 }
 async function go(v,value){await v.navigate(value);if(v.route.value!==value)await v.hashChanged();}
 test('page Back uses the existing parent history entry',async()=>{
@@ -141,4 +142,59 @@ test('ordinary link click uses the current app route exactly once',async()=>{
  const{v}=await scenario();global.fetch=async()=>response();navigationFixture(v);let prevented=0;
  await v.navigate('history',{button:0,preventDefault(){prevented++;}});
  assert.equal(v.route.value,'history');assert.equal(prevented,1);assert.equal(history.state.insightCapture.from,'capture');
+});
+
+
+function paintClock(){
+ const previous=global.requestAnimationFrame,queue=[];
+ global.requestAnimationFrame=callback=>queue.push(callback);
+ return {async paint(){const batch=queue.splice(0);for(const callback of batch)callback(performance.now());await Promise.resolve();},restore(){global.requestAnimationFrame=previous;}};
+}
+async function deferredHistoryLayout(){
+ const{v}=await scenario();global.fetch=async()=>response();const nav=navigationFixture(v);let expanded=0;
+ nav.link.getBoundingClientRect=()=>({top:12200+expanded-window.scrollY});
+ await go(v,'history/fixture_a');window.scrollY=12000;
+ await go(v,'history/fixture_a/80');location.hash='#history/fixture_a';await v.hashChanged();
+ return {v,expand(){expanded=116;},top:()=>nav.link.getBoundingClientRect().top};
+}
+test('history anchor survives deferred row heights resolving after the first layout',async()=>{
+ const layout=await deferredHistoryLayout(),clock=paintClock();
+ try{
+  const restoring=layout.v.restoreView(true);await new Promise(setImmediate);
+  layout.expand();await clock.paint();await clock.paint();await restoring;
+  assert.equal(layout.top(),200,'Late content-visibility row layout moved the restored Take');
+ }finally{clock.restore();}
+});
+test('a later route cannot be scrolled by an earlier history paint continuation',async()=>{
+ const layout=await deferredHistoryLayout(),clock=paintClock();
+ try{
+  const restoring=layout.v.restoreView(true);await new Promise(setImmediate);
+  await go(layout.v,'settings');layout.expand();await clock.paint();await clock.paint();await restoring;
+  assert.equal(window.scrollY,0);assert.equal(layout.v.route.value,'settings');
+ }finally{clock.restore();}
+});
+test('user scrolling cancels a pending history anchor adjustment',async()=>{
+ const layout=await deferredHistoryLayout(),clock=paintClock();
+ try{
+  const restoring=layout.v.restoreView(true);await new Promise(setImmediate);
+  document.dispatchEvent(new Event('pointerdown'));window.scrollY=11500;
+  layout.expand();await clock.paint();await clock.paint();await restoring;
+  assert.equal(window.scrollY,11500,'Delayed restoration overrode the user scroll');
+ }finally{clock.restore();}
+});
+
+test('return from a different section preserves a visible record anchor without stealing heading focus',async()=>{
+ const{v}=await scenario();global.fetch=async()=>response();const nav=navigationFixture(v);let expanded=0;
+ nav.link.getBoundingClientRect=()=>({top:12200+expanded-window.scrollY});
+ const previous=document.elementFromPoint;
+ document.elementFromPoint=()=>({closest:()=>nav.link});
+ const clock=paintClock();
+ try{
+  await go(v,'history/fixture_a');window.scrollY=12000;
+  await go(v,'settings');await go(v,'history/fixture_a');
+  const restoring=v.restoreView(true);await new Promise(setImmediate);
+  expanded=116;await clock.paint();await clock.paint();await restoring;
+  assert.equal(nav.link.getBoundingClientRect().top,200,'Section return lost the visible record anchor');
+  assert.equal(nav.focused(),'heading','A section return should still focus its heading');
+ }finally{document.elementFromPoint=previous;clock.restore();}
 });
