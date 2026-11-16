@@ -125,6 +125,12 @@ class RecordingRoutes:
             payload = {}
         if not isinstance(payload, dict):
             return web.json_response({"error": "Request body must be a JSON object."}, status=400)
+        task_id = payload.get("task_id")
+        if "task_id" in payload and (not isinstance(task_id, str) or not task_id.strip()):
+            return web.json_response({
+                "error": "Invalid task_id.",
+                "message": "任务标识无效，请刷新后再开始录制。",
+            }, status=400)
         topics = payload.get("topics")
         if "topics" in payload and not isinstance(topics, list):
             return web.json_response({"error": "Field 'topics' must be a list."}, status=400)
@@ -136,6 +142,7 @@ class RecordingRoutes:
         return await self._start_with_preflight(
             topics=topics,
             bag_name=bag_name,
+            expected_task_id=task_id,
             relaxed_preflight=(
                 payload.get("native_relaxed_preflight") is True or native_request
             ),
@@ -181,10 +188,21 @@ class RecordingRoutes:
         payload = await read_json_body(request)
         return web.json_response(await asyncio.to_thread(manager.start_merge, payload.get("session_id")), status=202)
 
-    async def _start_with_preflight(self, **kwargs):
+    async def _start_with_preflight(self, *, expected_task_id: str | None = None, **kwargs):
         if self.busy:
             raise RuntimeError("A recording operation is still running.")
         async with self._transition:
+            # A displayed task may predate another viewer's selection. Reject
+            # under the transition lock before pausing preview or allocating a Take.
+            if expected_task_id is not None:
+                take_store = getattr(self.context, "take_store", None)
+                current = take_store.task_status() if take_store is not None else {}
+                if (not current.get("active")
+                        or (current.get("task") or {}).get("task_id") != expected_task_id):
+                    return web.json_response({
+                        "error": "capture_task_changed",
+                        "message": "采集任务已变更，请确认当前任务后再开始录制。",
+                    }, status=409)
             # Hold through preflight, Take reservation, recorder startup and
             # status publication. The installer cannot stop this transition;
             # once it owns the exclusive lock, new starts cannot enter it.
@@ -222,19 +240,8 @@ class RecordingRoutes:
         preflight_mode: str = "capture",
         track_take: bool = True,
         relaxed_preflight: bool = False,
-        expected_task_id: str | None = None,
     ) -> web.Response:
         take_store = getattr(self.context, "take_store", None)
-        # The mobile page may predate another client's task selection. Check
-        # under the recording transition lock, before preflight or Take allocation.
-        if expected_task_id is not None:
-            current = take_store.task_status() if take_store is not None else {}
-            if (not current.get("active")
-                    or (current.get("task") or {}).get("task_id") != expected_task_id):
-                return web.json_response({
-                    "error": "capture_task_changed",
-                    "message": "采集任务已变更，请确认当前任务后再开始录制。",
-                }, status=409)
         if (
             track_take
             and take_store is not None

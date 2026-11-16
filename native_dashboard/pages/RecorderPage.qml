@@ -82,6 +82,7 @@ PageFrame {
                 onClicked: {
                     var body = {
                         "topics": page.selected,
+                        "task_id": ((page.status.task_status || {}).task || {}).task_id || "",
                         "native_relaxed_preflight": true
                     };
                     if (name.text.trim())

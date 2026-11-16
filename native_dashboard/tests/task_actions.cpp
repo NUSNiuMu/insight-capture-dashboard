@@ -63,6 +63,8 @@ int main(int argc, char **argv) {
                     data = {{"recording", false}, {"merge_state", "idle"},
                         {"task_status", QJsonObject{{"active", true},
                             {"task", QJsonObject{{"task_id", "task_a"}}}}}};
+                } else if (path == "/api/recording/topics") {
+                    data = {{"topics", QJsonArray{"/camera"}}, {"default_selected_topics", QJsonArray{"/camera"}}};
                 } else if (path == "/api/tasks") {
                     data = {{"active_task_id", "task_a"},
                         {"tasks", QJsonArray{QJsonObject{{"task_id", "task_a"}, {"name", "Task A"}},
@@ -129,11 +131,32 @@ int main(int argc, char **argv) {
     const auto confirmed = requests.last();
     const bool dialogBody = confirmed.value("task_id") == "task_a";
     const bool workspaceMessage = workspace.errors().value("action").toString() == message;
+    dashboard.command("record");
+    if (!waitFor([&] { return requests.size() == 3 && dashboard.state().value("captureAction").toString().isEmpty(); })) return 13;
+    const auto directStart = requests.last();
+    const bool directStartBound = directStart.value("task_id") == "task_a" && directStart.value("native_relaxed_preflight").toBool();
+    root->setProperty("page", "recording");
+    QObject *startButton = nullptr;
+    if (!waitFor([&] {
+        startButton = named(root.get(), "recording-start");
+        return startButton && startButton->property("enabled").toBool();
+    })) {
+        qWarning() << "Recorder page not ready" << workspace.data() << workspace.errors();
+        return 14;
+    }
+    if (!QMetaObject::invokeMethod(startButton, "clicked")) return 15;
+    if (!waitFor([&] { return requests.size() == 4 && !workspace.busy().value("action").toBool(); })) return 16;
+    const auto recorderStart = requests.last();
+    const bool recorderStartBound = recorderStart.value("task_id") == "task_a" &&
+        recorderStart.value("native_relaxed_preflight").toBool() &&
+        recorderStart.value("topics").toArray() == QJsonArray{"/camera"};
     dashboard.shutdown();
     QJsonObject result{{"direct_body", direct}, {"dialog_body_after_task_change", confirmed},
         {"direct_task_bound", directBody}, {"dialog_task_bound", dialogBody},
         {"dashboard_message_visible", directMessage}, {"dashboard_message", dashboard.message()},
-        {"workspace_message_visible", workspaceMessage}};
+        {"workspace_message_visible", workspaceMessage}, {"direct_start_body", directStart},
+        {"recorder_start_body", recorderStart}, {"direct_start_task_bound", directStartBound},
+        {"recorder_start_task_bound", recorderStartBound}};
     std::puts(QJsonDocument(result).toJson(QJsonDocument::Compact).constData());
-    return directBody && dialogBody && directMessage && workspaceMessage ? 0 : 1;
+    return directBody && dialogBody && directMessage && workspaceMessage && directStartBound && recorderStartBound ? 0 : 1;
 }
