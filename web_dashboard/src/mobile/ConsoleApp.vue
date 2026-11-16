@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import CameraPreview from '../preview/components/CameraPreview.vue';
+import { guardModalScroll } from '../modal-scroll.js';
 import RecordsPage from './RecordsPage.vue';
 import TrajectoryPanel from './TrajectoryPanel.vue';
 import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration, deviceStage, deviceHint } from './useCapture.js';
@@ -8,7 +9,7 @@ import { t, language, setLanguage } from './i18n.js';
 const {status,mapping,tasks,tasksError,taskDraft,online,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
 const selectedTask=ref(''),openedTaskId=ref(''),taskDialogKey=ref(0),fieldErrors=ref({}),fieldAnnouncement=ref('');
-let fieldFrame,announceTimer,taskOpenGeneration=0;
+let fieldFrame,announceTimer,taskOpenGeneration=0,releaseModalScroll;
 const editedFields=new WeakSet(),blurredFields=new WeakSet(),submittedForms=new WeakSet();
 function fieldMessage(field){return field.id==='task-select'?'请选择任务。':field.id==='task-input'?'请输入任务名称。':'请输入任务说明。';}
 function syncField(event){
@@ -135,6 +136,11 @@ function back(){
 }
 function visibility(){visible.value=!document.hidden;if(!visible.value)taskOpenGeneration++;}
 function canOpenTasks(generation){return generation===taskOpenGeneration&&page.value==='capture'&&visible.value&&!busy.value&&online.value;}
+function showTaskDialog(){
+ dialog.value.showModal();
+ releaseModalScroll?.();
+ releaseModalScroll=guardModalScroll(dialog.value,{fitViewport:true});
+}
 async function openTasks(){
  const generation=++taskOpenGeneration;
  await loadTasks().catch(()=>{});
@@ -144,7 +150,7 @@ async function openTasks(){
  taskDialogKey.value++;fieldErrors.value={};fieldAnnouncement.value='';
  cancelAnimationFrame(fieldFrame);clearTimeout(announceTimer);
  await nextTick();
- if(canOpenTasks(generation))dialog.value.showModal();
+ if(canOpenTasks(generation))showTaskDialog();
 }
 async function selectTask(taskId){if(busy.value)return;if(await action(`/api/tasks/${encodeURIComponent(taskId)}/activate`,{},(e,current)=>!e.status&&current?.task_status?.active&&current.task_status.task?.task_id===taskId))dialog.value.close();}
 async function endTask(){const taskId=openedTaskId.value;if(busy.value)return;if(await action('/api/tasks/current/end',{task_id:taskId},(e,current)=>!e.status&&current?.task_status?.active===false&&current.task_status.last_task_id===taskId))dialog.value.close();}
@@ -177,8 +183,8 @@ function updateLayout(){
   shell.value.style.setProperty('--footer-height',`${footerHeight}px`);
  });
 }
-onMounted(()=>{previousScrollRestoration=history.scrollRestoration;history.scrollRestoration='manual';const saved=pagePosition();if(saved){pendingView={generation:++viewGeneration,saved};restoreView();}window.addEventListener('pagehide',savePagePosition);if(taskDraft.value)dialog.value.showModal();window.addEventListener('hashchange',hashChanged);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(updateLayout);observer.observe(footer.value);});
-onBeforeUnmount(()=>{viewGeneration++;pendingView=null;history.scrollRestoration=previousScrollRestoration;window.removeEventListener('pagehide',savePagePosition);taskOpenGeneration++;window.removeEventListener('hashchange',hashChanged);document.removeEventListener('visibilitychange',visibility);observer?.disconnect();cancelAnimationFrame(layoutFrame);cancelAnimationFrame(fieldFrame);clearTimeout(announceTimer);});
+onMounted(()=>{previousScrollRestoration=history.scrollRestoration;history.scrollRestoration='manual';const saved=pagePosition();if(saved){pendingView={generation:++viewGeneration,saved};restoreView();}window.addEventListener('pagehide',savePagePosition);if(taskDraft.value)showTaskDialog();window.addEventListener('hashchange',hashChanged);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(updateLayout);observer.observe(footer.value);});
+onBeforeUnmount(()=>{releaseModalScroll?.();viewGeneration++;pendingView=null;history.scrollRestoration=previousScrollRestoration;window.removeEventListener('pagehide',savePagePosition);taskOpenGeneration++;window.removeEventListener('hashchange',hashChanged);document.removeEventListener('visibilitychange',visibility);observer?.disconnect();cancelAnimationFrame(layoutFrame);cancelAnimationFrame(fieldFrame);clearTimeout(announceTimer);});
 watch(page,updateLayout,{flush:'post'});
 watch(title,value=>document.title=`${value} · Insight Capture`,{immediate:true});
 watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=task.value?.task_id||'';fieldErrors.value={};fieldAnnouncement.value='';clearTimeout(announceTimer);await nextTick();(dialog.value?.querySelector('input:not(:disabled),select:not(:disabled)')||dialog.value?.querySelector('button'))?.focus();});

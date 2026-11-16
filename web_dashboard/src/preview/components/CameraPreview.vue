@@ -4,6 +4,7 @@ import { t } from "../i18n.js"
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { startWebRTC } from '../webrtc.js'
 import { appActive } from '../lifecycle.js'
+import { guardModalScroll } from '../../modal-scroll.js'
 const props = defineProps({ preview: Object, online: Boolean, recording: Boolean, active: { type: Boolean, default: true } })
 const emit = defineEmits(['notify', 'recovered'])
 const selected = ref(''), video = ref(null), failed = ref(false), ready = ref(false)
@@ -38,7 +39,7 @@ function regionStyle(id) {
     width: `${region.width / overview.value.width * 100}%`, height: `${region.height / overview.value.height * 100}%` }
 }
 const fullscreenAvailable = Boolean(document.fullscreenEnabled)
-let previousFocus, previousScroll, resizeObserver, returnToOverview = false
+let previousFocus, previousScroll, resizeObserver, releaseModalScroll, returnToOverview = false
 let rtcSession, retryTimer
 let generation = 0, dead = false
 try { selected.value = localStorage.getItem('insight-preview-source') || '' } catch { /* storage may be disabled */ }
@@ -125,6 +126,8 @@ watch(expanded, async value => {
     // Keep the inline slot in flow so opening cannot clamp the page's scroll.
     inline.value.style.height = `${inline.value.getBoundingClientRect().height}px`
     overlay.value.showModal()
+    releaseModalScroll?.()
+    releaseModalScroll = guardModalScroll(overlay.value)
     await nextTick()
     if (expanded.value && !dead) {
       movePanel(overlay.value)
@@ -156,6 +159,7 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   dead = true; cleanup()
+  releaseModalScroll?.()
   document.removeEventListener('visibilitychange', visibility)
   resizeObserver?.disconnect()
   if (panel.value?.parentElement !== inline.value) movePanel(inline.value)

@@ -188,7 +188,7 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #7b8494; border
 .recording-row > p { grid-column: 1 / -1; font-size: 0.8125rem; overflow-wrap: anywhere; }
 .recording-row-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .storage-scan-result { font-size: 0.75rem; color: #596273; overflow-wrap: anywhere; }
-#task-dialog { width: min(440px, calc(100% - 28px)); max-height: 85dvh; padding: 20px; border: 1px solid #dfe3e8; border-radius: 18px; }
+#task-dialog { inset: var(--modal-viewport-inset, 0px); width: min(440px, calc(var(--modal-viewport-width, 100%) - 28px)); max-height: calc(var(--modal-viewport-height, 100dvh) * .85); padding: 20px; border: 1px solid #dfe3e8; border-radius: 18px; }
 #task-dialog::backdrop { background: #11182766; }
 #task-dialog label, #task-dialog p { font-size: 0.8125rem; color: #596273; }
 #task-dialog label { display: block; margin: 12px 0; }
@@ -244,6 +244,7 @@ summary{cursor:pointer;min-height:44px;padding:14px 0}.calibration-card{margin-t
 
 /* Native modal isolation and progressive scroll containment. */
 dialog:modal { overscroll-behavior: contain; }
+dialog textarea { overscroll-behavior: contain; }
 dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 #task-dialog #activate-task { width: 100%; margin-top: .75rem; }
 #task-dialog :is(input,textarea,select)[aria-invalid="true"] { border-color: #b42318; }

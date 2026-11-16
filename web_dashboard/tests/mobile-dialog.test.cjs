@@ -8,7 +8,7 @@ const {parse,compileScript}=require('@vue/compiler-sfc');
 
 // Compile the actual script setup so these tests exercise the same openTasks
 // continuation that the button uses, including useCapture's async task read.
-global.document={hidden:false,documentElement:{},createElement:()=>({})};
+global.document=Object.assign(new EventTarget(),{hidden:false,documentElement:{},createElement:()=>({})});
 let hash='#capture';
 global.location={host:'fixture'};
 Object.defineProperty(location,'hash',{get:()=>hash,set:value=>{hash=value.startsWith('#')?value:'#'+value;}});
@@ -36,11 +36,14 @@ const ready=build({stdin:{contents:`
   return {contents:compileScript(descriptor,{id:path.basename(args.path)}).content,loader:'js',resolveDir:path.dirname(args.path)};
  })}}]}).then(()=>{const {view}=require(outfile);fs.rmSync(dir,{recursive:true});return view;});
 const response=()=>({ok:true,json:async()=>({tasks:[{task_id:'fixture_a',name:'Task A'}]})});
+let currentDialog;
 async function scenario(){
+ currentDialog?.close();
  location.hash='#capture';document.hidden=false;
  const view=await ready;const v=await view();let shown=0;
  v.online.value=true;v.status.value={state:'idle',task_status:{active:true,task:{task_id:'fixture_a'}}};
- v.dialog.value={showModal(){shown++},close(){}};
+ v.dialog.value=Object.assign(new EventTarget(),{ownerDocument:document,open:false,showModal(){this.open=true;shown++},close(){this.open=false;this.dispatchEvent(new Event('close'))}});
+ currentDialog=v.dialog.value;
  return {v,shown:()=>shown};
 }
 function deferred(){let release;const promise=new Promise(resolve=>release=resolve);return{promise,release};}
