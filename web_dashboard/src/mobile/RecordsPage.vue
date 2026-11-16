@@ -5,7 +5,7 @@ import { t } from './i18n.js';
 const props=defineProps({route:String,tasks:Array,tasksError:String,status:Object,busy:Boolean,online:Boolean,action:Function});
 const emit=defineEmits(['navigate','refresh-tasks','ready']);
 const recordSet=ref(null),error=ref(''),loading=ref(false),transfers=ref(null);
-let generation=0,timer,alive=true;
+let generation=0,transfersGeneration=0,timer,alive=true;
 const selectedTakes=computed(()=>{
  const takeId=props.route.split('/')[2];
  return (recordSet.value?.takes||[]).filter(take=>!takeId||String(take.take_id)===takeId)
@@ -33,7 +33,11 @@ watch([()=>props.status?.state,()=>props.status?.output_path,()=>props.online],(
  if(props.online)refreshRecords();
 });
 async function refreshTransfers(){
- try{transfers.value=await api('/api/postprocessing/recordings');}catch{ /* Keep the last list while polling retries a transient read. */ }
+ const gen=++transfersGeneration;
+ try{
+  const value=await api('/api/postprocessing/recordings');
+  if(alive&&gen===transfersGeneration)transfers.value=value;
+ }catch{ /* Keep the last list while polling retries a transient read. */ }
 }
 async function refresh(){
  if(props.online&&!document.hidden){

@@ -23,3 +23,18 @@ test('an acknowledged merge survives a failed follow-up transfer read',async()=>
  assert.deepEqual(commands,[{path:'/api/postprocessing/merge',body:{session_id:'saved-session'}}]);
  assert.equal(v.transfers.value,cached,'A failed read must retain the previously loaded list for retry');
 });
+
+test('a slow background list read cannot replace a newer post-merge state',async()=>{
+ const reads=[Promise.withResolvers(),Promise.withResolvers()],commands=[];let requests=0;
+ global.fetch=async url=>{assert.equal(url,'/api/postprocessing/recordings');return reads[requests++].promise;};
+ const view=await ready,v=await view({route:'history',tasks:[],tasksError:'',status:null,busy:false,online:true,action:async(path,body)=>{commands.push({path,body});return true;}});
+ const timeout=global.setTimeout;global.setTimeout=()=>0;
+ try{
+  const poll=v.refresh(),merge=v.merge('saved-session');await Promise.resolve();assert.equal(requests,2);
+  const response=phase=>({ok:true,json:async()=>({enabled:true,recordings:[{session_id:'saved-session',phase}]})});
+  reads[1].resolve(response('copying'));await merge;assert.equal(v.transfers.value.recordings[0].phase,'copying');
+  reads[0].resolve(response('saved'));await poll;
+  assert.equal(v.transfers.value.recordings[0].phase,'copying','An older poll replaced the accepted merge status');
+  assert.equal(commands.length,1);
+ }finally{global.setTimeout=timeout;}
+});
