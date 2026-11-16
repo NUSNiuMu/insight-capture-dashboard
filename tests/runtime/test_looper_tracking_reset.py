@@ -196,3 +196,32 @@ def test_geometry_change_reports_a_new_pose_boundary(mapper):
     assert state.tracking_epoch == 1
     assert state.last_pose_reset_wall_ns == mapper.now
     assert state.correction is None
+
+
+@pytest.mark.parametrize('wall_start_ns', [5_000_000_000, 1_794_840_000_000_000_000])
+def test_wall_clock_correction_restarts_common_ticks_without_replaying_missed_time(mapper, wall_start_ns):
+    class BoundedTicks(deque):
+        def append(self, value):
+            self.additions += 1
+            assert self.additions <= 3, 'Unbounded catch-up across a wall-clock correction'
+            super().append(value)
+    ticks = BoundedTicks(mapper.pose_corrections, maxlen=1000)
+    ticks.additions = 0
+    mapper.pose_corrections = ticks
+    previous_corrections = {n:s.correction.copy() for n,s in mapper.cameras.items()}
+    for index in range(101):
+        mapper.now = wall_start_ns + index * 10_000_000
+        for name in mapper.names:
+            msg = message(0, 2. if name == 'wrist' else 0.)
+            msg.header.stamp.sec, msg.header.stamp.nanosec = divmod(
+                10_010_000_000 + index * 10_000_000, 1_000_000_000)
+            mapper.on_vio(name, msg)
+            mapper.on_frame_pose(name, msg.header, msg.pose)
+    mapper.publish_poses()
+    assert ticks.additions == 1
+    for name, state in mapper.cameras.items():
+        assert state.clock.ready and state.tracking_epoch == 1
+        assert np.allclose(state.correction, previous_corrections[name])
+        poses = mapper.pose_publishers[name].values
+        assert poses and abs(poses[-1].header.stamp.sec - mapper.now // 1_000_000_000) <= 1
+    assert mapper.pose_publishers['wrist'].values[-1].pose.position.x == pytest.approx(12.)

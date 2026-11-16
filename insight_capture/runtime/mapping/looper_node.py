@@ -426,6 +426,15 @@ class LooperNode(Node):
                 return
             latest_tick = max(state.latest_source_ns + state.clock.offset_ns
                               for state in states.values()) * 30 // 1_000_000_000
+            if self.last_pose_tick is not None and (
+                    latest_tick < self.last_pose_tick
+                    or latest_tick - self.last_pose_tick > self.pose_corrections.maxlen):
+                # A wall-clock correction starts a new publication timeline.
+                # Never freeze on future ticks or replay an unbounded time gap.
+                self.pose_corrections.clear()
+                self.last_pose_tick = None
+                for state in self.cameras.values():
+                    state.last_pose_tick = None
             first_tick = latest_tick if self.last_pose_tick is None else self.last_pose_tick + 1
             for tick in range(first_tick, latest_tick + 1):
                 stamp = tick * 1_000_000_000 // 30
