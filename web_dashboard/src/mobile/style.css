@@ -279,3 +279,8 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 .trajectory-3d{touch-action:none;user-select:none;aspect-ratio:1;cursor:grab}
 .trajectory-3d:active{cursor:grabbing}
 .trajectory-controls{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+
+@media (pointer: coarse) {
+  .compact { min-width: 44px; min-height: 44px; }
+  .capture-view-switch button { min-height: 44px; }
+}

@@ -6,7 +6,7 @@
 .preview-head span { display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; }
 .preview-head small { color: #c4cbd7; max-width: 62%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #preview-failure { display: block; padding: 0 12px 10px; color: #fcd34d; font-size: 0.8125rem; line-height: 1.6; }
-#preview-failure button { min-height: 40px; margin-left: 6px; }
+#preview-failure button { min-height: 44px; margin-left: 6px; }
 .camera-switch { min-height: 54px; padding: 0 10px 10px; display: grid; grid-template-columns: repeat(var(--preview-source-count, 4), minmax(0, 1fr)); gap: 6px; }
 .camera-switch button { min-width: 0; padding: 9px 4px; background: #20283a; color: #d8dee9; font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .camera-switch button.active { background: #fff; color: #111827; }
