@@ -14,6 +14,7 @@ import gi
 gi.require_version("Gst", "1.0")
 gi.require_version("GstVideo", "1.0")
 from gi.repository import Gst, GstVideo
+from .h264 import H264Gate
 from .preview_config import FPS, GOP, OVERVIEW_QP, SINGLE_BITRATE, SYNC_TOLERANCE_NS, SYNC_WAIT_NS, STALE_NS
 
 Gst.init(None)
@@ -37,6 +38,7 @@ class Decoder:
         self.received = 0
         self.error = None
         self.closed = False
+        self.gate = H264Gate() if fmt == "H264" else None
         if fmt == "JPEG":
             caps, decode = f"image/jpeg,width={width},height={height},framerate={FPS}/1", "nvjpegdec ! "
         elif fmt == "H264":
@@ -50,13 +52,14 @@ class Decoder:
             raise ValueError(f"Unsupported preview pixel format: {fmt}")
         # Never leak arbitrary inter frames from encoded H264. Its upstream queue
         # already sheds whole GOPs; raw/JPEG can safely replace older buffers.
-        queue = "max-buffers=32" if fmt == "H264" else "max-buffers=2 leaky-type=downstream"
+        queue = "max-buffers=32 max-bytes=8388608" if fmt == "H264" else "max-buffers=2 leaky-type=downstream"
         self.pipeline = Gst.parse_launch(
             f'appsrc name=input is-live=true format=time block=false {queue} caps="{caps}" ! '
             f'{decode}nvvidconv ! video/x-raw(memory:NVMM),format=NV12,width={self.width},height={self.height} ! '
             'nvvidconv ! video/x-raw,format=NV12 ! appsink name=output sync=false emit-signals=true max-buffers=2 drop=true')
         self.source = self.pipeline.get_by_name("input")
-        self.pipeline.get_by_name("output").connect("new-sample", self._sample)
+        self.sink = self.pipeline.get_by_name("output")
+        self.sample_handler = self.sink.connect("new-sample", self._sample)
         if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
             self.close()
             raise RuntimeError("Jetson preview decoder did not start")
@@ -74,26 +77,49 @@ class Decoder:
             self.frames.append((int(buf.pts), time.monotonic_ns(), y, uv))
         return Gst.FlowReturn.OK
 
-    def push(self, data, stamp):
-        if self.closed:
-            return
-        buf = Gst.Buffer.new_wrapped(data)
-        buf.pts = max(0, int(stamp))
-        buf.duration = Gst.SECOND // FPS
-        self.source.emit("push-buffer", buf)
-        self.received += 1
+    def _check_error(self):
         message = self.pipeline.get_bus().pop_filtered(Gst.MessageType.ERROR)
         if message:
             self.error = str(message.parse_error()[0])
+        if self.error:
             raise RuntimeError(self.error)
+
+    def push(self, data, stamp):
+        if self.closed:
+            return
+        self._check_error()
+        if self.gate is not None:
+            data = self.gate.accept(data)
+            if data is None:
+                return
+            # max-buffers alone only emits enough-data when block=false.
+            # Reject this GOP rather than block IPC or drop reference frames.
+            if (self.source.get_property("current-level-buffers") >= self.source.get_property("max-buffers") or
+                    self.source.get_property("current-level-bytes") + len(data) > self.source.get_property("max-bytes")):
+                self.error = "H264 preview decoder input backlog exceeded its bound"
+                raise RuntimeError(self.error)
+        buf = Gst.Buffer.new_wrapped(data)
+        buf.pts = max(0, int(stamp))
+        buf.duration = Gst.SECOND // FPS
+        if self.source.emit("push-buffer", buf) != Gst.FlowReturn.OK:
+            self.error = "Preview decoder rejected an input frame"
+            raise RuntimeError(self.error)
+        self.received += 1
+        self._check_error()
 
     def snapshot(self):
         with self.lock:
             return list(self.frames)
 
     def close(self):
+        if self.closed:
+            return
         self.closed = True
         self.pipeline.set_state(Gst.State.NULL)
+        self.sink.disconnect(self.sample_handler)
+        self.pipeline = self.source = self.sink = None
+        with self.lock:
+            self.frames.clear()
 
 
 class OverviewEncoder:
@@ -107,6 +133,7 @@ class OverviewEncoder:
         self._close_lock = threading.Lock()
         self._closed = False
         self.error = None
+        self.thread = None
         self.frames_encoded = 0
         self.paired = 0
         self.unmatched = 0
@@ -127,9 +154,10 @@ class OverviewEncoder:
             'profile=0 ! h264parse config-interval=-1 ! video/x-h264,stream-format=byte-stream,alignment=au ! '
             'appsink name=output sync=false emit-signals=true max-buffers=4 drop=false')
         self.source = self.pipeline.get_by_name("input")
-        self.pipeline.get_by_name("output").connect("new-sample", self._encoded)
+        self.sink = self.pipeline.get_by_name("output")
+        self.sample_handler = self.sink.connect("new-sample", self._encoded)
         if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-            self.pipeline.set_state(Gst.State.NULL)
+            self.close()
             raise RuntimeError("Jetson H264 encoder did not start")
         self.thread = threading.Thread(target=self._render, daemon=True, name="preview_mosaic")
         self.thread.start()
@@ -157,7 +185,12 @@ class OverviewEncoder:
                     decoder = None
                 if decoder is None:
                     decoder = self.decoders[name] = Decoder(fmt, width, height, self.regions[name])
-                decoder.push(data, stamp)
+                try:
+                    decoder.push(data, stamp)
+                except Exception:
+                    self.decoders.pop(name, None)
+                    decoder.close()
+                    raise
         except Exception as exc:
             self.error = str(exc)
             self.log(f"preview decode {name}: {exc}")
@@ -240,9 +273,14 @@ class OverviewEncoder:
                 return
             self._closed = True
             self.stopped.set()
-            self.thread.join(timeout=2)
+            if self.thread is not None:
+                self.thread.join(timeout=2)
             with self.lock:
                 for decoder in self.decoders.values():
                     decoder.close()
                 self.decoders.clear()
             self.pipeline.set_state(Gst.State.NULL)
+            self.sink.disconnect(self.sample_handler)
+            self.pipeline = self.source = self.sink = None
+            self.last.clear()
+            self.pending_anchor = None

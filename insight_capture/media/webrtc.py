@@ -6,12 +6,25 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 from urllib.parse import quote
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from .preview_config import FPS
+
+
+# A fresh interpreter avoids preexec_fn in this threaded worker. Bind the relay
+# to its owner before exec so a killed worker cannot leave ports/processes behind.
+_RELAY_CHILD = """
+import os, sys
+from insight_capture.media.webrtc_worker import _die_with_parent
+_die_with_parent()
+if os.getppid() != int(sys.argv[1]):
+    raise SystemExit(0)
+os.execv(sys.argv[2], sys.argv[2:])
+"""
 
 
 def validate_signal(raw, offered):
@@ -91,7 +104,8 @@ class WebRtcStreams:
         temp = tempfile.TemporaryDirectory(prefix="insight-preview-")
         path = Path(temp.name) / "go2rtc.json"
         path.write_text(json.dumps(config))
-        process = subprocess.Popen([str(binary), "-config", str(path)])
+        process = subprocess.Popen([sys.executable, "-c", _RELAY_CHILD, str(os.getpid()),
+                                    str(binary), "-config", str(path)])
         self.services[address] = (process, temp, api_port)
         try:
             for _ in range(60):

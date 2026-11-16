@@ -23,6 +23,8 @@ class H264Decoder:
         self._selection_lock = threading.Lock()
         self._selection_error = None
         self.selected_frames = self.decoded_frames = 0
+        self._selection_pad = None
+        self._selection_probe = None
         if hardware:
             # Only verified I/P live sources may bypass DPB; replay keeps normal ordering.
             decoder = "nvv4l2decoder name=decoder " + ("disable-dpb=true enable-max-performance=true " if low_latency else "") + "! nvvidconv ! "
@@ -55,8 +57,8 @@ class H264Decoder:
                     if not selected:
                         self._discarded.append(stamp)
                 return Gst.PadProbeReturn.OK if selected else Gst.PadProbeReturn.DROP
-            self.pipeline.get_by_name("decoder").get_static_pad("src").add_probe(
-                Gst.PadProbeType.BUFFER, select_decoded)
+            self._selection_pad = self.pipeline.get_by_name("decoder").get_static_pad("src")
+            self._selection_probe = self._selection_pad.add_probe(Gst.PadProbeType.BUFFER, select_decoded)
         if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
             self.close()
             raise RuntimeError("H.264 decoder failed to start")
@@ -112,4 +114,10 @@ class H264Decoder:
         self.source.emit("end-of-stream")
 
     def close(self):
+        if self.pipeline is None:
+            return
         self.pipeline.set_state(self.Gst.State.NULL)
+        if self._selection_pad is not None:
+            self._selection_pad.remove_probe(self._selection_probe)
+            self._selection_pad = self._selection_probe = None
+        self.pipeline = self.source = self.sink = None
