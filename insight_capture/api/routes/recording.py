@@ -201,6 +201,12 @@ class RecordingRoutes:
         if self.busy:
             raise RuntimeError("A recording operation is still running.")
         async with self._transition:
+            playback = getattr(self.context, "prepared_playback_manager", None)
+            if playback is not None and playback.status().get("state") == "playing":
+                return web.json_response({
+                    "error": "playback_active",
+                    "message": "请先结束回放并返回实时画面，再开始录制。",
+                }, status=409)
             # A displayed task may predate another viewer's selection. Reject
             # under the transition lock before pausing preview or allocating a Take.
             if expected_task_id is not None:

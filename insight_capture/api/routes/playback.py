@@ -6,42 +6,62 @@ import math
 
 from aiohttp import web
 
-from insight_capture.api.context import DashboardContext
+from insight_capture.api.context import DashboardContext, capture_transition_lock
 
 
 class PlaybackRoutes:
     def __init__(self, context: DashboardContext) -> None:
         self.context = context
+        self._transition = capture_transition_lock(context)
 
     async def _handle_playback_start(self, request: web.Request) -> web.Response:
         body = await request.json()
         bag_name = str(body.get("bag_name", "")).strip()
         if not bag_name:
             return web.json_response({"error": "bag_name is required"}, status=400)
-        cameras, poses = self.context.playback_configuration()
-        status = self.context.prepared_playback_manager.prepare(
-            bag_name,
-            self.context.recording_manager,
-            cameras,
-            poses,
-        )
-        return web.json_response(status)
+        if self._transition.locked():
+            raise RuntimeError("A capture operation is still running.")
+        async with self._transition:
+            self._require_idle_capture()
+            cameras, poses = self.context.playback_configuration()
+            status = self.context.prepared_playback_manager.prepare(
+                bag_name,
+                self.context.recording_manager,
+                cameras,
+                poses,
+            )
+            return web.json_response(status)
 
     async def _handle_playback_activate(self, request: web.Request) -> web.Response:
         body = await request.json()
         bag_name = str(body.get("bag_name", "")).strip()
-        status = self.context.prepared_playback_manager.activate(bag_name)
-        # Prepared media no longer consumes ROS playback topics. Gate the live
-        # callbacks while it is visible so JPEG/WebRTC work cannot steal its
-        # fixed 30 Hz browser frame budget.
-        self.context.node.set_playback_mode(True)
-        return web.json_response(status)
+        if self._transition.locked():
+            raise RuntimeError("A capture operation is still running.")
+        async with self._transition:
+            self._require_idle_capture()
+            status = self.context.prepared_playback_manager.activate(bag_name)
+            # Gate live display callbacks only after activation is admitted.
+            self.context.node.set_playback_mode(True)
+            return web.json_response(status)
 
     async def _handle_playback_stop(self, _request: web.Request) -> web.Response:
-        self.context.prepared_playback_manager.stop()
-        self.context.node.set_playback_mode(False)
-        self.context.node.clear_traces()
-        return web.json_response({"status": "idle"})
+        if self._transition.locked():
+            raise RuntimeError("A capture operation is still running.")
+        async with self._transition:
+            was_playing = self.context.prepared_playback_manager.status()["state"] == "playing"
+            self.context.prepared_playback_manager.stop()
+            self.context.node.set_playback_mode(False)
+            # A duplicate Live request is not a command to clear a live path.
+            if was_playing:
+                self.context.node.clear_traces()
+            return web.json_response({"status": "idle"})
+
+    def _require_idle_capture(self) -> None:
+        status = self.context.recording_manager.status()
+        if (status.get("recording")
+                or status.get("merge_state") in {"finalizing", "merging"}
+                or (status.get("distributed") or {}).get("phase") == "starting"):
+            raise RuntimeError("Cannot enter playback while capture is recording or saving.")
 
     async def _handle_playback_status(self, _request: web.Request) -> web.Response:
         return web.json_response(self.context.prepared_playback_manager.status())

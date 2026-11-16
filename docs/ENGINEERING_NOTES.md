@@ -324,3 +324,7 @@ Insight9 解码平均约 20–21 ms，高于两路红外的约 7–8 ms。各组
 API Context拥有一把capture_transition_lock，录制准备/停止与校准请求发出共用它。正常capture录制中允许在线校准；vio_calibration、准备/停止/保存阶段不得发出新的重置。MappingStream在call_async发出（或发出失败）后通知on_dispatched，HTTP层随后释放切换锁，再等待原有5秒响应；慢响应不阻止停止录制。取消请求须等到发出阶段结束后再释放锁，后台结果异常也会被回收。Qt的按钮与命令复用canResetMapping，并读取其它客户端的operation_in_progress；回放/返回实时会通知该属性更新。原头部输入检查、普通录制中校准和单次RPC语义保持。
 
 隔离验证覆盖真实RecordingRoutes/MappingRoutes转换、PoseBridgeNode/MappingStream方法链、取消两次、发出失败和RPC未应答时停止；实际校准RPC与物理录制未执行。
+
+### Capture and prepared playback admission
+
+Prepared playback prepare/activate/stop use the API capture-transition lock. Prepare and activate require recording and saving to be idle; capture start rejects actively playing media before preview pause, preflight or Take allocation. Returning to live clears display traces only when actually leaving playing media; duplicate Live requests preserve a live capture path. This changes no raw recording content or playback cache/encoding settings.
