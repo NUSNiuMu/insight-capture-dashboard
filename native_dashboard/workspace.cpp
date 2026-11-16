@@ -78,8 +78,8 @@ void Workspace::request(const QString &key, const QString &path, const QString &
                 m_viewData.insert(key, value);
             }
         } else
-            m_errors[key] = value.toMap().value("error",
-                reply->error() == QNetworkReply::NoError ? "Invalid backend response" : reply->errorString());
+            m_errors[key] = value.toMap().value("message", value.toMap().value("error",
+                reply->error() == QNetworkReply::NoError ? "Invalid backend response" : reply->errorString()));
         emit changed();
         emit completed(key, ok);
         reply->deleteLater();

@@ -122,3 +122,17 @@ CPU 来自客户端进程累计 ticks，不包含后端和 GPU；原始样本归
 `position` / `rotation` 保留原始输入，模型使用 `displayPosition` / `displayRotation`；建图、统一定位、ROS 发布、录制和轨迹历史不变。诊断 `spatial.position` / `rotation` 表示模型实际显示值，`sourcePosition` / `sourceRotation` 表示未平滑值，位置单位为 Qt 场景厘米。逐帧延迟诊断补充 `display_position_lag_mm`，便于区分输入到达与显示平滑残差。
 
 同一段真实静止位姿离线对照：三模型逐帧位置与旋转变化的 P95 约下降 46–57%；模拟 20 cm/s 平移与 90°/s 转动，最大残差约 2.24 mm / 0.39°。该结果是过滤同一输入的对照，不是光学端到端延迟，也不是定位精度改善。慢速地图修正或真正的漂移仍会显示，不能靠显示平滑保证定位正确。
+
+## 任务结束请求回归
+
+两个“End task”入口都向 `/api/tasks/current/end` 发送 `task_id`。采集页使用当前显示的任务；确认弹窗记住打开时的任务 ID，其他查看端切换任务后由后端拒绝过期操作。Qt 优先显示后端 `message`，兼容原有 `error` 和网络错误。
+
+已有 Qt 6 开发环境可独立构建请求与 QML 回归，不需要相机或 NVIDIA 设备；使用隔离网络和临时目录执行：
+
+```bash
+cmake -S native_dashboard/tests -B <scratch>/qt-task-actions -DCMAKE_BUILD_TYPE=Release
+cmake --build <scratch>/qt-task-actions -j1
+ctest --test-dir <scratch>/qt-task-actions --output-on-failure
+```
+
+测试使用虚构任务和回环 HTTP 服务，检查两个入口的实际 JSON、弹窗打开后另一端切换任务的身份保留，以及两种 Qt 客户端对 HTTP 409 提示的展示。该测试不替代实体桌面、相机和录制验收。

@@ -153,6 +153,7 @@ PageFrame {
     }
     Ui.Dialog {
         id: endDialog
+        property string expectedTaskId: ""
         objectName: "end-task-dialog"
         width: 440
         implicitWidth: 440
@@ -160,7 +161,8 @@ PageFrame {
         modal: true
         anchors.centerIn: Overlay.overlay
         standardButtons: Dialog.Ok | Dialog.Cancel
-        onAccepted: shell.mutate("/api/tasks/current/end")
+        onAboutToShow: expectedTaskId = page.taskData.active_task_id || ""
+        onAccepted: shell.mutate("/api/tasks/current/end", {task_id: expectedTaskId})
         Label {
             text: "Recorded data will be retained."
         }

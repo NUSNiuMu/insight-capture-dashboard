@@ -125,7 +125,7 @@ void Dashboard::request(const QString &path, const QJsonObject *body, std::funct
             m_state["captureAction"] = "";
         auto value = reply->isOpen() ? QJsonDocument::fromJson(reply->readAll()).object() : QJsonObject();
         if (reply->error() != QNetworkReply::NoError) {
-            m_message = value["error"].toString(reply->errorString());
+            m_message = value.value("message").toString(value.value("error").toString(reply->errorString()));
             m_transportError = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).isNull()
                 ? m_message : QString();
             if (captureCommand)
@@ -640,9 +640,10 @@ void Dashboard::command(const QString &action, const QString &value) {
         path = "/api/trajectory/clear";
     else if (action == "task")
         path = "/api/tasks/" + QString::fromLatin1(QUrl::toPercentEncoding(value)) + "/activate";
-    else if (action == "endTask")
+    else if (action == "endTask") {
         path = "/api/tasks/current/end";
-    else if (action == "reject") {
+        body = {{"task_id", m_state["task"].toMap().value("task").toMap().value("task_id").toString()}};
+    } else if (action == "reject") {
         path = "/api/takes/current/reject";
         body = {{"reason", value.isEmpty() ? "operator_rejected" : value}};
     } else
