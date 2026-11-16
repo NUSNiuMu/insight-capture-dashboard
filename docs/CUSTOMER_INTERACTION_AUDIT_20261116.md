@@ -44,3 +44,11 @@ Related regression results: 117 backend tests and 48 frontend tests pass; fronte
 ## Still requiring field validation
 
 Stable-power recording and interruption recovery, RTC retention across power loss, physical camera replacement and calibration accuracy, and longer sustained use still require their corresponding physical conditions and checks. This pass does not establish that the whole product is bug-free or replace those acceptance items.
+
+## Additional fix: stale restart confirmation could interrupt capture
+
+The native Settings page can open its restart confirmation while idle and confirm it after another client starts. The backend restart route previously scheduled process exit unconditionally, even when its recording manager reported active recording. A reproduction replaced the exit thread with a recorder and confirmed HTTP 200 plus scheduled restart during capture without actually exiting a process.
+
+Settings now checks the live recorder and holds the same recording transition lock from restart admission until exit. Starts arriving during the response grace period are rejected; preparation, capture/calibration recording, finalizing, merging and distributed startup prevent restart. Duplicate restart requests and failed status reads are covered. Eight focused tests pass; the complete Python suite currently passes 301 tests. This fix does not require a physical recording or power-cycle test.
+
+The user updated modern-web-guidance during this audit and requested full verification. The earlier dialog/forms review and two-page PDF are a limited preceding pass, not the new complete-audit result. A separate catalog snapshot and coverage ledger track all 208 guides outside the business repository; reading and acceptance checks remain in progress.

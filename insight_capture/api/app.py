@@ -43,7 +43,7 @@ def create_app(context: DashboardContext) -> web.Application:
     tasks = TaskRoutes(context, recording)
     playback = PlaybackRoutes(context)
     optimization = OptimizationRoutes(context)
-    settings = SettingsRoutes(context)
+    settings = SettingsRoutes(context, recording)
     static = StaticRoutes(context)
 
     async def handle_health(_request: web.Request) -> web.Response:
