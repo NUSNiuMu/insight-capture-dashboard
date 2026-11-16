@@ -17,14 +17,14 @@ from insight_capture.runtime.recording import (
     vio_calibration_raw_image_topics,
 )
 
-from insight_capture.api.context import DashboardContext
+from insight_capture.api.context import DashboardContext, capture_transition_lock
 from insight_capture.runtime.upgrade import recording_start_lock
 
 
 class RecordingRoutes:
     def __init__(self, context: DashboardContext) -> None:
         self.context = context
-        self._transition = asyncio.Lock()
+        self._transition = capture_transition_lock(context)
         self._watchdog_stop = asyncio.Event()
         self._watchdog_task = None
 

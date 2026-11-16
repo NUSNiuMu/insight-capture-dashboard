@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from typing import Dict
+from typing import Callable, Dict, Optional
 
 try:
     from std_msgs.msg import String
@@ -111,17 +111,25 @@ class MappingStream:
             }
             return payload
 
-    def request_reset(self, timeout_sec: float = 5.0) -> Dict[str, object]:
-        client = self._reset_client
-        if client is None or not client.service_is_ready():
-            return {"ok": False, "error": "mapping_service_unavailable"}
-        with self._lock:
-            self._map_point_count = 0
-            for name in self._statuses:
-                self._statuses[name] = {"state": "resetting"}
-        future = client.call_async(Empty.Request())
-        finished = threading.Event()
-        future.add_done_callback(lambda _: finished.set())
+    def request_reset(
+        self, timeout_sec: float = 5.0, *,
+        on_dispatched: Optional[Callable[[], None]] = None,
+    ) -> Dict[str, object]:
+        try:
+            client = self._reset_client
+            if client is None or not client.service_is_ready():
+                return {"ok": False, "error": "mapping_service_unavailable"}
+            with self._lock:
+                self._map_point_count = 0
+                for name in self._statuses:
+                    self._statuses[name] = {"state": "resetting"}
+            future = client.call_async(Empty.Request())
+            finished = threading.Event()
+            future.add_done_callback(lambda _: finished.set())
+        finally:
+            # Only RPC admission shares the capture transition, not its response wait.
+            if on_dispatched is not None:
+                on_dispatched()
         if not finished.wait(timeout_sec):
             return {"ok": False, "error": "mapping_reset_timeout"}
         try:

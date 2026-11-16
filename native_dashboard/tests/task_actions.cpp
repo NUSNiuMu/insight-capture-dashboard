@@ -42,7 +42,8 @@ int main(int argc, char **argv) {
     QStringList requestPaths;
     bool fixtureRecording = false;
     const QString fixtureOutput = "/bags/recording_a";
-    const QString fixtureMode = "vio_calibration";
+    QString fixtureMode = "vio_calibration";
+    bool fixtureOperationBusy = false;
     QString fixtureTaskId = "task_a";
     const qint64 fixtureTakeId = 1;
     QObject::connect(&server, &QTcpServer::newConnection, &app, [&] {
@@ -71,6 +72,7 @@ int main(int argc, char **argv) {
                 } else if (path == "/api/recording/status") {
                     data = {{"recording", fixtureRecording}, {"merge_state", "idle"},
                         {"output_path", fixtureOutput}, {"recording_mode", fixtureMode},
+                        {"operation_in_progress", fixtureOperationBusy},
                         {"task_status", QJsonObject{{"active", true},
                             {"task", QJsonObject{{"task_id", fixtureTaskId}}}}},
                         {"current_take", QJsonObject{{"task_id", fixtureTaskId}, {"take_id", fixtureTakeId}, {"task_name", fixtureTaskId}}}};
@@ -212,6 +214,25 @@ int main(int argc, char **argv) {
     if (!waitFor([&] { return confirmation->property("visible").toBool(); })) return 37;
     if (!QMetaObject::invokeMethod(confirmation.get(), "accept") || !waitFor([&] { return requests.size() == 9; })) return 38;
     const bool resetConfirmationKept = requestPaths.last() == "/api/mapping/reset" && requests.last().isEmpty();
+    fixtureMode = "capture";
+    fixtureRecording = true;
+    if (!waitFor([&] { return dashboard.state().value("recording").toBool() && dashboard.state().value("recordingMode") == "capture"; })) return 39;
+    dashboard.command("reset");
+    if (!waitFor([&] { return requests.size() == 10 || dashboard.message() == "Stop recording first."; })) return 40;
+    const bool captureResetAllowed = requests.size() == 10 && requestPaths.last() == "/api/mapping/reset" && dashboard.property("canResetMapping").toBool();
+    fixtureMode = "vio_calibration";
+    if (!waitFor([&] { return dashboard.state().value("recordingMode") == "vio_calibration"; })) return 41;
+    const int beforeRawReset = requests.size();
+    dashboard.command("reset");
+    const bool rawCalibrationResetBlocked = !dashboard.property("canResetMapping").toBool() &&
+        requests.size() == beforeRawReset && dashboard.message() == "Stop recording first.";
+    fixtureMode = "capture";
+    fixtureOperationBusy = true;
+    if (!waitFor([&] { return dashboard.state().value("recordingMode") == "capture" && dashboard.state().value("recordingBusy").toBool(); })) return 42;
+    const int beforeBusyReset = requests.size();
+    dashboard.command("reset");
+    const bool transitionResetBlocked = !dashboard.property("canResetMapping").toBool() &&
+        requests.size() == beforeBusyReset && dashboard.message() == "Wait for the capture operation to finish.";
     dashboard.shutdown();
     QJsonObject result{{"direct_body", direct}, {"dialog_body_after_task_change", confirmed},
         {"direct_task_bound", directBody}, {"dialog_task_bound", dialogBody},
@@ -222,7 +243,8 @@ int main(int argc, char **argv) {
         {"recorder_stop_body", recorderStop}, {"direct_stop_bound", directStopBound},
         {"recorder_stop_bound", recorderStopBound}, {"reject_body", rejectBody}, {"reject_bound", rejectBound},
         {"review_reopened_body", reopenedReview}, {"review_reopened", reviewReopened},
-        {"reset_confirmation_kept", resetConfirmationKept}};
+        {"reset_confirmation_kept", resetConfirmationKept}, {"capture_reset_allowed", captureResetAllowed},
+        {"raw_calibration_reset_blocked", rawCalibrationResetBlocked}, {"transition_reset_blocked", transitionResetBlocked}};
     std::puts(QJsonDocument(result).toJson(QJsonDocument::Compact).constData());
-    return directBody && dialogBody && directMessage && workspaceMessage && directStartBound && recorderStartBound && directStopBound && recorderStopBound && rejectBound && reviewReopened && resetConfirmationKept ? 0 : 1;
+    return directBody && dialogBody && directMessage && workspaceMessage && directStartBound && recorderStartBound && directStopBound && recorderStopBound && rejectBound && reviewReopened && resetConfirmationKept && captureResetAllowed && rawCalibrationResetBlocked && transitionResetBlocked ? 0 : 1;
 }

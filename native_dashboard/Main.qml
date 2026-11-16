@@ -357,7 +357,7 @@ ApplicationWindow {
                     Ui.Button { text: "Reject last take"; tone: "danger"; enabled: !dashboard.state.recording && !!((dashboard.state.take || {}).take_id); onClicked: root.confirm("reject","operator_rejected","Reject the last take?") }
                     Item { Layout.fillWidth: true }
                     Ui.Button { id: checkButton; text: "Check"; onClicked: dashboard.command("check") }
-                    Ui.Button { text: "New map"; enabled: !dashboard.state.recording&&!dashboard.playback; onClicked: root.confirm("reset","","Reset the current map?") }
+                    Ui.Button { text: "New map"; enabled: dashboard.canResetMapping; onClicked: root.confirm("reset","","Reset the current map?") }
                 }
                 RowLayout {
                     Label { text: "Playback"; color: "#776d5a" }

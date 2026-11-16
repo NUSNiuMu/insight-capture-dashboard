@@ -635,8 +635,8 @@ class PoseBridgeNode(Node):
     def build_mapping_payload(self) -> Dict[str, object]:
         return self._mapping_stream.snapshot()
 
-    def reset_mapping(self) -> Dict[str, object]:
-        return self._mapping_stream.request_reset()
+    def reset_mapping(self, *, on_dispatched=None) -> Dict[str, object]:
+        return self._mapping_stream.request_reset(on_dispatched=on_dispatched)
 
 
     def build_camera_payload(self) -> Dict[str, object]:

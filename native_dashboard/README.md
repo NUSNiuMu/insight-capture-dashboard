@@ -142,3 +142,5 @@ Qt 两个起录入口向 `/api/recording/start` 发送显示任务的 `task_id`�
 Qt 停止入口携带各自显示的 `output_path` 和 `recording_mode`，旧HTTP接口将其传给已有本地/分布式管理器的锁内身份检查；过期请求返回409，不停止另一条录制或完成它的Take。采集和校准模式均使用实际返回的模式，不硬编码为capture。省略这两个字段的脚本保持原有停止当前录制语义；显式提供身份时两项均须为非空字符串。
 
 “Reject last take”确认窗口使用本项目原生ActionConfirmation组件，打开时复制任务ID、Take编号及显示名，后续轮询不替换确认目标。实际接受后将身份传入command及后端状态库锁内检查；过期确认返回409。重复相同作废决定保持原决定时间，修改原因可更新；原始数据不删除。重置地图沿用同一原生确认组件的原行为。
+
+Qt“New map”的启用与命令检查共用canResetMapping：普通capture录制中允许在线校准；专用vio_calibration、回放、起录/停止/保存中禁止。其它客户端的operation_in_progress也纳入状态。服务端在共用采集转换锁内核对并发出重置RPC，发出后即释放锁，等待应答不会阻止停止录制；HTTP取消不能让尚未发出的重置绕开转换锁。

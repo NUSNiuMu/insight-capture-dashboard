@@ -76,7 +76,7 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
         ))
         response = await routes._handle_reset(None)
         self.assertEqual(response.status, 200)
-        node.reset_mapping.assert_called_once_with()
+        node.reset_mapping.assert_called_once()
 
     async def test_reset_starts_when_all_camera_inputs_are_fresh(self):
         node = self._node()
@@ -88,7 +88,7 @@ class MappingRoutesTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status, 200)
         self.assertTrue(json.loads(response.text)["ok"])
-        node.reset_mapping.assert_called_once_with()
+        node.reset_mapping.assert_called_once()
 
     async def test_reset_unavailable_returns_actionable_message(self):
         payload = {

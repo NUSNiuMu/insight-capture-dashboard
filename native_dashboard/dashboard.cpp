@@ -64,6 +64,12 @@ Dashboard::Dashboard(QUrl server, int fps, QObject *parent) : QObject(parent), m
             m_reconnect.start(1500);
     });
 }
+bool Dashboard::canResetMapping() const {
+    return !playback() && !m_state.value("recordingBusy").toBool()
+        && m_state.value("captureAction").toString().isEmpty()
+        && (!m_state.value("recording").toBool()
+            || m_state.value("recordingMode").toString() == "capture");
+}
 void Dashboard::setSpatialActive(bool value) {
     if (m_spatialActive == value) return;
     m_spatialActive = value;
@@ -204,7 +210,7 @@ void Dashboard::poll() {
         m_state["output"] = d["output_path"].toString();
         m_state["recordingMode"] = d["recording_mode"].toString();
         m_state["distributed"] = d["distributed"].toObject().toVariantMap();
-        m_state["recordingBusy"] = d["merge_state"].toString() == "merging" || d["merge_state"].toString() == "finalizing" || m_pending.contains("/api/recording/start") || m_pending.contains("/api/recording/stop");
+        m_state["recordingBusy"] = d["operation_in_progress"].toBool() || d["merge_state"].toString() == "merging" || d["merge_state"].toString() == "finalizing" || m_pending.contains("/api/recording/start") || m_pending.contains("/api/recording/stop");
         m_state["task"] = d["task_status"].toObject().toVariantMap();
         m_state["take"] = d["current_take"].toObject().toVariantMap();
         if (m_state != previous)
@@ -588,7 +594,14 @@ void Dashboard::copyDiagnostics(const QVariantList &videos) {
 }
 void Dashboard::command(const QString &action, const QString &value, const QVariantMap &identity) {
     const bool recording = m_state["recording"].toBool();
-    if (recording && (action == "reset" || action == "task" || action == "endTask" || action == "playback")) {
+    if (action == "reset" && !canResetMapping()) {
+        m_message = playback() ? "Return to Live first." :
+            recording && m_state.value("recordingMode").toString() != "capture"
+                ? "Stop recording first." : "Wait for the capture operation to finish.";
+        emit stateChanged();
+        return;
+    }
+    if (recording && (action == "task" || action == "endTask" || action == "playback")) {
         m_message = "Stop recording first.";
         emit stateChanged();
         return;
@@ -597,7 +610,7 @@ void Dashboard::command(const QString &action, const QString &value, const QVari
         refreshBags();
         return;
     }
-    if (playback() && (action == "record" || action == "reset")) {
+    if (playback() && action == "record") {
         m_message = "Return to Live first.";
         emit stateChanged();
         return;
@@ -718,6 +731,7 @@ void Dashboard::activatePlayback(const QJsonObject &status) {
             }
             m_cameras = list;
             emit camerasChanged();
+            emit stateChanged();
             setPlaybackTime(0);
         });
     });
@@ -734,6 +748,7 @@ void Dashboard::goLive() {
             clearTraces();
             m_cameras = m_liveCameras;
             emit camerasChanged();
+            emit stateChanged();
             m_poseSocket.abort();
             m_reconnect.start(150);
         });

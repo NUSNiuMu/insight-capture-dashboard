@@ -1,5 +1,6 @@
 """Explicit dependencies shared by dashboard HTTP adapters."""
 
+import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -32,3 +33,13 @@ class DashboardContext:
         [], tuple[list[dict[str, object]], list[dict[str, object]]]
     ]
     _image_capabilities_cache: Optional[Dict[str, object]] = field(default=None, init=False)
+    _capture_transition_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+
+
+def capture_transition_lock(context: DashboardContext) -> asyncio.Lock:
+    """One API-loop admission lock, also available to lightweight adapters."""
+    lock = getattr(context, "_capture_transition_lock", None)
+    if lock is None:
+        lock = asyncio.Lock()
+        context._capture_transition_lock = lock
+    return lock

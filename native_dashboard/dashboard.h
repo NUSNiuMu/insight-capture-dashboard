@@ -81,6 +81,7 @@ class Dashboard : public QObject {
     Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
     Q_PROPERTY(bool keepTrail READ keepTrail WRITE setKeepTrail NOTIFY stateChanged)
     Q_PROPERTY(bool playback READ playback NOTIFY camerasChanged)
+    Q_PROPERTY(bool canResetMapping READ canResetMapping NOTIFY stateChanged)
     Q_PROPERTY(double duration READ duration NOTIFY camerasChanged)
     Q_PROPERTY(int targetFps READ targetFps CONSTANT)
     Q_PROPERTY(QVariantMap cameraAvailability READ cameraAvailability NOTIFY availabilityChanged)
@@ -96,6 +97,7 @@ class Dashboard : public QObject {
     bool connected() const { return m_connected; }
     bool keepTrail() const { return m_keep; }
     bool playback() const { return !m_manifest.isEmpty(); }
+    bool canResetMapping() const;
     double duration() const { return m_manifest["duration_s"].toDouble(); }
     int targetFps() const { return m_fps; }
     QVariantMap cameraAvailability() const { return m_cameraAvailability; }

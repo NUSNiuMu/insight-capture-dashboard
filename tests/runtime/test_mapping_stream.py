@@ -54,5 +54,28 @@ class MappingStreamResetTest(unittest.TestCase):
         self.assertEqual(self.stream.request_reset()['error'], 'engine unavailable')
 
 
+    def test_dispatch_notification_precedes_response_wait(self):
+        future = Future()
+        observed = []
+        self.stream._reset_client = SimpleNamespace(service_is_ready=lambda: True, call_async=lambda _: future)
+        result = self.stream.request_reset(.001, on_dispatched=lambda: observed.append(future.done()))
+        self.assertEqual(observed, [False])
+        self.assertEqual(result['error'], 'mapping_reset_timeout')
+        self.owner.clear_traces.assert_not_called()
+
+    def test_unavailable_service_notifies_admission_complete(self):
+        notification = Mock()
+        self.assertFalse(self.stream.request_reset(on_dispatched=notification)['ok'])
+        notification.assert_called_once_with()
+
+    def test_dispatch_error_notifies_admission_complete(self):
+        notification = Mock()
+        self.stream._reset_client = SimpleNamespace(service_is_ready=lambda: True,
+            call_async=Mock(side_effect=RuntimeError('dispatch failed')))
+        with self.assertRaisesRegex(RuntimeError, 'dispatch failed'):
+            self.stream.request_reset(on_dispatched=notification)
+        notification.assert_called_once_with()
+
+
 if __name__ == '__main__':
     unittest.main()
