@@ -4,7 +4,7 @@ import { t } from "../i18n.js"
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { startWebRTC } from '../webrtc.js'
 import { appActive } from '../lifecycle.js'
-const props = defineProps({ preview: Object, online: Boolean, recording: Boolean, active: { type: Boolean, default: true }, availableHeight: { type: Number, default: 0 } })
+const props = defineProps({ preview: Object, online: Boolean, recording: Boolean, active: { type: Boolean, default: true } })
 const emit = defineEmits(['notify', 'recovered'])
 const selected = ref(''), video = ref(null), failed = ref(false), ready = ref(false)
 const failure = ref('')
@@ -26,7 +26,7 @@ const aspect = computed(() => {
   return dimensions?.width && dimensions?.height ? `${dimensions.width} / ${dimensions.height}` : '3 / 4'
 })
 const pictureStyle = computed(() => {
-  if ((!expanded.value && !props.availableHeight) || !stageSize.value.width || !stageSize.value.height) return undefined
+  if (!expanded.value || !stageSize.value.width || !stageSize.value.height) return undefined
   const [width, height] = aspect.value.split('/').map(Number)
   return { width: `${Math.min(stageSize.value.width, stageSize.value.height * width / height)}px` }
 })
@@ -157,8 +157,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section ref="panel" class="preview-card" :class="{ 'preview-expanded': expanded, 'preview-fitted': availableHeight && !expanded }"
-    :style="!expanded && availableHeight ? {height: `${availableHeight}px`} : undefined"
+  <section ref="panel" class="preview-card" :class="{ 'preview-expanded': expanded }"
     :role="expanded ? 'dialog' : undefined" :aria-modal="expanded ? 'true' : undefined"
     :aria-label="t(&quot;相机预览&quot;)" tabindex="-1" @keydown="keyboard">
     <div class="preview-controls">

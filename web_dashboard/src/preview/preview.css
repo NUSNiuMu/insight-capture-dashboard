@@ -13,6 +13,7 @@
 .preview-actions button[aria-pressed="true"] { background: #fff; color: #111827; }
 .preview-actions .preview-close { margin-left: auto; }
 .preview-stage { display: flex; justify-content: center; align-items: center; min-height: 0; background: #151b2c; }
+/* Inline previews use the card width; only expanded previews fit viewport height. */
 .preview-picture { position: relative; width: 100%; aspect-ratio: var(--preview-aspect); }
 .preview-card img, .preview-card video { display: block; width: 100%; height: 100%; position: absolute; inset: 0; object-fit: contain; background: #151b2c; }
 .preview-tiles { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
@@ -21,9 +22,8 @@
 .preview-tiles span { position: relative; z-index: 1; max-width: 100%; padding: 3px 4px; border-radius: 6px; background: #000a; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .preview-card button:focus-visible { outline: 3px solid #60a5fa; outline-offset: -3px; }
 .preview-expanded { position: fixed; inset: 0; z-index: 100; margin: 0; border: 0; border-radius: 0; display: flex; flex-direction: column; padding: var(--safe-area-inset-top, env(safe-area-inset-top)) var(--safe-area-inset-right, env(safe-area-inset-right)) var(--safe-area-inset-bottom, env(safe-area-inset-bottom)) var(--safe-area-inset-left, env(safe-area-inset-left)); }
-.preview-fitted { display: flex; flex-direction: column; }
-.preview-fitted .preview-stage, .preview-expanded .preview-stage { flex: 1; overflow: hidden; }
-.preview-fitted .preview-picture, .preview-expanded .preview-picture { flex: none; }
+.preview-expanded .preview-stage { flex: 1; overflow: hidden; }
+.preview-expanded .preview-picture { flex: none; }
 .preview-controls { flex-shrink: 0; }
 .preview-card [hidden] { display: none; }
 

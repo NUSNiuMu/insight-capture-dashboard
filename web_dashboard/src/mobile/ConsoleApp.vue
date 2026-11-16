@@ -8,7 +8,7 @@ import { t, language, setLanguage } from './i18n.js';
 const {status,mapping,tasks,tasksError,taskDraft,online,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
 const previewError=ref('');
-const route=ref(location.hash.slice(1)||'capture'),visible=ref(!document.hidden),dialog=ref(null),creating=ref(Boolean(taskDraft.value)),name=ref(taskDraft.value?.name||''),instruction=ref(taskDraft.value?.instruction||''),shell=ref(null),footer=ref(null),header=ref(null),intro=ref(null),viewport=ref(null),previewHeight=ref(0);
+const route=ref(location.hash.slice(1)||'capture'),visible=ref(!document.hidden),dialog=ref(null),creating=ref(Boolean(taskDraft.value)),name=ref(taskDraft.value?.name||''),instruction=ref(taskDraft.value?.instruction||''),shell=ref(null),footer=ref(null);
 const page=computed(()=>route.value.split('/')[0]);
 const savedTake=computed(()=>status.value?.state==='saved' && status.value.current_take?.state==='complete' && status.value.current_take.bag_path===status.value.output_path ? status.value.current_take : null);
 const uiState=computed(()=>recordPending.value==='start'?'starting':recordPending.value==='stop'?'saving':status.value?.state==='saved'&&!savedTake.value?'idle':status.value?.state);
@@ -78,22 +78,17 @@ function updateLayout(){
  layoutFrame=requestAnimationFrame(()=>{
   const footerHeight=footer.value.getBoundingClientRect().height;
   shell.value.style.setProperty('--footer-height',`${footerHeight}px`);
-  // The small viewport stays fixed while mobile browser toolbars retract.
-  // Measure the intro in document coordinates so scrolling cannot resize video.
-  const viewportHeight=viewport.value.getBoundingClientRect().height;
-  if(page.value==='capture')previewHeight.value=Math.max(144,viewportHeight-(intro.value.getBoundingClientRect().bottom+window.scrollY)-footerHeight-12);
  });
 }
-onMounted(()=>{if(taskDraft.value)dialog.value.showModal();window.addEventListener('hashchange',hashChanged);window.addEventListener('resize',updateLayout);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(updateLayout);[footer.value,header.value,intro.value,viewport.value].forEach(node=>observer.observe(node));});
-onBeforeUnmount(()=>{window.removeEventListener('hashchange',hashChanged);window.removeEventListener('resize',updateLayout);document.removeEventListener('visibilitychange',visibility);observer?.disconnect();cancelAnimationFrame(layoutFrame);});
+onMounted(()=>{if(taskDraft.value)dialog.value.showModal();window.addEventListener('hashchange',hashChanged);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(updateLayout);observer.observe(footer.value);});
+onBeforeUnmount(()=>{window.removeEventListener('hashchange',hashChanged);document.removeEventListener('visibilitychange',visibility);observer?.disconnect();cancelAnimationFrame(layoutFrame);});
 watch(page,updateLayout,{flush:'post'});
 watch(language,()=>document.title='Insight Capture');
 </script>
 <template><div ref="shell" class="console-shell" :class="{'has-capture-dock':showDock,'compact-capture-dock':page!=='capture','capture-page':page==='capture'}">
-<div ref="viewport" class="layout-viewport" aria-hidden="true"></div>
-<header ref="header" class="topbar"><button v-if="route.includes('/') && route!=='capture/trajectory'" class="icon-button" :aria-label="t('返回')" @click="back">‹</button><div class="topbar-title"><small>Insight Capture</small><h1>{{title}}</h1></div><span id="device-state" class="pill" :class="{online}"><i></i>{{t(online?'在线':status?'离线':'连接中')}}</span></header>
+<header class="topbar"><button v-if="route.includes('/') && route!=='capture/trajectory'" class="icon-button" :aria-label="t('返回')" @click="back">‹</button><div class="topbar-title"><small>Insight Capture</small><h1>{{title}}</h1></div><span id="device-state" class="pill" :class="{online}"><i></i>{{t(online?'在线':status?'离线':'连接中')}}</span></header>
 <main>
-<div ref="intro" class="capture-intro">
+<div class="capture-intro">
 <section class="card readiness-card" :class="{'readiness-blocked':online&&!status?.preflight?.ok&&!active,'readiness-warning':!online||(status?.preflight?.ok&&status?.preflight?.warnings?.length)}">
 <div class="readiness-title"><i class="state-mark"></i><strong><template v-if="page==='capture'&&attentionDevice">{{roleLabel(attentionDevice.role)}}<small :title="stage(attentionDevice)">{{stage(attentionDevice)}}</small></template><template v-else>{{!online?t('正在连接设备'):active||uiState==='error'?stateLabel(uiState):!task?t('请先创建或选择任务'):t(status?.preflight?.ok?'可以开始录制':'等待采集就绪')}}</template></strong><button id="view-device-status" class="text-link" v-if="page!=='settings'" @click="navigate('settings')">{{t(readinessIssues.length&&!active?'查看状态（{0}）':'查看状态',readinessIssues.length)}} ›</button></div>
 <p v-if="page==='capture'&&readinessSummary" class="readiness-summary" :class="status?.preflight?.ok?'warning':'bad'">{{readinessSummary}}</p>
@@ -106,7 +101,7 @@ watch(language,()=>document.title='Insight Capture');
 <div v-show="page==='capture'" class="capture-view-switch" role="group" :aria-label="t('采集视图')"><button :aria-pressed="route==='capture'" @click="navigate('capture')">{{t('画面')}}</button><button :aria-pressed="route==='capture/trajectory'" @click="navigate('capture/trajectory')">{{t('轨迹')}}</button></div>
 </div>
 <div v-show="page==='capture'">
-<CameraPreview v-show="route!=='capture/trajectory'" :available-height="previewHeight" :preview="status?.preview||{}" :online="online" :recording="active" :active="page==='capture'&&route!=='capture/trajectory'&&visible&&status?.state!=='playback'" @notify="previewError=$event" @recovered="previewError=''"/>
+<CameraPreview v-show="route!=='capture/trajectory'" :preview="status?.preview||{}" :online="online" :recording="active" :active="page==='capture'&&route!=='capture/trajectory'&&visible&&status?.state!=='playback'" @notify="previewError=$event" @recovered="previewError=''"/>
 <TrajectoryPanel v-if="route==='capture/trajectory'"/>
 <p class="settings-note">{{t('准备、录制和保存时暂停预览，保存完成后自动恢复。')}}</p>
 <section class="card calibration-card"><div class="section-title"><h2>{{t('校准与定位')}}</h2><button id="calibrate" class="secondary compact" :disabled="!online||!mapping||pending||['starting','saving','playback'].includes(status?.state)||!health[head?.name]?.ready" @click="calibrate">{{t('重新校准')}}</button></div>

@@ -120,8 +120,6 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #cbd2dc; border
 
 /* Three primary pages share one recording controller and persistent navigation. */
 .console-shell { --footer-height: 76px; }
-/* Stable layout height, independent of the address bar opening during scroll. */
-.layout-viewport { position: fixed; top: 0; left: 0; width: 0; height: 100vh; height: 100svh; visibility: hidden; pointer-events: none; }
 .console-shell.has-capture-dock { --footer-height: 190px; }
 .console-shell.has-capture-dock.compact-capture-dock { --footer-height: 164px; }
 .console-shell main { padding-bottom: calc(var(--footer-height) + 18px); }
