@@ -34,7 +34,7 @@ services:
       - INSIGHT_VERSION=${INSIGHT_VERSION}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
-      - INSIGHT_ROSBAG_DIR=/mnt/insight-recordings
+      - INSIGHT_ROSBAG_DIR=${INSIGHT_ROSBAG_DIR:-/mnt/insight-recordings}
       - INSIGHT_ROSBAG_REQUIRED_SOURCE=${INSIGHT_ROSBAG_REQUIRED_SOURCE:-}
       - INSIGHT_ROSBAG_FALLBACK_DIR=/workspaces/insight_capture/rosbags
       - INSIGHT_MODE=capture

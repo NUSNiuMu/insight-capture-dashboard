@@ -721,8 +721,6 @@
   "连接与启动": "Connections & startup",
   "USB 连接 → 时钟就绪 → 图像 / VIO 就绪": "USB connected → clock synchronized → video / VIO ready",
   "当前访问地址": "Connected address",
-  "录制盘未连接，当前使用备用存储。": "Capture disk unavailable. Using backup storage.",
-  "使用采集存储。": "Using capture storage.",
   "测量中": "Measuring",
   "相机相对 Jetson 的 NTP 偏差；不代表曝光同步精度。": "NTP offset relative to Jetson; not an exposure synchronization measurement.",
   "两机误差保守上界": "Conservative pairwise error bound",
