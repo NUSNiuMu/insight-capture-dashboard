@@ -386,16 +386,27 @@ class SessionTakeStore:
             self._write_json(self._path(payload["take_id"]), payload)
             return deepcopy(payload)
 
-    def reject_current(self, reason: object = "operator_rejected") -> Dict:
+    def reject_current(
+        self, reason: object = "operator_rejected", *,
+        expected_task_id: Optional[str] = None, expected_take_id: Optional[int] = None,
+    ) -> Dict:
         """Mark a take invalid; raw bag data is deliberately never deleted."""
         with self._lock:
             payload = self.current()
             if payload is None:
                 raise RuntimeError("No take is available to reject.")
+            if ((expected_task_id is not None and self.task_id != expected_task_id)
+                    or (expected_take_id is not None and payload["take_id"] != expected_take_id)):
+                raise RuntimeError("录次已变化，作废请求未执行，请刷新状态。")
+            reason = str(reason or "operator_rejected")
+            if (payload.get("operator_valid") is False
+                    and payload.get("operator_decision") == "rejected"
+                    and payload.get("reject_reason") == reason):
+                return deepcopy(payload)
             payload.update({
                 "operator_valid": False,
                 "operator_decision": "rejected",
-                "reject_reason": str(reason or "operator_rejected"),
+                "reject_reason": reason,
                 "operator_decided_at_epoch_s": time.time(),
             })
             self._write_json(self._path(payload["take_id"]), payload)

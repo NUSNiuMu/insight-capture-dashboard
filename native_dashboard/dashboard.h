@@ -103,7 +103,8 @@ class Dashboard : public QObject {
     void start();
     void setKeepTrail(bool value);
     Q_INVOKABLE void setSpatialActive(bool value);
-    Q_INVOKABLE void command(const QString &action, const QString &value = QString());
+    Q_INVOKABLE void command(const QString &action, const QString &value = QString(),
+                             const QVariantMap &identity = QVariantMap());
     Q_INVOKABLE void setPlaybackTime(double seconds);
     Q_INVOKABLE QVariantMap diagnostics() const;
     Q_INVOKABLE void copyDiagnostics(const QVariantList &videos);

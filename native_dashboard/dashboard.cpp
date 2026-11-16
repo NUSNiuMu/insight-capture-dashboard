@@ -586,7 +586,7 @@ void Dashboard::copyDiagnostics(const QVariantList &videos) {
         emit stateChanged();
     });
 }
-void Dashboard::command(const QString &action, const QString &value) {
+void Dashboard::command(const QString &action, const QString &value, const QVariantMap &identity) {
     const bool recording = m_state["recording"].toBool();
     if (recording && (action == "reset" || action == "task" || action == "endTask" || action == "playback")) {
         m_message = "Stop recording first.";
@@ -649,7 +649,9 @@ void Dashboard::command(const QString &action, const QString &value) {
         body = {{"task_id", m_state["task"].toMap().value("task").toMap().value("task_id").toString()}};
     } else if (action == "reject") {
         path = "/api/takes/current/reject";
-        body = {{"reason", value.isEmpty() ? "operator_rejected" : value}};
+        body = {{"reason", value.isEmpty() ? "operator_rejected" : value},
+                {"task_id", identity.value("task_id").toString()},
+                {"take_id", QJsonValue(identity.value("take_id").toLongLong())}};
     } else
         return;
     if (action == "record" || action == "stop") {

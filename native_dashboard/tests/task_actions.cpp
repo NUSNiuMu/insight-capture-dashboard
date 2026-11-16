@@ -4,6 +4,7 @@
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QQmlExpression>
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QJsonDocument>
@@ -36,10 +37,14 @@ int main(int argc, char **argv) {
     QTcpServer server;
     if (!server.listen(QHostAddress::LocalHost)) return 2;
     const QString message = QStringLiteral("当前任务已变化，请重新打开任务列表后操作。");
+    const QString reviewMessage = QStringLiteral("录次已变化，作废请求未执行，请刷新状态。");
     QList<QJsonObject> requests;
+    QStringList requestPaths;
     bool fixtureRecording = false;
     const QString fixtureOutput = "/bags/recording_a";
     const QString fixtureMode = "vio_calibration";
+    QString fixtureTaskId = "task_a";
+    const qint64 fixtureTakeId = 1;
     QObject::connect(&server, &QTcpServer::newConnection, &app, [&] {
         while (auto *socket = server.nextPendingConnection()) {
             auto buffer = std::make_shared<QByteArray>();
@@ -60,13 +65,15 @@ int main(int argc, char **argv) {
                 int status = 200;
                 if (method == "POST") {
                     requests.append(QJsonDocument::fromJson(buffer->mid(split + 4, length)).object());
-                    data = {{"message", message}};
+                    requestPaths.append(QString::fromUtf8(path));
+                    data = {{"message", path == "/api/takes/current/reject" ? reviewMessage : message}};
                     status = 409;
                 } else if (path == "/api/recording/status") {
                     data = {{"recording", fixtureRecording}, {"merge_state", "idle"},
                         {"output_path", fixtureOutput}, {"recording_mode", fixtureMode},
                         {"task_status", QJsonObject{{"active", true},
-                            {"task", QJsonObject{{"task_id", "task_a"}}}}}};
+                            {"task", QJsonObject{{"task_id", fixtureTaskId}}}}},
+                        {"current_take", QJsonObject{{"task_id", fixtureTaskId}, {"take_id", fixtureTakeId}, {"task_name", fixtureTaskId}}}};
                 } else if (path == "/api/recording/topics") {
                     data = {{"topics", QJsonArray{"/camera"}}, {"default_selected_topics", QJsonArray{"/camera"}}};
                 } else if (path == "/api/tasks") {
@@ -135,7 +142,9 @@ int main(int argc, char **argv) {
     const auto confirmed = requests.last();
     const bool dialogBody = confirmed.value("task_id") == "task_a";
     const bool workspaceMessage = workspace.errors().value("action").toString() == message;
-    dashboard.command("record");
+    QQmlExpression startExpression(engine.rootContext(), nullptr, QStringLiteral("dashboard.command('record')"));
+    startExpression.evaluate();
+    if (startExpression.hasError()) { qWarning() << startExpression.error(); return 13; }
     if (!waitFor([&] { return requests.size() == 3 && dashboard.state().value("captureAction").toString().isEmpty(); })) return 13;
     const auto directStart = requests.last();
     const bool directStartBound = directStart.value("task_id") == "task_a" && directStart.value("native_relaxed_preflight").toBool();
@@ -169,6 +178,40 @@ int main(int argc, char **argv) {
     if (!waitFor([&] { return requests.size() == 6 && !workspace.busy().value("action").toBool(); })) return 21;
     const auto recorderStop = requests.last();
     const bool recorderStopBound = recorderStop.value("output_path") == fixtureOutput && recorderStop.value("recording_mode") == fixtureMode;
+    fixtureRecording = false;
+    if (!waitFor([&] { return !dashboard.state().value("recording").toBool(); })) return 22;
+    QQmlComponent confirmationComponent(&engine, QUrl("qrc:/ui/ActionConfirmation.qml"));
+    if (!waitFor([&] { return confirmationComponent.status() != QQmlComponent::Loading; })) return 23;
+    std::unique_ptr<QObject> confirmation(confirmationComponent.createWithInitialProperties({
+        {"controller", QVariant::fromValue(&dashboard)}, {"parent", QVariant::fromValue(window.contentItem())}}));
+    if (!confirmation) { qWarning() << confirmationComponent.errors(); return 24; }
+    auto openReview = [&] {
+        return QMetaObject::invokeMethod(confirmation.get(), "showFor",
+            Q_ARG(QVariant, QVariant("reject")), Q_ARG(QVariant, QVariant("operator_rejected")),
+            Q_ARG(QVariant, QVariant("Reject the last take?")), Q_ARG(QVariant, dashboard.state().value("take")));
+    };
+    if (!openReview() || !waitFor([&] { return confirmation->property("visible").toBool(); })) return 25;
+    fixtureTaskId = "task_b"; // Same numeric Take, different task, while dialog stays open.
+    if (!waitFor([&] { return dashboard.state().value("take").toMap().value("task_id") == "task_b"; })) return 26;
+    if (!QMetaObject::invokeMethod(confirmation.get(), "accept")) return 27;
+    if (!waitFor([&] { return requests.size() == 7 && dashboard.message() == reviewMessage; })) return 28;
+    const auto rejectBody = requests.last();
+    const bool rejectBound = rejectBody.value("task_id") == "task_a" && rejectBody.value("take_id").toInteger() == fixtureTakeId;
+    if (!waitFor([&] { return !confirmation->property("visible").toBool(); }) || !openReview()) return 29;
+    if (!waitFor([&] { return confirmation->property("visible").toBool(); })) return 30;
+    if (!QMetaObject::invokeMethod(confirmation.get(), "reject")) return 31;
+    if (!waitFor([&] { return !confirmation->property("visible").toBool(); }) || requests.size() != 7) return 32;
+    if (!openReview() || !waitFor([&] { return confirmation->property("visible").toBool(); })) return 33;
+    if (!QMetaObject::invokeMethod(confirmation.get(), "accept") || !waitFor([&] { return requests.size() == 8; })) return 34;
+    const auto reopenedReview = requests.last();
+    const bool reviewReopened = reopenedReview.value("task_id") == "task_b" && reopenedReview.value("take_id").toInteger() == fixtureTakeId;
+    if (!waitFor([&] { return !confirmation->property("visible").toBool(); })) return 35;
+    if (!QMetaObject::invokeMethod(confirmation.get(), "showFor",
+        Q_ARG(QVariant, QVariant("reset")), Q_ARG(QVariant, QVariant("")),
+        Q_ARG(QVariant, QVariant("Reset the current map?")), Q_ARG(QVariant, QVariant(QVariantMap())))) return 36;
+    if (!waitFor([&] { return confirmation->property("visible").toBool(); })) return 37;
+    if (!QMetaObject::invokeMethod(confirmation.get(), "accept") || !waitFor([&] { return requests.size() == 9; })) return 38;
+    const bool resetConfirmationKept = requestPaths.last() == "/api/mapping/reset" && requests.last().isEmpty();
     dashboard.shutdown();
     QJsonObject result{{"direct_body", direct}, {"dialog_body_after_task_change", confirmed},
         {"direct_task_bound", directBody}, {"dialog_task_bound", dialogBody},
@@ -177,7 +220,9 @@ int main(int argc, char **argv) {
         {"recorder_start_body", recorderStart}, {"direct_start_task_bound", directStartBound},
         {"recorder_start_task_bound", recorderStartBound}, {"direct_stop_body", directStop},
         {"recorder_stop_body", recorderStop}, {"direct_stop_bound", directStopBound},
-        {"recorder_stop_bound", recorderStopBound}};
+        {"recorder_stop_bound", recorderStopBound}, {"reject_body", rejectBody}, {"reject_bound", rejectBound},
+        {"review_reopened_body", reopenedReview}, {"review_reopened", reviewReopened},
+        {"reset_confirmation_kept", resetConfirmationKept}};
     std::puts(QJsonDocument(result).toJson(QJsonDocument::Compact).constData());
-    return directBody && dialogBody && directMessage && workspaceMessage && directStartBound && recorderStartBound && directStopBound && recorderStopBound ? 0 : 1;
+    return directBody && dialogBody && directMessage && workspaceMessage && directStartBound && recorderStartBound && directStopBound && recorderStopBound && rejectBound && reviewReopened && resetConfirmationKept ? 0 : 1;
 }

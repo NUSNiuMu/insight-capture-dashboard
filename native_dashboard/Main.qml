@@ -49,8 +49,6 @@ ApplicationWindow {
     property real distance: 580
     property real playTime: 0
     property bool playPaused: false
-    property string confirmAction: ""
-    property string confirmValue: ""
     font.family: Ui.Theme.bodyFont
     font.pixelSize: 14
     palette.button: "#fffaf0"
@@ -59,7 +57,7 @@ ApplicationWindow {
     palette.buttonText: "#494438"
     palette.text: "#25251f"
     function confirm(action, value, description) {
-        confirmAction = action; confirmValue = value; confirmDialog.title = description; confirmDialog.open()
+        confirmDialog.showFor(action, value, description, dashboard.state.take || {})
     }
     function spatialDiagnostics() { var result=[]; for(var i=0;i<poseRepeater.count;++i)result.push(poseRepeater.objectAt(i).diagnostics()); return result }
     function controlPositions() {
@@ -133,11 +131,9 @@ ApplicationWindow {
     }
     Shortcut { sequence: "Escape"; onActivated: root.visibility = Window.Windowed }
     Shortcut { sequence: "F11"; onActivated: root.visibility = root.visibility === Window.FullScreen ? Window.Windowed : Window.FullScreen }
-    Ui.Dialog {
-        id: confirmDialog; objectName: "confirm-dialog"; anchors.centerIn: parent; modal: true; width: 400
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        onAccepted: dashboard.command(root.confirmAction, root.confirmValue)
-        Label { text: "Apply to the current device."; padding: 16 }
+    Ui.ActionConfirmation {
+        id: confirmDialog; objectName: "confirm-dialog"; anchors.centerIn: parent
+        controller: dashboard
     }
     RowLayout {
         anchors.fill: parent; spacing: 0
@@ -358,7 +354,7 @@ ApplicationWindow {
                     Ui.Button { text: "End task"; enabled: !root.captureLocked && root.taskActive; onClicked: dashboard.command("endTask") }
                     Rectangle { width: 1; height: 25; color: "#ddd1b9" }
                     Ui.Button { id: recordButton; tone: dashboard.state.recording ? "danger" : "primary"; text: root.captureAction === "starting" ? "Starting…" : root.captureAction === "stopping" ? "Stopping…" : dashboard.state.recording ? "Stop" : dashboard.state.recordingBusy ? "Saving…" : !root.taskActive ? "Select a task" : "Record"; highlighted: true; enabled: (dashboard.state.recording||dashboard.connected&&root.taskActive)&&!dashboard.playback&&!dashboard.state.recordingBusy&&!root.captureAction; onClicked: dashboard.command(dashboard.state.recording?"stop":"record") }
-                    Ui.Button { text: "Reject last take"; tone: "danger"; enabled: !dashboard.state.recording; onClicked: root.confirm("reject","operator_rejected","Reject the last take?") }
+                    Ui.Button { text: "Reject last take"; tone: "danger"; enabled: !dashboard.state.recording && !!((dashboard.state.take || {}).take_id); onClicked: root.confirm("reject","operator_rejected","Reject the last take?") }
                     Item { Layout.fillWidth: true }
                     Ui.Button { id: checkButton; text: "Check"; onClicked: dashboard.command("check") }
                     Ui.Button { text: "New map"; enabled: !dashboard.state.recording&&!dashboard.playback; onClicked: root.confirm("reset","","Reset the current map?") }

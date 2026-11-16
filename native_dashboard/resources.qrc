@@ -18,6 +18,7 @@
     <file>pages/SettingsPage.qml</file>
     <file>pages/Sidebar.qml</file>
     <file>pages/WorkspacePages.qml</file>
+    <file>ui/ActionConfirmation.qml</file>
     <file>ui/Badge.qml</file>
     <file>ui/Button.qml</file>
     <file>ui/CheckBox.qml</file>

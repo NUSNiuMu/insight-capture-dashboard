@@ -140,3 +140,5 @@ ctest --test-dir <scratch>/qt-task-actions --output-on-failure
 Qt 两个起录入口向 `/api/recording/start` 发送显示任务的 `task_id`，后端在录制转换锁内、暂停预览和预检之前核对。已变更的任务返回409，不分配Take或打断预览。旧脚本省略该字段时继续使用当前任务；显式提供的字段必须是非空字符串。主题、录制名和 `native_relaxed_preflight` 含义保持。
 
 Qt 停止入口携带各自显示的 `output_path` 和 `recording_mode`，旧HTTP接口将其传给已有本地/分布式管理器的锁内身份检查；过期请求返回409，不停止另一条录制或完成它的Take。采集和校准模式均使用实际返回的模式，不硬编码为capture。省略这两个字段的脚本保持原有停止当前录制语义；显式提供身份时两项均须为非空字符串。
+
+“Reject last take”确认窗口使用本项目原生ActionConfirmation组件，打开时复制任务ID、Take编号及显示名，后续轮询不替换确认目标。实际接受后将身份传入command及后端状态库锁内检查；过期确认返回409。重复相同作废决定保持原决定时间，修改原因可更新；原始数据不删除。重置地图沿用同一原生确认组件的原行为。
