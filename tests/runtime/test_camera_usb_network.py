@@ -1,0 +1,102 @@
+"""Exercise the SDK's generated command, including its original missing mask."""
+import importlib.util
+import ipaddress
+import os
+from pathlib import Path
+import shlex
+import subprocess
+from types import SimpleNamespace
+
+import pytest
+
+NETWORK = '[Match]\nName=usb0\n[Network]\nAddress=169.254.40.1/24\n'
+BOOT = '#!/bin/bash\nifconfig usb0 169.254.40.1\nroute add default gw 169.254.40.2\n'
+# These are the relevant two SDK statements, in their actual order.
+GENERATOR = r'''#!/bin/bash
+sed -i "s/Address=[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+\(\/[0-9]\+\)\?/Address=$NEW_IP\/24/" "$DNS_SERVER_INIT_SCRIPT"
+echo 'ifconfig usb0 '$NEW_IP'' >> "$IP_SCRIPT_FILE"
+'''
+
+
+@pytest.fixture
+def usb_network():
+    path = Path(__file__).resolve().parents[2] / 'deploy/camera-clock/usb_network.py'
+    spec = importlib.util.spec_from_file_location('camera_usb_network', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def generate(tmp_path, source, address):
+    boot = tmp_path / 'boot command.sh'
+    network = tmp_path / 'network config'
+    boot.unlink(missing_ok=True)
+    network.write_text('Address=169.254.40.1/24\n')
+    env = {**os.environ, 'NEW_IP': address, 'IP_SCRIPT_FILE': str(boot),
+           'DNS_SERVER_INIT_SCRIPT': str(network)}
+    subprocess.run(['bash', '-c', source], env=env, check=True)
+    return shlex.split(boot.read_text())
+
+
+def test_original_sdk_reproduces_missing_netmask(tmp_path):
+    assert generate(tmp_path, GENERATOR, '169.254.50.1') == [
+        'ifconfig', 'usb0', '169.254.50.1',
+    ]
+
+
+@pytest.mark.parametrize('prefix', [24, 20, 16])
+@pytest.mark.parametrize('new_ip', ['169.254.50.1', '169.254.40.1', '10.21.77.1'])
+def test_changed_ip_retains_declared_prefix(usb_network, tmp_path, prefix, new_ip):
+    network = NETWORK.replace('/24', f'/{prefix}')
+    generator = GENERATOR.replace('/24', f'/{prefix}')
+    boot, generator, address = usb_network.repaired_scripts(network, BOOT, generator)
+    mask = str(ipaddress.IPv4Network(f'0.0.0.0/{prefix}').netmask)
+    assert generate(tmp_path, generator, new_ip) == ['ifconfig', 'usb0', new_ip, 'netmask', mask]
+    assert f'ifconfig usb0 {address.ip} netmask {mask}' in boot
+    assert boot.splitlines()[0] == BOOT.splitlines()[0]
+    assert boot.splitlines()[-1] == BOOT.splitlines()[-1]
+    assert usb_network.repaired_scripts(network, boot, generator)[:2] == (boot, generator)
+
+
+def installation(tmp_path, usb_network, monkeypatch, generator=GENERATOR):
+    directory = tmp_path / 'etc/init.d/looper'
+    directory.mkdir(parents=True)
+    network = tmp_path / 'etc/systemd/network/usb0.network'
+    network.parent.mkdir(parents=True)
+    network.write_text(NETWORK)
+    boot = directory / 'ip_config.sh'
+    target = directory / 'modify_ip.sh'
+    boot.write_text(BOOT)
+    target.write_text(generator)
+    boot.chmod(0o751)
+    target.chmod(0o700)
+    run = subprocess.run
+    monkeypatch.setattr(usb_network, 'subprocess', SimpleNamespace(run=lambda command, **kwargs:
+        subprocess.CompletedProcess(command, 0) if command == ['sync'] else run(command, **kwargs)))
+    return boot, target
+
+
+def test_install_preserves_modes_and_does_not_rewrite_on_retry(usb_network, tmp_path, monkeypatch):
+    boot, target = installation(tmp_path, usb_network, monkeypatch)
+    result = usb_network.install(tmp_path)
+    assert set(result['changed']) == {str(boot), str(target)}
+    assert boot.stat().st_mode & 0o777 == 0o751
+    assert target.stat().st_mode & 0o777 == 0o700
+    before = [(p.stat().st_ino, p.stat().st_mtime_ns) for p in (boot, target)]
+    assert usb_network.install(tmp_path)['changed'] == []
+    assert before == [(p.stat().st_ino, p.stat().st_mtime_ns) for p in (boot, target)]
+
+
+@pytest.mark.parametrize('source', [GENERATOR + '\nif [\n', GENERATOR.replace('ifconfig usb0', 'unsupported usb0')])
+def test_failure_keeps_original_files_and_cleans_staging(usb_network, tmp_path, monkeypatch, source):
+    boot, target = installation(tmp_path, usb_network, monkeypatch, source)
+    with pytest.raises((ValueError, subprocess.CalledProcessError)):
+        usb_network.install(tmp_path)
+    assert boot.read_text() == BOOT
+    assert target.read_text() == source
+    assert sorted(p.name for p in boot.parent.iterdir()) == ['ip_config.sh', 'modify_ip.sh']
+
+
+def test_mismatched_startup_address_is_not_rewritten(usb_network):
+    with pytest.raises(ValueError, match='does not match'):
+        usb_network.repaired_scripts(NETWORK, BOOT.replace('169.254.40.1', '169.254.50.1'), GENERATOR)

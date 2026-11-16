@@ -7,6 +7,7 @@ if pgrep -x insight_full >/dev/null || pgrep -f '^/userdata/install/lib/insight_
     exit 1
 fi
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+python3 "$here/usb_network.py" --apply
 root=/opt/insight-capture-clock
 mkdir -p "$root" /run/insight-capture-clock
 dpkg-deb -x "$here/vendor/chrony_4.2-2ubuntu2_arm64.deb" "$root"

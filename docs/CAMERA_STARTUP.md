@@ -19,6 +19,7 @@ Jetson 开机不再自动重启全部相机，也不在等待相机后重启 Das
 同时配置 namespace、ROS domain 和 DDS 直连；不能把“支持任意有效 IP”
 理解为无需配置任意出厂相机。
 
+- 安装时同步修正 USB 启动命令和改 IP 生成器的掩码，分别沿用当前网络配置及生成器声明的前缀，避免改 IP 后与 DHCP 子网不一致。地址仍由设备配置决定。
 - 每台相机只有一个 `insight-capture-clock.service`，替代原生一次性 ntpdate 和旧测试 chrony。
 - NTP 源读取当前 `/etc/dnsmasq.conf` 的实际 Jetson 对端，地址变化只在同一 chronyd 内
   删除旧源、添加新源及更新访问控制，不重启 daemon、不触发新一轮 step。
