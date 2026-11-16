@@ -118,5 +118,92 @@ class IntegrityTest(unittest.TestCase):
         self.assertEqual(report["topics"][0]["loss_attribution"], "undetermined")
 
 
+class RecordingCoverageTest(unittest.TestCase):
+    subject = "/insight3_a/camera/infra1/image_rect_raw"
+    peer = "/insight3_b/camera/infra1/image_rect_raw"
+
+    def analyze(self, start=0, end=10, *, deep=True, offset=0, extra=None):
+        rows = []
+        for name, first, last in [(self.subject, start, end), (self.peer, 0, 10)]:
+            for i in range(round((last - first) * 30) + 1):
+                stamp = 10_000_000_000 + round(first * 1e9) + i * 1_000_000_000 // 30
+                rows.append((name, packet(stamp + offset), stamp))
+        rows.extend(extra or [])
+        rows.sort(key=lambda row: row[2])
+        names = sorted({row[0] for row in rows})
+        with patch.object(integrity, "single_mcap"), \
+                patch.object(integrity, "read_metadata", return_value={
+                    "topics_with_message_count": [{"topic_metadata": {"name": n}} for n in names]}), \
+                patch.object(integrity, "iter_messages", side_effect=lambda *_: iter(rows)), \
+                patch.object(integrity, "_selected_topics", return_value=[]):
+            return integrity.analyze_bag(Path("/nonexistent/qa"), deep=deep)
+
+    def subject_result(self, report):
+        return next(t for t in report["topics"] if t["name"] == self.subject)
+
+    def test_early_stop_fails_even_when_recorded_prefix_has_no_rate_shortfall(self):
+        for deep in (True, False):
+            with self.subTest(deep=deep):
+                report = self.analyze(end=2, deep=deep)
+                topic = self.subject_result(report)
+                self.assertFalse(topic["ok"])
+                self.assertFalse(report["ok"])
+                self.assertEqual(topic["missing"], 0)
+                self.assertFalse(topic["recording_coverage"]["ok"])
+                self.assertAlmostEqual(topic["recording_coverage"]["end_gap_sec"], 8)
+
+    def test_late_start_fails_without_inventing_source_message_loss(self):
+        for deep in (True, False):
+            with self.subTest(deep=deep):
+                topic = self.subject_result(self.analyze(start=5, deep=deep))
+                self.assertFalse(topic["ok"])
+                self.assertEqual(topic["missing"], 0)
+                self.assertAlmostEqual(topic["recording_coverage"]["start_gap_sec"], 5)
+
+    def test_small_endpoint_skew_is_allowed_and_measured(self):
+        for deep in (True, False):
+            with self.subTest(deep=deep):
+                topic = self.subject_result(self.analyze(start=0.2, end=9.8, deep=deep))
+                self.assertTrue(topic["ok"])
+                self.assertTrue(topic["recording_coverage"]["ok"])
+                self.assertAlmostEqual(topic["recording_coverage"]["end_gap_sec"], 0.2)
+
+    def test_endpoint_tolerance_boundary_is_explicit(self):
+        for deep in (True, False):
+            for start, good in ((2.0, True), (2.000001, False)):
+                with self.subTest(deep=deep, start=start):
+                    topic = self.subject_result(self.analyze(
+                        start=start, end=start + 8, deep=deep))
+                    self.assertEqual(topic["recording_coverage"]["ok"], good)
+                    self.assertEqual(topic["ok"], good)
+
+    def test_conditional_and_static_topics_do_not_expand_continuous_window(self):
+        extras = [("/insight_global/wrist/pose", b"event", 60_000_000_000),
+                  ("/insight3_a/tf_static", b"static", 1_000_000_000)]
+        for deep in (True, False):
+            with self.subTest(deep=deep):
+                report = self.analyze(deep=deep, extra=extras)
+                self.assertTrue(report["ok"])
+                topic = self.subject_result(report)
+                self.assertEqual(topic["recording_coverage"]["reference_duration_sec"], 10)
+                for t in report["topics"]:
+                    if t["name"] in {e[0] for e in extras}:
+                        self.assertNotIn("recording_coverage", t)
+
+    def test_coverage_uses_recorder_clock_without_changing_source_clock_checks(self):
+        for offset in (-2_000_000_000, 1_000_000_000):
+            with self.subTest(offset=offset):
+                topic = self.subject_result(self.analyze(offset=offset))
+                self.assertTrue(topic["ok"])
+                self.assertEqual(topic["recording_coverage"]["start_gap_sec"], 0)
+                self.assertEqual(topic["recording_coverage"]["end_gap_sec"], 0)
+        topic = self.subject_result(self.analyze(end=2, offset=-3_000_000_000))
+        self.assertFalse(topic["ok"])
+        self.assertFalse(topic["rate_assessable"])
+        self.assertIsNone(topic["missing"])
+        self.assertIn("disagree", topic["error"])
+        self.assertFalse(topic["recording_coverage"]["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

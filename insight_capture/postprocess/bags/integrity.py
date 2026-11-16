@@ -17,6 +17,9 @@ from insight_capture.core.timing import (
 from insight_capture.quality.topic_rates import nominal_for
 
 DEFAULT_MAX_LOSS_PCT = 0.5
+# Endpoint skew within the default live camera-staleness interval is tolerated.
+# This is a saved-data quality check, not a recording-start restriction.
+COVERAGE_TOLERANCE_SEC = 2.0
 RATE_INTERPRETATION = (
     "missing/loss_pct estimate a count shortfall against the configured nominal rate; "
     "they do not identify source, transport, or recorder loss. Attribution requires "
@@ -24,6 +27,9 @@ RATE_INTERPRETATION = (
     "as received messages; inspect timestamp_diagnostics separately."
     " Invalid or inconsistent source timestamps make rate metrics unavailable; "
     "source-versus-recording bounds are clock-domain sanity checks, not NTP precision limits."
+    " Recording coverage compares recorder-time endpoints of known continuous topics; "
+    "it detects late starts/early stops relative to peers, not common outages before "
+    "all topics start or after all stop, and does not add inferred source-message loss."
 )
 
 
@@ -78,6 +84,50 @@ def gap_stats(ts, nominal_hz):
     ]
 
 
+def _observe_record_stamp(item: Dict[str, int], stamp: int) -> None:
+    if item["msgs"] == 0:
+        item["first_ns"] = stamp
+    item["first_ns"] = min(item["first_ns"], stamp)
+    item["last_ns"] = max(item["last_ns"], stamp)
+    item["msgs"] += 1
+
+
+def _check_recording_coverage(
+    topics: List[Dict[str, object]], windows: Dict[str, Dict[str, int]],
+) -> None:
+    """Check endpoint coverage separately from source cadence and clock health."""
+    continuous = {name: item for name, item in windows.items()
+                  if item["msgs"] and nominal_for(name) is not None
+                  and not is_latched_static_topic(name)}
+    if not continuous:
+        return
+    first = min(item["first_ns"] for item in continuous.values())
+    last = max(item["last_ns"] for item in continuous.values())
+    tolerance_ns = int(COVERAGE_TOLERANCE_SEC * 1e9)
+    for topic in topics:
+        item = continuous.get(str(topic["name"]))
+        if item is None:
+            continue
+        start_gap = item["first_ns"] - first
+        end_gap = last - item["last_ns"]
+        covered = max(start_gap, end_gap) <= tolerance_ns
+        topic["recording_coverage"] = {
+            "ok": covered,
+            "reference": "continuous_topic_recorder_window",
+            "reference_duration_sec": round((last - first) / 1e9, 6),
+            "start_gap_sec": round(start_gap / 1e9, 6),
+            "end_gap_sec": round(end_gap / 1e9, 6),
+            "tolerance_sec": COVERAGE_TOLERANCE_SEC,
+        }
+        if not covered:
+            topic["ok"] = False
+            topic.setdefault("error", (
+                f"incomplete recording coverage: starts {start_gap / 1e9:.3f}s late, "
+                f"ends {end_gap / 1e9:.3f}s early relative to continuous topics "
+                f"(tolerance {COVERAGE_TOLERANCE_SEC:g}s)"
+            ))
+
+
 def _read_topic_windows(bag_dir: Path) -> Dict[str, Dict[str, int]]:
     """Count each topic over its own recorder-time span without CDR decoding."""
     single_mcap(bag_dir)
@@ -85,11 +135,7 @@ def _read_topic_windows(bag_dir: Path) -> Dict[str, Dict[str, int]]:
                for entry in read_metadata(bag_dir).get("topics_with_message_count", [])}
     for topic, _raw, stamp in iter_messages(bag_dir, windows):
         item = windows[topic]
-        if item["msgs"] == 0:
-            item["first_ns"] = stamp
-        item["first_ns"] = min(item["first_ns"], stamp)
-        item["last_ns"] = max(item["last_ns"], stamp)
-        item["msgs"] += 1
+        _observe_record_stamp(item, stamp)
     return windows
 
 
@@ -185,6 +231,7 @@ def _analyze_fast(
             "missing": missing,
             "loss_pct": round(loss_pct, 2),
         })
+    _check_recording_coverage(topics, windows)
     _add_missing_selected_topics(bag_dir, topics)
     return topics
 
@@ -196,13 +243,13 @@ def _analyze_deep(
     single_mcap(bag_dir)
     names = sorted(entry["topic_metadata"]["name"]
                    for entry in read_metadata(bag_dir).get("topics_with_message_count", []))
-    counts = {name: 0 for name in names}
+    windows = {name: {"msgs": 0, "first_ns": 0, "last_ns": 0} for name in names}
     stamps = {name: [] for name in names if nominal_for(name) is not None}
     invalid_stamps = {name: 0 for name in stamps}
     mismatches = {name: 0 for name in stamps}
     offset_ranges = {name: [None, None] for name in stamps}
     for name, raw, record_stamp in iter_messages(bag_dir, names):
-        counts[name] = counts.get(name, 0) + 1
+        _observe_record_stamp(windows[name], record_stamp)
         if name in stamps:
             try:
                 stamp = header_stamp_ns(raw)
@@ -220,7 +267,7 @@ def _analyze_deep(
 
     topics: List[Dict[str, object]] = []
     for name in names:
-        msgs = counts.get(name, 0)
+        msgs = windows[name]["msgs"]
         if is_latched_static_topic(name):
             topics.append(latched_static_result(name, msgs))
             continue
@@ -306,6 +353,7 @@ def _analyze_deep(
             "gap_events": events,
             "worst_gaps": worst,
         })
+    _check_recording_coverage(topics, windows)
     _add_missing_selected_topics(bag_dir, topics)
     return topics
 
@@ -405,10 +453,10 @@ def main():
     if not report["source_timestamps_inspected"]:
         print("NOTE: quick scan does not inspect source timestamp validity, duplicates, or ordering.")
     if not report["ok"]:
-        print(f"RESULT: FAIL -- {len(report['failed_topics'])} topic(s) failed presence, timestamp, or rate checks (shortfall limit {args.max_loss}%).")
+        print(f"RESULT: FAIL -- {len(report['failed_topics'])} topic(s) failed presence, timestamp, coverage, or rate checks (shortfall limit {args.max_loss}%).")
         print("Triage: docs/USAGE.md (recording integrity and source/transport attribution)")
         sys.exit(1)
-    print(f"RESULT: OK -- checked presence/timestamp/rate criteria met (shortfall limit {args.max_loss}%). Not proof of loss-free transport.")
+    print(f"RESULT: OK -- checked presence/timestamp/coverage/rate criteria met (shortfall limit {args.max_loss}%). Not proof of loss-free transport.")
 
 
 if __name__ == "__main__":
