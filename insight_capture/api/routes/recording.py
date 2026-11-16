@@ -222,8 +222,19 @@ class RecordingRoutes:
         preflight_mode: str = "capture",
         track_take: bool = True,
         relaxed_preflight: bool = False,
+        expected_task_id: str | None = None,
     ) -> web.Response:
         take_store = getattr(self.context, "take_store", None)
+        # The mobile page may predate another client's task selection. Check
+        # under the recording transition lock, before preflight or Take allocation.
+        if expected_task_id is not None:
+            current = take_store.task_status() if take_store is not None else {}
+            if (not current.get("active")
+                    or (current.get("task") or {}).get("task_id") != expected_task_id):
+                return web.json_response({
+                    "error": "capture_task_changed",
+                    "message": "采集任务已变更，请确认当前任务后再开始录制。",
+                }, status=409)
         if (
             track_take
             and take_store is not None

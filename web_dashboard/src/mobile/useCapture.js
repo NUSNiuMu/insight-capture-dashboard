@@ -107,7 +107,7 @@ export function useCapture() {
     let rejected=false,acknowledgedError='';
     recordPending.value=actionName;
     try {
-      const ok=await action(`/api/mobile/${actionName}`, {command_id:command.command_id,output_path:command.output_path}, (e,current)=>{
+      const ok=await action(`/api/mobile/${actionName}`, {command_id:command.command_id,task_id:command.task_id,output_path:command.output_path}, (e,current)=>{
         rejected=Boolean(e.status);
         if(!e.status){
           const receipt=confirmedRecord(command,current);

@@ -185,7 +185,18 @@ class MobileCaptureRoutes:
         if previous is not None:
             if previous[0] != fingerprint:
                 raise RuntimeError("A command ID cannot be reused for a different operation.")
+            if (action == "start" and previous[1].get("task_id") is not None
+                    and previous[1]["task_id"] != body.get("task_id")):
+                raise RuntimeError("A command ID cannot be reused for a different task.")
             return web.json_response(previous[1], status=202)
+        task_id = body.get("task_id") if action == "start" else None
+        if action == "start":
+            if not isinstance(task_id, str) or not task_id.strip():
+                raise ValueError("页面已更新，请刷新后再开始录制。")
+            current = self.context.take_store.task_status()
+            if (not current.get("active")
+                    or (current.get("task") or {}).get("task_id") != task_id):
+                raise RuntimeError("采集任务已变更，请确认当前任务后再开始录制。")
         if self._task is not None and not self._task.done():
             raise RuntimeError("An operation is still running. Wait for it to finish.")
         manager = self.context.recording_manager
@@ -199,7 +210,7 @@ class MobileCaptureRoutes:
                 raise RuntimeError("No capture recording is running.")
             if not body.get("output_path") or body["output_path"] != status.get("output_path"):
                 raise RuntimeError("The recording has changed. Refresh before stopping it.")
-        operation = {"command_id": command_id, "action": action, "state": "running", "error": None, "accepted_at_epoch_s": time.time()}
+        operation = {"command_id": command_id, "action": action, "task_id": task_id, "state": "running", "error": None, "accepted_at_epoch_s": time.time()}
         await asyncio.to_thread(self._commands.reserve, fingerprint, operation)
         self._last_status = status
         self._operation = operation
@@ -210,7 +221,8 @@ class MobileCaptureRoutes:
         try:
             if action == "start":
                 response = await self.recording._start_with_preflight(
-                    topics=None, bag_name=None, relaxed_preflight=True
+                    topics=None, bag_name=None, relaxed_preflight=True,
+                    expected_task_id=operation["task_id"],
                 )
             else:
                 response = await self.recording.stop_recording(
@@ -218,7 +230,7 @@ class MobileCaptureRoutes:
                 )
             result = json.loads(response.body)
             if response.status >= 400:
-                raise RuntimeError(result["error"])
+                raise RuntimeError(result.get("message") or result["error"])
             if result.get("merge_state") == "error":
                 raise RuntimeError(result.get("merge_error") or "Could not save the recording.")
             if action == "start":

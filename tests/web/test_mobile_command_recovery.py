@@ -14,9 +14,9 @@ class Request:
     headers = {}
     can_read_body = True
 
-    def __init__(self, action, command_id, output_path=None):
+    def __init__(self, action, command_id, output_path=None, task_id="qa"):
         self.match_info = {"action": action, "command_id": command_id}
-        self.body = {"command_id": command_id, "output_path": output_path}
+        self.body = {"command_id": command_id, "output_path": output_path, "task_id": task_id}
 
     async def json(self):
         return self.body
@@ -36,6 +36,7 @@ def harness(tmp_path):
         return web.json_response(state)
 
     context = SimpleNamespace(results_root=tmp_path,
+        take_store=SimpleNamespace(task_status=lambda: {"active": True, "task": {"task_id": "qa"}}),
         recording_manager=SimpleNamespace(status=lambda: dict(state)),
         node=SimpleNamespace(get_logger=lambda: SimpleNamespace(error=lambda _: None)))
     recording = SimpleNamespace(_start_with_preflight=start, stop_recording=stop)
@@ -172,4 +173,43 @@ def test_disconnect_during_receipt_commit_does_not_orphan_accepted_command(tmp_p
         await route.command(Request("start", "disconnected"))
         assert starts == [1]
         assert route._commands.get("disconnected")[1]["state"] == "complete"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("task_id", [None, False, 7, {}, [], "", "   "])
+def test_new_start_requires_the_displayed_task(tmp_path, task_id):
+    async def scenario():
+        context, recording, starts = harness(tmp_path)
+        route = MobileCaptureRoutes(context, recording)
+        with pytest.raises(ValueError, match="请刷新后再开始录制"):
+            await route.command(Request("start", "missing-task", task_id=task_id))
+        assert starts == []
+        assert route._commands.get("missing-task") is None
+    asyncio.run(scenario())
+
+
+def test_another_client_cannot_start_under_a_task_the_page_did_not_show(tmp_path):
+    async def scenario():
+        context, recording, starts = harness(tmp_path)
+        route = MobileCaptureRoutes(context, recording)
+        with pytest.raises(RuntimeError, match="采集任务已变更"):
+            await route.command(Request("start", "stale-task", task_id="previous"))
+        assert starts == []
+        assert route._commands.get("stale-task") is None
+    asyncio.run(scenario())
+
+
+def test_start_receipt_identity_includes_the_displayed_task(tmp_path):
+    async def scenario():
+        context, recording, starts = harness(tmp_path)
+        route = MobileCaptureRoutes(context, recording)
+        await route.command(Request("start", "same-command"))
+        await route._task
+        context.take_store.task_status = lambda: {"active": True, "task": {"task_id": "next"}}
+        # Reading/retrying the original request must still return its receipt.
+        receipt = json.loads((await route.command(Request("start", "same-command"))).body)
+        assert receipt["task_id"] == "qa"
+        with pytest.raises(RuntimeError, match="different task"):
+            await route.command(Request("start", "same-command", task_id="next"))
+        assert starts == [1]
     asyncio.run(scenario())

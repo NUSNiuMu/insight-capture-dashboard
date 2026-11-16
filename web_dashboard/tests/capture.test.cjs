@@ -449,3 +449,21 @@ test('new pose data clears the diagnostic even before the next status heartbeat'
  const status=cameraStatus();status.preflight.camera_health.head.vio_fresh=true;
  assert.equal(deviceStage({name:'head'},status),'已就绪');assert.equal(deviceHint({name:'head'},status),'');
 });
+
+
+test('start carries the task displayed when the operator clicked',async()=>{
+  const c=await harness(snapshot('idle','displayed'));
+  let submitted;
+  global.fetch=async(url,options)=>{
+    if(options.method==='POST') {
+      submitted=JSON.parse(options.body);
+      return response({message:'采集任务已变更，请确认当前任务后再开始录制。'},409);
+    }
+    return response(url==='/api/tasks'?{tasks:[]}:snapshot('idle','other-client-task'));
+  };
+  assert.equal(await c.record('start'),false);
+  assert.equal(submitted.task_id,'displayed');
+  assert.equal(c.status.value.task_status.task.task_id,'other-client-task');
+  assert.equal(c.error.value,'采集任务已变更，请确认当前任务后再开始录制。');
+  assert.equal(c.pending.value,false);
+});

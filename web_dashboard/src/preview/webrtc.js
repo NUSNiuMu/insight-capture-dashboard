@@ -60,15 +60,18 @@ export function startWebRTC({ video, source, onFailure, onStats, onReady }) {
   queueMicrotask(() => {
     if (stopped) return
     try {
-      if (typeof RTCPeerConnection === 'undefined' || typeof RTCRtpReceiver === 'undefined') {
+      if (typeof RTCPeerConnection === 'undefined') {
         throw new Error('浏览器不支持 WebRTC')
       }
-      const codecs = RTCRtpReceiver.getCapabilities?.('video')?.codecs.filter(c => /^video\/H264$/i.test(c.mimeType)) || []
-      if (!codecs.length) throw new Error('此浏览器未提供 H.264 WebRTC 解码能力')
       pc = new RTCPeerConnection({ iceServers: [], bundlePolicy: 'max-bundle' })
       const transceiver = pc.addTransceiver('video', { direction: 'recvonly' })
-      if (!transceiver.setCodecPreferences) throw new Error('浏览器不支持指定视频编码')
-      transceiver.setCodecPreferences(codecs)
+      // Capability queries and codec preferences are optional hints. The SDP
+      // negotiation and decoded-frame stats below decide whether H.264 works.
+      try {
+        const codecs = globalThis.RTCRtpReceiver?.getCapabilities?.('video')?.codecs
+          ?.filter(c => /^video\/H264$/i.test(c.mimeType))
+        if (codecs?.length) transceiver.setCodecPreferences?.(codecs)
+      } catch { /* The browser can still offer and negotiate H.264. */ }
       // A best-effort browser hint; unsupported browsers keep their default.
       if (transceiver.receiver && 'jitterBufferTarget' in transceiver.receiver) {
         try { transceiver.receiver.jitterBufferTarget = 0 } catch { /* optional capability */ }
@@ -93,6 +96,9 @@ export function startWebRTC({ video, source, onFailure, onStats, onReady }) {
         try {
           const offer = await pc.createOffer()
           if (stopped) return
+          if (!/^a=rtpmap:\d+ H264\/90000(?:\s|$)/im.test(offer.sdp)) {
+            throw new Error('此浏览器未提供 H.264 WebRTC 解码能力')
+          }
           await pc.setLocalDescription(offer)
           if (stopped) return
           send('webrtc/offer', pc.localDescription.sdp)

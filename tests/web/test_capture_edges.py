@@ -198,3 +198,36 @@ def test_mobile_storage_is_live_without_rerunning_preflight(tmp_path, monkeypatc
         assert value['preflight']['storage']['minimum_free_bytes'] == 5
         assert value['preflight']['ok'] is True
     assert route._last_preflight['storage']['free_bytes'] == 20
+
+
+def test_task_changed_during_mobile_receipt_commit_never_allocates_take(tmp_path, monkeypatch):
+    from insight_capture.api.routes.mobile import MobileCaptureRoutes
+    import json
+
+    async def scenario():
+        store = SessionTakeStore(tmp_path, task_catalog=CaptureTaskCatalog([
+            CaptureTask('qa_a', 'A', 'A', 'capture'),
+            CaptureTask('qa_b', 'B', 'B', 'capture'),
+        ], default_task_id='qa_a'))
+        starts = []
+        context = SimpleNamespace(results_root=tmp_path, take_store=store,
+            recording_manager=SimpleNamespace(status=lambda: {'recording': False}, start=lambda **kw: starts.append(kw)),
+            node=SimpleNamespace(get_logger=lambda: SimpleNamespace(error=lambda _: None)))
+        mobile = MobileCaptureRoutes(context, RecordingRoutes(context))
+        reserve = mobile._commands.reserve
+        def change_after_commit(*args):
+            reserve(*args)
+            store.activate_task('qa_b')
+        monkeypatch.setattr(mobile._commands, 'reserve', change_after_commit)
+        async def body():
+            return {'command_id': 'stale-commit', 'task_id': 'qa_a'}
+        request = SimpleNamespace(headers={}, can_read_body=True, match_info={'action': 'start'}, json=body)
+        assert (await mobile.command(request)).status == 202
+        await mobile._task
+        assert starts == []
+        assert store.current() is None
+        receipt = json.loads((await mobile.command_status(SimpleNamespace(match_info={'command_id': 'stale-commit'}))).body)['operation']
+        assert receipt['state'] == 'error'
+        assert '采集任务已变更' in receipt['error']
+        assert store.task_status()['stats']['next_take_id'] == 1
+    asyncio.run(scenario())

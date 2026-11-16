@@ -780,6 +780,8 @@
   "设备离线，已加载的记录仍可查看；重连后自动更新。": "Device offline. Loaded records remain available and update after reconnection.",
   "任务列表暂时无法读取，连接恢复后自动重试。": "Task list unavailable. Retrying after reconnection.",
   "记录暂时无法更新，连接恢复后自动重试。": "Records cannot update right now. Retrying after reconnection.",
+  "页面已更新，请刷新后再开始录制。": "The page has been updated. Refresh before recording.",
+  "采集任务已变更，请确认当前任务后再开始录制。": "The capture task has changed. Confirm the current task before recording.",
   "存储": "Storage",
   "时间同步": "Clock synchronization",
   "诊断": "Diagnostics",
