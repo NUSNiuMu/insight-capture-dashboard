@@ -127,3 +127,15 @@ test('page hide saves this history entry for reload without losing its parent',a
  assert.equal(v.pagePosition().y,12000);assert.equal(v.pagePosition().route,'history/fixture_a');
  location.hash='#settings';await v.hashChanged();assert.equal(v.pagePosition(),null);
 });
+for(const attributes of [{ctrlKey:true},{metaKey:true},{shiftKey:true},{altKey:true},{button:1},{defaultPrevented:true}]){
+ test(`native link activation is preserved for ${JSON.stringify(attributes)}`,async()=>{
+  const{v}=await scenario();global.fetch=async()=>response();navigationFixture(v);let prevented=false;
+  await v.navigate('history',{button:0,preventDefault(){prevented=true;},...attributes});
+  assert.equal(v.route.value,'capture');assert.equal(prevented,false);
+ });
+}
+test('ordinary link click uses the current app route exactly once',async()=>{
+ const{v}=await scenario();global.fetch=async()=>response();navigationFixture(v);let prevented=0;
+ await v.navigate('history',{button:0,preventDefault(){prevented++;}});
+ assert.equal(v.route.value,'history');assert.equal(prevented,1);assert.equal(history.state.insightCapture.from,'capture');
+});
