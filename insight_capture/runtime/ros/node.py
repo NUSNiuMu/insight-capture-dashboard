@@ -170,6 +170,7 @@ class PoseBridgeNode(Node):
         self.latest_pose_sample: Dict[str, Optional[PoseSample]] = {pose.name: None for pose in self.poses}
         self.last_pose_received_time: Dict[str, float] = {pose.name: 0.0 for pose in self.poses}
         self.last_pose_source_stamp = {}
+        self._common_pose_stamp_floor: Dict[str, int] = {}
         self.local_vio_samples = {
             pose.name: {} for pose in self.poses
             if pose.teleop_role in {"left_hand", "right_hand"}
@@ -453,7 +454,7 @@ class PoseBridgeNode(Node):
                     float(msg.pose.orientation.w),
                 ),
             )
-            self._record_pose_sample(pose_name, pose_sample, self._stamp_to_ns(msg.header.stamp))
+            self._record_pose_sample(pose_name, pose_sample, self._stamp_to_ns(msg.header.stamp), is_live)
 
         return callback
 
@@ -588,7 +589,8 @@ class PoseBridgeNode(Node):
         return ImagePipeline._jpeg_dimensions(data)
 
 
-    def _record_pose_sample(self, pose_name: str, pose_sample: PoseSample, source_stamp_ns=0) -> None:
+    def _record_pose_sample(self, pose_name: str, pose_sample: PoseSample, source_stamp_ns=0,
+                            is_live=None) -> None:
         received = time.monotonic()
         if pose_name in self._native_vio_pose_names:
             self.camera_liveness_times[pose_name] = received
@@ -607,12 +609,35 @@ class PoseBridgeNode(Node):
                                "non-finite visualization pose ignored", level="warning")
             return
         with self.pose_lock:
+            if is_live is not None and is_live == self._playback_mode:
+                return
+            floor = getattr(self, "_common_pose_stamp_floor", {}).get(pose_name)
+            if floor is not None and not self._playback_mode and source_stamp_ns < floor:
+                return
             self.latest_pose_sample[pose_name] = pose_sample
             self.last_pose_received_time[pose_name] = received
             self.last_pose_source_stamp[pose_name] = source_stamp_ns
             self.trace_sequences[pose_name] += 1
             self.raw_traces[pose_name].append(pose_sample.position)
             self.raw_trace_sequences[pose_name].append(self.trace_sequences[pose_name])
+
+    def set_common_pose_epoch(self, names, minimum_stamp_ns, *, reset=False) -> None:
+        """Advance live common-map display data without changing raw VIO or replay."""
+        if not names:
+            return
+        with self.pose_lock:
+            for name in names:
+                self._common_pose_stamp_floor[name] = minimum_stamp_ns
+            if not reset or self._playback_mode:
+                return
+            for name in names:
+                self.raw_traces[name].clear()
+                self.raw_trace_sequences[name].clear()
+                self.latest_pose_sample[name] = None
+                self.last_pose_received_time[name] = 0.0
+                self.last_pose_source_stamp.pop(name, None)
+            self.trace_generation += 1
+
     def clear_traces(self) -> None:
         with self.pose_lock:
             for name in self.raw_traces:
@@ -624,7 +649,8 @@ class PoseBridgeNode(Node):
 
     def set_playback_mode(self, enabled: bool) -> None:
         # Topic remapping, not boot-relative timestamps, separates playback.
-        self._playback_mode = enabled
+        with self.pose_lock:
+            self._playback_mode = enabled
         self.get_logger().info(f"Playback mode {'ON' if enabled else 'OFF'}")
 
     def build_pose_payload(

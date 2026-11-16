@@ -6,6 +6,7 @@ Dashboard 不订阅稀疏点云和完整 Path，只接收三个 JSON 状态话�
 
 from __future__ import annotations
 
+from collections import deque
 import json
 import threading
 import time
@@ -24,6 +25,10 @@ STATUS_TOPICS = {
     "insight3_a": "/insight_global/insight3_a/status",
     "insight3_b": "/insight_global/insight3_b/status",
 }
+POSE_TOPICS = {name: topic.removesuffix("/status") + "/pose"
+               for name, topic in STATUS_TOPICS.items()}
+
+
 class MappingStream:
     """保存地图计数与在线状态，不转发三维几何数据。"""
 
@@ -39,6 +44,9 @@ class MappingStream:
         }
         self._subscriptions = []
         self._reset_client = None
+        self._world_epoch = None
+        self._camera_epochs = {}
+        self._retired_sessions = deque(maxlen=16)
 
     def start(self) -> None:
         if String is None or Empty is None:
@@ -62,6 +70,51 @@ class MappingStream:
             "Mapping status bridge subscribed without receiving sparse cloud data"
         )
 
+    def _sync_pose_epoch(self, name, status):
+        # Keep status epochs ordered. The owner checks the timestamp boundary
+        # under the same pose lock used for trajectory writes.
+        session, generation = status.get("session_id"), status.get("generation")
+        stamp = status.get("last_reset_wall_ns")
+        if (not isinstance(session, str) or not session
+                or type(generation) is not int or generation < 0
+                or type(stamp) is not int or stamp < 0):
+            return True
+        if session in self._retired_sessions:
+            return False
+        world = (session, generation)
+        world_changed = False
+        if name == "insight9":
+            previous_world = self._world_epoch
+            if previous_world and session == previous_world[0] and generation < previous_world[1]:
+                return False
+            world_changed = previous_world != world
+            if world_changed:
+                if previous_world and session != previous_world[0]:
+                    self._retired_sessions.append(previous_world[0])
+                    self._camera_epochs.clear()
+                self._world_epoch = world
+                names = [p.name for p in self.owner.poses if p.topic in POSE_TOPICS.values()]
+                self.owner.set_common_pose_epoch(names, stamp, reset=previous_world is not None)
+        elif self._world_epoch is not None and world != self._world_epoch:
+            # A new wrist status can precede the authoritative head status.
+            return not (session == self._world_epoch[0] and generation < self._world_epoch[1])
+        epoch, reset_stamp = status.get("tracking_epoch"), status.get("last_pose_reset_wall_ns")
+        if type(epoch) is not int or epoch < 0 or type(reset_stamp) is not int or reset_stamp < 0:
+            return True
+        previous_camera = self._camera_epochs.get(name)
+        if previous_camera and previous_camera[0] == session and epoch < previous_camera[1]:
+            return False
+        current = (session, epoch)
+        if previous_camera != current:
+            self._camera_epochs[name] = current
+            names = [p.name for p in self.owner.poses if p.topic == POSE_TOPICS[name]]
+            # A newer camera epoch is authoritative even when ROS time moved
+            # backwards; a max() with the old world time would lock out recovery.
+            floor = reset_stamp if epoch > 0 or reset_stamp > 0 else stamp
+            self.owner.set_common_pose_epoch(names, floor,
+                reset=previous_camera is not None and not world_changed)
+        return True
+
     def _status_callback(self, name: str):
         def callback(message: String) -> None:
             try:
@@ -71,6 +124,8 @@ class MappingStream:
             except (json.JSONDecodeError, ValueError):
                 status = {"state": "error", "error": "invalid status payload"}
             with self._lock:
+                if not self._sync_pose_epoch(name, status):
+                    return
                 self._statuses[name] = status
                 if name == "insight9":
                     try:

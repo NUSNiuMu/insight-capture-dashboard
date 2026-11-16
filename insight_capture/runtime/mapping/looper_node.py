@@ -77,6 +77,7 @@ class CameraState:
     last_match: float = 0.
     map_revision: int = 0
     tracking_epoch: int = 0
+    last_pose_reset_wall_ns: int = 0
     last_pose_tick: int | None = None
 
 
@@ -115,7 +116,7 @@ class LooperNode(Node):
         self.ready = False
         self.generation = 0
         self.session_id = uuid.uuid4().hex
-        self.last_reset_wall_ns = 0
+        self.last_reset_wall_ns = self.get_clock().now().nanoseconds
         self.last_map_source_ns = 0
         self.head_raw_correction = None
         self.stats = {"state": "waiting_for_inputs", "map_point_count": 0}
@@ -247,6 +248,7 @@ class LooperNode(Node):
                 else:
                     if state.geometry_id is not None:
                         state.tracking_epoch += 1
+                        state.last_pose_reset_wall_ns = self.get_clock().now().nanoseconds
                         state.correction = None
                         state.fusion = PoseCorrectionFilter()
                         state.last_match = 0.
@@ -277,6 +279,7 @@ class LooperNode(Node):
         self.pose_corrections.clear()
         for state in self.cameras.values():
             state.reset_source_ns = state.latest_source_ns
+            state.last_pose_reset_wall_ns = self.last_reset_wall_ns
             state.correction = None
             state.fusion = PoseCorrectionFilter()
             state.next_image = 0
@@ -317,7 +320,14 @@ class LooperNode(Node):
 
     def on_tracking(self, name, tracking):
         with self.lock:
-            self.cameras[name].tracking = tracking
+            state = self.cameras[name]
+            reset = (tracking in {"NOT_INITED", "NO_CALIBRATION", "RESTARTING", "STOPPED"}
+                     and tracking != state.tracking
+                     and (state.last_raw_received_ns or state.latest_source_ns
+                          or state.correction is not None))
+            state.tracking = tracking
+        if reset:
+            self.invalidate_camera(name)
         self.events.changed("sdk_tracking", name, tracking,
                             level="info" if tracking in {"TRACKING", "TRACKING_STATIC"} else "warning")
 
@@ -327,6 +337,7 @@ class LooperNode(Node):
             state.correction = None
             state.fusion = PoseCorrectionFilter()
             state.tracking_epoch += 1
+            state.last_pose_reset_wall_ns = self.get_clock().now().nanoseconds
             state.last_pose_tick = None
             state.buffer.clear()
             state.odometry = FrameOdometry()
@@ -358,6 +369,7 @@ class LooperNode(Node):
                     state.latest_source_ns = state.last_vio_received_ns = 0
                     state.next_image = 0
                     state.tracking_epoch += 1
+                    state.last_pose_reset_wall_ns = received
                 self.events.changed("source_clock", name, "resynchronizing",
                                     "Clock offset changed; retaining map and localization", level="warning")
             elif received_delta > 2_000_000_000:
@@ -672,6 +684,8 @@ class LooperNode(Node):
                            "fusion": state.fusion.diagnostics,
                            "odometry": state.odometry.diagnostics,
                            "camera": name, "tracking_status": state.tracking, "generation": self.generation,
+                           "tracking_epoch": state.tracking_epoch,
+                           "last_pose_reset_wall_ns": state.last_pose_reset_wall_ns,
                            "session_id": self.session_id, "last_reset_wall_ns": self.last_reset_wall_ns,
                            "last_map_source_ns": self.last_map_source_ns}
                 payload["map_revision"] = state.map_revision
