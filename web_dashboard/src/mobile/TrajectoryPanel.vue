@@ -18,6 +18,7 @@ function updateTrace(old,u){
  const drop=Math.max(0,points.length-1500,u.drop_before_seq-firstSeq);
  return {generation:u.generation,lastSeq,points:points.slice(drop)};
 }
+function clearTrace(){traces.clear();poses.value=[];connected.value=false;}
 function connect(){
  if(!alive||document.hidden)return;
  socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
@@ -29,14 +30,14 @@ function connect(){
   const next=[];
   for(const p of data.poses){
    const record=updateTrace(traces.get(p.name),p.trace_update);
-   if(!record){traces.clear();poses.value=[];connected.value=false;current.close();return;}
+   if(!record){clearTrace();current.close();return;}
    traces.set(p.name,record);next.push({...p,points:record.points});
   }
   poses.value=next;
  };
- socket.onclose=()=>{if(socket!==current)return;connected.value=false;if(alive&&!document.hidden)timer=setTimeout(connect,2000);};
+ socket.onclose=()=>{if(socket!==current)return;clearTrace();if(alive&&!document.hidden)timer=setTimeout(connect,2000);};
 }
-function visibility(){pointers.clear();clearTimeout(timer);const old=socket;socket=null;old?.close();connected.value=false;if(!document.hidden)connect();}
+function visibility(){pointers.clear();clearTimeout(timer);const old=socket;socket=null;old?.close();clearTrace();if(!document.hidden)connect();}
 // Projection and orbit convention adapted by value from EgoHalo's owned UI;
 // this project owns its implementation and has no runtime/build dependency on it.
 const yaw=ref(-0.7),pitch=ref(0.65),zoom=ref(1),pan=ref([0,0]),panMode=ref(false),pointers=new Map();

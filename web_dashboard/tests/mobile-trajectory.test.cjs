@@ -53,3 +53,22 @@ test('3D keyboard controls include pan, zoom, and reset without consuming unrela
  const{v}=await scenario();let prevented=0;const e=(key,shiftKey=false)=>({key,shiftKey,preventDefault(){prevented++;}});
  v.keydown(e('ArrowRight'));assert.notEqual(v.yaw.value,-.7);v.keydown(e('ArrowDown',true));assert.equal(v.pan.value[1],12);v.keydown(e('+'));assert.ok(v.zoom.value>1);v.keydown(e('Home'));assert.equal(v.zoom.value,1);assert.deepEqual(v.pan.value,[0,0]);v.keydown(e('Tab'));assert.equal(prevented,4);
 });
+
+
+test('a disconnected trajectory hides old poses until a new connection supplies its snapshot',async()=>{
+ const {v,socket}=await scenario();socket.onopen();send(socket,{mode:'snapshot',from:1,to:3});
+ try {
+  socket.onclose();assert.equal(v.connected.value,false);assert.deepEqual(v.poses.value,[]);assert.equal(v.traces.size,0);
+  document.hidden=true;v.visibility();document.hidden=false;v.visibility();const next=sockets.at(-1);next.onopen();
+  assert.deepEqual(v.poses.value,[]);send(next,{mode:'snapshot',from:10,to:11});assert.deepEqual(xs(v),[10,11]);
+  send(socket,{mode:'snapshot',from:1,to:3});assert.deepEqual(xs(v),[10,11]);
+ } finally {document.hidden=true;v.visibility();document.hidden=false;}
+});
+test('suspending the trajectory removes displayed poses before reconnecting on return',async()=>{
+ const {v,socket}=await scenario();socket.onopen();send(socket,{mode:'snapshot',from:1,to:3});
+ try {
+  document.hidden=true;v.visibility();assert.equal(socket.closed,true);assert.equal(v.connected.value,false);assert.deepEqual(v.poses.value,[]);assert.equal(v.traces.size,0);
+  document.hidden=false;v.visibility();const next=sockets.at(-1);next.onopen();assert.deepEqual(v.poses.value,[]);
+  send(next,{mode:'snapshot',from:20,to:21});assert.deepEqual(xs(v),[20,21]);
+ } finally {document.hidden=true;v.visibility();document.hidden=false;}
+});
