@@ -18,6 +18,7 @@ def display():
     node = S(pose_lock=threading.Lock(), trace_generation=1, pose_timeout_sec=2.,
              display_fps_limit=30., max_points=100, _playback_mode=False,
              _native_vio_pose_names=set(), _common_pose_stamp_floor={},
+             get_clock=lambda:S(now=lambda:S(nanoseconds=1_000_000_000_000_000_000)),
              poses=[PoseSpec(n, topic, role, None, 1., (0.,0.,0.), (0.,0.,0.))
                     for n, topic, role in specs], local_vio_samples={})
     names = [p.name for p in node.poses]
@@ -216,3 +217,31 @@ def test_callback_already_inflight_cannot_cross_a_playback_mode_switch(display, 
     point(display,stamp=21,x=99.,live=live)
     assert not xs(display)
     assert display.latest_pose_sample["head"] is None
+
+
+def test_queued_future_pose_from_before_clock_rollback_cannot_reenter(display):
+    display.get_clock = lambda:S(now=lambda:S(nanoseconds=21_000_000_000))
+    status(display, reset=100)
+    status(display, tracking_epoch=1, tracking_reset=20, reset=100)
+    point(display, stamp=21, x=1.)
+    point(display, stamp=101, x=99.)
+    assert xs(display) == [1.]
+    assert display.latest_pose_sample['head'].position[0] == 1.
+
+
+@pytest.mark.parametrize('stamp,accepted', [(23, True), (24, False)])
+def test_common_future_tolerance_matches_source_clock_resynchronization_window(display, stamp, accepted):
+    display.get_clock = lambda:S(now=lambda:S(nanoseconds=21_000_000_000))
+    status(display, reset=20)
+    point(display, stamp=stamp, x=2.)
+    assert xs(display) == ([2.] if accepted else [])
+
+
+def test_future_common_pose_rule_does_not_filter_native_clock_or_playback(display):
+    display.get_clock = lambda:S(now=lambda:S(nanoseconds=21_000_000_000))
+    status(display, reset=20)
+    point(display, 'local', stamp=101, x=9.)
+    assert xs(display, 'local') == [9.]
+    display._playback_mode = True
+    point(display, stamp=101, x=8., live=False)
+    assert xs(display) == [8.]

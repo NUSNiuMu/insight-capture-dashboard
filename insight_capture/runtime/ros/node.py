@@ -612,8 +612,13 @@ class PoseBridgeNode(Node):
             if is_live is not None and is_live == self._playback_mode:
                 return
             floor = getattr(self, "_common_pose_stamp_floor", {}).get(pose_name)
-            if floor is not None and not self._playback_mode and source_stamp_ns < floor:
-                return
+            if floor is not None and not self._playback_mode:
+                # The mapper resynchronizes offsets above two seconds. Keep
+                # small offset changes, but reject old future stamps after a
+                # Jetson clock rollback as well as stamps before this epoch.
+                now_ns = self.get_clock().now().nanoseconds
+                if source_stamp_ns < floor or source_stamp_ns > now_ns + 2_000_000_000:
+                    return
             self.latest_pose_sample[pose_name] = pose_sample
             self.last_pose_received_time[pose_name] = received
             self.last_pose_source_stamp[pose_name] = source_stamp_ns
