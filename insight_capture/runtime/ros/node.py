@@ -598,6 +598,14 @@ class PoseBridgeNode(Node):
             if pose_name in self.local_vio_samples:
                 self._record_local_vio(pose_name, pose_sample.position, pose_sample.orientation_xyzw,
                                        source_stamp_ns, received)
+        # Invalid display samples would poison every later JSON trace snapshot.
+        # Packet liveness and the raw recording path remain independent.
+        if not all(isfinite(value) for value in (*pose_sample.position, *pose_sample.orientation_xyzw)):
+            events = getattr(self, "events", None)
+            if events is not None:
+                events.changed("pose", pose_name, "non_finite_seen",
+                               "non-finite visualization pose ignored", level="warning")
+            return
         with self.pose_lock:
             self.latest_pose_sample[pose_name] = pose_sample
             self.last_pose_received_time[pose_name] = received
