@@ -38,7 +38,7 @@ function regionStyle(id) {
     width: `${region.width / overview.value.width * 100}%`, height: `${region.height / overview.value.height * 100}%` }
 }
 const fullscreenAvailable = Boolean(document.fullscreenEnabled)
-let previousFocus, previousOverflow, resizeObserver, returnToOverview = false
+let previousFocus, previousOverflow, previousScroll, resizeObserver, returnToOverview = false
 let rtcSession, retryTimer
 let generation = 0, dead = false
 try { selected.value = localStorage.getItem('insight-preview-source') || '' } catch { /* storage may be disabled */ }
@@ -126,6 +126,7 @@ function keyboard(event) {
 watch(expanded, async value => {
   if (value) {
     previousFocus = document.activeElement
+    previousScroll = { x: window.scrollX, y: window.scrollY }
     previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     await nextTick()
@@ -133,9 +134,11 @@ watch(expanded, async value => {
   } else {
     document.body.style.overflow = previousOverflow ?? ''
     await nextTick()
-    if (previousFocus?.isConnected) previousFocus.focus()
-    else if (previousFocus?.id && document.getElementById(previousFocus.id)) document.getElementById(previousFocus.id).focus()
-    else panel.value?.querySelector('#preview-overview, #preview-expand')?.focus()
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
+    else if (previousFocus?.id && document.getElementById(previousFocus.id)) document.getElementById(previousFocus.id).focus({ preventScroll: true })
+    else panel.value?.querySelector('#preview-overview, #preview-expand')?.focus({ preventScroll: true })
+    // A fixed expanded panel leaves document flow and can clamp page scroll.
+    if (props.active && previousScroll) window.scrollTo(previousScroll.x, previousScroll.y)
   }
 })
 watch(() => previewPaused.value, recording => { if (recording && expanded.value) closePreview() })
