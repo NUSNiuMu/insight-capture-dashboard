@@ -199,7 +199,7 @@ onBeforeUnmount(() => {
         <video v-show="rtc" id="preview-video" ref="video" muted autoplay playsinline :aria-label="t(&quot;H.264 WebRTC 相机视频预览&quot;)"></video>
         <div v-if="isOverview" class="preview-tiles">
           <button v-for="item in sources" :key="item.id" :disabled="!online || previewPaused" :style="regionStyle(item.id)"
-            :aria-label="t(`放大${item.label}`)" @click="openPreview(item.id)">
+            :aria-label="t('放大{0}', t(item.label)) + t(item.publisher_count === 0 && preview?.publishers_checked ? ' · 未连接' : '')" @click="openPreview(item.id)">
             <span>{{ t(item.label) }}{{ t(item.publisher_count === 0 && preview?.publishers_checked ? ' · 未连接' : '') }}</span>
           </button>
         </div>
