@@ -8,6 +8,7 @@ from collections import deque
 import threading
 import time
 
+import cv2
 import numpy as np
 import gi
 
@@ -29,6 +30,26 @@ def fit(width, height, region):
     return x, y, w, h
 
 
+# BT.601 full-range JPEG YUV -> BT.709 limited-range video YUV.
+_JPEG_TO_VIDEO = (
+    (219 / 255, -.1015025251475953, -.1826589439711247),
+    (0, .8948050908355266, .10068400490169194),
+    (0, .06592579019401852, .9006794664778416),
+)
+
+
+def _jpeg_video_planes(raw_y, u, v):
+    height, width = raw_y.shape
+    scale, a, b = _JPEG_TO_VIDEO[0]
+    delta = cv2.addWeighted(u, a, v, b, 16 - 128 * (a + b), dtype=cv2.CV_32F)
+    delta = cv2.resize(delta, (width, height), interpolation=cv2.INTER_NEAREST)
+    y = cv2.addWeighted(raw_y, scale, delta, 1, 0, dtype=cv2.CV_8U)
+    uv = np.empty((height // 2, width), np.uint8)
+    for column, (_, a, b) in enumerate(_JPEG_TO_VIDEO[1:]):
+        uv[:, column::2] = cv2.addWeighted(u, a, v, b, 128 * (1 - a - b))
+    return y, uv
+
+
 class Decoder:
     def __init__(self, fmt, width, height, region):
         self.layout = (fmt, width, height)
@@ -40,7 +61,10 @@ class Decoder:
         self.closed = False
         self.gate = H264Gate() if fmt == "H264" else None
         if fmt == "JPEG":
-            caps, decode = f"image/jpeg,width={width},height={height},framerate={FPS}/1", "nvjpegdec ! "
+            caps = f"image/jpeg,width={width},height={height},framerate={FPS}/1"
+            # L4T36.4.3 retains exported NVMM JPEG mappings across stream restarts.
+            # Keep hardware decode, passing I420 system memory to the scaler.
+            decode = "nvjpegdec ! video/x-raw,format=I420 ! "
         elif fmt == "H264":
             caps = "video/x-h264,stream-format=byte-stream,alignment=au"
             decode = "h264parse ! nvv4l2decoder disable-dpb=true ! "
@@ -53,10 +77,14 @@ class Decoder:
         # Never leak arbitrary inter frames from encoded H264. Its upstream queue
         # already sheds whole GOPs; raw/JPEG can safely replace older buffers.
         queue = "max-buffers=32 max-bytes=8388608" if fmt == "H264" else "max-buffers=2 leaky-type=downstream"
+        raw_format = "I420" if fmt == "JPEG" else "NV12"
+        # Separate color conversion from hardware decode/scale without a backlog.
+        color_queue = ("queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! "
+                       if fmt == "JPEG" else "")
         self.pipeline = Gst.parse_launch(
             f'appsrc name=input is-live=true format=time block=false {queue} caps="{caps}" ! '
-            f'{decode}nvvidconv ! video/x-raw(memory:NVMM),format=NV12,width={self.width},height={self.height} ! '
-            'nvvidconv ! video/x-raw,format=NV12 ! appsink name=output sync=false emit-signals=true max-buffers=2 drop=true')
+            f'{decode}nvvidconv ! video/x-raw(memory:NVMM),format={raw_format},width={self.width},height={self.height} ! '
+            f'nvvidconv ! video/x-raw,format={raw_format} ! {color_queue}appsink name=output sync=false emit-signals=true max-buffers=2 drop=true')
         self.source = self.pipeline.get_by_name("input")
         self.sink = self.pipeline.get_by_name("output")
         self.sample_handler = self.sink.connect("new-sample", self._sample)
@@ -71,8 +99,14 @@ class Decoder:
         buf = sample.get_buffer()
         info = GstVideo.VideoInfo.new_from_caps(sample.get_caps())
         data = buf.extract_dup(0, buf.get_size())
-        y = np.ndarray((self.height, self.width), np.uint8, data, offset=info.offset[0], strides=(info.stride[0], 1)).copy()
-        uv = np.ndarray((self.height // 2, self.width), np.uint8, data, offset=info.offset[1], strides=(info.stride[1], 1)).copy()
+        if self.layout[0] == "JPEG":
+            planes = [np.ndarray((self.height // (2 if i else 1), self.width // (2 if i else 1)),
+                                 np.uint8, data, offset=info.offset[i], strides=(info.stride[i], 1))
+                      for i in range(3)]
+            y, uv = _jpeg_video_planes(*planes)
+        else:
+            y = np.ndarray((self.height, self.width), np.uint8, data, offset=info.offset[0], strides=(info.stride[0], 1)).copy()
+            uv = np.ndarray((self.height // 2, self.width), np.uint8, data, offset=info.offset[1], strides=(info.stride[1], 1)).copy()
         with self.lock:
             self.frames.append((int(buf.pts), time.monotonic_ns(), y, uv))
         return Gst.FlowReturn.OK
