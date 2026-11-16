@@ -239,7 +239,7 @@ summary{cursor:pointer;min-height:44px;padding:14px 0}.calibration-card{margin-t
 .recovery-details { grid-column: 1 / -1; margin-top: 10px; padding: 12px; border-radius: 12px; background: #f3f6fa; overflow-wrap: anywhere; }
 .recovery-details p { font-size: 0.8125rem; }
 .recovery-downloads { display: grid; gap: 8px; margin: 12px 0; }
-.recovery-downloads a { display: block; padding: 12px; background: #e9edf2; color: #202939; border-radius: 10px; text-decoration: none; font-size: 0.8125rem; }
+.recovery-downloads a { display: block; min-height: 44px; padding: 12px; background: #e9edf2; color: #202939; border-radius: 10px; text-decoration: none; font-size: 0.8125rem; }
 .recovery-downloads a[aria-disabled="true"] { opacity: .5; }
 
 /* Native modal isolation and progressive scroll containment. */
