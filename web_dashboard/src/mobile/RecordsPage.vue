@@ -25,6 +25,7 @@ async function refreshRecords(clear=false){
 watch(()=>props.route,(route,previous)=>{
  const changed=route.split('/')[1]!==previous?.split('/')[1];
  refreshRecords(changed);
+ if(previous&&!route.includes('/'))emit('refresh-tasks');
  if(!route.includes('/')||(!changed&&recordSet.value))emit('ready');
 },{immediate:true});
 watch(()=>props.tasks,()=>{if(!props.route.includes('/'))emit('ready');});

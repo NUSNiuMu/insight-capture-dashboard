@@ -125,7 +125,7 @@ function hashChanged(remembered=false){
  taskOpenGeneration++;dialog.value?.close();
  const value=location.hash.slice(1)||'capture';
  pendingView={generation:++viewGeneration,saved:viewPositions.get(value)};
- route.value=value;loadTasks().catch(()=>{});
+ route.value=value;
  return restoreView();
 }
 function back(){
