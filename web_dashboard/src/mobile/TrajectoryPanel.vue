@@ -4,15 +4,37 @@ import { t } from './i18n.js';
 import { roleLabel } from './useCapture.js';
 const poses=ref([]), connected=ref(false), traces=new Map(); let socket,timer,alive=true;
 const styles={head:{color:'#1d4ed8',dash:''},left_hand:{color:'#9a4800',dash:'8 4'},right_hand:{color:'#11754f',dash:'2 3'}};
+function updateTrace(old,u){
+ let points,lastSeq;
+ if(u.mode==='snapshot'){points=u.points;lastSeq=u.to_seq;}
+ else{
+  if(!old||old.generation!==u.generation||u.from_seq>old.lastSeq+1)return null;
+  // A new viewer's snapshot can be newer than the shared broadcast cursor.
+  const overlap=Math.max(0,old.lastSeq-u.from_seq+1);
+  points=u.to_seq>old.lastSeq?[...old.points,...u.points.slice(overlap)]:old.points;
+  lastSeq=Math.max(old.lastSeq,u.to_seq);
+ }
+ const firstSeq=lastSeq-points.length+1;
+ const drop=Math.max(0,points.length-1500,u.drop_before_seq-firstSeq);
+ return {generation:u.generation,lastSeq,points:points.slice(drop)};
+}
 function connect(){
  if(!alive||document.hidden)return;
  socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
- socket.onopen=()=>connected.value=true;
- socket.onmessage=event=>{const data=JSON.parse(event.data);if(data.type!=='pose_update')return;
-   poses.value=data.poses.map(p=>{const u=p.trace_update,old=traces.get(p.name);
-    const pts=!old||u.mode==='snapshot'||old.generation!==u.generation?u.points:[...old.points,...u.points];
-    const record={generation:u.generation,points:pts.slice(-1500)};traces.set(p.name,record);return {...p,points:record.points};});};
- const current=socket;socket.onclose=()=>{if(socket!==current)return;connected.value=false;if(alive&&!document.hidden)timer=setTimeout(connect,2000);};
+ const current=socket;
+ socket.onopen=()=>{if(alive&&socket===current)connected.value=true;};
+ socket.onmessage=event=>{
+  if(!alive||socket!==current)return;
+  const data=JSON.parse(event.data);if(data.type!=='pose_update')return;
+  const next=[];
+  for(const p of data.poses){
+   const record=updateTrace(traces.get(p.name),p.trace_update);
+   if(!record){traces.clear();poses.value=[];connected.value=false;current.close();return;}
+   traces.set(p.name,record);next.push({...p,points:record.points});
+  }
+  poses.value=next;
+ };
+ socket.onclose=()=>{if(socket!==current)return;connected.value=false;if(alive&&!document.hidden)timer=setTimeout(connect,2000);};
 }
 function visibility(){clearTimeout(timer);const old=socket;socket=null;old?.close();connected.value=false;if(!document.hidden)connect();}
 const plotted=computed(()=>{
