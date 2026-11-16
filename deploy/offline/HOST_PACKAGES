@@ -1,0 +1,15 @@
+docker-ce
+docker-ce-cli
+containerd.io
+docker-compose-plugin
+nvidia-container-toolkit
+chrony
+dnsmasq-base
+iptables
+iw
+wpasupplicant
+network-manager
+python3-paramiko
+curl
+kmod
+util-linux
