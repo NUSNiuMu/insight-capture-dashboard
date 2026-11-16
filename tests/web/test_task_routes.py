@@ -43,7 +43,7 @@ class _JsonRequest:
         return self.payload
 
 
-def _catalog() -> CaptureTaskCatalog:
+def _catalog(managed_root=None) -> CaptureTaskCatalog:
     return CaptureTaskCatalog(
         [
             CaptureTask(
@@ -54,6 +54,7 @@ def _catalog() -> CaptureTaskCatalog:
             )
         ],
         default_task_id="cup_stacking",
+        managed_root=managed_root,
     )
 
 
@@ -207,6 +208,64 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status, 409)
             self.assertEqual(manager.start_calls, [])
             self.assertIn("No capture task", json.loads(response.text)["error"])
+
+
+    async def test_stale_end_cannot_end_another_clients_task(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SessionTakeStore(Path(temporary), task_catalog=_catalog(Path(temporary) / "sessions"))
+            store.create_task({"id": "another", "name": "Other", "instruction": "Other", "capture_profile": "dual_arm_umi"})
+            store.activate_task("another")
+            routes = TaskRoutes(SimpleNamespace(take_store=store, recording_manager=_RecordingManager()))
+            before = (store.sessions_root / "active_session.json").read_bytes()
+            response = await routes._handle_end(_JsonRequest({"task_id": "cup_stacking"}))
+            self.assertEqual(response.status, 409)
+            self.assertEqual(store.task_status()["task"]["task_id"], "another")
+            self.assertEqual((store.sessions_root / "active_session.json").read_bytes(), before)
+
+    async def test_end_requires_the_task_displayed_by_the_client(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SessionTakeStore(Path(temporary), task_catalog=_catalog())
+            routes = TaskRoutes(SimpleNamespace(take_store=store, recording_manager=_RecordingManager()))
+            for task_id in (None, "", "  ", 42, []):
+                response = await routes._handle_end(_JsonRequest({"task_id": task_id}))
+                self.assertEqual(response.status, 400)
+                self.assertTrue(store.task_status()["active"])
+
+    async def test_end_same_task_is_idempotent_without_deleting_takes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SessionTakeStore(Path(temporary), task_catalog=_catalog())
+            routes = TaskRoutes(SimpleNamespace(take_store=store, recording_manager=_RecordingManager()))
+            for _ in range(2):
+                response = await routes._handle_end(_JsonRequest({"task_id": "cup_stacking"}))
+                self.assertEqual(response.status, 200)
+                self.assertFalse(json.loads(response.text)["active"])
+                self.assertEqual(json.loads(response.text)["last_task_id"], "cup_stacking")
+            self.assertEqual(store.task_status()["stats"]["next_take_id"], 1)
+            self.assertTrue(store.root.is_dir())
+
+    async def test_task_change_during_end_snapshot_is_rechecked_under_store_lock(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SessionTakeStore(Path(temporary), task_catalog=_catalog(Path(temporary) / "sessions"))
+            store.create_task({"id": "another", "name": "Other", "instruction": "Other", "capture_profile": "dual_arm_umi"})
+            routes = TaskRoutes(SimpleNamespace(take_store=store, recording_manager=_RecordingManager()))
+            original_end = store.end_task
+            def concurrent_change(**kwargs):
+                store.activate_task("another")
+                return original_end(**kwargs)
+            with mock.patch.object(store, "end_task", side_effect=concurrent_change):
+                with self.assertRaisesRegex(RuntimeError, "当前任务已变化"):
+                    await routes._handle_end(_JsonRequest({"task_id": "cup_stacking"}))
+            self.assertTrue(store.task_status()["active"])
+            self.assertEqual(store.task_status()["task"]["task_id"], "another")
+
+    async def test_end_remains_blocked_during_recording(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = SessionTakeStore(Path(temporary), task_catalog=_catalog())
+            manager = _RecordingManager(); manager.recording = True
+            routes = TaskRoutes(SimpleNamespace(take_store=store, recording_manager=manager))
+            response = await routes._handle_end(_JsonRequest({"task_id": "cup_stacking"}))
+            self.assertEqual(response.status, 409)
+            self.assertTrue(store.task_status()["active"])
 
 
 if __name__ == "__main__":

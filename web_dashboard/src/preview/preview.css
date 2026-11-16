@@ -1,13 +1,16 @@
+.preview-dialog { width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: #0b1020; color: #fff; }
+.preview-dialog:modal { overscroll-behavior: contain; }
+.preview-dialog::backdrop { background: #0b1020; overflow: hidden; overscroll-behavior: contain; }
 .preview-card { overflow: hidden; border-radius: 18px; background: #0b1020; margin-bottom: 12px; border: 1px solid #20283a; }
 .preview-head { min-height: 48px; padding: 0 14px; display: flex; align-items: center; justify-content: space-between; color: #fff; }
-.preview-head span { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.preview-head span { display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; }
 .preview-head small { color: #c4cbd7; max-width: 62%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#preview-failure { display: block; padding: 0 12px 10px; color: #fcd34d; font-size: 13px; line-height: 1.6; }
+#preview-failure { display: block; padding: 0 12px 10px; color: #fcd34d; font-size: 0.8125rem; line-height: 1.6; }
 #preview-failure button { min-height: 40px; margin-left: 6px; }
-.camera-switch { padding: 0 10px 10px; display: grid; grid-template-columns: repeat(var(--preview-source-count, 4), minmax(0, 1fr)); gap: 6px; }
-.camera-switch button { min-width: 0; padding: 9px 4px; background: #20283a; color: #d8dee9; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.camera-switch { min-height: 54px; padding: 0 10px 10px; display: grid; grid-template-columns: repeat(var(--preview-source-count, 4), minmax(0, 1fr)); gap: 6px; }
+.camera-switch button { min-width: 0; padding: 9px 4px; background: #20283a; color: #d8dee9; font-size: 0.75rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .camera-switch button.active { background: #fff; color: #111827; }
-.camera-switch button.unavailable:not(.active)::after { content: ' !'; color: #fbbf24; }
+
 .preview-actions { display: flex; gap: 8px; padding: 0 10px 10px; flex-wrap: wrap; }
 .preview-actions button { min-height: 44px; padding: 8px 12px; background: #20283a; color: #fff; }
 .preview-actions button[aria-pressed="true"] { background: #fff; color: #111827; }
@@ -19,9 +22,9 @@
 .preview-tiles { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
 .preview-tiles button { position: relative; padding: 4px; display: flex; align-items: flex-start; background: transparent; color: #fff; border: 1px solid #ffffff30; border-radius: 0; overflow: hidden; }
 .preview-tiles video { object-fit: contain; }
-.preview-tiles span { position: relative; z-index: 1; max-width: 100%; padding: 3px 4px; border-radius: 6px; background: #000a; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.preview-tiles span { position: relative; z-index: 1; max-width: 100%; padding: 3px 4px; border-radius: 6px; background: #000a; font-size: 0.6875rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .preview-card button:focus-visible { outline: 3px solid #60a5fa; outline-offset: -3px; }
-.preview-expanded { position: fixed; inset: 0; z-index: 100; margin: 0; border: 0; border-radius: 0; display: flex; flex-direction: column; padding: var(--safe-area-inset-top, env(safe-area-inset-top)) var(--safe-area-inset-right, env(safe-area-inset-right)) var(--safe-area-inset-bottom, env(safe-area-inset-bottom)) var(--safe-area-inset-left, env(safe-area-inset-left)); }
+.preview-expanded { position: absolute; inset: 0; z-index: 100; margin: 0; border: 0; border-radius: 0; display: flex; flex-direction: column; padding: var(--safe-area-inset-top, env(safe-area-inset-top)) var(--safe-area-inset-right, env(safe-area-inset-right)) var(--safe-area-inset-bottom, env(safe-area-inset-bottom)) var(--safe-area-inset-left, env(safe-area-inset-left)); }
 .preview-expanded .preview-stage { flex: 1; overflow: hidden; }
 .preview-expanded .preview-picture { flex: none; }
 .preview-controls { flex-shrink: 0; }
@@ -30,9 +33,9 @@
 .preview-head { gap: 8px; }
 .preview-head > span { flex-shrink: 0; }
 .preview-head small { margin-left: auto; min-width: 0; }
-.preview-head #preview-expand { flex-shrink: 0; min-height: 40px; width: 40px; padding: 0; color: #fff; background: #20283a; font-size: 22px; }
+.preview-head #preview-expand { flex-shrink: 0; min-height: 44px; width: 44px; padding: 0; color: #fff; background: #20283a; font-size: 1.375rem; }
 .preview-card button { border: 0; border-radius: 10px; cursor: pointer; font: inherit; }
-.preview-card .camera-switch button { min-height: 44px; font-size: 12px; }
+.preview-card .camera-switch button { min-height: 44px; font-size: 0.75rem; }
 .preview-card .preview-tiles button { border: 1px solid #ffffff30; border-radius: 0; }
 .preview-card button:disabled { opacity: .5; cursor: default; }
 
@@ -41,3 +44,7 @@
   .preview-expanded .preview-controls { min-height: 0; overflow-y: auto; }
   .preview-expanded .camera-switch { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+.preview-card .camera-switch button { white-space: normal; overflow-wrap: anywhere; }
+.preview-head { flex-wrap: wrap; }
+.preview-head small { white-space: normal; overflow-wrap: anywhere; }

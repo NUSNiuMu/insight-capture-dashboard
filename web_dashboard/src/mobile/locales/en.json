@@ -852,5 +852,10 @@
   "暂未收到新的相机定位状态，请检查连接；持续异常时保存诊断。": "No recent camera localization status has arrived. Check the connection and save diagnostics if the problem persists.",
   "尚未收到新的定位数据，当前状态不能确认原因；持续异常时保存诊断。": "No recent pose data has arrived. The current status does not identify the cause. Save diagnostics if the problem persists.",
   "录制存储空间已耗尽，采集已停止，未完成数据已保留。请释放空间后重新开始。": "Recording storage is full. Capture has stopped and incomplete data is retained. Free space before starting again.",
-  "MCAP 文件未完整保存，原始数据已保留。": "The MCAP file was not saved completely. The original data is retained."
+  "MCAP 文件未完整保存，原始数据已保留。": "The MCAP file was not saved completely. The original data is retained.",
+  "请输入任务名称。": "Enter a task name.",
+  "请输入任务说明。": "Enter task instructions.",
+  "跳到主导航": "Skip to main navigation",
+  "当前任务已变化，请重新打开任务列表后操作。": "The active task changed. Reopen the task list before continuing.",
+  "页面已更新，请刷新后再结束任务。": "The page has been updated. Refresh before ending a task."
 }

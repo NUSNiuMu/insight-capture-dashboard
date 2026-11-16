@@ -153,11 +153,21 @@ class TaskRoutes:
         )
         return web.json_response({**status, "changed": not unchanged, "message": message})
 
-    async def _handle_end(self, _request: web.Request) -> web.Response:
+    async def _handle_end(self, request: web.Request) -> web.Response:
+        payload = await read_json_body(request)
+        task_id = payload.get("task_id")
+        if not isinstance(task_id, str) or not task_id.strip():
+            return web.json_response(
+                {"message": "页面已更新，请刷新后再结束任务。"}, status=400
+            )
         conflict = self._recording_conflict("end")
         if conflict is not None:
             return conflict
         previous = self.context.take_store.task_status()
+        if ((previous.get("task") or {}).get("task_id") or previous.get("last_task_id")) != task_id:
+            return web.json_response(
+                {"message": "当前任务已变化，请重新打开任务列表后操作。"}, status=409
+            )
         if not previous.get("active"):
             return web.json_response({**previous, "message": task_status_message(previous)})
         previous_task = previous.get("task") or {}
@@ -166,7 +176,7 @@ class TaskRoutes:
             or "当前"
         )
         recorded = int((previous.get("stats") or {}).get("recorded_takes") or 0)
-        status = self.context.take_store.end_task()
+        status = self.context.take_store.end_task(expected_task_id=task_id)
         return web.json_response(
             {**status, "message": f"已退出{name}任务集，累计录制{recorded}条。"}
         )

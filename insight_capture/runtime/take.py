@@ -190,8 +190,10 @@ class SessionTakeStore:
                 self._write_active_state()
             return task.as_dict()
 
-    def end_task(self) -> Dict[str, object]:
+    def end_task(self, expected_task_id: Optional[str] = None) -> Dict[str, object]:
         with self._lock:
+            if expected_task_id is not None and self.task_id != expected_task_id:
+                raise RuntimeError("当前任务已变化，请重新打开任务列表后操作。")
             if not self._active:
                 return self.task_status()
             current = self.current()
@@ -524,6 +526,7 @@ class SessionTakeStore:
                 return {
                     "active": False,
                     "task": None,
+                    "last_task_id": self.task_id,
                     "session_id": None,
                     "stats": self._cached_take_stats(self.takes_root),
                 }

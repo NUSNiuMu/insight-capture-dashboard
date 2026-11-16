@@ -8,7 +8,7 @@ const props = defineProps({ preview: Object, online: Boolean, recording: Boolean
 const emit = defineEmits(['notify', 'recovered'])
 const selected = ref(''), video = ref(null), failed = ref(false), ready = ref(false)
 const failure = ref('')
-const panel = ref(null), expanded = ref(false), hidden = ref(document.hidden)
+const panel = ref(null), inline = ref(null), overlay = ref(null), expanded = ref(false), hidden = ref(document.hidden)
 const stage = ref(null), stageSize = ref({ width: 0, height: 0 })
 const overview = computed(() => props.preview?.overview)
 const previewPaused = computed(() => props.recording || props.preview?.paused)
@@ -23,7 +23,7 @@ const fallbackSource = computed(() => sources.value.find(s => s.id === props.pre
 const source = computed(() => sources.value.find(s => s.id === selected.value) || fallbackSource.value)
 const aspect = computed(() => {
   const dimensions = isOverview.value ? overview.value : source.value
-  return dimensions?.width && dimensions?.height ? `${dimensions.width} / ${dimensions.height}` : '3 / 4'
+  return dimensions?.width && dimensions?.height ? `${dimensions.width} / ${dimensions.height}` : '1 / 1'
 })
 const pictureStyle = computed(() => {
   if (!expanded.value || !stageSize.value.width || !stageSize.value.height) return undefined
@@ -38,7 +38,7 @@ function regionStyle(id) {
     width: `${region.width / overview.value.width * 100}%`, height: `${region.height / overview.value.height * 100}%` }
 }
 const fullscreenAvailable = Boolean(document.fullscreenEnabled)
-let previousFocus, previousOverflow, previousScroll, resizeObserver, returnToOverview = false
+let previousFocus, previousScroll, resizeObserver, returnToOverview = false
 let rtcSession, retryTimer
 let generation = 0, dead = false
 try { selected.value = localStorage.getItem('insight-preview-source') || '' } catch { /* storage may be disabled */ }
@@ -110,34 +110,37 @@ async function fullscreen() {
     else await panel.value.requestFullscreen()
   } catch { emit('notify', '当前浏览器无法进入系统全屏，可继续使用放大预览') }
 }
-function keyboard(event) {
-  if (!expanded.value) return
-  if (event.key === 'Escape') { event.preventDefault(); closePreview(); return }
-  if (event.key !== 'Tab') return
-  const buttons = [...panel.value.querySelectorAll('button:not(:disabled)')].filter(node => node.getClientRects().length)
-  if (!buttons.length) return
-  const first = buttons[0], last = buttons[buttons.length - 1]
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === panel.value)) {
-    event.preventDefault(); last.focus()
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault(); first.focus()
-  }
+function overlayClosed() { if (!overlay.value.open) closePreview() }
+function movePanel(target) {
+  // The hosts are stable and empty except for this panel. Vue owns its content.
+  if (typeof target.moveBefore === 'function') target.moveBefore(panel.value, null)
+  else target.insertBefore(panel.value, null)
+  // Traditional DOM moves can pause media in older browsers, including Safari.
+  if (video.value?.srcObject && !previewPaused.value && !paused.value) video.value.play().catch(() => {})
 }
 watch(expanded, async value => {
   if (value) {
     previousFocus = document.activeElement
     previousScroll = { x: window.scrollX, y: window.scrollY }
-    previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    // Keep the inline slot in flow so opening cannot clamp the page's scroll.
+    inline.value.style.height = `${inline.value.getBoundingClientRect().height}px`
+    overlay.value.showModal()
     await nextTick()
-    if (expanded.value) panel.value?.querySelector('.preview-close')?.focus()
+    if (expanded.value && !dead) {
+      movePanel(overlay.value)
+      panel.value.querySelector('.preview-close')?.focus({ preventScroll: true })
+    }
   } else {
-    document.body.style.overflow = previousOverflow ?? ''
     await nextTick()
-    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true })
-    else if (previousFocus?.id && document.getElementById(previousFocus.id)) document.getElementById(previousFocus.id).focus({ preventScroll: true })
-    else panel.value?.querySelector('#preview-overview, #preview-expand')?.focus({ preventScroll: true })
-    // A fixed expanded panel leaves document flow and can clamp page scroll.
+    if (dead || expanded.value) return
+    movePanel(inline.value)
+    inline.value.style.height = ''
+    overlay.value.close()
+    // Repair focus only if moving DOM or replacing a selected tile lost the invoker.
+    if (document.activeElement === document.body || !document.activeElement?.getClientRects().length) {
+      const invoker = previousFocus?.isConnected ? previousFocus : panel.value.querySelector('#preview-overview, #preview-expand')
+      invoker?.focus({ preventScroll: true })
+    }
     if (props.active && previousScroll) window.scrollTo(previousScroll.x, previousScroll.y)
   }
 })
@@ -155,19 +158,22 @@ onBeforeUnmount(() => {
   dead = true; cleanup()
   document.removeEventListener('visibilitychange', visibility)
   resizeObserver?.disconnect()
-  if (expanded.value) document.body.style.overflow = previousOverflow ?? ''
+  if (panel.value?.parentElement !== inline.value) movePanel(inline.value)
+  overlay.value?.close()
 })
 </script>
 
 <template>
+  <div class="preview-host">
+  <dialog ref="overlay" class="preview-dialog" :aria-label="t('相机预览')" @close="overlayClosed"></dialog>
+  <div ref="inline" class="preview-inline">
   <section ref="panel" class="preview-card" :class="{ 'preview-expanded': expanded }"
-    :role="expanded ? 'dialog' : undefined" :aria-modal="expanded ? 'true' : undefined"
-    :aria-label="t(&quot;相机预览&quot;)" tabindex="-1" @keydown="keyboard">
+    :aria-label="t(&quot;相机预览&quot;)" tabindex="-1">
     <div class="preview-controls">
     <div class="preview-toolbar">
     <div class="preview-head"><span><i></i>{{ t("相机预览") }}</span><small id="preview-topic">
       {{ !online ? t('设备离线') : previewPaused ? t('预览已暂停') : `${t(isOverview ? overview?.label || '三路总览' : source?.label || '等待相机')} · ${t(!ready ? '等待画面' : failed ? '等待重试' : '实时预览')}` }}
-    </small><button v-if="!expanded" id="preview-expand" :aria-label="t(&quot;放大预览&quot;)" :disabled="!online || previewPaused" @click="openPreview()">↗</button></div>
+    </small><button v-show="!expanded" id="preview-expand" :aria-label="t(&quot;放大预览&quot;)" :disabled="!online || previewPaused" @click="openPreview()">↗</button></div>
     <div v-if="expanded" class="preview-actions">
       <button v-if="expanded && fullscreenAvailable" @click="fullscreen">{{ t("系统全屏") }}</button>
       <button v-if="expanded" class="preview-close" @click="closePreview">{{ t("关闭预览") }}</button>
@@ -180,7 +186,7 @@ onBeforeUnmount(() => {
       <button v-if="overview" id="preview-overview" :class="{ active: isOverview }" :aria-pressed="isOverview" :disabled="!online" @click="showOverview">{{ t(overview.label || '三路总览') }}</button>
       <button v-for="item in sources" :id="`preview-source-${item.id}`" :key="item.id" type="button"
         :class="{ active: !isOverview && source?.id === item.id, unavailable: item.publisher_count === 0 && preview?.publishers_checked }"
-        :aria-pressed="!isOverview && source?.id === item.id" :disabled="!online" @click="selected = item.id">{{ t(item.label) }}</button>
+        :aria-pressed="!isOverview && source?.id === item.id" :disabled="!online" @click="selected = item.id">{{ t(item.label) }}{{ t(item.publisher_count === 0 && preview?.publishers_checked ? ' · 未连接' : '') }}</button>
     </div>
     </div>
     <div ref="stage" class="preview-stage" :style="{ '--preview-aspect': aspect }">
@@ -196,4 +202,6 @@ onBeforeUnmount(() => {
       </div>
     </div>
   </section>
+  </div>
+  </div>
 </template>

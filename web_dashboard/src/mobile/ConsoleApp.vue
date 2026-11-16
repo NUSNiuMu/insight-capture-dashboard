@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import CameraPreview from '../preview/components/CameraPreview.vue';
 import RecordsPage from './RecordsPage.vue';
 import TrajectoryPanel from './TrajectoryPanel.vue';
@@ -7,6 +7,34 @@ import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration, d
 import { t, language, setLanguage } from './i18n.js';
 const {status,mapping,tasks,tasksError,taskDraft,online,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
+const selectedTask=ref(''),openedTaskId=ref(''),fieldErrors=ref({}),fieldAnnouncement=ref('');
+let fieldFrame,announceTimer;
+const editedFields=new WeakSet();
+function fieldMessage(field){return field.id==='task-input'?'请输入任务名称。':'请输入任务说明。';}
+function syncField(event){
+ const field=event.target;if(!field.matches('input,textarea'))return;
+ if(event.type==='input')editedFields.add(field);
+ field.setCustomValidity(field.value&&!field.value.trim()?t(fieldMessage(field)):'');
+ const submitted=event.type==='invalid',blurred=event.type==='focusout';
+ // Native user-invalid is set after event delivery; sample after that update.
+ cancelAnimationFrame(fieldFrame);
+ fieldFrame=requestAnimationFrame(()=>{
+  const controls=dialog.value?.querySelectorAll('input,textarea')||[];
+  const previous=fieldErrors.value;const errors={};
+  for(const control of controls){
+   const invalid=CSS.supports('selector(:user-invalid)')?control.matches(':user-invalid'):
+    !control.validity.valid&&(previous[control.id]||(control===field&&(submitted||(blurred&&editedFields.has(field)))));
+   if(invalid)errors[control.id]=fieldMessage(control);
+  }
+  fieldErrors.value=errors;
+  if(!errors[field.id]){clearTimeout(announceTimer);fieldAnnouncement.value='';}
+  else if(blurred&&!previous[field.id]){
+   clearTimeout(announceTimer);fieldAnnouncement.value='';
+   announceTimer=setTimeout(()=>fieldAnnouncement.value=errors[field.id],500);
+  }
+ });
+}
+
 const previewError=ref('');
 const route=ref(location.hash.slice(1)||'capture'),visible=ref(!document.hidden),dialog=ref(null),creating=ref(Boolean(taskDraft.value)),name=ref(taskDraft.value?.name||''),instruction=ref(taskDraft.value?.instruction||''),shell=ref(null),footer=ref(null);
 const page=computed(()=>route.value.split('/')[0]);
@@ -49,8 +77,9 @@ function navigate(value){location.hash=value;}
 function hashChanged(){route.value=location.hash.slice(1)||'capture';loadTasks().catch(()=>{});window.scrollTo(0,0);}
 function back(){const p=route.value.split('/');navigate(p.length>2?p.slice(0,-1).join('/'):page.value);}
 function visibility(){visible.value=!document.hidden;}
-async function openTasks(){await loadTasks().catch(()=>{});creating.value=Boolean(taskDraft.value)||!tasks.value.length;dialog.value.showModal();}
-async function selectTask(taskId){if(busy.value)return;if(await action(`/api/tasks/${encodeURIComponent(taskId)}/activate`))dialog.value.close();}
+async function openTasks(){await loadTasks().catch(()=>{});selectedTask.value=openedTaskId.value=task.value?.task_id||'';creating.value=Boolean(taskDraft.value)||!tasks.value.length;dialog.value.showModal();}
+async function selectTask(taskId){if(busy.value)return;if(await action(`/api/tasks/${encodeURIComponent(taskId)}/activate`,{},(e,current)=>!e.status&&current?.task_status?.active&&current.task_status.task?.task_id===taskId))dialog.value.close();}
+async function endTask(){const taskId=openedTaskId.value;if(busy.value)return;if(await action('/api/tasks/current/end',{task_id:taskId},(e,current)=>!e.status&&current?.task_status?.active===false&&current.task_status.last_task_id===taskId))dialog.value.close();}
 async function createTask(){if(busy.value||!name.value.trim()||!instruction.value.trim())return;
  if(await createAndActivateTask(name.value,instruction.value)){dialog.value.close();name.value='';instruction.value='';}
 }
@@ -81,12 +110,14 @@ function updateLayout(){
  });
 }
 onMounted(()=>{if(taskDraft.value)dialog.value.showModal();window.addEventListener('hashchange',hashChanged);document.addEventListener('visibilitychange',visibility);observer=new ResizeObserver(updateLayout);observer.observe(footer.value);});
-onBeforeUnmount(()=>{window.removeEventListener('hashchange',hashChanged);document.removeEventListener('visibilitychange',visibility);observer?.disconnect();cancelAnimationFrame(layoutFrame);});
+onBeforeUnmount(()=>{window.removeEventListener('hashchange',hashChanged);document.removeEventListener('visibilitychange',visibility);observer?.disconnect();cancelAnimationFrame(layoutFrame);cancelAnimationFrame(fieldFrame);clearTimeout(announceTimer);});
 watch(page,updateLayout,{flush:'post'});
-watch(language,()=>document.title='Insight Capture');
+watch(title,value=>document.title=`${value} · Insight Capture`,{immediate:true});
+watch(route,async()=>{await nextTick();shell.value?.querySelector('h1')?.focus({preventScroll:true});});
+watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=task.value?.task_id||'';fieldErrors.value={};fieldAnnouncement.value='';clearTimeout(announceTimer);await nextTick();(dialog.value?.querySelector('input:not(:disabled),select:not(:disabled)')||dialog.value?.querySelector('button'))?.focus();});
 </script>
 <template><div ref="shell" class="console-shell" :class="{'has-capture-dock':showDock,'compact-capture-dock':page!=='capture','capture-page':page==='capture'}">
-<header class="topbar"><button v-if="route.includes('/') && route!=='capture/trajectory'" class="icon-button" :aria-label="t('返回')" @click="back">‹</button><div class="topbar-title"><small>Insight Capture</small><h1>{{title}}</h1></div><span id="device-state" class="pill" :class="{online}"><i></i>{{t(online?'在线':status?'离线':'连接中')}}</span></header>
+<a class="skip-navigation" href="#primary-navigation" @click.prevent="footer.querySelector('nav').focus()">{{t('跳到主导航')}}</a><header class="topbar"><button v-if="route.includes('/') && route!=='capture/trajectory'" class="icon-button" :aria-label="t('返回')" @click="back">‹</button><div class="topbar-title"><small>Insight Capture</small><h1 tabindex="-1">{{title}}</h1></div><span id="device-state" class="pill" :class="{online}"><i></i>{{t(online?'在线':status?'离线':'连接中')}}</span></header>
 <main>
 <div class="capture-intro">
 <section class="card readiness-card" :class="{'readiness-blocked':online&&!status?.preflight?.ok&&!active,'readiness-warning':!online||(status?.preflight?.ok&&status?.preflight?.warnings?.length)}">
@@ -120,7 +151,7 @@ watch(language,()=>document.title='Insight Capture');
 <section class="card settings-links"><button class="settings-link" @click="navigate('settings/language')"><span>{{t('语言')}}</span><small>{{language==='en'?'English':'简体中文'}}</small><b>›</b></button><button class="settings-link" @click="navigate('settings/diagnostics')"><span>{{t('诊断')}}</span><small>{{t('设备与采集状态')}}</small><b>›</b></button></section>
 </template>
 <section v-else-if="route==='settings/language'" class="card"><h2>{{t('界面语言')}}</h2><div class="language-options"><button :aria-pressed="language==='zh'" @click="setLanguage('zh')">简体中文</button><button :aria-pressed="language==='en'" @click="setLanguage('en')">English</button></div></section>
-<section v-else class="card"><h2>{{t('诊断')}}</h2><p class="section-description">{{t('保存连接、相机、校时、校准和录制状态，便于排查问题。')}}</p><button id="save-diagnostics" class="secondary" @click="diagnostics">{{t('保存诊断')}}</button><details><summary>{{t('当前状态')}}</summary><pre>{{JSON.stringify({state:status?.state,clocks,mapping: mapping?.statuses},null,2)}}</pre></details></section>
+<section v-else class="card"><h2>{{t('诊断')}}</h2><p class="section-description">{{t('保存连接、相机、校时、校准和录制状态，便于排查问题。')}}</p><button id="save-diagnostics" class="secondary" @click="diagnostics">{{t('保存诊断')}}</button><details><summary>{{t('当前状态')}}</summary><pre tabindex="0" role="region" :aria-label="t('当前状态')"><code>{{JSON.stringify({state:status?.state,clocks,mapping: mapping?.statuses},null,2)}}</code></pre></details></section>
 </div>
 </main>
 <footer ref="footer" class="console-footer">
@@ -134,6 +165,6 @@ watch(language,()=>document.title='Insight Capture');
 </div>
 <div class="dock-actions"><button v-if="status?.state==='recording'" id="stop" class="danger" :disabled="pending||!online||status.recording_mode!=='capture'" @click="record('stop')">{{t('结束并保存')}}</button><button v-else id="start" class="primary" :disabled="busy||!online||!status?.preflight?.ok" @click="record('start')">{{t(uiState==='starting'?'正在准备':uiState==='saving'?'正在保存':'开始录制')}}</button></div>
 </section>
-<nav class="bottom-nav" :aria-label="t('主导航')"><button v-for="item in [{id:'capture',label:'采集'},{id:'history',label:'记录'},{id:'settings',label:'设备'}]" :key="item.id" :aria-current="page===item.id?'page':undefined" @click="navigate(item.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><template v-if="item.id==='capture'"><rect x="3" y="5" width="18" height="14" rx="4"/><circle cx="12" cy="12" r="3.5"/></template><template v-else-if="item.id==='history'"><path d="M4 7h6l2-3h8v16H4z"/><path d="M8 11h8M8 15h6"/></template><template v-else><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 18h4M10 6h4"/></template></svg><span>{{t(item.label)}}</span></button></nav></footer>
-<dialog id="task-dialog" ref="dialog" aria-labelledby="task-dialog-title"><div class="section-title"><h2 id="task-dialog-title">{{t(creating?'新建任务':'选择任务')}}</h2><button class="icon-button" :aria-label="t('关闭')" @click="dialog.close()">×</button></div><p v-if="tasksError" class="issue warning">{{tasksError}}</p><p v-if="error" class="issue error" role="alert">{{error}}</p><template v-if="!creating"><label for="task-select">{{t('切换当前采集任务')}}</label><select id="task-select" :value="task?.task_id||''" :disabled="busy" @change="selectTask($event.target.value)"><option value="" disabled>{{t('请选择任务')}}</option><option v-for="item in tasks" :key="item.task_id" :value="item.task_id">{{item.name}}</option></select><button v-if="task" class="secondary" :disabled="busy" @click="action('/api/tasks/current/end').then(ok=>ok&&dialog.close())">{{t('结束当前任务')}}</button><button id="new-task" class="secondary" :disabled="busy" @click="creating=true">{{t(taskDraft?'继续未完成任务':'新建任务')}}</button></template><form v-else @submit.prevent="createTask"><button v-if="tasks.length" type="button" class="secondary compact" :disabled="pending" @click="creating=false">{{t('返回任务列表')}}</button><p v-if="taskDraft" class="section-description">{{t('任务操作尚未完成。重试会继续同一任务，不会重复新建。')}}</p><template v-if="taskDraft"><button type="button" class="secondary compact" :disabled="pending" @click="leaveCreation">{{t('结束创建流程')}}</button><p class="section-description">{{t('已创建的任务仍保留在任务列表。')}}</p></template><label for="task-input">{{t('任务名称')}}</label><input id="task-input" v-model="name" required maxlength="80" :disabled="busy||!!taskDraft"><label for="task-instruction">{{t('任务说明')}}</label><textarea id="task-instruction" v-model="instruction" required maxlength="2000" :disabled="busy||!!taskDraft"></textarea><div class="dialog-actions"><button type="button" class="secondary" @click="dialog.close()">{{t(taskDraft?'稍后继续':'取消')}}</button><button class="primary" :disabled="busy||!online||!name.trim()||!instruction.trim()">{{t(taskDraft?.created?'继续启用任务':taskDraft?'重试创建任务':'创建任务')}}</button></div></form></dialog>
+<nav id="primary-navigation" tabindex="-1" class="bottom-nav" :aria-label="t('主导航')"><button v-for="item in [{id:'capture',label:'采集'},{id:'history',label:'记录'},{id:'settings',label:'设备'}]" :key="item.id" :aria-current="page===item.id?'page':undefined" @click="navigate(item.id)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><template v-if="item.id==='capture'"><rect x="3" y="5" width="18" height="14" rx="4"/><circle cx="12" cy="12" r="3.5"/></template><template v-else-if="item.id==='history'"><path d="M4 7h6l2-3h8v16H4z"/><path d="M8 11h8M8 15h6"/></template><template v-else><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M10 18h4M10 6h4"/></template></svg><span>{{t(item.label)}}</span></button></nav></footer>
+<dialog id="task-dialog" ref="dialog" aria-labelledby="task-dialog-title"><div class="section-title"><h2 id="task-dialog-title">{{t(creating?'新建任务':'选择任务')}}</h2><button class="icon-button" :aria-label="t('关闭')" @click="dialog.close()">×</button></div><p v-if="tasksError" class="issue warning">{{tasksError}}</p><p v-if="error" class="issue error" role="alert">{{error}}</p><template v-if="!creating"><form @submit.prevent="selectTask(selectedTask)"><label for="task-select">{{t('切换当前采集任务')}}</label><select id="task-select" name="task" v-model="selectedTask" required :disabled="busy"><option value="" disabled>{{t('请选择任务')}}</option><option v-for="item in tasks" :key="item.task_id" :value="item.task_id">{{item.name}}</option></select><button id="activate-task" type="submit" class="primary" :disabled="busy||!online">{{t('切换')}}</button></form><button v-if="task" class="secondary" :disabled="busy" @click="endTask">{{t('结束当前任务')}}</button><button id="new-task" class="secondary" :disabled="busy" @click="creating=true">{{t(taskDraft?'继续未完成任务':'新建任务')}}</button></template><form v-else @submit.prevent="createTask" @input="syncField" @focusout="syncField" @invalid.capture="syncField"><button v-if="tasks.length" type="button" class="secondary compact" :disabled="pending" @click="creating=false">{{t('返回任务列表')}}</button><p v-if="taskDraft" class="section-description">{{t('任务操作尚未完成。重试会继续同一任务，不会重复新建。')}}</p><template v-if="taskDraft"><button type="button" class="secondary compact" :disabled="pending" @click="leaveCreation">{{t('结束创建流程')}}</button><p class="section-description">{{t('已创建的任务仍保留在任务列表。')}}</p></template><label for="task-input">{{t('任务名称')}}</label><input id="task-input" name="name" v-model="name" required maxlength="80" :aria-invalid="!!fieldErrors['task-input']" :aria-describedby="fieldErrors['task-input']?'task-input-error':undefined" :disabled="busy||!!taskDraft"><p v-if="fieldErrors['task-input']" id="task-input-error" class="field-error">{{t(fieldErrors['task-input'])}}</p><label for="task-instruction">{{t('任务说明')}}</label><textarea id="task-instruction" name="instruction" v-model="instruction" required maxlength="2000" :aria-invalid="!!fieldErrors['task-instruction']" :aria-describedby="fieldErrors['task-instruction']?'task-instruction-error':undefined" :disabled="busy||!!taskDraft"></textarea><p v-if="fieldErrors['task-instruction']" id="task-instruction-error" class="field-error">{{t(fieldErrors['task-instruction'])}}</p><p class="visually-hidden" aria-live="polite">{{t(fieldAnnouncement)}}</p><div class="dialog-actions"><button type="button" class="secondary" @click="dialog.close()">{{t(taskDraft?'稍后继续':'取消')}}</button><button class="primary" :disabled="busy||!online">{{t(taskDraft?.created?'继续启用任务':taskDraft?'重试创建任务':'创建任务')}}</button></div></form></dialog>
 </div></template>

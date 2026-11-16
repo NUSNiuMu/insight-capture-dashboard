@@ -1,54 +1,41 @@
-# Customer interaction audit - 2026-11-16
+# InsightCapture software and customer-flow audit - 2026-11-16
 
-Scope: independent InsightCapture field branch based on `57aaeb9`, deployed on the Jetson. This pass combines production route tests, actual browser interaction with the device and live H.264 decoding. Camera power was previously reported unstable; no new physical recording, camera restart or power-cycle was performed in this pass.
+This review covers the independent field branch, the complete implemented mobile web surface, relevant backend task/recording/restart paths, and actual Jetson preview decoding. It follows the user's updated Modern Web Guidance complete-coverage requirement. Camera power remains unstable by the operator's latest report: no physical recording, camera restart, calibration motion or power-cycle was initiated during this software pass.
 
-## Fixed: a stale phone page could record under another task
+## Confirmed defects fixed
 
-Reproduction: phone A still displays task A; client B selects task B before A's next status poll; A presses Start. The old phone request did not carry its displayed task ID, and the backend accepted it under B. An isolated reproduction with the real MobileCaptureRoutes, RecordingRoutes and SessionTakeStore confirmed this behavior without hardware recording.
+- A stale page could start recording under a task selected by another client. Start commands now carry the displayed task ID, checked when accepted and again under the recording transition lock before Take allocation. Historical receipts remain readable.
+- Optional WebRTC codec capability/preference APIs prevented H.264-capable browsers from playing. These hints are optional; actual SDP, receiver codec and decoded frames decide readiness. Six API availability/error cases decoded the actual Jetson stream.
+- A stale Settings restart confirmation could terminate active capture. Restart now checks actual recorder/finalization/merge/startup state and holds the shared recording transition lock until exit. The deployed maintenance endpoint recovered in approximately 4.1 seconds during the earlier idle software restart check.
+- A stale task modal could end another client's task. Reproduced using the actual TaskRoutes/SessionTakeStore in a temporary directory: request A ended active B with HTTP200. End requests now carry the modal's original task ID and recheck it under the store lock. Missing identity requests ask for refresh; stale identity is rejected. Ending the same task is idempotent, and inactive state exposes last_task_id for exact lost-ACK reconciliation.
+- Expanded preview allowed focus on the background Start button. It now uses native showModal, without a manual Tab trap or body overflow lock. The existing video panel moves into stable modal/inline hosts with feature-detected moveBefore, and insertBefore plus playback resumption in older browsers. Real decoding, same track/peer, Escape, repeated open/close, route hiding and scroll return were verified.
+- Changing the task select committed immediately; empty creation forms silently disabled submission. Selection now needs an explicit submit. Creation retains native validation and reports empty/whitespace errors with associated field descriptions, correct invalid timing and focus. Native IME submission is retained; no custom Enter handler was added.
+- Fixed pixel fonts ignored root text scaling; English at 320px, 200% text and increased spacing overflowed horizontally by73px. Fonts now use equivalent rem sizes, constrained grid tracks can shrink, labels wrap, and short-landscape controls scroll with the page. The failing combination now has zero document/dialog overflow. Default inline preview width is preserved.
+- Trajectory role colors changed when other devices disappeared and small legend colors had insufficient contrast. Colors now derive from stable roles, with darker text and different dash patterns. This does not constitute a complete nonvisual equivalent of the trajectory dataset.
 
-The phone now includes its displayed task ID. New start commands validate it at acceptance and again under the recording transition lock before preflight and Take reservation. A task change during receipt persistence also prevents recording. The persisted receipt includes the task ID; reusing a command for another task is rejected while reading an original historical receipt remains valid. Existing recorded data and receipt schema are preserved. An outdated page without a task ID is asked to refresh.
+Additional improvements include route titles/heading focus, named Take detail controls, native list semantics, a keyboard bypass to main navigation, visible forced-color selection and keyboard-scrollable diagnostics. No explanatory storage copy was added: storage remains capacity plus path.
 
-Regression coverage: missing/invalid task identity, task changed by another client, task changed during receipt commit, historical receipt after task switching, command ID reused for another task, and the actual frontend request payload. Unrelated native recording entry points retain their existing behavior.
+## Complete guidance review
 
-## Fixed: optional browser APIs could prevent working H.264 preview
+The full catalog contains208 entries:59 applicable,149 excluded,0 undetermined. Every applicable guide and its fallback sections was read and checked. The coverage JSON and readable report remain outside the business repository. The installed checker confirms review coverage, separately reports findings/unverified items, and does not establish hardware or browser acceptance.
 
-The old player required both RTCRtpReceiver.getCapabilities and RTCRtpTransceiver.setCodecPreferences to succeed. In a real Chrome browser, hiding either API produced zero decoded frames even though the browser supports H.264.
+No experimental connection-allowlists gate was enabled or bypassed. No runtime dependency, login, IP whitelist, cross-project link, synchronization path or strict global security policy was added by this review. InsightCapture continues to own its code/resources independently.
 
-The player now treats those APIs as hints. It validates H.264 in the offer, validates the answer, checks the negotiated codec in receiver statistics and declares readiness only after decoded frames arrive. A non-H.264 offer/answer/receiver codec and a connection with no decoded frames still fail explicitly. Transport, encoder parameters and recording-time preview suspension remain unchanged.
+## Evidence and validation
 
-Live device validation used desktop Chrome 154.0.8037.57 with a 390 x 844 mobile viewport. Normal behavior, missing/throwing capability query, empty capability list, and missing/throwing codec preference API all decoded the actual Jetson 1280 x 1280 stream as video/H264. These are browser API fault-injection results, not six different physical phone models.
+- Complete Python regression:306 passed; frontend regression:48 passed. Frontend build and git diff whitespace check passed.
+- Actual Jetson H.264 preview: normal and missing/throwing optional API cases pass. The new modal maintains decoded frames and the same media track/peer both with moveBefore and a simulated missing moveBefore fallback.
+- Six real-data browser states have zero axe violations. Manual testing is separate: it first exposed background focus despite zero initial axe violations, and verifies that background Start now cannot receive focus.
+- Ten real existing-data customer flows pass: Take10/detail reload, network loss/recovery, language persistence, modal keyboard/Escape, form cancel, expanded preview, storage and baseline layout. Mutating requests were blocked.
+- Fourteen browser-fixture checks pass: stale-modal identity, lost activation/end ACK, empty/missing/error/recovered Take views, literal HTML rendering, trajectory styles and starting/recording/saving/saved controls. All mutations remained intercepted inside the browser.
+- 320/390px, 200% text, landscape and forced-color layout checks pass in desktop Chrome154. Additional English text spacing reproduces then clears the73px overflow. These are browser tests, not physical phone acceptance.
+- A1000-Take fixture renders every record. Keyboard navigation crosses the deferred row10/11 boundary and reaches Take1000. Deferring offscreen rows reduced the longest sampled4x-CPU lab task from392ms to196ms; real phone responsiveness is still unverified.
+- Default-load lab LCP around204-248ms and CLS0.093 in the latest three runs; decoded video readiness ranged418-2278ms. These are small desktop lab samples over the office path, not hotspot latency or field INP guarantees. Initial startup still contains long tasks.
 
-## Customer workflow walk-through
+## Known gaps and remaining findings
 
-The browser used the real device APIs and existing QA Take 10. All mutating requests were blocked at the browser boundary for this walk-through.
+Power-dependent recording/recovery, physical camera replacement/IP changes, calibration accuracy, cold-boot RTC retention and offline clean install/upgrade are not re-certified by this pass. Actual updated iPhone Safari/Android touch, virtual keyboard, OS background/discard, VoiceOver/TalkBack and sustained performance remain unverified.
 
-- Open the saved Take detail and confirm its 31-second MCAP data span.
-- Disconnect the browser network: the loaded Take remains readable and the page indicates offline state.
-- Reconnect: the page returns to authoritative online state.
-- Reload a direct Take detail URL: the selected record and duration are restored.
-- Switch Chinese/English, reload, then switch back: language state persists.
-- Open the task modal, navigate with the keyboard and dismiss with Escape.
-- Fill a new task form and cancel: no write request is issued.
-- Expand preview and close with Escape: the inline view returns.
-- Check the storage card shows capacity and path, with no extra storage description.
-- Check 390-pixel page width for horizontal overflow.
+Remaining web findings are recorded, not hidden: navigation uses hash-changing buttons rather than native links; Back resets long-list position; trajectory lacks an equivalent nonvisual path dataset; some compact touch targets are40px; CSS contains old duplicate/unused rules. The prominent fixed capture controls deliberately remain available instead of hiding Stop to meet a generic content-site bar-height recommendation.
 
-No browser page errors were observed in this walk-through. A suspected trajectory connection leak was checked and disproved: leaving the trajectory view unmounted it and closed its WebSocket. Tests of delayed task reads waited for the modal to actually open; an early sampling error was a test-script issue, not a confirmed product failure.
-
-## Guidance review and evidence
-
-The requested modern-web-guidance skill was used to review task dialogs, forms and asynchronous interaction. Its dialog/forms guides were read. No applicable WebRTC codec guide was found after focused searches; codec handling was checked against the API documentation and live browser results instead.
-
-Related regression results: 117 backend tests and 48 frontend tests pass; frontend build and git diff whitespace checks pass. The API compatibility tests also cover non-H.264 rejection and decoded-frame timeout. Evidence snapshots and browser results are retained locally under `.local/insight-customer-audit-20261116` in the local ego-system project group and are not runtime dependencies.
-
-## Still requiring field validation
-
-Stable-power recording and interruption recovery, RTC retention across power loss, physical camera replacement and calibration accuracy, and longer sustained use still require their corresponding physical conditions and checks. This pass does not establish that the whole product is bug-free or replace those acceptance items.
-
-## Additional fix: stale restart confirmation could interrupt capture
-
-The native Settings page can open its restart confirmation while idle and confirm it after another client starts. The backend restart route previously scheduled process exit unconditionally, even when its recording manager reported active recording. A reproduction replaced the exit thread with a recorder and confirmed HTTP 200 plus scheduled restart during capture without actually exiting a process.
-
-Settings now checks the live recorder and holds the same recording transition lock from restart admission until exit. Starts arriving during the response grace period are rejected; preparation, capture/calibration recording, finalizing, merging and distributed startup prevent restart. Duplicate restart requests and failed status reads are covered. Eight focused tests pass; the complete Python suite currently passes 301 tests. This fix does not require a physical recording or power-cycle test.
-
-The user updated modern-web-guidance during this audit and requested full verification. The earlier dialog/forms review and two-page PDF are a limited preceding pass, not the new complete-audit result. A separate catalog snapshot and coverage ledger track all 208 guides outside the business repository; reading and acceptance checks remain in progress.
+Direct private HTTP and the absence of comprehensive CSP/frame/Fetch-Metadata policies are documented deployment assumptions/gaps. Preview has an Origin check; ordinary task/settings endpoints do not have uniform Origin enforcement. This audit did not silently introduce new access/security gates or a telemetry service. It is not a server penetration test or a claim that the product has no bugs.
