@@ -2,6 +2,7 @@
 import asyncio
 import json
 import io
+import os
 from zipfile import ZipFile
 from types import SimpleNamespace
 
@@ -73,8 +74,13 @@ def test_missing_or_unrelated_recovery_is_not_advertised(recovered, fault):
     assert 'recovery' not in store.task_recordings('qa')['takes'][0]
 
 
-def test_download_is_resumable_and_limited_to_known_recovered_take_files(recovered):
+@pytest.mark.parametrize('file_mtime', [None, 0, 4_354_819_200])
+def test_download_is_resumable_and_limited_to_known_recovered_take_files(recovered, file_mtime):
     store, take, bag, data = recovered
+    if file_mtime is not None:
+        for path in bag.iterdir():
+            os.utime(path, (file_mtime, file_mtime))
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in bag.iterdir()}
     async def scenario():
         route = TaskRoutes(SimpleNamespace(take_store=store))
         app = web.Application()
@@ -93,6 +99,9 @@ def test_download_is_resumable_and_limited_to_known_recovered_take_files(recover
             assert bag.name + '.zip' in response.headers['Content-Disposition']
             with ZipFile(io.BytesIO(await response.read())) as archive:
                 assert archive.testzip() is None
+                if file_mtime is not None:
+                    expected_year = 1980 if file_mtime == 0 else 2107
+                    assert {item.date_time[0] for item in archive.infolist()} == {expected_year}
                 assert sorted(archive.namelist()) == sorted(bag.name + '/' + name for name in (
                     'data.mcap', 'metadata.yaml', 'recording_manifest.json'))
                 for name in archive.namelist():
@@ -107,6 +116,7 @@ def test_download_is_resumable_and_limited_to_known_recovered_take_files(recover
                 assert (await client.get(url)).status == 404
     asyncio.run(scenario())
     assert store.task_status()['task']['task_id'] == 'other'
+    assert {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in before} == before
 
 
 def test_bundle_keeps_large_reads_bounded_and_closes_after_cancel(tmp_path):

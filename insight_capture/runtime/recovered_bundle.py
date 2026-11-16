@@ -29,7 +29,10 @@ def recovered_bundle(files, *, chunk_size=1024 * 1024):
     sink = _Chunks()
     with ZipFile(sink, 'w', compression=ZIP_STORED, allowZip64=True) as archive:
         for path in files:
-            info = ZipInfo.from_file(path, arcname=path.parent.name + '/' + path.name)
+            # DOS archive dates have narrower bounds than filesystem timestamps.
+            info = ZipInfo.from_file(
+                path, arcname=path.parent.name + '/' + path.name, strict_timestamps=False,
+            )
             with path.open('rb') as source, archive.open(info, 'w', force_zip64=True) as target:
                 yield from sink.drain()
                 while data := source.read(chunk_size):
