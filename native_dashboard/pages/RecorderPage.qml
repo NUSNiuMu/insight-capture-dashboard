@@ -96,7 +96,10 @@ PageFrame {
                 tone: "danger"
                 text: "Stop"
                 enabled: !!page.status.recording && !workspace.busy.action && !dashboard.state.captureAction
-                onClicked: shell.mutate("/api/recording/stop")
+                onClicked: shell.mutate("/api/recording/stop", {
+                        "output_path": page.status.output_path || "",
+                        "recording_mode": page.status.recording_mode || ""
+                    })
             }
             Ui.Button {
                 text: "Refresh"

@@ -202,6 +202,7 @@ void Dashboard::poll() {
         const auto previous = m_state;
         m_state["recording"] = d["recording"].toBool();
         m_state["output"] = d["output_path"].toString();
+        m_state["recordingMode"] = d["recording_mode"].toString();
         m_state["distributed"] = d["distributed"].toObject().toVariantMap();
         m_state["recordingBusy"] = d["merge_state"].toString() == "merging" || d["merge_state"].toString() == "finalizing" || m_pending.contains("/api/recording/start") || m_pending.contains("/api/recording/stop");
         m_state["task"] = d["task_status"].toObject().toVariantMap();
@@ -631,9 +632,11 @@ void Dashboard::command(const QString &action, const QString &value) {
         path = "/api/recording/start";
         body = {{"native_relaxed_preflight", true},
                 {"task_id", m_state["task"].toMap().value("task").toMap().value("task_id").toString()}};
-    } else if (action == "stop")
+    } else if (action == "stop") {
         path = "/api/recording/stop";
-    else if (action == "check")
+        body = {{"output_path", m_state["output"].toString()},
+                {"recording_mode", m_state["recordingMode"].toString()}};
+    } else if (action == "check")
         path = "/api/capture-check/run";
     else if (action == "reset")
         path = "/api/mapping/reset";

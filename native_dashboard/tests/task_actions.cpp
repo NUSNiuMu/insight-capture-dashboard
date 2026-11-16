@@ -37,6 +37,9 @@ int main(int argc, char **argv) {
     if (!server.listen(QHostAddress::LocalHost)) return 2;
     const QString message = QStringLiteral("当前任务已变化，请重新打开任务列表后操作。");
     QList<QJsonObject> requests;
+    bool fixtureRecording = false;
+    const QString fixtureOutput = "/bags/recording_a";
+    const QString fixtureMode = "vio_calibration";
     QObject::connect(&server, &QTcpServer::newConnection, &app, [&] {
         while (auto *socket = server.nextPendingConnection()) {
             auto buffer = std::make_shared<QByteArray>();
@@ -60,7 +63,8 @@ int main(int argc, char **argv) {
                     data = {{"message", message}};
                     status = 409;
                 } else if (path == "/api/recording/status") {
-                    data = {{"recording", false}, {"merge_state", "idle"},
+                    data = {{"recording", fixtureRecording}, {"merge_state", "idle"},
+                        {"output_path", fixtureOutput}, {"recording_mode", fixtureMode},
                         {"task_status", QJsonObject{{"active", true},
                             {"task", QJsonObject{{"task_id", "task_a"}}}}}};
                 } else if (path == "/api/recording/topics") {
@@ -150,13 +154,30 @@ int main(int argc, char **argv) {
     const bool recorderStartBound = recorderStart.value("task_id") == "task_a" &&
         recorderStart.value("native_relaxed_preflight").toBool() &&
         recorderStart.value("topics").toArray() == QJsonArray{"/camera"};
+    fixtureRecording = true;
+    if (!waitFor([&] { return dashboard.state().value("recording").toBool(); })) return 17;
+    dashboard.command("stop");
+    if (!waitFor([&] { return requests.size() == 5 && dashboard.state().value("captureAction").toString().isEmpty(); })) return 18;
+    const auto directStop = requests.last();
+    const bool directStopBound = directStop.value("output_path") == fixtureOutput && directStop.value("recording_mode") == fixtureMode;
+    QObject *stopButton = nullptr;
+    if (!waitFor([&] {
+        stopButton = named(root.get(), "recording-stop");
+        return stopButton && stopButton->property("enabled").toBool();
+    })) return 19;
+    if (!QMetaObject::invokeMethod(stopButton, "clicked")) return 20;
+    if (!waitFor([&] { return requests.size() == 6 && !workspace.busy().value("action").toBool(); })) return 21;
+    const auto recorderStop = requests.last();
+    const bool recorderStopBound = recorderStop.value("output_path") == fixtureOutput && recorderStop.value("recording_mode") == fixtureMode;
     dashboard.shutdown();
     QJsonObject result{{"direct_body", direct}, {"dialog_body_after_task_change", confirmed},
         {"direct_task_bound", directBody}, {"dialog_task_bound", dialogBody},
         {"dashboard_message_visible", directMessage}, {"dashboard_message", dashboard.message()},
         {"workspace_message_visible", workspaceMessage}, {"direct_start_body", directStart},
         {"recorder_start_body", recorderStart}, {"direct_start_task_bound", directStartBound},
-        {"recorder_start_task_bound", recorderStartBound}};
+        {"recorder_start_task_bound", recorderStartBound}, {"direct_stop_body", directStop},
+        {"recorder_stop_body", recorderStop}, {"direct_stop_bound", directStopBound},
+        {"recorder_stop_bound", recorderStopBound}};
     std::puts(QJsonDocument(result).toJson(QJsonDocument::Compact).constData());
-    return directBody && dialogBody && directMessage && workspaceMessage && directStartBound && recorderStartBound ? 0 : 1;
+    return directBody && dialogBody && directMessage && workspaceMessage && directStartBound && recorderStartBound && directStopBound && recorderStopBound ? 0 : 1;
 }

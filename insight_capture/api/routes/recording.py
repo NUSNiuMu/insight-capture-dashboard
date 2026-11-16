@@ -148,8 +148,17 @@ class RecordingRoutes:
             ),
         )
 
-    async def _handle_recording_stop(self, _request: web.Request) -> web.Response:
-        return await self.stop_recording()
+    async def _handle_recording_stop(self, request: web.Request) -> web.Response:
+        payload = await read_json_body(request)
+        if "output_path" not in payload and "recording_mode" not in payload:
+            return await self.stop_recording()
+        identity = (payload.get("output_path"), payload.get("recording_mode"))
+        if any(not isinstance(value, str) or not value.strip() for value in identity):
+            return web.json_response({
+                "error": "Invalid recording identity.",
+                "message": "录制标识无效，请刷新状态后再停止。",
+            }, status=400)
+        return await self.stop_recording(expected_recording=identity)
 
     async def stop_recording(self, **stop_arguments) -> web.Response:
         if self.busy:
