@@ -396,6 +396,63 @@ test('leaving unfinished setup clears only the browser draft and sends no delete
 });
 
 
+test('cold failure differs from connecting and clears after each automatic reconnect', async()=>{
+  sessionValues.clear();let settleInitial,first=true,fail=false;
+  global.fetch=async(url)=>{
+    if(url==='/api/mobile/status'){
+      if(first){first=false;return new Promise(resolve=>{settleInitial=resolve;});}
+      return fail?response({error:'QA unavailable'},503):response(snapshot());
+    }
+    return response(url==='/api/tasks'?{tasks:[]}:{});
+  };
+  const live=liveCapture(),c=live.value;
+  const until=async predicate=>{
+    const deadline=Date.now()+2500;
+    while(!predicate()){
+      assert.ok(Date.now()<deadline,'automatic status transition timed out');
+      await new Promise(resolve=>setTimeout(resolve,20));
+    }
+  };
+  try{
+    assert.equal(c.online.value,false);
+    assert.equal(c.connectionFailed.value,false);
+    settleInitial(response({error:'QA initial unavailable'},503));
+    await until(()=>c.connectionFailed.value);
+    assert.equal(c.online.value,false);assert.equal(c.status.value,null);
+    await until(()=>c.online.value);
+    assert.equal(c.connectionFailed.value,false);
+    const previous=c.status.value;
+    fail=true;await until(()=>c.connectionFailed.value);
+    assert.equal(c.online.value,false);assert.equal(c.status.value,previous);
+    fail=false;await until(()=>c.online.value);
+    assert.equal(c.connectionFailed.value,false);
+  }finally{live.unmount();settleInitial(response({},503));}
+});
+
+test('an older failed status read cannot mark a newer snapshot offline', async()=>{
+  sessionValues.clear();let statusReads=0,rejectOld;
+  global.fetch=async(url,options)=>{
+    if(options.method==='POST')return response({});
+    if(url==='/api/mobile/status'){
+      statusReads++;
+      if(statusReads===2)return new Promise((resolve,reject)=>{rejectOld=reject;});
+      return response(snapshot('idle',statusReads===1?'old':'new'));
+    }
+    return response(url==='/api/tasks'?{tasks:[]}:{});
+  };
+  const live=liveCapture(),c=live.value;
+  try{
+    const deadline=Date.now()+3000;
+    while(!rejectOld){assert.ok(Date.now()<deadline);await new Promise(resolve=>setTimeout(resolve,20));}
+    assert.equal(await c.action('/api/tasks/new/activate'),true);
+    assert.equal(c.status.value.task_status.task.task_id,'new');
+    rejectOld(new TypeError('late older read failure'));
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(c.online.value,true);assert.equal(c.connectionFailed.value,false);
+    assert.equal(c.status.value.task_status.task.task_id,'new');
+  }finally{live.unmount();rejectOld?.(new TypeError('test cleanup'));}
+});
+
 test('camera stage separates missing images from a fresh wrong timestamp',()=>{
   const device={name:'left'};
   const status={system:{camera_links:[{namespace:'left'}]},preflight:{

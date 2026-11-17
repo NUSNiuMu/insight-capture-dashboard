@@ -48,7 +48,7 @@ function taskDraftFromSession() {
 function sameTask(task,draft) { return task?.task_id===draft.id&&task.name===draft.name&&task.instruction===draft.instruction&&task.capture_profile===draft.capture_profile; }
 function confirmedRecord(command,current) { return [current?.operation,current?.requested_operation].find(operation=>operation?.command_id===command.command_id&&operation.action===command.action); }
 export function useCapture() {
-  const status=ref(null), mapping=ref(null), tasks=ref([]), tasksError=ref(''), online=ref(false), pending=ref(false), recordPending=ref(null), error=ref('');
+  const status=ref(null), mapping=ref(null), tasks=ref([]), tasksError=ref(''), online=ref(false), connectionFailed=ref(false), pending=ref(false), recordPending=ref(null), error=ref('');
   const taskDraft=ref(taskDraftFromSession()),unconfirmedRecord=ref(readSession('record-command'));
   if(unconfirmedRecord.value)error.value=t('连接中断，操作结果待确认；重连后会核对设备状态。');
   const busy=computed(()=>pending.value || ['starting','recording','saving'].includes(status.value?.state));
@@ -59,7 +59,7 @@ export function useCapture() {
       let value=await api('/api/mobile/status');
       // Show authoritative live state immediately, even if an old receipt
       // lookup is slow. A history lookup is not the device connection itself.
-      if(alive&&generation===statusGeneration){status.value=value;online.value=true;}
+      if(alive&&generation===statusGeneration){status.value=value;online.value=true;connectionFailed.value=false;}
       const command=unconfirmedRecord.value;
       if(command&&!confirmedRecord(command,value)){
         // Another client may have replaced the latest operation. Read this
@@ -70,7 +70,7 @@ export function useCapture() {
       if(alive&&generation===statusGeneration){status.value=value;online.value=true;}
       return value;
     }
-    catch { if(alive&&generation===statusGeneration)online.value=false;return null; }
+    catch { if(alive&&generation===statusGeneration){online.value=false;connectionFailed.value=true;}return null; }
   }
   async function loadTasks() {
     const generation=++tasksGeneration;
@@ -183,7 +183,7 @@ export function useCapture() {
   watch(online,value=>{if(value)loadTasks().catch(()=>{});});
   onMounted(()=>{poll();pollMap();});
   onBeforeUnmount(()=>{alive=false;clearTimeout(timer);clearTimeout(mapTimer);});
-  return {status,mapping,tasks,tasksError,taskDraft,online,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks};
+  return {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks};
 }
 export const roleLabel=role=>t({head:'头部相机',left_hand:'左腕相机',right_hand:'右腕相机'}[role]||role);
 export const stateLabel=state=>t({idle:'准备就绪',starting:'正在准备',recording:'正在录制',saving:'正在保存',saved:'保存完成',error:'操作失败',playback:'桌面回放中'}[state]||'连接中');

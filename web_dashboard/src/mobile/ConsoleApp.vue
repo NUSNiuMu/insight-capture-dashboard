@@ -6,7 +6,7 @@ import RecordsPage from './RecordsPage.vue';
 import TrajectoryPanel from './TrajectoryPanel.vue';
 import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration, deviceStage, deviceHint } from './useCapture.js';
 import { t, language, setLanguage } from './i18n.js';
-const {status,mapping,tasks,tasksError,taskDraft,online,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks}=useCapture();
+const {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
 const selectedTask=ref(''),openedTaskId=ref(''),taskDialogKey=ref(0),fieldErrors=ref({}),fieldAnnouncement=ref('');
 let fieldFrame,announceTimer,taskOpenGeneration=0,releaseModalScroll;
@@ -205,14 +205,14 @@ watch(title,value=>document.title=`${value} · Insight Capture`,{immediate:true}
 watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=task.value?.task_id||'';fieldErrors.value={};fieldAnnouncement.value='';clearTimeout(announceTimer);await nextTick();(dialog.value?.querySelector('input:not(:disabled),select:not(:disabled)')||dialog.value?.querySelector('button'))?.focus();});
 </script>
 <template><div ref="shell" class="console-shell" :class="{'has-capture-dock':showDock,'compact-capture-dock':page!=='capture','capture-page':page==='capture'}">
-<a class="skip-navigation" href="#primary-navigation" @click.prevent="footer.querySelector('nav').focus()">{{t('跳到主导航')}}</a><header class="topbar"><button v-if="route.includes('/') && route!=='capture/trajectory'" class="icon-button" :aria-label="t('返回')" @click="back">‹</button><div class="topbar-title"><small>Insight Capture</small><h1 tabindex="-1">{{title}}</h1></div><span id="device-state" class="pill" :class="{online}"><i></i>{{t(online?'在线':status?'离线':'连接中')}}</span></header>
+<a class="skip-navigation" href="#primary-navigation" @click.prevent="footer.querySelector('nav').focus()">{{t('跳到主导航')}}</a><header class="topbar"><button v-if="route.includes('/') && route!=='capture/trajectory'" class="icon-button" :aria-label="t('返回')" @click="back">‹</button><div class="topbar-title"><small>Insight Capture</small><h1 tabindex="-1">{{title}}</h1></div><span id="device-state" class="pill" :class="{online}"><i></i>{{t(online?'在线':connectionFailed?'离线':'连接中')}}</span></header>
 <main>
 <div class="capture-intro">
 <section class="card readiness-card" :class="{'readiness-blocked':online&&!status?.preflight?.ok&&!active,'readiness-warning':!online||(status?.preflight?.ok&&status?.preflight?.warnings?.length)}">
-<div class="readiness-title"><i class="state-mark"></i><strong><template v-if="page==='capture'&&attentionDevice">{{roleLabel(attentionDevice.role)}}<small :title="stage(attentionDevice)">{{stage(attentionDevice)}}</small></template><template v-else>{{!online?t('正在连接设备'):active||uiState==='error'?stateLabel(uiState):!task?t('请先创建或选择任务'):t(status?.preflight?.ok?'可以开始录制':'等待采集就绪')}}</template></strong><a id="view-device-status" href="#settings" class="route-link text-link" v-if="page!=='settings'" @click="navigate('settings',$event)">{{t(readinessIssues.length&&!active?'查看状态（{0}）':'查看状态',readinessIssues.length)}} ›</a></div>
+<div class="readiness-title"><i class="state-mark"></i><strong><template v-if="page==='capture'&&attentionDevice">{{roleLabel(attentionDevice.role)}}<small :title="stage(attentionDevice)">{{stage(attentionDevice)}}</small></template><template v-else>{{!online?t(connectionFailed?'已离线':'正在连接设备'):active||uiState==='error'?stateLabel(uiState):!task?t('请先创建或选择任务'):t(status?.preflight?.ok?'可以开始录制':'等待采集就绪')}}</template></strong><a id="view-device-status" href="#settings" class="route-link text-link" v-if="page!=='settings'" @click="navigate('settings',$event)">{{t(readinessIssues.length&&!active?'查看状态（{0}）':'查看状态',readinessIssues.length)}} ›</a></div>
 <p v-if="page==='capture'&&readinessSummary" class="readiness-summary" :class="status?.preflight?.ok?'warning':'bad'">{{readinessSummary}}</p>
-<p v-if="!online" class="section-description">{{t('网页断开不会停止设备上的录制。')}}</p>
-<p v-if="!online" class="section-description">{{t('请检查手机是否切换了 Wi-Fi；使用采集热点时，系统提示无法上网也请选择保持连接。')}}</p>
+<p v-if="!online&&connectionFailed" class="section-description">{{t('网页断开不会停止设备上的录制。')}}</p>
+<p v-if="!online&&connectionFailed" class="section-description">{{t('请检查手机是否切换了 Wi-Fi；使用采集热点时，系统提示无法上网也请选择保持连接。')}}</p>
 </section>
 <p v-if="error||captureError||status?.operation?.error||(page==='capture'&&!active&&previewError)" role="alert" class="global-error">{{t(error||captureError||status?.operation?.error||previewError)}}</p>
 <p v-if="status?.state==='saving'" role="status" class="save-progress">{{t('正在保存，请保持设备供电。')}}</p>
