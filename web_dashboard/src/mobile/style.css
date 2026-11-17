@@ -275,7 +275,6 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 @media (prefers-reduced-motion: reduce) { button:active:not(:disabled), .route-link:active { transform: none; } }
 
 /* Ten full rows precede deferred content; a normal Take row is about 9rem. */
-.take-list > li:nth-child(n + 11) { content-visibility: auto; contain-intrinsic-block-size: auto 9rem; }
 
 .bottom-nav .route-link, .capture-view-switch button { min-width: 0; overflow-wrap: anywhere; }
 
