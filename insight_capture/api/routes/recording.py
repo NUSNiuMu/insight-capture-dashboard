@@ -420,13 +420,32 @@ class RecordingRoutes:
             shutil.rmtree(bag_path)
             return bag_path
 
+        async def delete():
+            async with self._transition:
+                playback = self.context.prepared_playback_manager
+                current = playback.status()
+                selected = current.get("bag_name") == bag_name
+                if selected and current.get("state") in {"preparing", "playing"}:
+                    return web.json_response(
+                        {"error": "Stop playback before deleting this bag."}, status=409
+                    )
+                bag_path = await asyncio.to_thread(remove)
+                if selected and current.get("state") == "ready":
+                    playback.stop()
+                return web.json_response({"status": "deleted", "bag_name": bag_path.name})
+
+        deletion = asyncio.create_task(delete())
         try:
-            bag_path = await asyncio.to_thread(remove)
+            return await asyncio.shield(deletion)
+        except asyncio.CancelledError:
+            # Keep the transition until the filesystem worker finishes, even
+            # when the requesting client disappears during removal.
+            await deletion
+            raise
         except FileNotFoundError:
             return web.json_response({"error": "Bag not found."}, status=404)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
-        return web.json_response({"status": "deleted", "bag_name": bag_path.name})
 
     async def _handle_integrity_run(self, request: web.Request) -> web.Response:
         payload = await read_json_body(request)
