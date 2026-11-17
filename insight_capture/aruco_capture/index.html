@@ -295,7 +295,7 @@
                 <option value="1" selected>1×</option>
                 <option value="2">2×</option>
               </select></label
-            ><span class="key-hint">空格播放 · ← → 逐帧 · I / O 设起止 · M 向前合并 · Shift+M 向后合并</span>
+            ><span class="key-hint">空格播放 · ← → 逐帧 · I / O 设起止 · Enter 确认并跳到下一段待复核 · 1–9 选 subtask · [ / ] 起止对齐播放头 · M / Shift+M 向前 / 向后合并</span>
           </div>
           <div class="timeline-wrap">
             <div id="timelineMarks" class="timeline-marks"></div>
@@ -353,6 +353,9 @@
               <div class="section-title">
                 <h3>动作片段</h3>
                 <span id="segmentCount" class="muted">0 个片段</span>
+                <label class="muted review-order" title="Enter 跳到待复核片段时，先去模型把握最低的那段"
+                  ><input id="reviewByConfidence" type="checkbox" /> 按把握排序复核</label
+                >
               </div>
               <div id="segmentGuide" class="segment-guide" hidden>
                 <ol id="guideSteps" class="guide-steps">

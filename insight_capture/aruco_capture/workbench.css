@@ -790,6 +790,15 @@ input[type="range"] {
   border-color: #63b3c6;
   background: #2d5665;
 }
+/* One hue per subtask (set from JS); the border keeps the hands colour. */
+.segment-track button.hued {
+  background: hsl(var(--seg-hue) 45% 34%);
+  color: #f2f6fb;
+}
+/* Waiting for review: a bright cap along the top edge. */
+.segment-track button.pending {
+  box-shadow: inset 0 3px 0 var(--amber);
+}
 /* Highlight states, strongest last: unfilled task, under the playhead, open
    in the editor. */
 .segment-track button.unfilled {
@@ -1086,6 +1095,14 @@ input[type="range"] {
   flex: none;
 }
 .segment-row .off-table.flagged {
+  border-color: var(--red);
+  color: var(--red);
+}
+.segment-row .off-table.confidence {
+  border-color: #6f8199;
+  color: #9fb0c6;
+}
+.segment-row .off-table.confidence.low {
   border-color: var(--red);
   color: var(--red);
 }

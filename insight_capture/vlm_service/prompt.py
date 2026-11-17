@@ -59,18 +59,24 @@ def build_segment_prompt(duration_s, task=None, task_text=""):
         )
         item = (
             '{"start": 开始秒数, "end": 结束秒数, "subtask_id": "subtask id", '
-            f'"subtask": "用你自己的英文措辞写这一步，{IMPERATIVE}"}}'
+            f'"subtask": "用你自己的英文措辞写这一步，{IMPERATIVE}", '
+            '"confidence": 0 到 1 之间的小数}'
         )
     else:
         body = (
             (f"整条录制的任务是：{task_text}\n" if task_text else "")
             + "请把这一段切分成动作片段，每个片段只包含一个动作步骤。"
         )
-        item = f'{{"start": 开始秒数, "end": 结束秒数, "subtask": "这一步，{IMPERATIVE}"}}'
+        item = (
+            f'{{"start": 开始秒数, "end": 结束秒数, "subtask": "这一步，{IMPERATIVE}", '
+            '"confidence": 0 到 1 之间的小数}'
+        )
     return (
         head + body
         + "片段从动作开始的时刻到动作完成的时刻，时间精确到 0.5 秒；动作之间的停顿不算在片段内，"
-        "没有动作的时间不要输出片段。输出一个 JSON 对象，不要输出其他内容：\n"
+        "没有动作的时间不要输出片段。confidence 是你对这个片段的 subtask 和起止时间判断正确的把握："
+        "画面清楚、动作明确接近 1，被遮挡、动作含糊或拿不准边界时给低分。"
+        "输出一个 JSON 对象，不要输出其他内容：\n"
         f'{{"segments": [{item}, ...]}}'
     )
 
@@ -163,9 +169,13 @@ def parse_segments_answer(answer, duration_s, task=None):
         text = text or (sub["text"] if sub else "")
         if not text:
             flags.append("模型没有给出子任务文本")
+        try:
+            confidence = round(min(max(float(item.get("confidence")), 0.0), 1.0), 2)
+        except (TypeError, ValueError):
+            confidence = None   # older prompt or the model left it out
         segments.append(
             {"start": round(start, 2), "end": round(end, 2), "subtask_id": sub["id"] if sub else "",
-             "subtask": text, "flags": flags}
+             "subtask": text, "flags": flags, "confidence": confidence}
         )
     segments.sort(key=lambda s: s["start"])
     for previous, current in zip(segments, segments[1:]):

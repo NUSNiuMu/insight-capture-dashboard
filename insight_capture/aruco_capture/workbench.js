@@ -113,6 +113,50 @@ function title(name) {
 function setDirty(value) {
   dirty = value;
   $("dirty").hidden = !value;
+  clearTimeout(wipTimer);
+  if (value && review && selectedName) wipTimer = setTimeout(saveWip, 2000);
+}
+// Unsaved edits are stashed on the server (segments_wip.json) two seconds after
+// the last change, so a reload or a crashed browser does not lose them;
+// 保存全部标注 still writes segments.json and clears the stash.
+let wipTimer = null;
+async function saveWip() {
+  if (!dirty || !review || !selectedName) return;
+  const name = selectedName;
+  try {
+    await api(base() + "/wip", "POST", { segments: parts });
+  } catch (e) {
+    if (name === selectedName) notice("未保存的修改暂存失败：" + e.message, true);
+  }
+}
+async function offerWip(name) {
+  let wip;
+  try {
+    wip = await api(base() + "/wip");
+  } catch {
+    return;
+  }
+  if (!wip || name !== selectedName || dirty) return;
+  const when = new Date(wip.saved_unix_ns / 1e6).toLocaleString();
+  notice(`这条录制有 ${when} 暂存的未保存修改（${wip.segments.length} 段）。`);
+  const restore = el("button", "恢复", "quiet"),
+    drop = el("button", "丢弃", "quiet");
+  restore.onclick = () => {
+    if (name !== selectedName) return;
+    const previous = parts.map((p) => ({ ...p }));
+    parts = wip.segments;
+    selection = new Set();
+    resetEditor();
+    renderParts();
+    setDirty(true);
+    notice("已恢复暂存的修改，确认后点「保存全部标注」");
+    offerUndo("撤销恢复", previous);
+  };
+  drop.onclick = async () => {
+    await api(base() + "/wip", "DELETE").catch(() => {});
+    notice("已丢弃暂存的修改");
+  };
+  $("message").append(restore, drop);
 }
 function bind(id, fn) {
   $(id).addEventListener("click", async () => {
@@ -750,6 +794,11 @@ async function selectSession(name) {
     $("sessions").value = selectedName;
     return;
   }
+  if (dirty && selectedName) {
+    // Discarded on purpose: do not offer the stash back next time.
+    clearTimeout(wipTimer);
+    api(base() + "/wip", "DELETE").catch(() => {});
+  }
   playing = false;
   updatePlay();
   frameVersion++;
@@ -791,6 +840,7 @@ async function selectSession(name) {
     installReview(data);
     loadService();
     loadDraft(name, true);
+    offerWip(name);
     $("sessionMeta").textContent =
       `${seconds(data.duration_s, 1)} · ${data.streams.length} 路视频 · ${data.fps} Hz`;
     notice("");
@@ -1083,6 +1133,140 @@ function editPart(i) {
 function unfilled(p) {
   return !p?.task?.trim();
 }
+const LOW_CONFIDENCE = 0.6,
+  SHORT_SEGMENT_S = 0.3;
+// Checks computed from the list itself (never stored): a very short segment is
+// often a mis-cut, and within one task a subtask that comes before the previous
+// one in the action table, other than the group starting over, is out of order.
+function hints(p, i) {
+  const out = [];
+  if (p.end_s - p.start_s < SHORT_SEGMENT_S)
+    out.push(`片段短于 ${SHORT_SEGMENT_S} 秒，可能是误切，考虑合并（M / Shift+M）`);
+  const before = parts[i - 1],
+    task = tableTask(p.task_id);
+  if (task && before && before.task_id === p.task_id && p.subtask_id && before.subtask_id) {
+    const at = task.subtasks.findIndex((x) => x.id === p.subtask_id),
+      prev = task.subtasks.findIndex((x) => x.id === before.subtask_id);
+    if (at >= 0 && prev >= 0 && at < prev && at !== 0)
+      out.push(`顺序存疑：动作表中「${task.subtasks[at].text}」应在「${task.subtasks[prev].text}」之前`);
+  }
+  return out;
+}
+// A segment still waiting for a person: no task yet, flagged by the model or
+// the checks, or labelled with low model confidence. Opening it and confirming
+// (Enter / 更新片段) writes a fresh segment without flags or confidence.
+function needsReview(p, i) {
+  return (
+    unfilled(p) ||
+    !!p.flags?.length ||
+    hints(p, i).length > 0 ||
+    (p.confidence != null && p.confidence < LOW_CONFIDENCE)
+  );
+}
+// Next segment to review: by time after `after` (wrapping), or, with
+// 按把握排序 on, the least confident one left.
+function nextReview(after = -Infinity, skip = -1) {
+  const pending = parts
+    .map((p, i) => i)
+    .filter((i) => i !== skip && needsReview(parts[i], i));
+  if (!pending.length) return -1;
+  if ($("reviewByConfidence")?.checked)
+    return pending.reduce((a, b) =>
+      (parts[b].confidence ?? 0) < (parts[a].confidence ?? 0) ? b : a,
+    );
+  return pending.find((i) => parts[i].start_s > after) ?? pending[0];
+}
+function focusReview(after, skip) {
+  const i = nextReview(after, skip);
+  if (i < 0) {
+    notice("没有待复核的片段了，确认无误后点「保存全部标注」");
+    return false;
+  }
+  editPart(i);
+  return true;
+}
+// Enter outside a text field: confirm the open segment as it stands and open
+// the next one to review.
+function confirmAndNext() {
+  if (!review || reviewBusy) return;
+  if (editing < 0) {
+    focusReview(currentTime);
+    return;
+  }
+  const at = parts[editing].start_s,
+    p = commitEditor();
+  if (!p) return;
+  focusReview(at, parts.indexOf(p));
+}
+// Digit keys pick the n-th subtask of the chosen task, or the n-th task when
+// none is chosen yet.
+function pickByNumber(n) {
+  if (editing < 0 || !actionTable.tasks.length) return;
+  const task = tableTask($("taskId").value);
+  if (task) {
+    const sub = task.subtasks[n - 1];
+    if (!sub) return;
+    $("subtaskId").value = sub.id;
+    $("subtaskId").onchange();
+  } else {
+    const t = actionTable.tasks[n - 1];
+    if (!t) return;
+    $("taskId").value = t.id;
+    $("taskId").onchange();
+  }
+}
+// [ / ] move the open segment's start / end to the playhead, pushing the
+// neighbour's edge along so the two never overlap.
+function edgeToPlayhead(start) {
+  if (!review || reviewBusy) return;
+  if (editorDirty) {
+    notice("请先更新正在编辑的片段，再用 [ / ] 调整边界", true);
+    return;
+  }
+  const i =
+    editing >= 0
+      ? editing
+      : parts.findIndex((p) => currentTime >= p.start_s && currentTime < p.end_s);
+  if (i < 0) {
+    notice("先打开一个片段，或把播放头移到片段内", true);
+    return;
+  }
+  const p = parts[i],
+    t = Math.round(currentTime * 1000) / 1000,
+    prev = parts[i - 1],
+    next = parts[i + 1];
+  if (start ? t >= p.end_s : t <= p.start_s) {
+    notice(start ? "起点须早于本段终点" : "终点须晚于本段起点", true);
+    return;
+  }
+  if (start && prev && t <= prev.start_s) {
+    notice("会吞掉整个上一段：请先合并（M）", true);
+    return;
+  }
+  if (!start && next && t >= next.end_s) {
+    notice("会吞掉整个下一段：请先合并（Shift+M）", true);
+    return;
+  }
+  const previous = parts.map((x) => ({ ...x }));
+  if (start) {
+    p.start_s = t;
+    if (prev && prev.end_s > t) prev.end_s = t;
+  } else {
+    p.end_s = t;
+    if (next && next.start_s < t) next.start_s = t;
+  }
+  setDirty(true);
+  renderParts();
+  editPart(i);
+  offerUndo(start ? "撤销调整起点" : "撤销调整终点", previous);
+}
+// One colour per subtask on the timeline, so mis-cuts and gaps stand out.
+function labelHue(p) {
+  const key = p.subtask_id || p.subtask || p.task || "";
+  let h = 0;
+  for (const c of key) h = (h * 31 + c.codePointAt(0)) % 360;
+  return h;
+}
 // Next segment without a task, searching forward from `after` (seconds) and
 // wrapping around; -1 when every segment is filled.
 function nextUnfilled(after = -Infinity) {
@@ -1177,9 +1361,11 @@ function renderParts() {
   $("segments").replaceChildren();
   $("segmentTrack").replaceChildren();
   const outside = parts.filter(offTable).length;
-  const flagged = parts.filter((p) => p.flags?.length).length;
+  const flagged = parts.filter((p) => p.flags?.length).length,
+    pending = parts.filter(needsReview).length;
   $("segmentCount").textContent =
     `${parts.length} 个片段` +
+    (pending ? ` · ${pending} 段待复核` : "") +
     (flagged ? ` · ${flagged} 段存疑` : "") +
     (outside ? ` · ${outside} 段未关联动作表` : "");
   if (!parts.length)
@@ -1204,6 +1390,21 @@ function renderParts() {
     if (p.flags?.length) {
       const tag = el("span", "存疑", "off-table flagged");
       tag.title = p.flags.join("\n");
+      heading.append(tag);
+    }
+    const warnings = hints(p, i);
+    if (warnings.length) {
+      const tag = el("span", "提示", "off-table hint");
+      tag.title = warnings.join("\n");
+      heading.append(tag);
+    }
+    if (p.confidence != null) {
+      const tag = el(
+        "span",
+        "把握 " + p.confidence.toFixed(2),
+        "off-table confidence" + (p.confidence < LOW_CONFIDENCE ? " low" : ""),
+      );
+      tag.title = "模型自评把握（0–1），低于 " + LOW_CONFIDENCE + " 计入待复核";
       heading.append(tag);
     }
     b.append(
@@ -1248,6 +1449,9 @@ function renderParts() {
       const block = el("button", p.subtask || p.task || "未填写", p.hands || "both");
       block.dataset.index = i;
       block.classList.toggle("unfilled", unfilled(p));
+      if (!unfilled(p)) block.style.setProperty("--seg-hue", labelHue(p));
+      block.classList.toggle("hued", !unfilled(p));
+      block.classList.toggle("pending", needsReview(p, i));
       block.style.left = (p.start_s / review.duration_s) * 100 + "%";
       block.style.width =
         ((p.end_s - p.start_s) / review.duration_s) * 100 + "%";
@@ -1908,11 +2112,9 @@ function commitEditor() {
 }
 $("segmentForm").onsubmit = (e) => {
   e.preventDefault();
-  const filling = editing >= 0 && unfilled(parts[editing]),
+  const reviewing = editing >= 0 && needsReview(parts[editing], editing),
     p = commitEditor();
-  if (!p || !filling || focusUnfilled(p.start_s)) return;
-  if (!parts.some(unfilled))
-    notice("全部片段都已填写任务，点「保存全部标注」后生效");
+  if (p && reviewing) focusReview(p.start_s, parts.indexOf(p));
 };
 $("nextUnfilled").onclick = () => {
   const from = editing >= 0 ? parts[editing].start_s : currentTime;
@@ -2314,6 +2516,7 @@ function applyDraft(auto) {
     hands: s.hands || "both",
     note: s.description || "",
     flags: s.flags || [],
+    confidence: s.confidence ?? null,
   }));
   selection = new Set();
   setDirty(true);
@@ -2384,7 +2587,7 @@ bind("save", async () => {
     await api(
       base() + "/segments",
       "POST",
-      parts.map(({ note, flags, ...p }) => p),
+      parts.map(({ note, flags, confidence, ...p }) => p),
     );
     const t = currentTime;
     const data = await api(base() + "/review");
@@ -2802,10 +3005,27 @@ document.addEventListener("keydown", (e) => {
     $("play").click();
     return;
   }
-  if (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(e.target.tagName)) return;
-  if (e.key.toLowerCase() === "m" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+  // Shortcuts work over buttons and the timeline slider too, but not while
+  // typing, inside a dropdown, or for Enter on a button (that presses it).
+  if (
+    typing(e.target) ||
+    e.target.tagName === "SELECT" ||
+    (e.key === "Enter" && e.target.tagName === "BUTTON")
+  )
+    return;
+  const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+  if (e.key.toLowerCase() === "m" && plain) {
     e.preventDefault();
     mergeNeighbour(!e.shiftKey);
+  } else if (e.key === "Enter" && plain) {
+    e.preventDefault();
+    confirmAndNext();
+  } else if (/^[1-9]$/.test(e.key) && plain) {
+    e.preventDefault();
+    pickByNumber(Number(e.key));
+  } else if ((e.key === "[" || e.key === "]") && plain) {
+    e.preventDefault();
+    edgeToPlayhead(e.key === "[");
   } else if (e.key === "ArrowLeft") {
     e.preventDefault();
     $("prevFrame").click();

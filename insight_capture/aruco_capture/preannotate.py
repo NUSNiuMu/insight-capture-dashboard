@@ -251,6 +251,9 @@ def fold_unsure(segments):
             out.append(segment)
         elif out:
             out[-1]["end_s"] = segment["end_s"]
+            # The joined time was not understood: the result is less certain.
+            if out[-1].get("confidence") is not None:
+                out[-1]["confidence"] = round(out[-1]["confidence"] * 0.8, 2)
             if MERGED_FLAG not in out[-1]["flags"]:
                 out[-1]["flags"].append(MERGED_FLAG)
     return out
@@ -405,6 +408,7 @@ def run(path, url, table=None, model="", progress=lambda done, total: None, segm
                     "subtask": subtask_text.strip() or OTHER,
                     "subtask_id": "" if not subtask_text.strip() else item.get("subtask_id", ""),
                     "hands": hands,
+                    "confidence": None if unsure else item.get("confidence"),
                     "description": "",
                     "flags": list(dict.fromkeys(flags)),
                 })

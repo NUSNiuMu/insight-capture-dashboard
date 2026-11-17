@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sqlite3
+import time
 from pathlib import Path
 
 import cv2
@@ -31,6 +32,10 @@ from .dataset import (
 from .pose import camera_view
 from .pose_track import pose_settings, recompute, shutdown_pool, update_pose_settings
 from . import pose_track
+
+
+WIP = "segments_wip.json"
+REVIEWED_DRAFT = "segments_draft_reviewed.json"
 
 
 def create_app(capture, annotation_url=""):
@@ -376,7 +381,28 @@ def create_app(capture, annotation_url=""):
                 values, json.loads((path / "session.json").read_text())["duration_s"]
             )
             write_json(path / "segments.json", values)
+            # The model draft as it stood when a person saved: comparing it with
+            # segments.json measures how much review changed (tools/
+            # preannotation_report.py). The unsaved work-in-progress is done with.
+            draft = path / preannotate.DRAFT
+            if preannotate.has_model_draft(path):
+                shutil.copyfile(draft, path / REVIEWED_DRAFT)
+            (path / WIP).unlink(missing_ok=True)
         return web.json_response(json.loads((path / "segments.json").read_text()))
+
+    async def wip(request):
+        """Unsaved segment edits, kept so a reload or crash does not lose them;
+        segments.json is still written only by 保存全部标注."""
+        path = session(request)
+        file = path / WIP
+        if request.method == "POST":
+            body = await request.json()
+            if not isinstance(body.get("segments"), list):
+                raise ValueError("segments 须为列表")
+            write_json(file, {"saved_unix_ns": time.time_ns(), "segments": body["segments"]})
+        elif request.method == "DELETE":
+            file.unlink(missing_ok=True)
+        return web.json_response(json.loads(file.read_text()) if file.is_file() else None)
 
     async def actions(request):
         if request.method == "POST":
@@ -715,6 +741,9 @@ def create_app(capture, annotation_url=""):
             web.post("/api/action-table", actions),
             web.get("/api/annotation/service", annotation_service),
             web.post("/api/annotation/service", annotation_service),
+            web.get("/api/sessions/{name}/wip", wip),
+            web.post("/api/sessions/{name}/wip", wip),
+            web.delete("/api/sessions/{name}/wip", wip),
             web.get("/api/sessions/{name}/draft", draft),
             web.post("/api/sessions/{name}/draft", draft),
             web.get("/api/preview/{stream}", preview),
