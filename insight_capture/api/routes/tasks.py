@@ -2,6 +2,7 @@
 
 import asyncio
 from urllib.parse import quote
+from pathlib import Path
 
 from aiohttp import web
 
@@ -141,13 +142,54 @@ class TaskRoutes:
                     playback.stop()
                 return web.json_response({"status": "deleted", "task": removed})
 
-        deletion = asyncio.create_task(delete())
+        return await self._complete_deletion(delete())
+
+    async def _handle_take_delete(self, request: web.Request) -> web.Response:
+        payload = await read_json_body(request)
+        bag_name = payload.get("bag_name")
+        try:
+            take_id = int(request.match_info["take_id"])
+        except ValueError:
+            take_id = 0
+        if take_id < 1 or not isinstance(bag_name, str) or not bag_name:
+            return web.json_response({"message": "请重新打开删除确认。"}, status=400)
+        task_id = request.match_info["task_id"]
+        conflict = self._recording_conflict("delete")
+        if conflict is not None:
+            return conflict
+
+        async def delete():
+            async with self._transition:
+                conflict = self._recording_conflict("delete", own_transition=True)
+                if conflict is not None:
+                    return conflict
+                playback = getattr(self.context, "prepared_playback_manager", None)
+                current = playback.status() if playback else {}
+                selected_path = None
+                if current.get("bag_name"):
+                    try:
+                        selected_path = await asyncio.to_thread(self.context.bag_library.resolve, current["bag_name"])
+                    except FileNotFoundError:
+                        pass
+                protected = [selected_path] if selected_path and current.get("state") in {"preparing", "playing"} else []
+                removed = await asyncio.to_thread(
+                    self.context.take_store.delete_take, task_id, take_id, bag_name,
+                    self.context.recording_manager.storage_browse_roots(), protected_paths=protected)
+                if selected_path and current.get("state") == "ready" and any(
+                        selected_path.resolve().is_relative_to(Path(path).resolve()) for path in removed["paths"]):
+                    playback.stop()
+                return web.json_response({"status": "deleted", "take_id": take_id, "task_id": task_id})
+
+        return await self._complete_deletion(delete())
+
+    async def _complete_deletion(self, operation) -> web.Response:
+        deletion = asyncio.create_task(operation)
         try:
             return await asyncio.shield(deletion)
         except asyncio.CancelledError:
             await deletion
             raise
-        except ValueError as exc:
+        except (FileNotFoundError, ValueError) as exc:
             return web.json_response({"message": str(exc)}, status=404)
         except RuntimeError as exc:
             return web.json_response({"message": str(exc)}, status=409)

@@ -6,7 +6,7 @@ import RecordsPage from './RecordsPage.vue';
 import TrajectoryPanel from './TrajectoryPanel.vue';
 import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration, deviceStage, deviceHint } from './useCapture.js';
 import { t, language, setLanguage } from './i18n.js';
-const {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,deleteTask,leaveTaskCreation,calibrate,loadTasks}=useCapture();
+const {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,deleteTask,deleteTake,leaveTaskCreation,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
 const selectedTask=ref(''),openedTaskId=ref(''),taskDialogKey=ref(0),fieldErrors=ref({}),fieldAnnouncement=ref('');
 let fieldFrame,announceTimer,taskOpenGeneration=0,releaseModalScroll;
@@ -228,7 +228,7 @@ watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=tas
 <p class="section-description">{{t('重新校准会重建当前公共地图。先开始录制再校准，可将校准过程一同保存；原始采集不要求已定位。')}}</p></section>
 <section v-if="savedTake" class="card save-result"><strong>Take {{savedTake.take_id}} · {{t('保存完成')}}</strong><a class="route-link secondary compact" :href="`#history/${savedTake.task_id}/${savedTake.take_id}`" @click="navigate(`history/${savedTake.task_id}/${savedTake.take_id}`,$event)">{{t('查看记录')}}</a></section>
 </div>
-<RecordsPage v-if="page==='history'" :route="route" :tasks="tasks" :tasks-error="tasksError" :status="status" :busy="busy" :online="online" :action="action" :delete-task="deleteTask" :action-error="error" @create-task="openTasks(true)" @navigate="navigate" @ready="restoreView(true)" @refresh-tasks="loadTasks().catch(()=>{})"/>
+<RecordsPage v-if="page==='history'" :route="route" :tasks="tasks" :tasks-error="tasksError" :status="status" :busy="busy" :online="online" :action="action" :delete-task="deleteTask" :delete-take="deleteTake" :action-error="error" @create-task="openTasks(true)" @navigate="navigate" @ready="restoreView(true)" @refresh-tasks="loadTasks().catch(()=>{})"/>
 <div v-if="page==='settings'">
 <template v-if="route==='settings'">
 <section class="card device-hero"><span class="device-mark">I</span><h2>Insight Capture</h2><p class="section-description">Jetson · {{devices.map(d=>d.name.split('_')[0].toUpperCase()).join(' / ')}}</p></section>

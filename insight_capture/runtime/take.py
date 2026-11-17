@@ -134,6 +134,7 @@ class SessionTakeStore:
         self._write_json(path, {
             "schema_version": 1,
             "session_id": self.session_id,
+            "next_take_id": self._next_take_id(),
             "task": self.task,
             "task_id": self.task_id,
             "task_name": self.task,
@@ -207,6 +208,93 @@ class SessionTakeStore:
             self._write_active_state()
             return self.task_status()
 
+    @staticmethod
+    def _validate_removal_path(target: Path, root: Path) -> None:
+        resolved = target.resolve()
+        if resolved == root or not target.is_relative_to(root) or not resolved.is_relative_to(root):
+            raise RuntimeError("录制目录不在采集存储内，不能删除。")
+        for path in [target, *target.parents]:
+            if path == root:
+                break
+            if path.is_symlink():
+                raise RuntimeError("录制目录含软链接，不能删除。")
+        if not target.exists():
+            return
+        if not target.is_dir():
+            raise RuntimeError("录制目录异常，不能删除。")
+        for directory, dirs, _ in os.walk(target, followlinks=False):
+            if Path(directory).is_mount() or any((Path(directory) / child).is_mount() for child in dirs):
+                raise RuntimeError("录制目录包含挂载点，不能删除。")
+
+    def _take_data_paths(self, payload: Dict, raw_roots) -> list[tuple[Path, Path]]:
+        roots = [Path(root).resolve() for root in raw_roots]
+        paths = []
+        bag_name = payload["bag_name"]
+        folder = self._task_set_id(payload["task_id"])
+        if payload.get("bag_path"):
+            bag = Path(payload["bag_path"])
+            root = next((root for root in roots if bag.is_relative_to(root) and bag != root), None)
+            if root is None or bag.name != bag_name:
+                raise RuntimeError("录制目录与记录不匹配，不能删除。")
+            paths.append((bag, root))
+            # Recovery copies belong to this Take only when their manifest names
+            # its exact archived source. A similarly named ordinary bag is kept.
+            recovered = bag.with_name(bag.name + "_recovered")
+            manifest_path = recovered / "recording_manifest.json"
+            if manifest_path.is_file():
+                manifest = json.loads(manifest_path.read_text())
+                archive = root / "_staging" / ("." + bag_name + ".original")
+                if (manifest.get("recovered") is True and manifest.get("bag_name") == recovered.name
+                        and Path(manifest.get("recovery_source", "")) == archive):
+                    paths.extend([(recovered, root), (archive, root)])
+        for root in roots:
+            staging = root / "_staging" / bag_name
+            marker = staging / ".recording_target.json"
+            if marker.is_file() and json.loads(marker.read_text()).get("output_subdirectory") == folder:
+                paths.append((staging, root))
+        return list(dict.fromkeys(paths))
+
+    def delete_take(self, task_id: str, take_id: int, expected_bag_name: str,
+                    raw_roots, *, protected_paths=()) -> Dict:
+        with self._lock:
+            self._task_catalog.get(task_id)
+            current = self.current()
+            if current and current.get("state") in {"starting", "recording", "finalizing"}:
+                raise RuntimeError("正在准备、录制或保存，不能删除录制。")
+            takes_root = self.sessions_root / self._task_set_id(task_id) / "takes"
+            metadata = takes_root / f"take_{take_id:04d}.json"
+            if metadata.is_symlink() or takes_root.is_symlink() or takes_root.parent.is_symlink():
+                raise RuntimeError("录制记录目录异常，不能删除。")
+            payload = json.loads(metadata.read_text())
+            if (payload.get("task_id") != task_id or payload.get("take_id") != take_id
+                    or payload.get("bag_name") != expected_bag_name):
+                raise RuntimeError("录制记录已变化，请关闭并重新确认删除。")
+            if payload.get("state") in {"reserved", "starting", "recording", "finalizing"}:
+                raise RuntimeError("正在准备、录制或保存，不能删除录制。")
+            paths = self._take_data_paths(payload, raw_roots)
+            for target, root in paths:
+                self._validate_removal_path(target, root)
+                if any(Path(protected).resolve().is_relative_to(target.resolve()) for protected in protected_paths):
+                    raise RuntimeError("请先停止该条录制的回放。")
+            owned = {target.resolve() for target, _ in paths}
+            for other in self._list_takes_from(takes_root, include_timing=False):
+                if other.get("take_id") != take_id and other.get("bag_path") and Path(other["bag_path"]).resolve() in owned:
+                    raise RuntimeError("数据目录与另一条录制共用，不能删除。")
+            # Persist the next number before removing the highest Take. It must
+            # never be reused, including after task switches or an app restart.
+            session_path = takes_root.parent / "session.json"
+            session = json.loads(session_path.read_text()) if session_path.is_file() else {}
+            session["next_take_id"] = self._next_take_id_from(takes_root)
+            self._write_json(session_path, session)
+            for target, _ in paths:
+                if target.exists():
+                    shutil.rmtree(target)
+            metadata.unlink()
+            if self.task_id == task_id and self._current_take_id == take_id:
+                self._current_take_id = None
+            self._stats_cache.pop(takes_root, None)
+            return {"task_id": task_id, "take_id": take_id, "paths": [str(target) for target, _ in paths]}
+
     def delete_task(self, task_id: str, raw_roots, expected_recorded_takes: int) -> Dict:
         with self._lock:
             task = self._task_catalog.get(task_id)
@@ -231,14 +319,7 @@ class SessionTakeStore:
                 target = root / name
                 if target in targets:
                     continue
-                if target.is_symlink() or target.resolve().parent != root:
-                    raise RuntimeError("任务目录不是独立目录，不能删除。")
-                if target.exists():
-                    if not target.is_dir():
-                        raise RuntimeError("任务目录异常，不能删除。")
-                    for directory, dirs, _ in os.walk(target, followlinks=False):
-                        if Path(directory).is_mount() or any((Path(directory) / child).is_mount() for child in dirs):
-                            raise RuntimeError("任务目录包含挂载点，不能删除。")
+                self._validate_removal_path(target, root)
                 targets.append(target)
             # All paths are validated before any removal. Raw data is removed
             # before its catalog entry, so an I/O failure remains visible for retry.
@@ -293,7 +374,14 @@ class SessionTakeStore:
             match = re.fullmatch(r"take_(\d+)\.json", path.name)
             if match:
                 ids.append(int(match.group(1)))
-        return max(ids, default=0) + 1
+        next_id = max(ids, default=0) + 1
+        try:
+            saved = json.loads((takes_root.parent / "session.json").read_text()).get("next_take_id")
+            if type(saved) is int:
+                next_id = max(next_id, saved)
+        except (OSError, ValueError, AttributeError):
+            pass
+        return next_id
 
     def reserve_take(
         self, requested_bag_name: Optional[str] = None, *, trigger: str = "web"

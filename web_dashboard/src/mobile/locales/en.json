@@ -870,5 +870,9 @@
   "已删除任务“{0}”。": "Deleted task “{0}”.",
   "任务未删除，请查看提示后重试。": "Task was not deleted. Check the message and try again.",
   "正在删除": "Deleting",
-  "确认删除": "Delete task"
+  "确认删除": "Delete task",
+  "删除录制 Take {0}": "Delete recording Take {0}",
+  "将删除任务“{0}”中的 Take {1} 及其录制数据，删除后无法恢复。": "Delete Take {1} and its recording data from task “{0}”? This cannot be undone.",
+  "已删除 Take {0}。": "Deleted Take {0}.",
+  "录制未删除，请查看提示后重试。": "Recording was not deleted. Check the message and try again."
 }

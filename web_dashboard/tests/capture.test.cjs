@@ -543,3 +543,24 @@ for(const outcome of ['removed','present','unreadable','rejected'])test(`task de
  assert.equal(await c.deleteTask({task_id:'qa',stats:{recorded_takes:2}}),outcome==='removed');
  assert.equal(writes,1);assert.equal(c.pending.value,false);
 });
+
+for(const outcome of ['removed','present','unreadable','rejected','already-deleted'])test(`single Take deletion reconciles ${outcome} without a second write`,async()=>{
+ const c=await harness();let writes=0;
+ global.fetch=async(url,options={})=>{
+  if(options.method==='POST'){
+   writes++;assert.equal(url,'/api/tasks/qa/recordings/7/delete');assert.equal(JSON.parse(options.body).bag_name,'take7');
+   if(outcome==='rejected')return response({message:'recording busy'},409);
+   if(outcome==='already-deleted')return response({message:'not found'},404);
+   throw new TypeError('Connection lost');
+  }
+  if(url==='/api/mobile/status')return response(snapshot());
+  if(url==='/api/tasks/qa/recordings'){
+   if(outcome==='unreadable')throw new TypeError('offline');
+   return response({takes:['removed','already-deleted'].includes(outcome)?[]:[{take_id:7}]});
+  }
+  if(url==='/api/tasks')return response({tasks:[]});
+  throw new Error(url);
+ };
+ assert.equal(await c.deleteTake('qa',{take_id:7,bag_name:'take7'}),['removed','already-deleted'].includes(outcome));
+ assert.equal(writes,1);assert.equal(c.pending.value,false);
+});

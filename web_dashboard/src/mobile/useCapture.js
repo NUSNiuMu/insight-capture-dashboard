@@ -108,6 +108,14 @@ export function useCapture() {
     if(ok&&taskDraft.value?.id===task.task_id){taskDraft.value=null;writeSession('task-draft',null);}
     return ok;
   }
+  async function deleteTake(taskId,take) {
+    const path=`/api/tasks/${encodeURIComponent(taskId)}/recordings`;
+    return action(`${path}/${take.take_id}/delete`,{bag_name:take.bag_name},async(e)=>{
+      if(e.status&&e.status!==404)return false;
+      const listed=await api(path).catch(()=>null);
+      return Boolean(listed?.takes&&!listed.takes.some(item=>item.take_id===take.take_id));
+    });
+  }
   async function record(actionName) {
     if(pending.value || !online.value) return;
     const taskId=status.value?.task_status?.task?.task_id,outputPath=status.value?.output_path;
@@ -193,7 +201,7 @@ export function useCapture() {
   watch(online,value=>{if(value)loadTasks().catch(()=>{});});
   onMounted(()=>{poll();pollMap();});
   onBeforeUnmount(()=>{alive=false;clearTimeout(timer);clearTimeout(mapTimer);});
-  return {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,deleteTask,leaveTaskCreation,calibrate,loadTasks};
+  return {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,deleteTask,deleteTake,leaveTaskCreation,calibrate,loadTasks};
 }
 export const roleLabel=role=>t({head:'头部相机',left_hand:'左腕相机',right_hand:'右腕相机'}[role]||role);
 export const stateLabel=state=>t({idle:'准备就绪',starting:'正在准备',recording:'正在录制',saving:'正在保存',saved:'保存完成',error:'操作失败',playback:'桌面回放中'}[state]||'连接中');

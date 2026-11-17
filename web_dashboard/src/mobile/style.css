@@ -188,7 +188,7 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #7b8494; border
 .records-heading button { flex-shrink: 0; }
 .recording-row > div:first-child { min-width: 0; overflow-wrap: anywhere; }
 .recording-row > p { grid-column: 1 / -1; font-size: 0.8125rem; overflow-wrap: anywhere; }
-.recording-row-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.recording-row-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .storage-scan-result { font-size: 0.75rem; color: #596273; overflow-wrap: anywhere; }
 :is(#task-dialog, #delete-task-dialog) { inset: var(--modal-viewport-inset, 0px); width: min(440px, calc(var(--modal-viewport-width, 100%) - 28px)); max-height: calc(var(--modal-viewport-height, 100dvh) * .85); padding: 20px; border: 1px solid #dfe3e8; border-radius: 18px; }
 :is(#task-dialog, #delete-task-dialog)::backdrop { background: #11182766; }
