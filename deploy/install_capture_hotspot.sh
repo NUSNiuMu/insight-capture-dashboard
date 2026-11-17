@@ -38,4 +38,4 @@ nmcli connection modify jetson-capture-hotspot \
     ipv4.never-default yes ipv6.method disabled
 python3 "$here/install_network_services.py" --hotspot --defer-start
 echo 'Installed. Reboot to apply the driver and NetworkManager configuration.'
-echo 'Phone page: http://10.77.0.1:8765/mobile'
+echo 'Phone page: http://10.77.0.1'

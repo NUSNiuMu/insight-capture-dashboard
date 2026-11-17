@@ -75,5 +75,5 @@ if [[ ! -f /etc/insight-capture-hotspot.conf ]]; then
     INSIGHT_HOTSPOT_PASSWORD=07310731 bash "$target/deploy/install_capture_hotspot.sh" "$here/rtl8822ce.ko" "$uplink" "$ssid"
 fi
 if [[ $owner != root ]]; then chown "$owner:$(id -gn "$owner")" "$target"; fi
-printf '\n安装完成。重启设备后使用采集热点，密码：07310731\n手机地址：http://10.77.0.1:8765/mobile\n'
+printf '\n安装完成。重启设备后使用采集热点，密码：07310731\n手机地址：http://10.77.0.1\n'
 printf 'Qt 启动：%s/native_dashboard/run.sh\n' "$target"
