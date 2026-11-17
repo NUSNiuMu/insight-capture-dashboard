@@ -28,8 +28,11 @@ def catalog(rgb_streams):
          "description": "Insight9 画面上下补黑边成正方形，等比缩放到 448"},
         {"id": "head_pad224", "key": "head_view_224", "label": "头部 · 补黑边 224×224", "group": "头部相机",
          "size": [224, 224], "default": False, "description": "同上，缩放到 224"},
+        {"id": "subtask_end_head_raw", "key": "subtask_end_head", "label": "子任务结束帧 · 原始分辨率",
+         "group": "头部相机", "size": None, "default": True,
+         "description": "当前片段（子任务）结束时刻的头部原图，不缩放不补边，整段片段内保持不变，作为目标图像"},
         {"id": "subtask_end_head", "key": "subtask_end_head_view", "label": "子任务结束帧 · 补黑边 224×224",
-         "group": "头部相机", "size": [224, 224], "default": True,
+         "group": "头部相机", "size": [224, 224], "default": False,
          "description": "当前片段（子任务）结束时刻的头部画面，整段片段内保持不变，作为目标图像"},
         {"id": "head_raw", "key": "head", "label": "头部 · 原始分辨率", "group": "头部相机",
          "size": None, "default": False, "description": "1920×1088 原图（旧版导出的格式）"},
@@ -141,6 +144,8 @@ class Renderer:
             return pad_square(self._stream("head", i)[0], 448)
         if kind == "head_pad224":
             return pad_square(self._stream("head", i)[0], 224)
+        if kind == "subtask_end_head_raw":
+            return self._stream("head", self._end_index(label))[0]
         if kind == "subtask_end_head":
             return pad_square(self._stream("head", self._end_index(label))[0], 224)
         if kind == "rgb_raw":
@@ -216,6 +221,9 @@ def describe_fields():
         {"key": "frame_index / episode_index / index", "label": "帧序号、episode 序号、全局序号"},
         {"key": "task_index", "label": "任务文本索引（meta/tasks.parquet）"},
         {"key": "valid.frame", "label": "有效帧标记"},
+        {"key": "observation.head_pose", "label": "头部 RGB 相机位姿 9 维：录制坐标系（重力对齐）下的位置 3 + 旋转 6D 6，来自头部 VIO"},
+        {"key": "observation.gravity", "label": "重力在头部相机坐标系下的向量（m/s²，3 维）"},
+        {"key": "valid.head_pose", "label": "该帧头部位姿是否有效"},
         {"key": "episode: tasks / subtask / task_id / subtask_id / participating_hands", "label": "片段标注元数据"},
         {"key": "meta/stats.json · modality.json · manifest.json", "label": "统计量、模态说明、来源清单"},
     ]
