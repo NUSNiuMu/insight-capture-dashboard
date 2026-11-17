@@ -13,6 +13,9 @@ POST /v1/segments  {"frames": [...], "fps": float, "action_table": {...} | null,
                     "task_id": str, "task": str}
                 -> {"segments": [{"start", "end", "subtask_id", "subtask", "flags"}], "flags", "raw"}
                    timed subtasks in one stretch of motion; times are seconds from its first frame
+POST /v1/ask       {"frames": [...], "fps": float, "question": str}
+                -> {"answer": "yes" | "no" | "unknown", "raw"}
+                   yes/no answer about the last frames (a robot's subtask post-condition check)
 """
 
 import argparse
@@ -135,6 +138,21 @@ class Model:
         answer = self.generate(frames, fps, build_task_prompt(len(frames or []) / fps, table), 400)
         return {**parse_task_answer(answer, table), "raw": answer}
 
+    def ask(self, request):
+        frames, fps = request.get("frames"), float(request.get("fps") or 1.0)
+        question = str(request.get("question") or "").strip()
+        if not question:
+            raise ValueError("question 不能为空")
+        if isinstance(frames, list) and len(frames) == 1:
+            frames = frames * 2  # a still frame is a two-frame clip
+        prompt = (
+            "These frames come from a robot's head camera; the last frame is the current state. "
+            f"{question} Answer with exactly one word: yes or no."
+        )
+        answer = self.generate(frames, fps, prompt, 8)
+        word = answer.strip().strip(".").lower()
+        return {"answer": "yes" if word.startswith("yes") else "no" if word.startswith("no") else "unknown", "raw": answer}
+
     def segments(self, request):
         frames, fps = request.get("frames"), float(request.get("fps") or 4.0)
         table = request.get("action_table") or {}
@@ -161,7 +179,7 @@ def serve(model, host, port):
             self.reply(200, {"status": "ok", "model": model.name, "busy": model.lock.locked()})
 
         def do_POST(self):
-            handler = {"/v1/task": model.task, "/v1/segments": model.segments}.get(self.path)
+            handler = {"/v1/task": model.task, "/v1/segments": model.segments, "/v1/ask": model.ask}.get(self.path)
             if handler is None:
                 return self.reply(404, {"error": "not found"})
             started = time.monotonic()
