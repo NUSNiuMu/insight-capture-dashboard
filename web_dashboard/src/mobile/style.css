@@ -190,8 +190,8 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #7b8494; border
 .recording-row > p { grid-column: 1 / -1; font-size: 0.8125rem; overflow-wrap: anywhere; }
 .recording-row-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .storage-scan-result { font-size: 0.75rem; color: #596273; overflow-wrap: anywhere; }
-#task-dialog { inset: var(--modal-viewport-inset, 0px); width: min(440px, calc(var(--modal-viewport-width, 100%) - 28px)); max-height: calc(var(--modal-viewport-height, 100dvh) * .85); padding: 20px; border: 1px solid #dfe3e8; border-radius: 18px; }
-#task-dialog::backdrop { background: #11182766; }
+:is(#task-dialog, #delete-task-dialog) { inset: var(--modal-viewport-inset, 0px); width: min(440px, calc(var(--modal-viewport-width, 100%) - 28px)); max-height: calc(var(--modal-viewport-height, 100dvh) * .85); padding: 20px; border: 1px solid #dfe3e8; border-radius: 18px; }
+:is(#task-dialog, #delete-task-dialog)::backdrop { background: #11182766; }
 #task-dialog label, #task-dialog p { font-size: 0.8125rem; color: #596273; }
 #task-dialog label { display: block; margin: 12px 0; }
 #task-dialog #new-task { width: 100%; margin-top: 12px; }
@@ -221,7 +221,7 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #7b8494; border
 .storage-detail p, .about-device p, .about-device small { color: #596273; line-height: 1.6; }
 .about-device { text-align: center; }
 .about-device .device-mark { margin: 0 auto; }
-.task-record-row { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; border-top: 1px solid #e9edf2; }
+.task-record-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; border-top: 1px solid #e9edf2; }
 .task-record-row .task-record-link { border-top: 0; }
 .task-delete-shortcut, .recording-delete-shortcut { color: #a52118; }
 
@@ -286,3 +286,8 @@ dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
   .compact { min-width: 44px; min-height: 44px; }
   .capture-view-switch button { min-height: 44px; }
 }
+
+.task-record-heading { flex-wrap: wrap; gap: 12px; }
+.task-record-heading h2 { margin-bottom: 4px; }
+.task-delete { color: #b42318; }
+#delete-task-dialog p { overflow-wrap: anywhere; line-height: 1.6; }

@@ -83,6 +83,7 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_post("/api/tasks/current", tasks._handle_current)
     app.router.add_post("/api/tasks/current/end", tasks._handle_end)
     app.router.add_post("/api/tasks/{task_id}/activate", tasks._handle_activate)
+    app.router.add_post("/api/tasks/{task_id}/delete", tasks._handle_delete)
     app.router.add_put("/api/tasks/{task_id}", tasks._handle_update)
     app.router.add_post("/api/takes/current/reject", takes._handle_reject_current)
     app.router.add_get("/api/recording/topics", recording._handle_recording_topics)

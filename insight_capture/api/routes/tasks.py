@@ -5,7 +5,7 @@ from urllib.parse import quote
 
 from aiohttp import web
 
-from insight_capture.api.context import DashboardContext
+from insight_capture.api.context import DashboardContext, capture_transition_lock
 from insight_capture.api.support import read_json_body
 from insight_capture.runtime.recovered_bundle import recovered_bundle
 
@@ -30,6 +30,7 @@ class TaskRoutes:
     def __init__(self, context: DashboardContext, recording=None) -> None:
         self.context = context
         self.recording = recording
+        self._transition = capture_transition_lock(context)
 
     async def _handle_list(self, _request: web.Request) -> web.Response:
         def snapshot():
@@ -95,8 +96,8 @@ class TaskRoutes:
         status = await asyncio.to_thread(self.context.take_store.task_status)
         return web.json_response({**status, "message": task_status_message(status)})
 
-    def _recording_conflict(self, action: str) -> web.Response | None:
-        busy = bool(self.recording and self.recording.busy)
+    def _recording_conflict(self, action: str, *, own_transition=False) -> web.Response | None:
+        busy = self._transition.locked() and not own_transition
         recording = {} if busy else self.context.recording_manager.status()
         if (not busy
                 and not recording.get("recording")
@@ -109,6 +110,49 @@ class TaskRoutes:
             },
             status=409,
         )
+
+    async def _handle_delete(self, request: web.Request) -> web.Response:
+        payload = await read_json_body(request)
+        count = payload.get("expected_recorded_takes")
+        if type(count) is not int or count < 0:
+            return web.json_response({"message": "请重新打开删除确认。"}, status=400)
+        task_id = request.match_info["task_id"]
+        conflict = self._recording_conflict("delete")
+        if conflict is not None:
+            return conflict
+
+        async def delete():
+            async with self._transition:
+                conflict = self._recording_conflict("delete", own_transition=True)
+                if conflict is not None:
+                    return conflict
+                playback = getattr(self.context, "prepared_playback_manager", None)
+                current = playback.status() if playback else {}
+                roots = self.context.recording_manager.storage_browse_roots()
+                selected = False
+                if current.get("bag_name"):
+                    path = self.context.bag_library.resolve(current["bag_name"])
+                    folder = self.context.take_store._task_set_id(task_id)
+                    selected = any(path.resolve().is_relative_to((root / folder).resolve()) for root in roots)
+                if selected and current.get("state") in {"preparing", "playing"}:
+                    return web.json_response({"message": "请先停止该任务的回放。"}, status=409)
+                removed = await asyncio.to_thread(self.context.take_store.delete_task, task_id, roots, count)
+                if selected and current.get("state") == "ready":
+                    playback.stop()
+                return web.json_response({"status": "deleted", "task": removed})
+
+        deletion = asyncio.create_task(delete())
+        try:
+            return await asyncio.shield(deletion)
+        except asyncio.CancelledError:
+            await deletion
+            raise
+        except ValueError as exc:
+            return web.json_response({"message": str(exc)}, status=404)
+        except RuntimeError as exc:
+            return web.json_response({"message": str(exc)}, status=409)
+        except OSError:
+            return web.json_response({"message": "删除未完成，请检查存储后重试。"}, status=500)
 
     async def _handle_create(self, request: web.Request) -> web.Response:
         payload = await read_json_body(request)

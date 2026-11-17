@@ -89,7 +89,7 @@ export function useCapture() {
       try { const result=await api(path,body);acknowledged?.(result); }
       catch(e) {
         const current=await refresh();
-        if(!reconcile?.(e,current)){error.value=e.message;return false;}
+        if(!await reconcile?.(e,current)){error.value=e.message;return false;}
       }
       // The command acknowledgement remains successful if a later read fails.
       await refresh();
@@ -97,6 +97,16 @@ export function useCapture() {
       return true;
     }
     finally { pending.value=false; }
+  }
+  async function deleteTask(task) {
+    const ok=await action(`/api/tasks/${encodeURIComponent(task.task_id)}/delete`,
+      {expected_recorded_takes:task.stats?.recorded_takes||0},async(e)=>{
+        if(e.status)return false;
+        const listed=await api('/api/tasks').catch(()=>null);
+        return Boolean(listed?.tasks&&!listed.tasks.some(item=>item.task_id===task.task_id));
+      });
+    if(ok&&taskDraft.value?.id===task.task_id){taskDraft.value=null;writeSession('task-draft',null);}
+    return ok;
   }
   async function record(actionName) {
     if(pending.value || !online.value) return;
@@ -183,7 +193,7 @@ export function useCapture() {
   watch(online,value=>{if(value)loadTasks().catch(()=>{});});
   onMounted(()=>{poll();pollMap();});
   onBeforeUnmount(()=>{alive=false;clearTimeout(timer);clearTimeout(mapTimer);});
-  return {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,leaveTaskCreation,calibrate,loadTasks};
+  return {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,deleteTask,leaveTaskCreation,calibrate,loadTasks};
 }
 export const roleLabel=role=>t({head:'头部相机',left_hand:'左腕相机',right_hand:'右腕相机'}[role]||role);
 export const stateLabel=state=>t({idle:'准备就绪',starting:'正在准备',recording:'正在录制',saving:'正在保存',saved:'保存完成',error:'操作失败',playback:'桌面回放中'}[state]||'连接中');

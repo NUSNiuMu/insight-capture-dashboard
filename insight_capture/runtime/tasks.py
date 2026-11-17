@@ -46,10 +46,12 @@ class CaptureTaskCatalog:
         *,
         default_task_id: Optional[str] = None,
         managed_root: Optional[Path] = None,
+        source_path: Optional[Path] = None,
     ) -> None:
         self._lock = threading.RLock()
         self._tasks = {task.task_id: task for task in tasks}
         self.managed_root = Path(managed_root).resolve() if managed_root else None
+        self.source_path = Path(source_path).resolve() if source_path else None
         self.default_task_id = str(default_task_id or "").strip() or None
         if self.default_task_id and self.default_task_id not in self._tasks:
             raise ValueError(
@@ -84,6 +86,7 @@ class CaptureTaskCatalog:
             tasks.values(),
             default_task_id=payload.get("default_task_id"),
             managed_root=resolved_managed_root,
+            source_path=path,
         )
 
     @staticmethod
@@ -142,6 +145,25 @@ class CaptureTaskCatalog:
             self._persist(task)
             self._tasks[normalized_id] = task
             return task
+
+    def remove(self, task_id: str) -> None:
+        """Remove a task from both the configured registry and memory."""
+        with self._lock:
+            self.get(task_id)
+            if self.source_path is not None:
+                payload = json.loads(self.source_path.read_text(encoding="utf-8"))
+                remaining = [item for item in payload["tasks"]
+                             if (item.get("id") or item.get("task_id")) != task_id]
+                if len(remaining) != len(payload["tasks"]):
+                    payload["tasks"] = remaining
+                    if payload.get("default_task_id") == task_id:
+                        payload["default_task_id"] = None
+                    temporary = self.source_path.with_suffix(".json.tmp")
+                    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    temporary.replace(self.source_path)
+            self._tasks.pop(task_id)
+            if self.default_task_id == task_id:
+                self.default_task_id = None
 
     def get(self, task_id: str) -> CaptureTask:
         with self._lock:

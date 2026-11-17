@@ -524,3 +524,22 @@ test('start carries the task displayed when the operator clicked',async()=>{
   assert.equal(c.error.value,'采集任务已变更，请确认当前任务后再开始录制。');
   assert.equal(c.pending.value,false);
 });
+
+for(const outcome of ['removed','present','unreadable','rejected'])test(`task deletion reconciles ${outcome} without repeating the write`,async()=>{
+ const c=await harness();let writes=0;
+ global.fetch=async(url,options={})=>{
+  if(options.method==='POST'){
+   writes++;assert.equal(JSON.parse(options.body).expected_recorded_takes,2);
+   if(outcome==='rejected')return response({message:'count changed'},409);
+   throw new TypeError('Connection lost');
+  }
+  if(url==='/api/mobile/status')return response(snapshot());
+  if(url==='/api/tasks'){
+   if(outcome==='unreadable')throw new TypeError('offline');
+   return response({tasks:outcome==='removed'?[]:[{task_id:'qa'}]});
+  }
+  throw new Error(url);
+ };
+ assert.equal(await c.deleteTask({task_id:'qa',stats:{recorded_takes:2}}),outcome==='removed');
+ assert.equal(writes,1);assert.equal(c.pending.value,false);
+});

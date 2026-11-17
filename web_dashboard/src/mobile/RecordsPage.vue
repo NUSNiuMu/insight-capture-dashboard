@@ -2,9 +2,37 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { api, takeDuration, takeDisplayState, roleLabel, duration } from './useCapture.js';
 import { t, language } from './i18n.js';
-const props=defineProps({route:String,tasks:Array,tasksError:String,status:Object,busy:Boolean,online:Boolean,action:Function});
-const emit=defineEmits(['navigate','refresh-tasks','ready']);
+import { guardModalScroll } from '../modal-scroll.js';
+const props=defineProps({route:String,tasks:Array,tasksError:String,status:Object,busy:Boolean,online:Boolean,action:Function,deleteTask:Function,actionError:String});
+const emit=defineEmits(['navigate','refresh-tasks','ready','create-task']);
 const recordSet=ref(null),error=ref(''),loading=ref(false),transfers=ref(null);
+const deleteDialog=ref(null),deleteTarget=ref(null),deleting=ref(false),deleteError=ref(''),notice=ref(''),createButton=ref(null);
+let releaseDeleteScroll;
+async function confirmDelete(task){
+ if(props.busy||!props.online||deleting.value)return;
+ deleteTarget.value={...task,stats:{...task.stats}};deleteError.value='';notice.value='';
+ await nextTick();
+ if(!alive||props.route.includes('/'))return;
+ deleteDialog.value.showModal();
+ releaseDeleteScroll=guardModalScroll(deleteDialog.value,{fitViewport:true});
+}
+function closeDelete(){releaseDeleteScroll?.();releaseDeleteScroll=null;}
+async function removeTask(){
+ if(deleting.value||props.busy||!props.online)return;
+ const task=deleteTarget.value;deleting.value=true;deleteError.value='';
+ try{
+  const ok=await props.deleteTask(task);
+  if(!alive)return;
+  if(ok){
+   deleteDialog.value.close();notice.value=t('已删除任务“{0}”。',task.name);
+   await nextTick();
+   if(alive&&!props.route.includes('/')&&!deleteDialog.value.open)createButton.value?.focus();
+  }else{
+   deleteError.value=t('任务未删除，请查看提示后重试。');emit('refresh-tasks');
+  }
+ }finally{if(alive)deleting.value=false;}
+}
+watch(()=>props.route,()=>{if(deleteDialog.value?.open)deleteDialog.value.close();});
 const takesPerFrame=64,renderLimit=ref(0);
 let generation=0,transfersGeneration=0,renderGeneration=0,renderFrame,timer,alive=true;
 const selectedTakes=computed(()=>{
@@ -69,7 +97,7 @@ async function refresh(){
 }
 function visibility(){if(!document.hidden&&props.online)refreshRecords();}
 onMounted(()=>{refresh();document.addEventListener('visibilitychange',visibility);});
-onBeforeUnmount(()=>{alive=false;generation++;renderGeneration++;if(renderFrame!==undefined)cancelAnimationFrame(renderFrame);clearTimeout(timer);document.removeEventListener('visibilitychange',visibility);});
+onBeforeUnmount(()=>{alive=false;releaseDeleteScroll?.();generation++;renderGeneration++;if(renderFrame!==undefined)cancelAnimationFrame(renderFrame);clearTimeout(timer);document.removeEventListener('visibilitychange',visibility);});
 async function merge(session_id){if(await props.action('/api/postprocessing/merge',{session_id})){await refreshTransfers();refreshRecords();}}
 const date=value=>value?new Date(value*1000).toLocaleString(): '—';
 const takeState=s=>t({complete:'已保存',saved:'等待传输',finalization_failed:'保存异常',recording:'正在录制',finalizing:'正在保存',reserved:'正在准备',starting:'正在准备',start_failed:'录制失败',failed:'录制失败'}[s]||s);
@@ -99,8 +127,9 @@ function qualityReasons(take){
 <p v-if="online && (error||(!route.includes('/')&&tasksError))" class="global-error" role="alert">{{error?t('记录暂时无法更新，连接恢复后自动重试。'):tasksError}}</p>
 <p v-if="!online" class="issue warning">{{t('设备离线，已加载的记录仍可查看；重连后自动更新。')}}</p>
 <p v-if="loading" class="empty">{{t('正在读取记录')}}</p>
-<section v-else-if="!route.includes('/')" class="card"><div class="section-title"><h2>{{t('任务记录')}}</h2><span>{{tasks.length}} {{t('个任务')}}</span></div>
-<ul class="record-list" role="list"><li v-for="task in tasks" :key="task.task_id"><a :href="`#history/${task.task_id}`" :data-history-route="`history/${task.task_id}`" class="route-link task-record-link" @click="emit('navigate',`history/${task.task_id}`,$event)"><strong>{{task.name}}</strong><span>{{task.stats?.recorded_takes||0}} Take ›</span></a></li></ul><p v-if="!tasks.length" class="empty">{{t('暂无记录')}}</p></section>
+<section v-else-if="!route.includes('/')" class="card"><div class="section-title task-record-heading"><div><h2>{{t('任务记录')}}</h2><span>{{tasks.length}} {{t('个任务')}}</span></div><button ref="createButton" id="create-task" type="button" class="primary compact" :disabled="busy||!online" @click="emit('create-task')">{{t('新建任务')}}</button></div>
+<p role="status">{{notice}}</p>
+<ul class="record-list" role="list"><li v-for="task in tasks" :key="task.task_id" class="task-record-row"><a :href="`#history/${task.task_id}`" :data-history-route="`history/${task.task_id}`" class="route-link task-record-link" @click="emit('navigate',`history/${task.task_id}`,$event)"><strong>{{task.name}}</strong><span>{{task.stats?.recorded_takes||0}} Take ›</span></a><button type="button" class="secondary compact task-delete" :disabled="busy||!online||deleting" :aria-label="t('删除任务“{0}”',task.name)" @click="confirmDelete(task)">{{t('删除')}}</button></li></ul><p v-if="!tasks.length" class="empty">{{t('暂无记录')}}</p></section>
 <section v-else-if="recordSet" class="card"><div class="section-title"><h2>{{recordSet.task.name}}</h2></div>
 <p v-if="!selectedTakes.length" class="empty">{{t(route.split('/')[2]?'找不到这条录制记录':'暂无记录')}}</p>
 <ul class="record-list take-list" role="list" :key="route.split('/')[2]?'detail':'list'" :aria-busy="renderLimit<selectedTakes.length"><li v-for="take in renderedTakes" :key="take.take_id" v-memo="[take,status,language,online,route,recordSet.task]"><article class="recording-row">
@@ -113,4 +142,10 @@ function qualityReasons(take){
 </article></li></ul><p v-if="renderLimit<selectedTakes.length" class="empty" role="status">{{t('正在读取记录')}}</p></section>
 <section v-if="transfers?.enabled" class="card"><h2>{{t('回传与合包')}}</h2><ul class="record-list" role="list"><li v-for="item in transfers.recordings" :key="item.session_id"><article class="recording-row"><strong>{{item.task_name}} · Take {{item.take_id}}</strong><span>{{item.phase}}</span><p v-if="item.error" class="issue error">{{item.error}}</p><button v-if="['saved','error'].includes(item.phase)" class="secondary" :disabled="busy||!online||transfers.busy" :aria-label="`${t('回传并合包')} · ${item.task_name} · Take ${item.take_id}`" @click="merge(item.session_id)">{{t('回传并合包')}}</button></article></li></ul><p v-if="!transfers.recordings.length" class="empty">{{t('暂无待回传记录')}}</p></section>
 <p class="settings-note">{{t('浏览记录不会切换当前采集任务。原始数据保存在 Jetson，可在桌面端回放。')}}</p>
+<dialog ref="deleteDialog" id="delete-task-dialog" aria-labelledby="delete-task-title" aria-describedby="delete-task-description" @close="closeDelete">
+<h2 id="delete-task-title">{{t('删除任务')}}</h2>
+<p id="delete-task-description">{{t('将删除任务“{0}”及其 {1} 条录制数据，删除后无法恢复。',deleteTarget?.name,deleteTarget?.stats?.recorded_takes||0)}}</p>
+<p v-if="deleteError" class="issue error" role="alert">{{actionError||deleteError}}</p>
+<div class="dialog-actions"><button type="button" class="secondary" autofocus @click="deleteDialog.close()">{{t(deleting?'关闭':'取消')}}</button><button type="button" class="danger" :disabled="deleting||busy||!online" @click="removeTask">{{t(deleting?'正在删除':'确认删除')}}</button></div>
+</dialog>
 </template>

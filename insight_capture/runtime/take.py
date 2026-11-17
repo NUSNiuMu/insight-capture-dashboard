@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import os
+import shutil
 import threading
 import time
 from copy import deepcopy
@@ -39,7 +41,7 @@ def _slug(value: object, fallback: str) -> str:
 
 
 class SessionTakeStore:
-    """Persist operator decisions and lightweight QC without touching raw bags."""
+    """Persist task metadata and remove owned data on explicit task deletion."""
 
     def __init__(
         self,
@@ -204,6 +206,56 @@ class SessionTakeStore:
             self._write_session(ended_at_epoch_s=ended_at)
             self._write_active_state()
             return self.task_status()
+
+    def delete_task(self, task_id: str, raw_roots, expected_recorded_takes: int) -> Dict:
+        with self._lock:
+            task = self._task_catalog.get(task_id)
+            current = self.current()
+            if current and current.get("state") in {"starting", "recording", "finalizing"}:
+                raise RuntimeError("正在准备、录制或保存，不能删除任务。")
+            folder = self._task_set_id(task_id)
+            if any(item["task_id"] != task_id and self._task_set_id(item["task_id"]) == folder
+                   for item in self._task_catalog.list()):
+                raise RuntimeError("任务目录与另一任务重名，不能删除。")
+            takes_root = self.sessions_root / folder / "takes"
+            self._stats_cache.pop(takes_root, None)
+            count = self._cached_take_stats(takes_root)["recorded_takes"]
+            if count != expected_recorded_takes:
+                raise RuntimeError("录制条数已变化，请关闭并重新确认删除。")
+            targets = []
+            for root, name in [(Path(root), folder) for root in raw_roots] + [
+                (self.sessions_root, folder),
+                *([(self._task_catalog.managed_root, task_id)] if self._task_catalog.managed_root else []),
+            ]:
+                root = root.resolve()
+                target = root / name
+                if target in targets:
+                    continue
+                if target.is_symlink() or target.resolve().parent != root:
+                    raise RuntimeError("任务目录不是独立目录，不能删除。")
+                if target.exists():
+                    if not target.is_dir():
+                        raise RuntimeError("任务目录异常，不能删除。")
+                    for directory, dirs, _ in os.walk(target, followlinks=False):
+                        if Path(directory).is_mount() or any((Path(directory) / child).is_mount() for child in dirs):
+                            raise RuntimeError("任务目录包含挂载点，不能删除。")
+                targets.append(target)
+            # All paths are validated before any removal. Raw data is removed
+            # before its catalog entry, so an I/O failure remains visible for retry.
+            for target in targets:
+                if target.exists():
+                    shutil.rmtree(target)
+            if self.task_id == task_id:
+                self._active = False
+                self.task_id = self.session_id = self.task_instruction = self.capture_profile = ""
+                self.task = "unspecified"
+                self._current_take_id = None
+                self.root = self.sessions_root
+                self.takes_root = self.sessions_root / "takes"
+                self._write_active_state()
+            self._task_catalog.remove(task_id)
+            self._stats_cache.clear()
+            return {"task_id": task_id, "name": task.name, "recorded_takes": count}
 
     def list_tasks(self) -> list[Dict[str, object]]:
         tasks = []
