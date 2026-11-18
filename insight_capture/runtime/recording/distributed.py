@@ -281,6 +281,24 @@ class DistributedRecordingManager:
                     sessions[session["session_id"]] = session
         return sorted(sessions.values(), key=lambda s: s["created_at_epoch_s"], reverse=True)
 
+    def delete_saved_recordings(self, operation):
+        # Serialize with direct manager callers and the background merge worker,
+        # in addition to the HTTP capture transition lock.
+        if not self._lifecycle.acquire(blocking=False):
+            raise RuntimeError("录制或合包操作正在进行，不能删除。")
+        try:
+            if self.local.is_recording() or self._session.get("phase") not in TERMINAL | {None}:
+                raise RuntimeError("请先结束录制或等待当前后处理完成")
+            result = operation()
+            with self._lock:
+                if self._session.get("session_id") in result.get("distributed_session_ids", []):
+                    self.state_path.unlink(missing_ok=True)
+                    self._session = {}
+                    self._last_error = None
+            return result
+        finally:
+            self._lifecycle.release()
+
     def start_merge(self, session_id):
         with self._lifecycle:
             if self.local.is_recording() or self._session.get("phase") not in TERMINAL | {None}:

@@ -195,7 +195,22 @@ class RecordingRoutes:
         if not hasattr(manager, "start_merge"):
             raise ValueError("Distributed recording is not configured.")
         payload = await read_json_body(request)
-        return web.json_response(await asyncio.to_thread(manager.start_merge, payload.get("session_id")), status=202)
+        if self.busy:
+            raise RuntimeError("A recording operation is still running.")
+
+        async def start_merge():
+            async with self._transition:
+                return await asyncio.to_thread(manager.start_merge, payload.get("session_id"))
+
+        admission = asyncio.create_task(start_merge())
+        try:
+            result = await asyncio.shield(admission)
+        except asyncio.CancelledError:
+            # A cancelled HTTP request must not release admission while its
+            # thread can still publish a new merge session.
+            await admission
+            raise
+        return web.json_response(result, status=202)
 
     async def _start_with_preflight(self, *, expected_task_id: str | None = None, **kwargs):
         if self.busy:

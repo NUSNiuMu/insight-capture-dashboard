@@ -9,8 +9,12 @@ from unittest.mock import patch
 
 from insight_capture.api.context import capture_transition_lock
 from insight_capture.api.routes.tasks import TaskRoutes
+from insight_capture.api.routes.recording import RecordingRoutes
+from insight_capture.runtime.recording.distributed import DistributedRecordingManager
 from insight_capture.runtime.take import SessionTakeStore
 from insight_capture.runtime.tasks import CaptureTaskCatalog
+from insight_capture.postprocess.bags import BagLibrary
+from insight_capture.postprocess.bags.synchronization import PreparedPlaybackManager
 
 class TaskDeletionTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -125,6 +129,56 @@ class TaskDeletionTest(unittest.IsolatedAsyncioTestCase):
         current["state"]="ready"
         self.assertEqual((await self.delete(count=1)).status,200)
         self.assertEqual(current["state"],"idle")
+
+    async def test_invalid_unrelated_staging_markers_do_not_block_task_deletion(self):
+        bag = self.record()
+        for name, contents in (("truncated", "{"), ("array", "[]"), ("null", "null")):
+            staging = self.raw / "_staging" / name
+            staging.mkdir(parents=True)
+            (staging / ".recording_target.json").write_text(contents)
+        response = await self.delete(count=1)
+        self.assertEqual(response.status, 200, response.text)
+        self.assertFalse(bag.exists())
+        for name, contents in (("truncated", "{"), ("array", "[]"), ("null", "null")):
+            marker = self.raw / "_staging" / name / ".recording_target.json"
+            self.assertEqual(marker.read_text(), contents)
+
+    async def test_unreadable_staging_marker_is_preserved_without_blocking_deletion(self):
+        bag = self.record()
+        marker = self.raw / "_staging" / "unreadable" / ".recording_target.json"
+        marker.parent.mkdir(parents=True)
+        marker.write_text('{"output_subdirectory":"unknown"}')
+        read_text = Path.read_text
+        def read(path, *args, **kwargs):
+            if path == marker:
+                raise PermissionError("fixture")
+            return read_text(path, *args, **kwargs)
+        with patch.object(Path, "read_text", read):
+            response = await self.delete(count=1)
+        self.assertEqual(response.status, 200, response.text)
+        self.assertFalse(bag.exists())
+        self.assertTrue(marker.exists())
+
+    async def test_missing_old_playback_selection_does_not_block_other_task_deletion(self):
+        bag = self.record()
+        selected = self.raw / "other" / "selected"
+        selected.mkdir(parents=True)
+        (selected / "data.mcap").write_bytes(b"synthetic recording")
+        (selected / "metadata.yaml").write_text("rosbag2_bagfile_information:\n  storage_identifier: mcap\n")
+        library = BagLibrary(lambda: [self.raw], lambda: self.raw)
+        reference = library.reference_for_path(selected)
+        self.assertIsNotNone(reference)
+        self.assertEqual(library.resolve(reference), selected)
+        playback = PreparedPlaybackManager(self.raw, self.root / "cache")
+        playback._state, playback._bag_name = "ready", reference
+        self.context.prepared_playback_manager = playback
+        self.context.bag_library = library
+        selected.rename(selected.with_name("moved"))
+        response = await self.delete(count=1)
+        self.assertEqual(response.status, 200, response.text)
+        self.assertFalse(bag.exists())
+        self.assertEqual(playback.status()["state"], "idle")
+        self.assertTrue(selected.with_name("moved").exists())
 
     async def delete_take(self, take_id, bag_name, task="builtin"):
         class Request:
@@ -248,3 +302,168 @@ class TaskDeletionTest(unittest.IsolatedAsyncioTestCase):
         data=json.loads(meta.read_text());data["bag_path"]=str(self.raw / ".." / "outside" / bag.name);meta.write_text(json.dumps(data))
         self.assertEqual((await self.delete_take(1,bag.name)).status,409)
         self.assertTrue((outside / "keep").exists());self.assertTrue(meta.exists());self.assertTrue(bag.exists())
+
+    def distributed_recording(self):
+        take = self.store.reserve_take()
+        bag = self.raw / "builtin" / take["bag_name"]
+        sid = "a" * 32
+        base = self.raw / "_distributed"
+        base.mkdir()
+        session = {
+            "session_id": sid, "task_id": "builtin", "take_id": 1,
+            "phase": "saved", "created_at_epoch_s": 1, "ego_url": "http://fixture",
+            "output_path": str(bag), "jetson_path": str(base / (sid + "_jetson")),
+            "ego_copy_path": str(base / (sid + "_ego")),
+            "manifest_path": str(base / (sid + ".json")),
+            "local_saved": True, "remote_saved": True,
+        }
+        for key in ("jetson_path", "ego_copy_path"):
+            Path(session[key]).mkdir()
+            Path(session[key], "data.mcap").write_bytes(b"synthetic original")
+        distributed = {key: session[key] for key in (
+            "session_id", "task_id", "take_id", "jetson_path")}
+        self.store.mark_recording(bag, {"distributed": distributed})
+        self.store.complete_current({"output_path": str(bag), "merge_state": "saved", "distributed": distributed})
+        manager = DistributedRecordingManager.__new__(DistributedRecordingManager)
+        manager.local = self.manager
+        manager.local.is_recording = lambda: False
+        manager._lock, manager._lifecycle = threading.RLock(), threading.Lock()
+        manager._session = session
+        manager._bypass, manager._clock, manager._last_error = False, {}, None
+        manager.state_path = self.root / "distributed-recording.json"
+        manager.ego = SimpleNamespace(base="http://fixture")
+        manager._save()
+        self.context.recording_manager = manager
+        return bag, session, manager
+
+    async def test_distributed_take_delete_removes_local_originals_and_merge_index(self):
+        bag, session, manager = self.distributed_recording()
+        other = self.raw / "_distributed" / ("b" * 32 + "_ego")
+        other.mkdir()
+        self.assertEqual(len(manager.saved_sessions()), 1)
+        response = await self.delete_take(1, bag.name)
+        self.assertEqual(response.status, 200, response.text)
+        for key in ("jetson_path", "ego_copy_path", "manifest_path"):
+            self.assertFalse(Path(session[key]).exists(), key)
+        self.assertTrue(other.exists())
+        self.assertEqual(manager.saved_sessions(), [])
+        self.assertIsNone(manager.status()["distributed"]["session_id"])
+        self.assertFalse(manager.state_path.exists())
+        with self.assertRaises(ValueError):
+            manager.start_merge(session["session_id"])
+
+    async def test_task_delete_removes_owned_staging_recovery_and_distributed_data(self):
+        bag, session, manager = self.distributed_recording()
+        staging = self.raw / "_staging" / bag.name
+        staging.mkdir(parents=True)
+        (staging / ".recording_target.json").write_text(json.dumps({"output_subdirectory": "builtin"}))
+        recovered = bag.with_name(bag.name + "_recovered")
+        recovered.mkdir(parents=True)
+        archive = self.raw / "_staging" / ("." + bag.name + ".original")
+        archive.mkdir()
+        (recovered / "recording_manifest.json").write_text(json.dumps({
+            "recovered": True, "bag_name": recovered.name, "recovery_source": str(archive)}))
+        unrelated = self.raw / "_staging" / "other"
+        unrelated.mkdir()
+        response = await self.delete(count=1)
+        self.assertEqual(response.status, 200, response.text)
+        for path in (staging, archive, recovered, Path(session["manifest_path"]), Path(session["jetson_path"])):
+            self.assertFalse(path.exists(), path)
+        self.assertTrue(unrelated.exists())
+        self.assertEqual(manager.saved_sessions(), [])
+
+    async def test_distributed_identity_mismatch_preserves_all_data(self):
+        bag, session, _ = self.distributed_recording()
+        session["task_id"] = "other"
+        Path(session["manifest_path"]).write_text(json.dumps(session))
+        response = await self.delete_take(1, bag.name)
+        self.assertEqual(response.status, 409, response.text)
+        self.assertTrue((self.sessions / "builtin/takes/take_0001.json").exists())
+        self.assertTrue(Path(session["jetson_path"]).exists())
+
+    async def test_distributed_delete_rejects_symlinks_before_removing_any_data(self):
+        bag, session, _ = self.distributed_recording()
+        original = Path(session["ego_copy_path"])
+        original.rename(original.with_name("keep"))
+        original.symlink_to(self.root, target_is_directory=True)
+        response = await self.delete_take(1, bag.name)
+        self.assertEqual(response.status, 409, response.text)
+        self.assertTrue(Path(session["jetson_path"]).exists())
+        self.assertTrue(Path(session["manifest_path"]).exists())
+
+    async def test_distributed_removal_failure_keeps_identity_and_can_retry(self):
+        bag, session, manager = self.distributed_recording()
+        with patch("insight_capture.runtime.take.shutil.rmtree", side_effect=OSError("fixture")):
+            response = await self.delete(count=1)
+        self.assertEqual(response.status, 500, response.text)
+        self.assertEqual(len(manager.saved_sessions()), 1)
+        self.assertTrue(manager.state_path.exists())
+        self.assertTrue((self.sessions / "builtin/takes/take_0001.json").exists())
+        self.assertEqual((await self.delete(count=1)).status, 200)
+
+    async def test_distributed_staging_and_archive_are_owned_by_the_session(self):
+        bag, session, _ = self.distributed_recording()
+        jetson = Path(session["jetson_path"])
+        staging = self.raw / "_staging" / jetson.name
+        staging.mkdir(parents=True)
+        (staging / ".recording_target.json").write_text(json.dumps({"output_subdirectory": "_distributed"}))
+        archive = staging.with_name("." + jetson.name + ".original")
+        archive.mkdir()
+        recovered = jetson.with_name(jetson.name + "_recovered")
+        recovered.mkdir()
+        (recovered / "recording_manifest.json").write_text(json.dumps({
+            "recovered": True, "bag_name": recovered.name, "recovery_source": str(archive)}))
+        self.assertEqual((await self.delete_take(1, bag.name)).status, 200)
+        for path in (staging, archive, recovered):
+            self.assertFalse(path.exists(), path)
+
+    async def test_task_delete_cleans_staging_without_take_metadata(self):
+        staging = self.raw / "_staging" / "failed_start"
+        staging.mkdir(parents=True)
+        (staging / ".recording_target.json").write_text(json.dumps({"output_subdirectory": "builtin"}))
+        self.assertEqual((await self.delete()).status, 200)
+        self.assertFalse(staging.exists())
+
+    async def test_direct_manager_merge_and_delete_use_same_lifecycle_guard(self):
+        bag, session, manager = self.distributed_recording()
+        with manager._lifecycle:
+            response = await self.delete_take(1, bag.name)
+        self.assertEqual(response.status, 409, response.text)
+        self.assertTrue(Path(session["jetson_path"]).exists())
+
+    async def test_merge_rejects_while_deletion_owns_shared_transition(self):
+        called = []
+        self.manager.start_merge = lambda sid: called.append(sid) or {}
+        routes = RecordingRoutes(self.context)
+        request = SimpleNamespace(can_read_body=True)
+        async def body(): return {"session_id": "fixture"}
+        request.json = body
+        async with capture_transition_lock(self.context):
+            with self.assertRaises(RuntimeError):
+                await routes._handle_saved_recording_merge(request)
+        self.assertEqual(called, [])
+
+    async def test_cancelled_merge_admission_keeps_delete_blocked_until_worker_finishes(self):
+        entered, finish = threading.Event(), threading.Event()
+        def start_merge(sid):
+            entered.set()
+            finish.wait(3)
+            return {}
+        self.manager.start_merge = start_merge
+        routes = RecordingRoutes(self.context)
+        request = SimpleNamespace(can_read_body=True)
+        async def body(): return {"session_id": "fixture"}
+        request.json = body
+        operation = asyncio.create_task(routes._handle_saved_recording_merge(request))
+        try:
+            self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+            operation.cancel()
+            await asyncio.sleep(.02)
+            self.assertTrue(capture_transition_lock(self.context).locked())
+            self.assertEqual((await self.delete()).status, 409)
+            self.assertFalse(operation.done())
+        finally:
+            finish.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await operation
+        self.assertFalse(capture_transition_lock(self.context).locked())

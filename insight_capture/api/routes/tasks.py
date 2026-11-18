@@ -1,6 +1,7 @@
 """Capture-task selection and operator status routes."""
 
 import asyncio
+from functools import partial
 from urllib.parse import quote
 from pathlib import Path
 
@@ -131,14 +132,20 @@ class TaskRoutes:
                 current = playback.status() if playback else {}
                 roots = self.context.recording_manager.storage_browse_roots()
                 selected = False
+                missing_selection = False
                 if current.get("bag_name"):
-                    path = self.context.bag_library.resolve(current["bag_name"])
-                    folder = self.context.take_store._task_set_id(task_id)
-                    selected = any(path.resolve().is_relative_to((root / folder).resolve()) for root in roots)
+                    try:
+                        path = await asyncio.to_thread(self.context.bag_library.resolve, current["bag_name"])
+                    except FileNotFoundError:
+                        missing_selection = True
+                    else:
+                        folder = self.context.take_store._task_set_id(task_id)
+                        selected = any(path.resolve().is_relative_to((root / folder).resolve()) for root in roots)
                 if selected and current.get("state") in {"preparing", "playing"}:
                     return web.json_response({"message": "请先停止该任务的回放。"}, status=409)
-                removed = await asyncio.to_thread(self.context.take_store.delete_task, task_id, roots, count)
-                if selected and current.get("state") == "ready":
+                removed = await asyncio.to_thread(self._delete_data, partial(
+                    self.context.take_store.delete_task, task_id, roots, count))
+                if (selected or missing_selection) and current.get("state") == "ready":
                     playback.stop()
                 return web.json_response({"status": "deleted", "task": removed})
 
@@ -172,15 +179,20 @@ class TaskRoutes:
                     except FileNotFoundError:
                         pass
                 protected = [selected_path] if selected_path and current.get("state") in {"preparing", "playing"} else []
-                removed = await asyncio.to_thread(
+                removed = await asyncio.to_thread(self._delete_data, partial(
                     self.context.take_store.delete_take, task_id, take_id, bag_name,
-                    self.context.recording_manager.storage_browse_roots(), protected_paths=protected)
+                    self.context.recording_manager.storage_browse_roots(), protected_paths=protected))
                 if selected_path and current.get("state") == "ready" and any(
                         selected_path.resolve().is_relative_to(Path(path).resolve()) for path in removed["paths"]):
                     playback.stop()
                 return web.json_response({"status": "deleted", "take_id": take_id, "task_id": task_id})
 
         return await self._complete_deletion(delete())
+
+    def _delete_data(self, operation):
+        manager = self.context.recording_manager
+        delete_saved = getattr(manager, "delete_saved_recordings", None)
+        return delete_saved(operation) if delete_saved else operation()
 
     async def _complete_deletion(self, operation) -> web.Response:
         deletion = asyncio.create_task(operation)

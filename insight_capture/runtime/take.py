@@ -209,7 +209,7 @@ class SessionTakeStore:
             return self.task_status()
 
     @staticmethod
-    def _validate_removal_path(target: Path, root: Path) -> None:
+    def _validate_removal_path(target: Path, root: Path, *, allow_file=False) -> None:
         resolved = target.resolve()
         if resolved == root or not target.is_relative_to(root) or not resolved.is_relative_to(root):
             raise RuntimeError("录制目录不在采集存储内，不能删除。")
@@ -220,17 +220,20 @@ class SessionTakeStore:
                 raise RuntimeError("录制目录含软链接，不能删除。")
         if not target.exists():
             return
+        if allow_file and target.is_file():
+            return
         if not target.is_dir():
             raise RuntimeError("录制目录异常，不能删除。")
         for directory, dirs, _ in os.walk(target, followlinks=False):
             if Path(directory).is_mount() or any((Path(directory) / child).is_mount() for child in dirs):
                 raise RuntimeError("录制目录包含挂载点，不能删除。")
 
-    def _take_data_paths(self, payload: Dict, raw_roots) -> list[tuple[Path, Path]]:
+    def _take_data_paths(self, payload: Dict, raw_roots, *, folder=None) -> list[tuple[Path, Path]]:
         roots = [Path(root).resolve() for root in raw_roots]
         paths = []
         bag_name = payload["bag_name"]
-        folder = self._task_set_id(payload["task_id"])
+        if folder is None:
+            folder = self._task_set_id(payload["task_id"])
         if payload.get("bag_path"):
             bag = Path(payload["bag_path"])
             root = next((root for root in roots if bag.is_relative_to(root) and bag != root), None)
@@ -254,6 +257,56 @@ class SessionTakeStore:
                 paths.append((staging, root))
         return list(dict.fromkeys(paths))
 
+    def _distributed_data_paths(self, payload: Dict, raw_roots) -> list[tuple[Path, Path]]:
+        distributed = payload.get("distributed") or {}
+        if not distributed:
+            return []
+        sid = distributed.get("session_id", "")
+        if (not isinstance(sid, str) or not re.fullmatch(r"[0-9a-f]{32}", sid)
+                or distributed.get("task_id") != payload["task_id"]
+                or distributed.get("take_id") != payload["take_id"]):
+            raise RuntimeError("双端录制身份与记录不匹配，不能删除。")
+        jetson = Path(distributed.get("jetson_path") or "")
+        root = next((Path(root).resolve() for root in raw_roots
+                     if jetson == Path(root).resolve() / "_distributed" / (sid + "_jetson")), None)
+        if root is None:
+            raise RuntimeError("双端原始录制目录与记录不匹配，不能删除。")
+        base = root / "_distributed"
+        manifest = base / (sid + ".json")
+        ego_copy = base / (sid + "_ego")
+        self._validate_removal_path(manifest, root, allow_file=True)
+        if manifest.exists():
+            session = json.loads(manifest.read_text())
+            expected = {
+                "session_id": sid, "task_id": payload["task_id"], "take_id": payload["take_id"],
+                "output_path": payload.get("bag_path"), "jetson_path": str(jetson),
+                "ego_copy_path": str(ego_copy), "manifest_path": str(manifest),
+            }
+            if any(session.get(key) != value for key, value in expected.items()):
+                raise RuntimeError("双端录制清单与记录不匹配，不能删除。")
+        # The coordinator always records wrists under this fixed session name.
+        # Reuse bag ownership checks for interrupted/staged wrist recordings.
+        paths = self._take_data_paths({"task_id": "_distributed", "bag_name": jetson.name,
+                                       "bag_path": str(jetson)}, [root], folder="_distributed")
+        return [*paths, (ego_copy, root), (manifest, root)]
+
+    def _validate_data_paths(self, paths, protected_paths=()) -> None:
+        for target, root in paths:
+            manifest = target.parent == root / "_distributed" and re.fullmatch(r"[0-9a-f]{32}\.json", target.name)
+            self._validate_removal_path(target, root, allow_file=bool(manifest))
+            if any(Path(protected).resolve().is_relative_to(target.resolve()) for protected in protected_paths):
+                raise RuntimeError("请先停止该条录制的回放。")
+
+    @staticmethod
+    def _remove_data_paths(paths) -> None:
+        # Callers place raw data before manifests and task metadata, preserving
+        # ownership records for retry when a data removal fails.
+        for target, _ in paths:
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.is_file():
+                target.unlink()
+
     def delete_take(self, task_id: str, take_id: int, expected_bag_name: str,
                     raw_roots, *, protected_paths=()) -> Dict:
         with self._lock:
@@ -271,14 +324,16 @@ class SessionTakeStore:
                 raise RuntimeError("录制记录已变化，请关闭并重新确认删除。")
             if payload.get("state") in {"reserved", "starting", "recording", "finalizing"}:
                 raise RuntimeError("正在准备、录制或保存，不能删除录制。")
-            paths = self._take_data_paths(payload, raw_roots)
-            for target, root in paths:
-                self._validate_removal_path(target, root)
-                if any(Path(protected).resolve().is_relative_to(target.resolve()) for protected in protected_paths):
-                    raise RuntimeError("请先停止该条录制的回放。")
+            paths = self._take_data_paths(payload, raw_roots) + self._distributed_data_paths(payload, raw_roots)
+            self._validate_data_paths(paths, protected_paths)
             owned = {target.resolve() for target, _ in paths}
             for other in self._list_takes_from(takes_root, include_timing=False):
-                if other.get("take_id") != take_id and other.get("bag_path") and Path(other["bag_path"]).resolve() in owned:
+                if other.get("take_id") == take_id:
+                    continue
+                shared_bag = other.get("bag_path") and Path(other["bag_path"]).resolve() in owned
+                sid = (payload.get("distributed") or {}).get("session_id")
+                shared_session = sid and (other.get("distributed") or {}).get("session_id") == sid
+                if shared_bag or shared_session:
                     raise RuntimeError("数据目录与另一条录制共用，不能删除。")
             # Persist the next number before removing the highest Take. It must
             # never be reused, including after task switches or an app restart.
@@ -286,14 +341,13 @@ class SessionTakeStore:
             session = json.loads(session_path.read_text()) if session_path.is_file() else {}
             session["next_take_id"] = self._next_take_id_from(takes_root)
             self._write_json(session_path, session)
-            for target, _ in paths:
-                if target.exists():
-                    shutil.rmtree(target)
+            self._remove_data_paths(paths)
             metadata.unlink()
             if self.task_id == task_id and self._current_take_id == take_id:
                 self._current_take_id = None
             self._stats_cache.pop(takes_root, None)
-            return {"task_id": task_id, "take_id": take_id, "paths": [str(target) for target, _ in paths]}
+            return {"task_id": task_id, "take_id": take_id, "paths": [str(target) for target, _ in paths],
+                    "distributed_session_ids": [payload["distributed"]["session_id"]] if payload.get("distributed") else []}
 
     def delete_task(self, task_id: str, raw_roots, expected_recorded_takes: int) -> Dict:
         with self._lock:
@@ -310,22 +364,37 @@ class SessionTakeStore:
             count = self._cached_take_stats(takes_root)["recorded_takes"]
             if count != expected_recorded_takes:
                 raise RuntimeError("录制条数已变化，请关闭并重新确认删除。")
-            targets = []
+            takes = self._list_takes_from(takes_root, include_timing=False)
+            paths = []
+            for take in takes:
+                if take.get("task_id") != task_id:
+                    raise RuntimeError("录制记录与任务不匹配，不能删除。")
+                paths.extend(self._take_data_paths(take, raw_roots))
+                paths.extend(self._distributed_data_paths(take, raw_roots))
+            # A failed start can leave a staging marker without Take metadata.
+            for raw_root in raw_roots:
+                root = Path(raw_root).resolve()
+                for marker in (root / "_staging").glob("*/.recording_target.json"):
+                    try:
+                        target = json.loads(marker.read_text())
+                    except (OSError, ValueError):
+                        # Unknown ownership must be preserved, not block cleanup
+                        # of an unrelated task.
+                        continue
+                    if isinstance(target, dict) and target.get("output_subdirectory") == folder:
+                        paths.append((marker.parent, root))
             for root, name in [(Path(root), folder) for root in raw_roots] + [
                 (self.sessions_root, folder),
                 *([(self._task_catalog.managed_root, task_id)] if self._task_catalog.managed_root else []),
             ]:
                 root = root.resolve()
                 target = root / name
-                if target in targets:
-                    continue
-                self._validate_removal_path(target, root)
-                targets.append(target)
+                paths.append((target, root))
+            paths = list(dict.fromkeys(paths))
+            self._validate_data_paths(paths)
             # All paths are validated before any removal. Raw data is removed
             # before its catalog entry, so an I/O failure remains visible for retry.
-            for target in targets:
-                if target.exists():
-                    shutil.rmtree(target)
+            self._remove_data_paths(paths)
             if self.task_id == task_id:
                 self._active = False
                 self.task_id = self.session_id = self.task_instruction = self.capture_profile = ""
@@ -336,7 +405,8 @@ class SessionTakeStore:
                 self._write_active_state()
             self._task_catalog.remove(task_id)
             self._stats_cache.clear()
-            return {"task_id": task_id, "name": task.name, "recorded_takes": count}
+            return {"task_id": task_id, "name": task.name, "recorded_takes": count,
+                    "distributed_session_ids": [take["distributed"]["session_id"] for take in takes if take.get("distributed")]}
 
     def list_tasks(self) -> list[Dict[str, object]]:
         tasks = []
