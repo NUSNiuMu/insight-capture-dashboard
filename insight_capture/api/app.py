@@ -16,6 +16,7 @@ from .routes.native import NativePreviewRoutes
 from .routes.optimization import OptimizationRoutes
 from .routes.playback import PlaybackRoutes
 from .routes.recording import RecordingRoutes
+from .routes.time_sync import TimeSyncRoutes
 from .routes.runtime import RuntimeRoutes
 from .routes.sessions import SessionRoutes
 from .routes.settings import SettingsRoutes
@@ -42,6 +43,8 @@ def create_app(context: DashboardContext) -> web.Application:
     recording = RecordingRoutes(context)
     mobile = MobileCaptureRoutes(context, recording)
     runtime = RuntimeRoutes(context)
+    time_sync = TimeSyncRoutes(context)
+    app.on_cleanup.append(time_sync.close)
     sessions = SessionRoutes(context)
     takes = TakeRoutes(context)
     tasks = TaskRoutes(context, recording)
@@ -71,6 +74,8 @@ def create_app(context: DashboardContext) -> web.Application:
     app.router.add_get("/api/mobile/status", mobile.status)
     app.router.add_get("/api/mobile/commands/{command_id}", mobile.command_status)
     app.router.add_post("/api/mobile/{action}", mobile.command)
+    app.router.add_get("/api/system/time", time_sync.snapshot)
+    app.router.add_post("/api/system/time", time_sync.synchronize)
     app.router.add_get("/api/preflight", runtime._handle_preflight)
     app.router.add_get("/api/system/status", runtime._handle_system_status)
     app.router.add_post("/api/system/status", runtime._handle_system_status)

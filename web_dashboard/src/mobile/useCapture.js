@@ -1,5 +1,6 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { t } from './i18n.js';
+import { phoneTimeSync } from './phoneTime.js';
 const vioStages={NOT_INITED:'定位尚未初始化',RESTARTING:'正在恢复定位',STOPPED:'定位已停止',TRACKING_LOST:'定位跟踪丢失',DATA_LOST:'定位输入中断',NO_CALIBRATION:'缺少相机标定'};
 const vioHints={
  NOT_INITED:'请确认镜头未遮挡、光线充足且画面有纹理；必要时缓慢移动设备，观察定位是否恢复。',
@@ -53,13 +54,14 @@ export function useCapture() {
   if(unconfirmedRecord.value)error.value=t('连接中断，操作结果待确认；重连后会核对设备状态。');
   const busy=computed(()=>pending.value || ['starting','recording','saving'].includes(status.value?.state));
   let alive=true, timer, mapTimer, statusGeneration=0, tasksGeneration=0;
+  const syncPhoneTime=phoneTimeSync(api);
   async function refresh() {
     const generation=++statusGeneration;
     try {
       let value=await api('/api/mobile/status');
       // Show authoritative live state immediately, even if an old receipt
       // lookup is slow. A history lookup is not the device connection itself.
-      if(alive&&generation===statusGeneration){status.value=value;online.value=true;connectionFailed.value=false;}
+      if(alive&&generation===statusGeneration){status.value=value;online.value=true;connectionFailed.value=false;syncPhoneTime(value);}
       const command=unconfirmedRecord.value;
       if(command&&!confirmedRecord(command,value)){
         // Another client may have replaced the latest operation. Read this
@@ -70,7 +72,7 @@ export function useCapture() {
       if(alive&&generation===statusGeneration){status.value=value;online.value=true;}
       return value;
     }
-    catch { if(alive&&generation===statusGeneration){online.value=false;connectionFailed.value=true;}return null; }
+    catch { if(alive&&generation===statusGeneration){online.value=false;connectionFailed.value=true;syncPhoneTime(null,false);}return null; }
   }
   async function loadTasks() {
     const generation=++tasksGeneration;

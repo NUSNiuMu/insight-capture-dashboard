@@ -116,6 +116,11 @@ class MobileCaptureRoutes:
             pipeline = getattr(self.context.node, "_image_pipeline", None)
             if pipeline:
                 report["image_clocks"] = pipeline.clock_status()
+        phone_time = dict(getattr(self.context, "phone_time_sync", {}))
+        if phone_time.get("state") in {"syncing", "error"}:
+            message = "正在同步手机时间，请稍候。" if phone_time["state"] == "syncing" else "时间同步未完成，正在重试。"
+            report = {**report, "ok": False, "failures": [*report.get("failures", []),
+                       {"code": "phone_time_sync", "message": message}]}
         # Admission checks are a start-time snapshot; capacity is live operator
         # information and must keep decreasing while the writer is running.
         report = {**report, "storage": {
@@ -140,7 +145,7 @@ class MobileCaptureRoutes:
             "output_path": status.get("output_path"),
             "started_at_epoch_s": getattr(manager, "started_at", None),
             "recording_timing": timing,
-            "server_time": time.time(), "operation": self._operation,
+            "server_time": time.time(), "time_sync": phone_time, "operation": self._operation,
             "preflight": report, "devices": devices, "task_status": task_status,
             "current_take": current_take, "live_alerts": live_alerts,
             "preview": preview_description(self.context.node.cameras, self.context.node.poses, paused=self.context.node._preview_manager.paused),

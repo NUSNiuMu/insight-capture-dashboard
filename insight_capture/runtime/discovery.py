@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import fcntl
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -175,12 +176,97 @@ def recover_camera_startup():
         time.sleep(2)
 
 
+def restart_acquisition(camera):
+    """Start uses the camera's existing stopped-acquisition clock step gate."""
+    for operation in ("insight-stop", "insight-start"):
+        result = json_request(f"http://{camera['host']}/api/{operation}", {}, timeout=165)
+        if not result.get("success"):
+            raise RuntimeError(f"{camera['namespace']}: {result}")
+
+
+def synchronize_phone_clock(body, recovery):
+    """A fixed idle-only operation; never accept commands or paths from a client."""
+    epoch, received = body.get('epoch_s'), body.get('received_monotonic_s')
+    if (type(epoch) not in (int, float) or not math.isfinite(epoch)
+            or not 946684800 <= epoch < 4102444800
+            or type(received) not in (int, float) or not math.isfinite(received)
+            or not 0 <= time.monotonic() - received <= 5):
+        raise ValueError('Phone clock sample is invalid or expired')
+    mounts = json.loads(subprocess.run(
+        ['docker', 'inspect', '--format', '{{json .Mounts}}', 'insight-dashboard'],
+        capture_output=True, text=True, check=True, timeout=5).stdout)
+    config = None
+    for mount in mounts:
+        if mount['Type'] != 'bind':
+            continue
+        if mount['Destination'] == '/workspaces/insight_capture/config':
+            config = Path(mount['Source'])
+            break
+        if mount['Destination'] == '/workspaces/insight_capture':
+            config = Path(mount['Source']) / 'config'
+    if config is None:
+        raise RuntimeError('Capture configuration is not mounted')
+    descriptor = os.open(config / '.capture-upgrade.lock', os.O_RDONLY | os.O_CREAT | os.O_CLOEXEC, 0o644)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        status = json_request('http://127.0.0.1:8765/api/mobile/status')
+        if status.get('recording') or status.get('state') in {'starting', 'recording', 'saving', 'playback'}:
+            return {'state': 'deferred'}
+        offset = epoch + time.monotonic() - received - time.time()
+        if abs(offset) > 1 or recovery.get('required'):
+            cameras = resolved_cameras()
+            recovery['required'] = True
+            if abs(offset) > 1:
+                time.clock_settime(time.CLOCK_REALTIME, time.time() + offset)
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                futures = [pool.submit(restart_acquisition, camera) for camera in cameras]
+                # All submitted camera work finishes before releasing capture admission.
+                for future in futures:
+                    future.result()
+            recovery['required'] = False
+        return {'state': 'synced', 'synced_at_epoch_s': time.time(), 'correction_s': offset}
+    finally:
+        os.close(descriptor)
+
+
+def serve_phone_clock():
+    """Root-only Unix socket, shared through the existing read-only runtime mount."""
+    path = SNAPSHOT.with_name('phone-clock.sock')
+    path.unlink(missing_ok=True)
+    recovery = {}
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(path))
+        path.chmod(0o600)
+        listener.listen(2)
+        while True:
+            connection, _ = listener.accept()
+            with connection:
+                try:
+                    _, uid, _ = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                    if uid != 0:
+                        raise PermissionError('Only the local capture service may set the clock')
+                    connection.settimeout(3)
+                    with connection.makefile('rb') as stream:
+                        data = stream.readline(4096)
+                    body = json.loads(data)
+                    if not isinstance(body, dict):
+                        raise ValueError('Expected a clock sample')
+                    result = synchronize_phone_clock(body, recovery)
+                except Exception as exc:
+                    result = {'state': 'error', 'error': str(exc)}
+                try:
+                    connection.sendall(json.dumps(result).encode() + b'\n')
+                except OSError:
+                    pass  # Recovery is complete even when the caller disconnected.
+
+
 def serve_discovery():
     """Publish verified USB peers and reconcile chrony's default-deny ACL."""
     SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['chronyc', 'deny', 'all', '0.0.0.0/0'], check=True, capture_output=True)
     allowed = set()
     threading.Thread(target=recover_camera_startup, daemon=True).start()
+    threading.Thread(target=serve_phone_clock, daemon=True).start()
     while True:
         # NTP must be available before the camera API/acquisition can start.
         # Trust only current CDC-NCM DHCP leases, never STA/AP or guessed IPs.
