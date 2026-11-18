@@ -499,6 +499,82 @@ def _modality(video_names, views=None):
     }
 
 
+HEAD_POSE_NAMES = ["x", "y", "z", "r00", "r01", "r02", "r10", "r11", "r12"]
+GRAVITY_REFERENCE = np.array([0.0, 0.0, -9.81])
+
+
+class HeadPose:
+    """Per-frame head RGB camera pose and gravity in that camera, for exported grid indices.
+
+    pose = reference_from_vio_world @ world_from_imu(head image stamp) @ imu_from_rgb (the chain
+    export_views.Renderer.project uses). The reference frame is z up, so gravity there is (0, 0, -9.81).
+    Sessions without VIO or the IMU extrinsic give NaN with valid=False.
+    """
+
+    def __init__(self, meta, db, video):
+        from insight_capture.runtime.mapping.geometry import matrix_from_pose
+
+        from .pose_track import _vio_lookup
+
+        self.matrix_from_pose = matrix_from_pose
+        self.db = db
+        self.rowids, self.found = video.get("head", (None, None))
+        self.reference = np.array(meta.get("reference_from_vio_world", np.eye(4)), float)
+        self.imu_from_rgb = np.array(meta["imu_from_rgb"], float) if meta.get("imu_from_rgb") else None
+        usable = self.imu_from_rgb is not None and self.rowids is not None and meta["config"].get("vio_enabled", True)
+        self.vio = _vio_lookup(db) if usable else None
+
+    def columns(self, indices):
+        pose = np.full((len(indices), 9), np.nan, np.float32)
+        gravity = np.full((len(indices), 3), np.nan, np.float32)
+        valid = np.zeros(len(indices), bool)
+        if self.vio is None:
+            return pose, gravity, valid
+        for k, i in enumerate(indices):
+            if not self.found[i]:
+                continue
+            stamp = self.db.execute("SELECT stamp_ns FROM samples WHERE rowid=?", (int(self.rowids[i]),)).fetchone()
+            head = self.vio(int(stamp[0])) if stamp and stamp[0] else None
+            if head is None:
+                continue
+            camera = self.reference @ self.matrix_from_pose(head) @ self.imu_from_rgb
+            pose[k] = np.r_[camera[:3, 3], camera[:2, :3].reshape(-1)]
+            gravity[k] = camera[:3, :3].T @ GRAVITY_REFERENCE
+            valid[k] = True
+        return pose, gravity, valid
+
+
+HEAD_FEATURES = {
+    "observation.head_pose": {"dtype": "float32", "shape": [9], "names": HEAD_POSE_NAMES},
+    "observation.gravity": {"dtype": "float32", "shape": [3], "names": ["gx", "gy", "gz"]},
+    "valid.head_pose": {"dtype": "bool", "shape": [1], "names": None},
+}
+
+
+def _head_stats(columns):
+    stats = {}
+    for key in ("observation.head_pose", "observation.gravity"):
+        values = np.array(columns[key], dtype=np.float64)
+        values = values[np.isfinite(values).all(1)] if len(values) else values
+        if len(values):
+            stats[key] = _feature_stats(values)
+    return stats
+
+
+def _arrow_type(key):
+    if key in ("observation.state", "action"):
+        return pa.list_(pa.float32(), 20)
+    if key == "observation.head_pose":
+        return pa.list_(pa.float32(), 9)
+    if key == "observation.gravity":
+        return pa.list_(pa.float32(), 3)
+    if key in ("timestamp", "source_time_s"):
+        return pa.float32()
+    if key in ("valid.frame", "valid.head_pose"):
+        return pa.bool_()
+    return pa.int64()
+
+
 def export(path):
     meta, grid, state, video, good, report, _reasons = align(path)
     segments = json.loads((path / "segments.json").read_text())
@@ -526,11 +602,13 @@ def export(path):
     for key in ("frame_index", "episode_index", "index", "task_index"):
         features[key] = {"dtype": "int64", "shape": [1], "names": None}
     features["valid.frame"] = {"dtype": "bool", "shape": [1], "names": None}
+    features.update(HEAD_FEATURES)
     with (
         tempfile.TemporaryDirectory(prefix=".export-", dir=path) as temporary,
         connect(path) as db,
     ):
         root = Path(temporary) / "lerobot"
+        head_pose = HeadPose(meta, db, video)
         writers, columns, episodes, offset = {}, {key: [] for key in features}, [], 0
         try:
             for episode, (run, label) in enumerate(runs):
@@ -547,6 +625,11 @@ def export(path):
                     "task_index": np.full(length, tasks.index(label["task"])),
                     "valid.frame": np.ones(length, dtype=bool),
                 }
+                (
+                    values["observation.head_pose"],
+                    values["observation.gravity"],
+                    values["valid.head_pose"],
+                ) = head_pose.columns(indices)
                 for key, value in values.items():
                     columns[key].extend(value.tolist())
                 row = {
@@ -608,19 +691,7 @@ def export(path):
             raise
         data = root / "data/chunk-000/file-000.parquet"
         data.parent.mkdir(parents=True)
-        arrays = {
-            key: pa.array(
-                values,
-                type=pa.list_(pa.float32(), 20)
-                if key in ("observation.state", "action")
-                else pa.float32()
-                if key in ("timestamp", "source_time_s")
-                else pa.bool_()
-                if key == "valid.frame"
-                else pa.int64(),
-            )
-            for key, values in columns.items()
-        }
+        arrays = {key: pa.array(values, type=_arrow_type(key)) for key, values in columns.items()}
         pq.write_table(pa.table(arrays), data)
         episode_path = root / "meta/episodes/chunk-000/file-000.parquet"
         episode_path.parent.mkdir(parents=True)
@@ -645,13 +716,17 @@ def export(path):
                 "action_semantics": "next absolute TCP state; final observation omitted; no action crosses a gap or annotation boundary",
                 "coordinate_frame": "recording " + _coordinate_frame(meta),
                 "rotation_6d": "first two rotation matrix rows",
+                "gravity": {"frame": "head RGB camera", "units": "m/s^2", "reference_frame_gravity": GRAVITY_REFERENCE.tolist()},
             },
         )
         write_json(
             root / "meta/stats.json",
             {
-                key: _feature_stats(np.array(columns[key]))
-                for key in ("observation.state", "action", "timestamp")
+                **{
+                    key: _feature_stats(np.array(columns[key]))
+                    for key in ("observation.state", "action", "timestamp")
+                },
+                **_head_stats(columns),
             },
         )
         write_json(
@@ -1136,6 +1211,11 @@ def export_to_dataset(path, output_root, views=None, hand_crop_m=None):
                 "valid.frame",
             )
         }
+        # Head pose / gravity columns: always for a new dataset; for an existing one only if it already has them,
+        # so every data file of a dataset keeps the same columns.
+        with_head = existing_info is None or "observation.head_pose" in existing_info.get("features", {})
+        if with_head:
+            columns.update({key: [] for key in HEAD_FEATURES})
         episodes, writers, video_shapes, offset = [], {}, {}, 0
         with (
             tempfile.TemporaryDirectory(prefix=".export-", dir=output_root) as temporary,
@@ -1146,6 +1226,7 @@ def export_to_dataset(path, output_root, views=None, hand_crop_m=None):
                 path, meta, db, video, grid, state,
                 **({"hand_crop_m": hand_crop_m} if hand_crop_m else {}),
             )
+            head_pose = HeadPose(meta, db, video) if with_head else None
             try:
                 for local_episode, (run, label) in enumerate(runs):
                     indices, following = run[:-1], run[1:]
@@ -1164,6 +1245,12 @@ def export_to_dataset(path, output_root, views=None, hand_crop_m=None):
                         "task_index": np.full(length, task_index_of[label["task"]]),
                         "valid.frame": np.ones(length, dtype=bool),
                     }
+                    if head_pose is not None:
+                        (
+                            values["observation.head_pose"],
+                            values["observation.gravity"],
+                            values["valid.head_pose"],
+                        ) = head_pose.columns(indices)
                     for key, value in values.items():
                         columns[key].extend(value.tolist())
                     row = {
@@ -1210,19 +1297,7 @@ def export_to_dataset(path, output_root, views=None, hand_crop_m=None):
                 raise
 
             data_built = build_root / "data.parquet"
-            arrays = {
-                key: pa.array(
-                    values,
-                    type=pa.list_(pa.float32(), 20)
-                    if key in ("observation.state", "action")
-                    else pa.float32()
-                    if key in ("timestamp", "source_time_s")
-                    else pa.bool_()
-                    if key == "valid.frame"
-                    else pa.int64(),
-                )
-                for key, values in columns.items()
-            }
+            arrays = {key: pa.array(values, type=_arrow_type(key)) for key, values in columns.items()}
             pq.write_table(pa.table(arrays), data_built)
             data_chunk, data_file = _place_built_file(
                 output_root / "data", "parquet", data_cap_mb, data_built
@@ -1293,6 +1368,8 @@ def export_to_dataset(path, output_root, views=None, hand_crop_m=None):
         for key in ("frame_index", "episode_index", "index", "task_index"):
             features[key] = {"dtype": "int64", "shape": [1], "names": None}
         features["valid.frame"] = {"dtype": "bool", "shape": [1], "names": None}
+        if with_head:
+            features.update(HEAD_FEATURES)
         for name, shape in video_shapes.items():
             features["observation.images." + name] = _video_feature(shape, fps)
 
@@ -1326,8 +1403,11 @@ def export_to_dataset(path, output_root, views=None, hand_crop_m=None):
             _merge_stats(
                 existing_stats,
                 {
-                    key: _feature_stats(np.array(columns[key]))
-                    for key in ("observation.state", "action", "timestamp")
+                    **{
+                        key: _feature_stats(np.array(columns[key]))
+                        for key in ("observation.state", "action", "timestamp")
+                    },
+                    **(_head_stats(columns) if with_head else {}),
                 },
             ),
         )
