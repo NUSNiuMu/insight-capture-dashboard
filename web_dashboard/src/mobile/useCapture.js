@@ -52,9 +52,9 @@ export function useCapture() {
   const status=ref(null), mapping=ref(null), tasks=ref([]), tasksError=ref(''), online=ref(false), connectionFailed=ref(false), pending=ref(false), recordPending=ref(null), error=ref('');
   const taskDraft=ref(taskDraftFromSession()),unconfirmedRecord=ref(readSession('record-command'));
   if(unconfirmedRecord.value)error.value=t('连接中断，操作结果待确认；重连后会核对设备状态。');
-  const busy=computed(()=>pending.value || ['starting','recording','saving'].includes(status.value?.state));
+  const busy=computed(()=>pending.value || status.value?.time_sync?.state==='syncing' || ['starting','recording','saving'].includes(status.value?.state));
   let alive=true, timer, mapTimer, statusGeneration=0, tasksGeneration=0;
-  const syncPhoneTime=phoneTimeSync(api);
+  const syncPhoneTime=phoneTimeSync(api,{visible:()=>alive&&!document.hidden});
   async function refresh() {
     const generation=++statusGeneration;
     try {
@@ -196,6 +196,13 @@ export function useCapture() {
       unconfirmedRecord.value=null;writeSession('record-command',null);
     }
   });
+  async function synchronizeTime() {
+    if(busy.value||!online.value)return;
+    pending.value=true;error.value='';
+    try { await syncPhoneTime(status.value,true,true); }
+    catch(e){error.value=t(e.message);}
+    finally {pending.value=false;await refresh();}
+  }
   async function calibrate() { await action('/api/mapping/reset'); }
   async function poll() { await refresh(); if(alive) timer=setTimeout(poll,document.hidden?4000:1500); }
   async function pollMap() { try { mapping.value=await api('/api/mapping'); } catch { mapping.value=null; }
@@ -203,7 +210,7 @@ export function useCapture() {
   watch(online,value=>{if(value)loadTasks().catch(()=>{});});
   onMounted(()=>{poll();pollMap();});
   onBeforeUnmount(()=>{alive=false;clearTimeout(timer);clearTimeout(mapTimer);});
-  return {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,deleteTask,deleteTake,leaveTaskCreation,calibrate,loadTasks};
+  return {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,deleteTask,deleteTake,leaveTaskCreation,synchronizeTime,calibrate,loadTasks};
 }
 export const roleLabel=role=>t({head:'头部相机',left_hand:'左腕相机',right_hand:'右腕相机'}[role]||role);
 export const stateLabel=state=>t({idle:'准备就绪',starting:'正在准备',recording:'正在录制',saving:'正在保存',saved:'保存完成',error:'操作失败',playback:'桌面回放中'}[state]||'连接中');

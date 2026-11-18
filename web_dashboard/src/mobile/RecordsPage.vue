@@ -22,7 +22,7 @@ function closeDelete(){releaseDeleteScroll?.();releaseDeleteScroll=null;}
 async function removeSelected(){
  if(deleting.value||props.busy||!props.online)return;
  const {task,take,origin}=deleteTarget.value;
- const rowIndex=take?renderedTakes.value.findIndex(item=>item.take_id===take.take_id):-1;
+ const rowIndex=take?renderedTakes.value.findIndex(item=>item.take_id===take.take_id):props.tasks.findIndex(item=>item.task_id===task.task_id);
  deleting.value=true;deleteError.value='';
  try{
   const ok=take?await props.deleteTake(task.task_id,take):await props.deleteTask(task);
@@ -38,13 +38,16 @@ async function removeSelected(){
      await nextTick();
      if(alive&&props.route===origin){
       const buttons=document.querySelectorAll('.take-delete');
-      (buttons[Math.min(rowIndex,buttons.length-1)]||recordsHeading.value)?.focus();
+      (buttons[Math.min(rowIndex,buttons.length-1)]||recordsHeading.value)?.focus({preventScroll:true});
      }
     }
     refreshRecords();
    }else if(!take&&props.route===origin){
     await nextTick();
-    if(alive&&props.route===origin)createButton.value?.focus();
+    if(alive&&props.route===origin){
+     const buttons=document.querySelectorAll('.task-record-row .task-delete');
+     (buttons[Math.min(rowIndex,buttons.length-1)]||createButton.value)?.focus({preventScroll:true});
+    }
    }
    emit('refresh-tasks');
   }else{

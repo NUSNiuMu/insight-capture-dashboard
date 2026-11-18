@@ -114,3 +114,20 @@ class HostClockTest(unittest.TestCase):
         self.assertEqual(result['state'], 'synced')
         self.assertTrue((config / '.capture-upgrade.lock').is_file())
         self.assertFalse((Path(self.directory.name) / '.capture-upgrade.lock').exists())
+
+    def test_manual_resync_restarts_camera_clock_gate_with_already_correct_host(self):
+        peers=[{"host":"169.254.40.1","namespace":"head"}]
+        sample={**self.sample(time.time()),'resync_cameras':True}
+        with mock.patch.object(discovery, "json_request", return_value={"state":"idle"}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition") as restart:
+            self.assertEqual(discovery.synchronize_phone_clock(sample,{})['state'],'synced')
+            setter.assert_not_called();restart.assert_called_once_with(peers[0])
+
+    def test_boot_and_manual_camera_recovery_do_not_interleave(self):
+        from concurrent.futures import ThreadPoolExecutor
+        calls=[]
+        def request(url,*args,**kwargs):
+            calls.append(url.rsplit('/',1)[-1]);time.sleep(.01);return {'success':True}
+        camera={'host':'169.254.40.1','namespace':'qa_serialization'}
+        with mock.patch.object(discovery,'json_request',side_effect=request),ThreadPoolExecutor(max_workers=2)as pool:
+            list(pool.map(discovery.restart_acquisition,[camera,camera]))
+        self.assertEqual(calls,['insight-stop','insight-start','insight-stop','insight-start'])

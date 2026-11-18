@@ -874,5 +874,7 @@
   "删除录制 Take {0}": "Delete recording Take {0}",
   "将删除任务“{0}”中的 Take {1} 及其录制数据，删除后无法恢复。": "Delete Take {1} and its recording data from task “{0}”? This cannot be undone.",
   "已删除 Take {0}。": "Deleted Take {0}.",
-  "录制未删除，请查看提示后重试。": "Recording was not deleted. Check the message and try again."
+  "录制未删除，请查看提示后重试。": "Recording was not deleted. Check the message and try again.",
+  "重新校时": "Sync time again",
+  "校时未完成，请重试。": "Time synchronization did not finish. Please try again."
 }

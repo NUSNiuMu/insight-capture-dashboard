@@ -34,14 +34,17 @@ class TimeSyncRoutes:
         if (type(rtt_ms) not in (int, float) or not math.isfinite(rtt_ms)
                 or not 0 <= rtt_ms <= 2000):
             raise ValueError("网络延迟较大，稍后重新校时。")
+        resync = body.get('resync_cameras', False)
+        if type(resync) is not bool:
+            raise ValueError('resync_cameras must be a boolean')
         if self.transition.locked() or (self._task and not self._task.done()):
             raise RuntimeError("设备忙，空闲后自动校时。")
         # A disconnected browser must not abandon camera recovery halfway.
         self.context.phone_time_sync = {"state": "syncing", "source": "phone"}
-        self._task = asyncio.create_task(self._synchronize(epoch_ms / 1000, rtt_ms / 2000, received))
+        self._task = asyncio.create_task(self._synchronize(epoch_ms / 1000, rtt_ms / 2000, received, resync))
         return web.json_response({"state": "syncing"}, status=202)
 
-    async def _synchronize(self, epoch, half_rtt, received):
+    async def _synchronize(self, epoch, half_rtt, received, resync=False):
         try:
             if self.transition.locked():
                 self.context.phone_time_sync = {"state": "deferred", "source": "phone"}
@@ -50,6 +53,7 @@ class TimeSyncRoutes:
                 result = await asyncio.to_thread(self._host_sync, {
                     "epoch_s": epoch + half_rtt,
                     "received_monotonic_s": received,
+                    "resync_cameras": resync,
                 })
                 self.context.phone_time_sync = {**result, "source": "phone"}
         except Exception as exc:

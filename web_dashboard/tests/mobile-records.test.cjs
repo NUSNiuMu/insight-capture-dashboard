@@ -38,3 +38,19 @@ test('a slow background list read cannot replace a newer post-merge state',async
   assert.equal(commands.length,1);
  }finally{global.setTimeout=timeout;}
 });
+
+test('deleting a task preserves scroll position and focuses the adjacent task',async()=>{
+ global.window={scrollY:1200};let focused='';
+ const next={focus(options){focused='next';if(!options?.preventScroll)window.scrollY=0;}};
+ const beforeQuery=document.querySelectorAll;document.querySelectorAll=()=>[next];
+ const props={route:'history',tasks:[{task_id:'first'},{task_id:'removed'},{task_id:'next'}],status:null,busy:false,online:true,deleteTask:async()=>{props.tasks.splice(1,1);return true;}};
+ try{
+  const view=await ready,v=await view(props);
+  v.deleteTarget.value={task:{task_id:'removed',name:'Removed'},take:null,origin:'history'};
+  v.deleteDialog.value={close(){}};
+  v.createButton.value={focus(options){focused='create';if(!options?.preventScroll)window.scrollY=0;}};
+  await v.removeSelected();
+  assert.equal(window.scrollY,1200,'Deleting the task scrolled the list to the top');
+  assert.equal(focused,'next');
+ }finally{document.querySelectorAll=beforeQuery;}
+});

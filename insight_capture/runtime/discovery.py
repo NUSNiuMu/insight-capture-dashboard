@@ -18,6 +18,7 @@ from urllib.request import ProxyHandler, build_opener, Request
 import threading
 
 SNAPSHOT = Path('/run/insight-capture-network/cameras.json')
+_acquisition_locks = {}
 
 @dataclass(frozen=True)
 class CameraLink:
@@ -152,10 +153,7 @@ def recover_camera_startup():
                 epoch = status['preflight'].get('image_clocks', {}).get('devices', {}).get(name, {})
                 action = 'already_ready'
                 if not sync.get('synced') or not health.get('ready') or not epoch.get('ok'):
-                    for operation in ('insight-stop', 'insight-start'):
-                        response = json_request(url + operation, {}, timeout=165)
-                        if not response.get('success'):
-                            raise RuntimeError(str(response))
+                    restart_acquisition(camera)
                     action = 'acquisition_restarted'
                 return name, {'action': action, 'host': camera['host'], 'monotonic_s': time.monotonic()}
             with ThreadPoolExecutor(max_workers=3) as pool:
@@ -178,10 +176,12 @@ def recover_camera_startup():
 
 def restart_acquisition(camera):
     """Start uses the camera's existing stopped-acquisition clock step gate."""
-    for operation in ("insight-stop", "insight-start"):
-        result = json_request(f"http://{camera['host']}/api/{operation}", {}, timeout=165)
-        if not result.get("success"):
-            raise RuntimeError(f"{camera['namespace']}: {result}")
+    # Boot recovery and a manual request may target the same camera together.
+    with _acquisition_locks.setdefault(camera['namespace'], threading.Lock()):
+        for operation in ("insight-stop", "insight-start"):
+            result = json_request(f"http://{camera['host']}/api/{operation}", {}, timeout=165)
+            if not result.get("success"):
+                raise RuntimeError(f"{camera['namespace']}: {result}")
 
 
 def synchronize_phone_clock(body, recovery):
@@ -192,6 +192,9 @@ def synchronize_phone_clock(body, recovery):
             or type(received) not in (int, float) or not math.isfinite(received)
             or not 0 <= time.monotonic() - received <= 5):
         raise ValueError('Phone clock sample is invalid or expired')
+    resync = body.get('resync_cameras', False)
+    if type(resync) is not bool:
+        raise ValueError('resync_cameras must be a boolean')
     mounts = json.loads(subprocess.run(
         ['docker', 'inspect', '--format', '{{json .Mounts}}', 'insight-dashboard'],
         capture_output=True, text=True, check=True, timeout=5).stdout)
@@ -213,7 +216,7 @@ def synchronize_phone_clock(body, recovery):
         if status.get('recording') or status.get('state') in {'starting', 'recording', 'saving', 'playback'}:
             return {'state': 'deferred'}
         offset = epoch + time.monotonic() - received - time.time()
-        if abs(offset) > 1 or recovery.get('required'):
+        if abs(offset) > 1 or recovery.get('required') or resync:
             cameras = resolved_cameras()
             recovery['required'] = True
             if abs(offset) > 1:
