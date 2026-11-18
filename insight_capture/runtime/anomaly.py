@@ -7,6 +7,8 @@ import threading
 import time
 from typing import Dict, Optional
 
+from insight_capture.runtime.camera_health import evaluate_calibration_cameras
+
 
 class ActiveQcMonitor:
     """Record only sustained faults; raw capture continues for forensics."""
@@ -61,7 +63,6 @@ class ActiveQcMonitor:
         if not present:
             self._pending_since.pop(code, None)
             if code in self._active:
-                self._active.remove(code)
                 self.take_store.add_anomaly({
                     "code": code,
                     "severity": "info",
@@ -69,11 +70,11 @@ class ActiveQcMonitor:
                     "affects_quality": affects_quality,
                     "details": details,
                 })
+                self._active.remove(code)
             return
         started = self._pending_since.setdefault(code, now)
         if code in self._active or now - started < self.sustain_sec:
             return
-        self._active.add(code)
         anomaly = {
             "code": code,
             "severity": severity,
@@ -83,6 +84,7 @@ class ActiveQcMonitor:
             "details": details,
         }
         self.take_store.add_anomaly(anomaly)
+        self._active.add(code)
 
     def poll(self) -> None:
         if not self.recording_manager.is_recording():
@@ -138,25 +140,36 @@ class ActiveQcMonitor:
                     age_sec=age,
                 )
 
-            mapping = self.node.build_mapping_payload()
-            statuses = mapping.get("statuses") if isinstance(mapping, dict) else {}
-            statuses = statuses if isinstance(statuses, dict) else {}
-            for name in ("insight9", "insight3_a", "insight3_b"):
-                mapping_status = (
-                    statuses.get(name)
-                    if isinstance(statuses.get(name), dict)
-                    else {}
-                )
-                broken = (
-                    not mapping_status.get("online")
-                    or mapping_status.get("state") == "error"
-                )
-                if name.startswith("insight3"):
-                    broken = broken or not mapping_status.get("localized")
-                self._observe(
-                    f"localization:{name}", broken,
-                    f"{name}定位异常，本条已标记复检。", service=name
-                )
+            if status.get("require_global_pose", True):
+                mapping = self.node.build_mapping_payload()
+                statuses = mapping.get("statuses") if isinstance(mapping, dict) else {}
+                statuses = statuses if isinstance(statuses, dict) else {}
+                for name in ("insight9", "insight3_a", "insight3_b"):
+                    mapping_status = (
+                        statuses.get(name)
+                        if isinstance(statuses.get(name), dict)
+                        else {}
+                    )
+                    broken = (
+                        not mapping_status.get("online")
+                        or mapping_status.get("state") == "error"
+                    )
+                    if name.startswith("insight3"):
+                        broken = broken or not mapping_status.get("localized")
+                    self._observe(
+                        f"localization:{name}", broken,
+                        f"{name}定位异常，本条已标记复检。", service=name
+                    )
+
+            elif self.node.cameras:
+                # Raw admission still requires device VIO; only global map
+                # localization is optional. Reuse the same freshness evidence.
+                health, _ = evaluate_calibration_cameras(self.node, self.camera_stale_sec, now=now)
+                for name, camera in health.items():
+                    self._observe(
+                        f"vio_stale:{name}", not camera["vio_fresh"],
+                        f"{name}设备 VIO 中断，本条已标记复检。", camera=name,
+                    )
 
         bridge = getattr(self.node, "_recording_bridge", None)
         audit = bridge.snapshot_image_header_audit() if bridge is not None else {}

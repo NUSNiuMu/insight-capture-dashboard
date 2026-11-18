@@ -33,7 +33,8 @@ def single_mcap(bag: Path) -> Path:
     files = list(bag.glob("*.mcap"))
     relative = info.get("relative_file_paths", [])
     if (info.get("storage_identifier") != "mcap" or len(files) != 1
-            or list(bag.glob("*.db3")) or len(relative) > 1):
+            or list(bag.glob("*.db3")) or not isinstance(relative, list)
+            or len(relative) > 1 or any(not isinstance(name, str) for name in relative)):
         raise ValueError(f"Expected one standard MCAP recording: {bag}")
     if relative and (bag / relative[0]).resolve() != files[0].resolve():
         raise ValueError(f"MCAP metadata does not match its data file: {bag}")

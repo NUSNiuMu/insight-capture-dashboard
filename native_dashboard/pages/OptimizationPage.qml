@@ -8,9 +8,11 @@ PageFrame {
     property var shell
     property var inputs: workspace.data.optimizationInputs || {}
     property var status: workspace.data.optimization || {}
-    property var trajectory: workspace.data.trajectories || {}
+    property var trajectory: ({})
     property bool running: ["running", "stopping"].indexOf(status.state) >= 0 || !!workspace.busy.action
     property string loadedRun: ""
+    property string requestedRun: ""
+    property string failedRun: ""
     heading: "Optimize"
     description: "Compare VIO with reconstructed trajectories."
     function loadInputs() {
@@ -19,7 +21,8 @@ PageFrame {
     function load(name) {
         if (!name)
             return;
-        loadedRun = name;
+        requestedRun = name;
+        failedRun = "";
         workspace.request("trajectories", "/api/optimization/trajectories?run_name=" + encodeURIComponent(name));
     }
     Ui.Section {
@@ -166,7 +169,7 @@ PageFrame {
             Ui.Button {
                 objectName: "optimization-load"
                 text: "Load"
-                enabled: saved.count > 0
+                enabled: saved.count > 0 && !workspace.busy.trajectories
                 onClicked: page.load(saved.currentText)
             }
         }
@@ -191,7 +194,16 @@ PageFrame {
     Connections {
         target: workspace
         function onCompleted(key, success) {
-            if (key === "optimization" && success && page.status.state === "done" && page.status.run_name && page.status.run_name !== page.loadedRun) {
+            if (key === "trajectories") {
+                if (success && workspace.data.trajectories.run_name === page.requestedRun) {
+                    page.trajectory = workspace.data.trajectories;
+                    page.loadedRun = page.requestedRun;
+                } else {
+                    page.failedRun = page.requestedRun;
+                }
+                page.requestedRun = "";
+            }
+            if (key === "optimization" && success && page.status.state === "done" && page.status.run_name && page.status.run_name !== page.loadedRun && page.status.run_name !== page.requestedRun && page.status.run_name !== page.failedRun) {
                 page.load(page.status.run_name);
                 workspace.request("runs", "/api/optimization/runs");
             }

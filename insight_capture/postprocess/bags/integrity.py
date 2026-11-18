@@ -158,6 +158,9 @@ def _add_missing_selected_topics(
     for name in _selected_topics(bag_dir):
         if name in present:
             continue
+        if is_latched_static_topic(name):
+            topics.append(latched_static_result(name, 0))
+            continue
         nominal = nominal_for(name)
         topics.append({
             "name": name,

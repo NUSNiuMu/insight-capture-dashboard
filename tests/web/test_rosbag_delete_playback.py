@@ -1,3 +1,4 @@
+from insight_capture.runtime.recording.manager import RecordingManager
 """Deleting a recording must coordinate with its prepared playback."""
 import asyncio
 import shutil
@@ -33,9 +34,7 @@ def fixture(root, phase="playing"):
         prepared._state = phase
     context = SimpleNamespace(
         bag_library=library, prepared_playback_manager=prepared,
-        recording_manager=SimpleNamespace(status=lambda: {
-            "recording": False, "merge_state": "idle", "output_path": None,
-        }),
+        recording_manager=RecordingManager({}, 0, root, 1024, ["/dummy"]),
         node=SimpleNamespace(set_playback_mode=lambda _: None),
     )
     return context, RecordingRoutes(context), selected, other, reference
@@ -118,4 +117,15 @@ def test_activation_cannot_race_an_admitted_delete(tmp_path, monkeypatch, cancel
                 assert (await deletion).status == 200
         assert not selected.exists()
         assert context.prepared_playback_manager.status()["state"] == "idle"
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('phase', ['finalizing', 'merging'])
+def test_delete_respects_local_manager_finalization(tmp_path, phase):
+    async def scenario():
+        context, routes, selected, _, reference = fixture(tmp_path, 'idle')
+        context.recording_manager.merge_state = phase
+        with pytest.raises(RuntimeError):
+            await routes._handle_rosbag_delete(SimpleNamespace(match_info={'bag_name': reference}))
+        assert selected.is_dir()
     asyncio.run(scenario())

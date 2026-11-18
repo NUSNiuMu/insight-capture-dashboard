@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 """Score VIO trajectory quality from pose covariance and sustained spikes."""
 
+from __future__ import annotations
+
 import argparse
 import json
 import math
@@ -8,9 +10,6 @@ import sys
 from pathlib import Path
 
 from insight_capture.core.bag import single_mcap
-import rosbag2_py
-from rclpy.serialization import deserialize_message
-from rosidl_runtime_py.utilities import get_message
 
 
 DEFAULT_TOPIC = "/insight7_a/camera/vio_image_cov"
@@ -73,6 +72,11 @@ def spike_runs(traces: list, threshold: float) -> list:
 
 def compute_stats(stamps_s: list, traces: list, cal_median_l: float, cal_sigma_l: float) -> dict:
     n = len(traces)
+    if (not n or len(stamps_s) != n
+            or not all(math.isfinite(value) for values in (stamps_s, traces, (cal_median_l, cal_sigma_l))
+                       for value in values)
+            or cal_sigma_l <= 0):
+        raise ValueError("Scoring requires matching finite timestamps/covariances and positive calibration sigma")
     mean = sum(traces) / n
     std = math.sqrt(sum((x - mean) ** 2 for x in traces) / n)
     s = sorted(traces)
@@ -94,7 +98,12 @@ def compute_stats(stamps_s: list, traces: list, cal_median_l: float, cal_sigma_l
 
     bulk_l = 0.5 * (math.log10(p50) + math.log10(p90))
     z = (cal_median_l - bulk_l) / cal_sigma_l
-    base = 100.0 / (1.0 + math.exp(-(1.1 + 1.2 * z)))
+    logit = 1.1 + 1.2 * z
+    if logit >= 0:
+        base = 100.0 / (1.0 + math.exp(-logit))
+    else:
+        exp_logit = math.exp(logit)
+        base = 100.0 * exp_logit / (1.0 + exp_logit)
 
     threshold = SPIKE_FACTOR * p50
     runs = spike_runs(traces, threshold)
@@ -143,6 +152,8 @@ def compute_stats(stamps_s: list, traces: list, cal_median_l: float, cal_sigma_l
 
 
 def open_reader(bag_path: str, topic: str) -> rosbag2_py.SequentialReader:
+    import rosbag2_py
+
     single_mcap(Path(bag_path))
     reader = rosbag2_py.SequentialReader()
     reader.open(
@@ -169,6 +180,8 @@ def collect_traces(
     msg_type,
     verbose: bool,
 ) -> tuple:
+    from rclpy.serialization import deserialize_message
+
     stamps_s = []
     traces = []
     while reader.has_next():
@@ -276,6 +289,8 @@ def main() -> None:
         for topic in reader.get_all_topics_and_types():
             print(f"  {topic.name}  [{topic.type}]", file=sys.stderr)
         sys.exit(1)
+
+    from rosidl_runtime_py.utilities import get_message
 
     msg_type = get_message(topic_type_str)
     print(f"Reading '{args.topic}'  [{topic_type_str}]")

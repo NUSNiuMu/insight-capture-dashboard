@@ -124,8 +124,14 @@ void Dashboard::request(const QString &path, const QJsonObject *body, std::funct
         reply = m_http.post(req, QJsonDocument(*body).toJson(QJsonDocument::Compact));
     } else
         reply = m_http.get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, path, done] {
+    const auto playbackGeneration = m_playbackGeneration;
+    connect(reply, &QNetworkReply::finished, this, [this, reply, path, done, playbackGeneration] {
         m_pending.remove(path);
+        if (path.contains("playback") && playbackGeneration != m_playbackGeneration) {
+            reply->deleteLater();
+            emit stateChanged();
+            return;
+        }
         const bool captureCommand = path == "/api/recording/start" || path == "/api/recording/stop";
         if (captureCommand)
             m_state["captureAction"] = "";
@@ -229,7 +235,7 @@ void Dashboard::poll() {
         const auto previous = m_state;
         m_state["playbackState"] = d["state"].toString();
         m_state["playbackProgress"] = d["progress"].toDouble();
-        if (!m_requestedPlayback.isEmpty() && d["state"] == "error") {
+        if (!m_requestedPlayback.isEmpty() && d["bag_name"] == m_requestedPlayback && d["state"] == "error") {
             m_message = d["error"].toString();
             m_requestedPlayback.clear();
         }
@@ -626,11 +632,14 @@ void Dashboard::command(const QString &action, const QString &value, const QVari
         return;
     }
     if (action == "playback") {
-        if (value.isEmpty())
+        if (value.isEmpty() || playback() || playbackBusy())
             return;
+        ++m_playbackGeneration;
         m_requestedPlayback = value;
         m_playbackStarting = true;
-        post("/api/playback/start", {{"bag_name", value}}, [this](QJsonObject d) {
+        emit stateChanged();
+        post("/api/playback/start", {{"bag_name", value}}, [this, value](QJsonObject d) {
+            if (m_requestedPlayback != value) return;
             m_playbackStarting = false;
             m_message = "Preparing playback…";
             if (d.contains("manifest_url"))
@@ -695,15 +704,16 @@ void Dashboard::command(const QString &action, const QString &value, const QVari
     });
 }
 void Dashboard::activatePlayback(const QJsonObject &status) {
-    if (m_playbackStarting || m_requestedPlayback.isEmpty())
+    if (m_playbackStarting || m_requestedPlayback.isEmpty() ||
+        status["bag_name"].toString() != m_requestedPlayback || status["manifest_url"].toString().isEmpty())
         return;
     m_playbackStarting = true;
-    fetch(status["manifest_url"].toString(), [this](QJsonObject manifest) {
-        if (m_requestedPlayback.isEmpty()) {
-            m_playbackStarting = false;
-            return;
-        }
-        post("/api/playback/activate", {{"bag_name", m_requestedPlayback}}, [this, manifest](QJsonObject) {
+    const auto bag = m_requestedPlayback;
+    const auto generation = m_playbackGeneration;
+    fetch(status["manifest_url"].toString(), [this, bag, generation](QJsonObject manifest) {
+        if (generation != m_playbackGeneration || m_requestedPlayback != bag) return;
+        post("/api/playback/activate", {{"bag_name", bag}}, [this, manifest, bag, generation](QJsonObject) {
+            if (generation != m_playbackGeneration || m_requestedPlayback != bag) return;
             m_manifest = manifest;
             m_message = manifest["quality"].toObject()["state"] == "warning"
                             ? "Playback ready · Quality warnings" : "Playback ready";
@@ -737,22 +747,28 @@ void Dashboard::activatePlayback(const QJsonObject &status) {
     });
 }
 void Dashboard::goLive() {
-    const bool requested = !m_requestedPlayback.isEmpty();
+    if (m_pending.contains("/api/playback/stop")) return;
+    const bool needsStop = playback() || playbackBusy()
+        || m_state["playbackState"] == "preparing" || m_state["playbackState"] == "playing";
+    ++m_playbackGeneration;
     m_requestedPlayback.clear();
-    if (playback() || m_playbackStarting || requested || m_state["playbackState"] == "preparing" || m_state["playbackState"] == "playing")
+    m_manifest = {};
+    m_playbackStarting = false;
+    m_message = "Live";
+    m_haveOrigin = false;
+    clearTraces();
+    m_cameras = m_liveCameras;
+    if (needsStop)
         post("/api/playback/stop", {}, [this](QJsonObject) {
-            m_manifest = {};
-            m_playbackStarting = false;
-            m_message = "Live";
-            m_haveOrigin = false;
-            clearTraces();
-            m_cameras = m_liveCameras;
-            emit camerasChanged();
+            m_state["playbackState"] = "idle";
             emit stateChanged();
-            m_poseSocket.abort();
-            m_reconnect.start(150);
         });
+    emit camerasChanged();
+    emit stateChanged();
+    m_poseSocket.abort();
+    m_reconnect.start(150);
 }
+
 void Dashboard::setPlaybackTime(double seconds) {
     if (!playback())
         return;
@@ -815,7 +831,11 @@ void Dashboard::shutdown() {
     m_poll.stop();
     m_reconnect.stop();
     m_poseSocket.abort();
-    if (playback()) {
+    const bool stopPlayback = playback() || playbackBusy();
+    ++m_playbackGeneration;
+    m_requestedPlayback.clear();
+    m_playbackStarting = false;
+    if (stopPlayback) {
         QEventLoop loop;
         QTimer timer;
         timer.setSingleShot(true);

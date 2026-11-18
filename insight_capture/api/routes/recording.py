@@ -163,8 +163,17 @@ class RecordingRoutes:
     async def stop_recording(self, **stop_arguments) -> web.Response:
         if self.busy:
             raise RuntimeError("A recording operation is still running.")
-        async with self._transition:
-            return await self._stop_recording(**stop_arguments)
+
+        async def stop():
+            async with self._transition:
+                return await self._stop_recording(**stop_arguments)
+
+        operation = asyncio.create_task(stop())
+        try:
+            return await asyncio.shield(operation)
+        except asyncio.CancelledError:
+            await operation
+            raise
 
     async def _stop_recording(self, **stop_arguments) -> web.Response:
         current = self.context.recording_manager.status()
@@ -173,6 +182,7 @@ class RecordingRoutes:
         take = (
             take_store.complete_current(status)
             if take_store is not None
+            and not (status.get("recording") and status.get("merge_state") == "error")
             and current.get("recording_mode") != "vio_calibration"
             else None
         )
@@ -352,7 +362,8 @@ class RecordingRoutes:
             )
         actual_name = take["bag_name"] if take is not None else bag_name
         try:
-            start_arguments = {"topics": topics, "bag_name": actual_name}
+            start_arguments = {"topics": topics, "bag_name": actual_name,
+                               "require_global_pose": not relaxed_preflight}
             if hasattr(self.context.recording_manager, "distributed_preflight"):
                 start_arguments["task"] = take
             if track_take and take_store is not None:
@@ -433,7 +444,7 @@ class RecordingRoutes:
         def remove():
             bag_path = self._bag_library().resolve(bag_name)
             shutil.rmtree(bag_path)
-            return bag_path
+            return {"bag_path": bag_path}
 
         async def delete():
             async with self._transition:
@@ -444,7 +455,10 @@ class RecordingRoutes:
                     return web.json_response(
                         {"error": "Stop playback before deleting this bag."}, status=409
                     )
-                bag_path = await asyncio.to_thread(remove)
+                result = await asyncio.to_thread(
+                    self.context.recording_manager.delete_saved_recordings, remove
+                )
+                bag_path = result["bag_path"]
                 if selected and current.get("state") == "ready":
                     playback.stop()
                 return web.json_response({"status": "deleted", "bag_name": bag_path.name})
@@ -484,7 +498,7 @@ class RecordingRoutes:
             return web.json_response({"error": str(exc)}, status=422)
         # Persisted next to scores/optimized so the bag catalog can surface a
         # per-bag integrity badge without re-scanning gigabytes per listing.
-        bag_name = bag_path.name
+        bag_name = BagLibrary._id_for_path(bag_path)
         integrity_dir = self.context.results_root / "integrity"
         integrity_dir.mkdir(parents=True, exist_ok=True)
         (integrity_dir / f"{bag_name}.json").write_text(json.dumps(report, indent=2))

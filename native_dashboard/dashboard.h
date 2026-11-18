@@ -81,6 +81,7 @@ class Dashboard : public QObject {
     Q_PROPERTY(bool connected READ connected NOTIFY stateChanged)
     Q_PROPERTY(bool keepTrail READ keepTrail WRITE setKeepTrail NOTIFY stateChanged)
     Q_PROPERTY(bool playback READ playback NOTIFY camerasChanged)
+    Q_PROPERTY(bool playbackBusy READ playbackBusy NOTIFY stateChanged)
     Q_PROPERTY(bool canResetMapping READ canResetMapping NOTIFY stateChanged)
     Q_PROPERTY(double duration READ duration NOTIFY camerasChanged)
     Q_PROPERTY(int targetFps READ targetFps CONSTANT)
@@ -97,6 +98,12 @@ class Dashboard : public QObject {
     bool connected() const { return m_connected; }
     bool keepTrail() const { return m_keep; }
     bool playback() const { return !m_manifest.isEmpty(); }
+    bool playbackBusy() const {
+        if (m_playbackStarting || (!m_requestedPlayback.isEmpty() && !playback())) return true;
+        for (const auto &path : m_pending)
+            if (path.contains("playback") && path != "/api/playback/status") return true;
+        return false;
+    }
     bool canResetMapping() const;
     double duration() const { return m_manifest["duration_s"].toDouble(); }
     int targetFps() const { return m_fps; }
@@ -158,4 +165,5 @@ class Dashboard : public QObject {
     qint64 m_lastPose = 0;
     qint64 m_lastCameraUpdate = -1, m_lastMappingUpdate = -1;
     int m_pollCount = 0;
+    quint64 m_playbackGeneration = 0;
 };

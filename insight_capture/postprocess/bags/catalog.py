@@ -143,13 +143,8 @@ def _directory_size_bytes(path: Path) -> int:
     return total
 
 
-def _result_exists(results_root: Path, category: str, bag_name: str) -> bool:
-    candidates = [
-        results_root / category / f"{bag_name}.json",
-        results_root / category / bag_name,
-        results_root / f"{bag_name}_{category}.json",
-    ]
-    return any(candidate.exists() for candidate in candidates)
+def _result_exists(results_root: Path, category: str, bag_id: str) -> bool:
+    return (results_root / category / f"{bag_id}.json").is_file()
 
 
 def _review_badge(path: Path) -> tuple[str, Optional[str]]:
@@ -182,10 +177,10 @@ def list_rosbag_locations(
         message_count = int(metadata.get("message_count", 0) or 0)
         topics = metadata.get("topics_with_message_count") or []
         size_bytes = _directory_size_bytes(bag_dir)
-        scored = _result_exists(results_root, "scores", bag_dir.name) or _result_exists(results_root, "scoring", bag_dir.name)
+        scored = _result_exists(results_root, "scores", location.bag_id)
         # The persisted report distinguishes pass, fail, and never checked.
         integrity: Optional[bool] = None
-        integrity_path = results_root / "integrity" / f"{bag_dir.name}.json"
+        integrity_path = results_root / "integrity" / f"{location.bag_id}.json"
         if integrity_path.exists():
             try:
                 integrity = bool(json.loads(integrity_path.read_text()).get("ok"))

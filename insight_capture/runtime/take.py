@@ -503,6 +503,7 @@ class SessionTakeStore:
             payload["state"] = "recording"
             payload["bag_path"] = str(output_path or "") or None
             payload["recording_timing"] = deepcopy((recording_status or {}).get("recording_timing"))
+            payload["require_global_pose"] = (recording_status or {}).get("require_global_pose", True)
             if (recording_status or {}).get("distributed"):
                 payload["distributed"] = recording_status["distributed"]
             self._write_json(self._path(payload["take_id"]), payload)
@@ -627,7 +628,7 @@ class SessionTakeStore:
             if not self._active:
                 return None
             if self._current_take_id is None:
-                paths = sorted(self.takes_root.glob("take_*.json"))
+                paths = self._take_paths(self.takes_root)
                 if not paths:
                     return None
                 try:
@@ -667,9 +668,16 @@ class SessionTakeStore:
         return self._list_takes_from(self.takes_root)
 
     @staticmethod
+    def _take_paths(root: Path) -> list[Path]:
+        return sorted(
+            (path for path in root.glob("take_*.json") if re.fullmatch(r"take_[0-9]+", path.stem)),
+            key=lambda path: int(path.stem[5:]),
+        )
+
+    @staticmethod
     def _list_takes_from(takes_root: Path, *, include_timing: bool = True) -> list[Dict]:
         items = []
-        for path in sorted(takes_root.glob("take_*.json"), reverse=True):
+        for path in reversed(SessionTakeStore._take_paths(takes_root)):
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 if not isinstance(payload, dict):

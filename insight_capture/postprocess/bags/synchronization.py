@@ -619,6 +619,17 @@ class PreparedPlaybackManager:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return False
+        if not isinstance(manifest, dict):
+            return False
+        cameras = manifest.get("cameras")
+        if not isinstance(cameras, list) or not cameras:
+            return False
+        for camera in cameras:
+            if not isinstance(camera, dict) or not isinstance(camera.get("video_file"), str):
+                return False
+            video = Path(camera["video_file"])
+            if video.is_absolute() or ".." in video.parts or not (manifest_path.parent / video).is_file():
+                return False
         return (
             manifest.get("schema_version") == SCHEMA_VERSION
             and (
@@ -628,11 +639,6 @@ class PreparedPlaybackManager:
             and manifest.get("source_signature") == signature
             and manifest.get("configuration") == configuration
             and manifest.get("cache_key") == _cache_key(signature, configuration)
-            and bool(manifest.get("cameras"))
-            and all(
-                (manifest_path.parent / camera["video_file"]).is_file()
-                for camera in manifest.get("cameras", [])
-            )
         )
 
     def _review_dir(self, bag_name: str) -> Path:

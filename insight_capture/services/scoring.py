@@ -9,11 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from insight_capture.postprocess.bags.catalog import BagLibrary
+
 
 @dataclass
 class _ScoringJob:
     bag_name: str
     bag_path: str
+    result_id: str
     topic: str          # empty = auto-discover all; non-empty = score only this topic
     status: str         # "running" | "done" | "error"
     result: Optional[Dict] = None
@@ -70,8 +73,9 @@ class ScoringManager:
                 else (self.rosbag_root / bag_name).resolve()
             )
             job = _ScoringJob(
-                bag_name=resolved.name,
+                bag_name=bag_name,
                 bag_path=str(resolved),
+                result_id=BagLibrary._id_for_path(resolved),
                 topic=topic,
                 status="running",
                 started_at=time.monotonic(),
@@ -100,7 +104,7 @@ class ScoringManager:
                     job.current_topic = topic
 
                 safe_name = topic.replace("/", "_").strip("_")
-                output_json = scores_dir / f"{job.bag_name}__{safe_name}.json"
+                output_json = scores_dir / f"{job.result_id}__{safe_name}.json"
 
                 cmd = [
                     "/usr/bin/python3",
@@ -124,7 +128,7 @@ class ScoringManager:
                 cameras.append(data)
 
             summary = {"cameras": cameras}
-            summary_json = scores_dir / f"{job.bag_name}.json"
+            summary_json = scores_dir / f"{job.result_id}.json"
             with summary_json.open("w", encoding="utf-8") as fh:
                 json.dump(summary, fh, indent=2)
 

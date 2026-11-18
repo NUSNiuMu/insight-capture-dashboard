@@ -185,6 +185,6 @@ def merge_session(session: dict, config: dict, ego: Path, wrists: Path, output: 
         raise RuntimeError("合并后 MCAP 消息计数校验失败")
     write_json(temporary / "distributed_session.json", session)
     write_json(temporary / "time_alignment.json", report)
-    write_json(temporary / "recording_manifest.json", {"format": "rosbag2", "storage_id": "mcap", "distributed": True, "session_id": session["session_id"], "raw_parts": [str(wrists), str(ego)]})
+    write_json(temporary / "recording_manifest.json", {"format": "rosbag2", "storage_id": "mcap", "distributed": True, "require_global_pose": session.get("require_global_pose", True), "session_id": session["session_id"], "raw_parts": [str(wrists), str(ego)]})
     os.replace(temporary, output)
     return report

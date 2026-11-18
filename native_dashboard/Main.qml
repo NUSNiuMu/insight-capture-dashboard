@@ -49,6 +49,45 @@ ApplicationWindow {
     property real distance: 580
     property real playTime: 0
     property bool playPaused: false
+    property bool playbackReady: false
+    function playbackMaster() {
+        return dashboard.cameras.length ? dashboard.cameras[0].name : ""
+    }
+    function seekPlayback(seconds) {
+        playTime = seconds
+        dashboard.setPlaybackTime(seconds)
+        allVideos(function(video) { video.seek(seconds) })
+    }
+    Connections {
+        target: dashboard
+        function onCamerasChanged() {
+            root.playbackReady = false
+            root.playTime = 0
+            root.playPaused = false
+        }
+    }
+    // Preroll every stream in PAUSED, then release the group together. Only
+    // the first camera drives poses; followers are corrected on that timeline.
+    Timer {
+        interval: 100; repeat: true; running: dashboard.playback && root.spatialActive
+        onTriggered: {
+            var players = []
+            root.allVideos(function(video) { players.push(video) })
+            if (!players.length || players.length !== dashboard.cameras.length) return
+            if (!root.playbackReady) {
+                if (players.every(function(video) { return video.playbackReady })) {
+                    root.playbackReady = true
+                }
+                return
+            }
+            var master = players.filter(function(video) { return video.cameraName === root.playbackMaster() })[0]
+            if (!master || timeline.pressed) return
+            players.forEach(function(video) {
+                if (video !== master && Math.abs(video.position - master.position) > .15)
+                    video.seek(master.position)
+            })
+        }
+    }
     font.family: Ui.Theme.bodyFont
     font.pixelSize: 14
     palette.button: "#fffaf0"
@@ -229,7 +268,13 @@ ApplicationWindow {
                                     sourceSize: Qt.size(cameraCard.modelData.width || 0, cameraCard.modelData.height || 0)
                                     sourceOnline: dashboard.playback || dashboard.cameraAvailability[cameraCard.modelData.name] !== false
                                     cameraName: cameraCard.modelData.name; endpoint: cameraCard.modelData.endpoint; nativeEndpoint: cameraCard.modelData.nativeEndpoint || ""; media: cameraCard.modelData.media; targetFps: root.previewFps
-                                    onStatsChanged: { if (dashboard.playback) { root.playTime = position; dashboard.setPlaybackTime(position) } }
+                                    paused: dashboard.playback && (root.playPaused || !root.playbackReady)
+                                    onStatsChanged: {
+                                        if (dashboard.playback && root.playbackReady && cameraName === root.playbackMaster() && !timeline.pressed) {
+                                            root.playTime = position
+                                            dashboard.setPlaybackTime(position)
+                                        }
+                                    }
                                     onFrameSizeChanged: {
                                         var sizes=Object.assign({}, root.frameSizes)
                                         sizes[cameraName]={width:frameSize.width, height:frameSize.height}
@@ -363,11 +408,11 @@ ApplicationWindow {
                     Label { text: "Playback"; color: "#776d5a" }
                     Ui.ComboBox { id: bag; Layout.fillWidth: true; model: dashboard.bags; textRole: "name"; valueRole: "selector"; enabled: !dashboard.state.recording }
                     Ui.Button { text: "Refresh"; onClicked: dashboard.command("refreshBags") }
-                    Ui.Button { id: loadButton; text: "Load"; enabled: bag.count>0&&!dashboard.state.recording&&!dashboard.playback; onClicked: dashboard.command("playback",bag.currentValue) }
-                    Ui.Button { id: pauseButton; text: root.playPaused ? "Resume" : "Pause"; enabled: dashboard.playback; onClicked: { root.playPaused=!root.playPaused;root.allVideos(function(v){v.paused=root.playPaused}) } }
-                    Ui.Slider { id: timeline; Layout.preferredWidth: 190; from: 0; to: Math.max(1,dashboard.duration); value: root.playTime; enabled: dashboard.playback; onMoved: root.allVideos(function(v){v.seek(timeline.value)}) }
+                    Ui.Button { id: loadButton; text: "Load"; enabled: bag.count>0&&!dashboard.state.recording&&!dashboard.playback&&!dashboard.playbackBusy; onClicked: dashboard.command("playback",bag.currentValue) }
+                    Ui.Button { id: pauseButton; text: root.playPaused ? "Resume" : "Pause"; enabled: dashboard.playback; onClicked: { root.playPaused=!root.playPaused } }
+                    Ui.Slider { id: timeline; Layout.preferredWidth: 190; from: 0; to: Math.max(1,dashboard.duration); value: root.playTime; enabled: dashboard.playback; onMoved: root.seekPlayback(timeline.value) }
                     Label { text: dashboard.playback ? root.playTime.toFixed(1)+" / "+dashboard.duration.toFixed(1)+" s" : Ui.Texts.value(dashboard.state.playbackState || "idle"); color: "#84775f" }
-                    Ui.Button { id: liveButton; text: "Live"; enabled: dashboard.playback || ["preparing", "playing"].indexOf(dashboard.state.playbackState) >= 0; onClicked: { root.playPaused=false;dashboard.command("live") } }
+                    Ui.Button { id: liveButton; text: "Live"; enabled: dashboard.playback || dashboard.playbackBusy || ["preparing", "playing"].indexOf(dashboard.state.playbackState) >= 0; onClicked: { root.playPaused=false;dashboard.command("live") } }
                 }
                 Label { text: root.captureAction === "starting" ? "Checking devices and clocks…" : root.captureAction === "stopping" ? "Stopping recording…" : dashboard.state.recording ? "● Recording  " + ((dashboard.state.distributed || {}).enabled ? "Ego SD + Jetson · " : "") + (dashboard.state.output || "") : dashboard.state.recordingBusy ? "Saving…" : Ui.Texts.value(dashboard.message); Layout.fillWidth: true; elide: Text.ElideRight; color: dashboard.state.recording ? "#bf604d" : "#84775f" }
             }

@@ -13,11 +13,20 @@ import traceback
 
 try:
     import rclpy
-    from rclpy.executors import MultiThreadedExecutor, SingleThreadedExecutor
+    from rclpy.executors import (
+        MultiThreadedExecutor, SingleThreadedExecutor,
+        ExternalShutdownException, ShutdownException,
+    )
 except Exception:  # pragma: no cover - help and import work outside ROS
     rclpy = None
     MultiThreadedExecutor = None
     SingleThreadedExecutor = None
+
+    class ExternalShutdownException(Exception):
+        pass
+
+    class ShutdownException(Exception):
+        pass
 
 from insight_capture.api import WebDashboardServer
 from insight_capture.api.context import DashboardContext
@@ -73,6 +82,8 @@ def _run_executor(executor: "MultiThreadedExecutor", node: PoseBridgeNode) -> No
 
     try:
         executor.spin()
+    except (ExternalShutdownException, ShutdownException):
+        return
     except Exception:
         node.get_logger().fatal(
             "ROS executor thread crashed; exiting so the container restarts.\n"

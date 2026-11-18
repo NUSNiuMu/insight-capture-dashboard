@@ -14,6 +14,7 @@ from insight_capture.runtime.discovery import camera_links
 from insight_capture.core.paths import PROJECT_ROOT
 
 _dynamic_profile = None
+_dynamic_excluded = frozenset()
 _transport_library = None
 
 
@@ -59,8 +60,9 @@ def configure_ros_network(config):
     atexit.register(path.unlink, missing_ok=True)
     os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(path)
     if dynamic:
-        global _dynamic_profile
+        global _dynamic_profile, _dynamic_excluded
         _dynamic_profile = path
+        _dynamic_excluded = frozenset(excluded)
         refresh_ros_network()
     return path
 
@@ -100,7 +102,7 @@ def refresh_ros_network():
     """Update both future child processes and Fast DDS's in-process QoS cache."""
     if _dynamic_profile is None:
         return
-    addresses = sorted({'127.0.0.1'} | {link.address for link in camera_links()})
+    addresses = sorted({'127.0.0.1'} | ({link.address for link in camera_links()} - _dynamic_excluded))
     global _transport_library
     if _transport_library is None:
         _transport_library = ctypes.CDLL(str(PROJECT_ROOT / '.native-build/libinsight_dds_network.so'))

@@ -100,6 +100,7 @@ class RecordingManager:
         self.output_path: Optional[str] = None
         self.started_at: Optional[float] = None
         self.recording_mode: Optional[str] = None
+        self.require_global_pose = True
         self.current_topics: List[str] = []
         self.topic_catalog = build_recording_topic_catalog(raw_config, [], self.default_topics)
         self._output_lines: Deque[str] = deque(maxlen=200)
@@ -111,7 +112,7 @@ class RecordingManager:
         self._recorder_subscribed_topics: Set[str] = set()
         self._recorder_control_fds: Dict[str, int] = {}
         self._stdout_threads: List[threading.Thread] = []
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._topic_refresh_lock = threading.Lock()
         self._merge_thread: Optional[threading.Thread] = None
         self._recording_completed_callbacks: List[Callable[[Path], None]] = []
@@ -469,6 +470,13 @@ class RecordingManager:
         missing = [topic for topic in selected if not results[topic]["ok"]]
         return {"ok": not missing, "topics": results, "missing": missing}
 
+    def delete_saved_recordings(self, operation):
+        with self._lock:
+            self._cleanup_if_exited_unlocked()
+            if self._recording_active_unlocked() or self.merge_state in {"merging", "finalizing"}:
+                raise RuntimeError("请先结束录制或等待当前后处理完成")
+            return operation()
+
     def start(self, *args, **kwargs):
         if self.preview_control:
             self.preview_control.pause("recording")
@@ -496,6 +504,7 @@ class RecordingManager:
         bag_name: Optional[str] = None,
         recording_mode: str = "capture",
         output_subdirectory: Optional[str] = None,
+        require_global_pose: bool = True,
     ) -> Dict[str, object]:
         start_started = time.perf_counter()
         selected_topics = self.default_topics if topics is None else _normalize_topics(topics)
@@ -551,15 +560,31 @@ class RecordingManager:
             setup_finished = time.perf_counter()
 
             def abort_started_processes() -> None:
-                for started_process in processes.values():
-                    with contextlib.suppress(ProcessLookupError):
-                        os.killpg(os.getpgid(started_process.pid), signal.SIGINT)
-                for started_process in processes.values():
-                    with contextlib.suppress(subprocess.TimeoutExpired):
-                        started_process.wait(timeout=3.0)
-                for control_fd in control_fds.values():
-                    with contextlib.suppress(OSError):
-                        os.close(control_fd)
+                # Keep ownership if even the shutdown attempts time out. A
+                # later stop can reap these children and start remains blocked.
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    for child in processes.values():
+                        if child.poll() is None:
+                            with contextlib.suppress(ProcessLookupError):
+                                os.killpg(os.getpgid(child.pid), sig)
+                    for child in processes.values():
+                        with contextlib.suppress(subprocess.TimeoutExpired):
+                            child.wait(timeout=3.0)
+                survivors = {key: child for key, child in processes.items() if child.poll() is None}
+                for key, fd in control_fds.items():
+                    if key not in survivors:
+                        with contextlib.suppress(OSError):
+                            os.close(fd)
+                self.processes = survivors
+                self._image_writer_active = False
+                self._recorder_control_fds = {key: fd for key, fd in control_fds.items() if key in survivors}
+                self._stdout_threads = stdout_threads if survivors else []
+                if survivors:
+                    self._staging_dir = staging_dir
+                    self.output_path = str(output_path)
+                    self.recording_mode = str(recording_mode)
+                    self.merge_state = "error"
+                    self.merge_error = "Recorder startup failed; child shutdown is still pending."
 
             spawn_started = time.perf_counter()
             master_fd, slave_fd = pty.openpty()
@@ -578,132 +603,137 @@ class RecordingManager:
                     start_new_session=True,
                     env=env,
                 )
-            except Exception:
-                os.close(master_fd)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.close(master_fd)
                 raise
             finally:
-                os.close(slave_fd)
+                with contextlib.suppress(OSError):
+                    os.close(slave_fd)
             control_fds["single"] = master_fd
             processes["single"] = process
-            thread = threading.Thread(
-                target=self._drain_stdout,
-                args=("single", process),
-                daemon=True,
-                name="rosbag_record_stdout_single",
-            )
-            thread.start()
-            stdout_threads.append(thread)
-            spawn_finished = time.perf_counter()
-
-            if not self._recorder_ready.wait(timeout=10.0):
-                abort_started_processes()
-                raise RuntimeError("Native MCAP recorder did not become ready within 10 seconds.")
-            if safe_subdirectory:
-                staging_dir.mkdir(parents=True, exist_ok=True)
-                (staging_dir / RECORDING_TARGET_NAME).write_text(
-                    json.dumps({"output_subdirectory": safe_subdirectory}, sort_keys=True),
-                    encoding="utf-8",
+            try:
+                thread = threading.Thread(
+                    target=self._drain_stdout,
+                    args=("single", process),
+                    daemon=True,
+                    name="rosbag_record_stdout_single",
                 )
-            ready_finished = time.perf_counter()
-            # Let image subscriptions and the rest of each DDS discovery burst settle.
-            # Discovery alone does not prove that payload was recorded.
-            settle_deadline = time.monotonic() + 20.0
-            while time.monotonic() < settle_deadline:
-                if self._all_recorder_topics_subscribed.is_set():
-                    break
-                last_subscription = self._last_recorder_subscription_monotonic
-                required_topics_ready = audit_topics.issubset(
-                    self._recorder_subscribed_topics
-                )
-                quiet_sec = 1.0 if audit_topics else 8.0
-                if (
-                    required_topics_ready
-                    and last_subscription
-                    and time.monotonic() - last_subscription >= quiet_sec
-                ):
-                    break
-                time.sleep(0.1)
-            else:
-                abort_started_processes()
-                raise RuntimeError("Native MCAP topic subscriptions did not settle.")
-            discovery_finished = time.perf_counter()
+                thread.start()
+                stdout_threads.append(thread)
+                spawn_finished = time.perf_counter()
 
-            network_snapshot_start = capture_network_snapshot()
-            network_snapshot_finished = time.perf_counter()
-            resume_requested = network_snapshot_finished
-            for control_fd in control_fds.values():
-                os.write(control_fd, b" ")
-            if not self._recorder_resumed.wait(timeout=5.0):
-                abort_started_processes()
-                raise RuntimeError("Native MCAP recorder did not resume from pause.")
-            resume_confirmed = time.perf_counter()
-            if self._start_image_recording is not None and audit_topics:
-                try:
+                if not self._recorder_ready.wait(timeout=10.0):
+                    raise RuntimeError("Native MCAP recorder did not become ready within 10 seconds.")
+                if safe_subdirectory:
+                    staging_dir.mkdir(parents=True, exist_ok=True)
+                    (staging_dir / RECORDING_TARGET_NAME).write_text(
+                        json.dumps({"output_subdirectory": safe_subdirectory}, sort_keys=True),
+                        encoding="utf-8",
+                    )
+                ready_finished = time.perf_counter()
+                # Let image subscriptions and the rest of each DDS discovery burst settle.
+                # Discovery alone does not prove that payload was recorded.
+                settle_deadline = time.monotonic() + 20.0
+                while time.monotonic() < settle_deadline:
+                    if self._all_recorder_topics_subscribed.is_set():
+                        break
+                    last_subscription = self._last_recorder_subscription_monotonic
+                    required_topics_ready = audit_topics.issubset(
+                        self._recorder_subscribed_topics
+                    )
+                    quiet_sec = 1.0 if audit_topics else 8.0
+                    if (
+                        required_topics_ready
+                        and last_subscription
+                        and time.monotonic() - last_subscription >= quiet_sec
+                    ):
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise RuntimeError("Native MCAP topic subscriptions did not settle.")
+                discovery_finished = time.perf_counter()
+
+                network_snapshot_start = capture_network_snapshot()
+                network_snapshot_finished = time.perf_counter()
+                resume_requested = network_snapshot_finished
+                for control_fd in control_fds.values():
+                    os.write(control_fd, b" ")
+                if not self._recorder_resumed.wait(timeout=5.0):
+                    raise RuntimeError("Native MCAP recorder did not resume from pause.")
+                resume_confirmed = time.perf_counter()
+                if self._start_image_recording is not None and audit_topics:
+                    image_writer_active = True
                     self._start_image_recording({
                         topic: str(staging_dir) for topic in audit_topics
                     })
-                except Exception:
-                    abort_started_processes()
-                    raise
-                image_writer_active = True
-            audit_finished = time.perf_counter()
+                audit_finished = time.perf_counter()
 
-            self.processes = processes
-            self._process_exit_codes = {}
-            self._recorder_failure = None
-            self._stdout_threads = stdout_threads
-            self._recorder_control_fds = control_fds
-            self._staging_dir = staging_dir
-            self._image_writer_active = image_writer_active
-            self._image_header_audit = None
-            self._network_snapshot_start = network_snapshot_start
-            self._network_audit = None
-            self.output_path = str(output_path)
-            self.started_at = time.time()
-            self.recording_mode = str(recording_mode or "capture")
-            self.current_topics = list(selected_topics)
-            self._recording_manifest = {
-                "version": 3,
-                "format": "rosbag2",
-                "storage_id": "mcap",
-                "rmw_implementation": env.get("RMW_IMPLEMENTATION"),
-                "bag_name": name,
-                "task_set_id": safe_subdirectory or None,
-                "recording_mode": self.recording_mode,
-                "selected_topics": list(selected_topics),
-                "started_at_epoch_s": self.started_at,
-                "camera_configuration": json.loads(json.dumps(self.raw_config)),
-                "clock_start": self._clock_start,
-            }
-            self.merge_state = "idle"
-            self.merge_error = None
-            self.merge_timings = {}
-            state_published = time.perf_counter()
-            self.start_timings = {
-                "lock_wait_sec": round(lock_acquired - start_started, 4),
-                "storage_check_sec": round(storage_finished - storage_started, 4),
-                "setup_sec": round(setup_finished - storage_finished, 4),
-                "recorder_spawn_sec": round(spawn_finished - spawn_started, 4),
-                "recorder_ready_wait_sec": round(ready_finished - spawn_finished, 4),
-                "recorder_ready_offset_sec": round(ready_finished - start_started, 4),
-                "dds_subscription_settle_sec": round(discovery_finished - ready_finished, 4),
-                "network_snapshot_sec": round(
-                    network_snapshot_finished - discovery_finished, 4
-                ),
-                "resume_wait_sec": round(resume_confirmed - resume_requested, 4),
-                "resume_requested_offset_sec": round(
-                    resume_requested - start_started, 4
-                ),
-                "resume_confirmed_offset_sec": round(
-                    resume_confirmed - start_started, 4
-                ),
-                "audit_enable_sec": round(audit_finished - resume_confirmed, 4),
-                "state_publish_sec": round(state_published - audit_finished, 4),
-                "total_sec": round(state_published - start_started, 4),
-            }
-            self._output_lines.append(
-                f"[startup] {json.dumps(self.start_timings, sort_keys=True)}"
-            )
+                self.processes = processes
+                self._process_exit_codes = {}
+                self._recorder_failure = None
+                self._stdout_threads = stdout_threads
+                self._recorder_control_fds = control_fds
+                self._staging_dir = staging_dir
+                self._image_writer_active = image_writer_active
+                self._image_header_audit = None
+                self._network_snapshot_start = network_snapshot_start
+                self._network_audit = None
+                self.output_path = str(output_path)
+                self.started_at = time.time()
+                self.recording_mode = str(recording_mode or "capture")
+                self.require_global_pose = bool(require_global_pose)
+                self.current_topics = list(selected_topics)
+                self._recording_manifest = {
+                    "version": 3,
+                    "format": "rosbag2",
+                    "storage_id": "mcap",
+                    "rmw_implementation": env.get("RMW_IMPLEMENTATION"),
+                    "bag_name": name,
+                    "task_set_id": safe_subdirectory or None,
+                    "recording_mode": self.recording_mode,
+                    "require_global_pose": self.require_global_pose,
+                    "selected_topics": list(selected_topics),
+                    "started_at_epoch_s": self.started_at,
+                    "camera_configuration": json.loads(json.dumps(self.raw_config)),
+                    "clock_start": self._clock_start,
+                }
+                self.merge_state = "idle"
+                self.merge_error = None
+                self.merge_timings = {}
+                state_published = time.perf_counter()
+                self.start_timings = {
+                    "lock_wait_sec": round(lock_acquired - start_started, 4),
+                    "storage_check_sec": round(storage_finished - storage_started, 4),
+                    "setup_sec": round(setup_finished - storage_finished, 4),
+                    "recorder_spawn_sec": round(spawn_finished - spawn_started, 4),
+                    "recorder_ready_wait_sec": round(ready_finished - spawn_finished, 4),
+                    "recorder_ready_offset_sec": round(ready_finished - start_started, 4),
+                    "dds_subscription_settle_sec": round(discovery_finished - ready_finished, 4),
+                    "network_snapshot_sec": round(
+                        network_snapshot_finished - discovery_finished, 4
+                    ),
+                    "resume_wait_sec": round(resume_confirmed - resume_requested, 4),
+                    "resume_requested_offset_sec": round(
+                        resume_requested - start_started, 4
+                    ),
+                    "resume_confirmed_offset_sec": round(
+                        resume_confirmed - start_started, 4
+                    ),
+                    "audit_enable_sec": round(audit_finished - resume_confirmed, 4),
+                    "state_publish_sec": round(state_published - audit_finished, 4),
+                    "total_sec": round(state_published - start_started, 4),
+                }
+                self._output_lines.append(
+                    f"[startup] {json.dumps(self.start_timings, sort_keys=True)}"
+                )
+            except BaseException:
+                abort_started_processes()
+                if image_writer_active and self._stop_image_recording is not None:
+                    with contextlib.suppress(Exception):
+                        self._stop_image_recording()
+                raise
+
         return self.status()
 
     def _stop(
@@ -798,11 +828,13 @@ class RecordingManager:
             for process in still_running:
                 with contextlib.suppress(subprocess.TimeoutExpired):
                     process.wait(timeout=3.0)
+        survivors = {key: process for key, process in processes.items() if process.poll() is None}
         for thread in stdout_threads:
             thread.join(timeout=2.0)
-        for control_fd in control_fds.values():
-            with contextlib.suppress(OSError):
-                os.close(control_fd)
+        for key, control_fd in control_fds.items():
+            if key not in survivors:
+                with contextlib.suppress(OSError):
+                    os.close(control_fd)
 
         recorder_loss_lines = list(self._recorder_loss_lines)
 
@@ -815,8 +847,9 @@ class RecordingManager:
 
         stop_sec = round(time.perf_counter() - stop_started, 3)
         with self._lock:
-            self.processes = {}
-            self._recorder_control_fds = {}
+            self.processes = survivors
+            self._recorder_control_fds = {key: fd for key, fd in control_fds.items() if key in survivors}
+            self._stdout_threads = stdout_threads if survivors else []
             self._process_exit_codes = exit_codes
             self.merge_error = None
             self.merge_timings = {"recorder_stop_sec": stop_sec}
@@ -826,9 +859,9 @@ class RecordingManager:
                 if self._recorder_failure.get("reason") == "storage_exhausted":
                     raise RuntimeError("录制存储空间已耗尽，采集已停止，未完成数据已保留。请释放空间后重新开始。")
                 raise RuntimeError("录制意外中断，未完成数据已保留。请检查设备后重新开始。")
-            if still_running:
+            if survivors:
                 raise RuntimeError(
-                    f"recorder process(es) did not stop cleanly: {len(still_running)}"
+                    f"recorder process(es) did not stop cleanly: {len(survivors)}"
                 )
             if failed_recorders:
                 details = ", ".join(
@@ -935,6 +968,7 @@ class RecordingManager:
             "recording": self._recording_active_unlocked(),
             "recorder_failure": dict(self._recorder_failure) if self._recorder_failure else None,
             "recording_mode": self.recording_mode,
+            "require_global_pose": self.require_global_pose,
             "output_path": self.output_path,
             "recording_timing": {
                 "source": "recorder",

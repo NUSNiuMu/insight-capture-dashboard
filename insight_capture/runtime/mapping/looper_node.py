@@ -344,6 +344,7 @@ class LooperNode(Node):
             state.clock = SourceClock()
             state.latest_source_ns = state.last_vio_received_ns = 0
             state.reset_source_ns = 0
+            state.next_image = 0
             state.last_raw_source_ns = state.last_raw_received_ns = 0
             state.last_match = 0.
             state.diagnostics = {"state": "waiting_for_vio", "geometric_match": False}

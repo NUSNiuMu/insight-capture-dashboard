@@ -12,6 +12,10 @@ from insight_capture.runtime.tasks import CaptureTask, CaptureTaskCatalog
 
 @pytest.fixture
 def capture(tmp_path, monkeypatch):
+    # Each test controls capacity; the runner's temporary filesystem is not
+    # the capture disk whose warning behavior this fixture describes.
+    monkeypatch.setattr("insight_capture.runtime.anomaly.shutil.disk_usage",
+                        lambda _: SimpleNamespace(free=10 * 1024**3, total=20 * 1024**3, used=10 * 1024**3))
     store = SessionTakeStore(tmp_path, task_catalog=CaptureTaskCatalog(
         [CaptureTask("qa", "QA", "Live alert test", "capture")], default_task_id="qa"))
     store.reserve_take()
@@ -155,3 +159,8 @@ def test_malformed_history_does_not_break_mobile_status(capture):
         {"code": "storage_low", "event": "unknown"}]
     capture.route.context.take_store.current = lambda: original
     assert [e["code"] for e in capture.route._snapshot()["live_alerts"]] == ["storage_low"]
+
+
+def test_unknown_camera_role_still_produces_mobile_status(capture):
+    capture.route.context.node.poses = [SimpleNamespace(name="custom_a", teleop_role="custom")]
+    assert capture.route._snapshot()["devices"][0]["label"] == "custom · CUSTOM"

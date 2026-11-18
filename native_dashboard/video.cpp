@@ -203,6 +203,8 @@ void NativeVideo::stop() {
     m_pipeline = m_peer = m_decode = m_sink = nullptr;
     m_appsrc = nullptr;
     m_nativeReceived = 0;
+    m_playbackReady = false;
+    m_position = 0;
     m_nativeFormat = 0;
     m_bus = nullptr;
     m_resumeFresh = false;
@@ -236,6 +238,7 @@ void NativeVideo::start() {
         query.addQueryItem("fps", QString::number(m_fps));
         url.setQuery(query);
         m_socket.open(url);
+        m_timer.start(m_active ? 33 : 250);
         emit statsChanged();
         return;
     }
@@ -576,6 +579,10 @@ void NativeVideo::iceCandidate(GstElement *, guint index, gchar *candidate, gpoi
         Qt::QueuedConnection);
 }
 void NativeVideo::poll() {
+    if (m_useNative && m_active && !m_pipeline && m_clock.elapsed() - m_lastProgress > 12000) {
+        fail("Video did not start · Reconnecting");
+        return;
+    }
     if (!m_pipeline)
         return;
     while (auto *message = gst_bus_pop(m_bus)) {
@@ -599,6 +606,14 @@ void NativeVideo::poll() {
     }
     auto now = m_clock.elapsed();
     if (!m_media.isEmpty()) {
+        if (!m_playbackReady) {
+            GstState state = GST_STATE_NULL;
+            const auto result = gst_element_get_state(m_pipeline, &state, nullptr, 0);
+            if (result == GST_STATE_CHANGE_SUCCESS && state >= GST_STATE_PAUSED) {
+                m_playbackReady = true;
+                emit statsChanged();
+            }
+        }
         gint64 pos = 0;
         if (gst_element_query_position(m_pipeline, GST_FORMAT_TIME, &pos)) {
             m_position = double(pos) / GST_SECOND;
@@ -636,6 +651,7 @@ void NativeVideo::poll() {
     }
 }
 void NativeVideo::setPaused(bool value) {
+    if (m_paused == value) return;
     m_paused = value;
     if (m_pipeline)
         gst_element_set_state(m_pipeline, value || !m_active ? GST_STATE_PAUSED : GST_STATE_PLAYING);
@@ -644,7 +660,7 @@ void NativeVideo::setPaused(bool value) {
 void NativeVideo::seek(double seconds) {
     if (m_pipeline && !m_media.isEmpty())
         gst_element_seek_simple(m_pipeline, GST_FORMAT_TIME,
-                                GstSeekFlags(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT),
+                                GstSeekFlags(GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE),
                                 qint64(qMax(0.0, seconds) * GST_SECOND));
 }
 static QString frameFingerprint(GstBuffer *buffer) {

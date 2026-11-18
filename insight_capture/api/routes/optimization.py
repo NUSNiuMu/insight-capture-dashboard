@@ -60,6 +60,7 @@ class OptimizationRoutes:
         vio_path = project_root / "data" / "derived" / run_name / "trajectories" / "vio_100hz.tum"
         colmap_path = next((project_root / "runs" / run_name).glob("viz/*/colmap_sim3.tum"), None)
         return web.json_response({
+            "run_name": run_name,
             "vio": _read_tum_points(vio_path),
             "colmap": _read_tum_points(colmap_path) if colmap_path is not None else [],
         })

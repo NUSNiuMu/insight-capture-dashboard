@@ -27,6 +27,7 @@ class NativeVideo : public QQuickItem {
     Q_PROPERTY(double renderedFps READ renderedFps NOTIFY statsChanged)
     Q_PROPERTY(double position READ position NOTIFY statsChanged)
     Q_PROPERTY(bool paused READ paused WRITE setPaused NOTIFY statsChanged)
+    Q_PROPERTY(bool playbackReady READ playbackReady NOTIFY statsChanged)
   public:
     explicit NativeVideo(QQuickItem *parent = nullptr);
     ~NativeVideo() override;
@@ -44,6 +45,7 @@ class NativeVideo : public QQuickItem {
     double renderedFps() const { return m_renderedFps; }
     double position() const { return m_position; }
     bool paused() const { return m_paused; }
+    bool playbackReady() const { return m_playbackReady; }
     void setCameraName(const QString &value);
     void setEndpoint(const QUrl &value);
     void setNativeEndpoint(const QUrl &value);
@@ -92,7 +94,7 @@ class NativeVideo : public QQuickItem {
     GstElement *m_pipeline = nullptr, *m_peer = nullptr, *m_decode = nullptr, *m_sink = nullptr;
     GstBus *m_bus = nullptr;
     GstElement *m_appsrc = nullptr;
-    bool m_useNative = false;
+    bool m_useNative = false, m_playbackReady = false;
     int m_nativeFormat = 0;
     QSize m_nativeSize;
     quint64 m_nativeEpoch = 0, m_nativeReceived = 0;

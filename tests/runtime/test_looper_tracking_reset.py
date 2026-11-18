@@ -225,3 +225,9 @@ def test_wall_clock_correction_restarts_common_ticks_without_replaying_missed_ti
         poses = mapper.pose_publishers[name].values
         assert poses and abs(poses[-1].header.stamp.sec - mapper.now // 1_000_000_000) <= 1
     assert mapper.pose_publishers['wrist'].values[-1].pose.position.x == pytest.approx(12.)
+
+
+def test_clock_restart_resets_wrist_image_sampling_deadline(mapper):
+    mapper.cameras["wrist"].next_image = 100_000_000_000
+    mapper.invalidate_camera("wrist")
+    assert mapper.cameras["wrist"].next_image == 0

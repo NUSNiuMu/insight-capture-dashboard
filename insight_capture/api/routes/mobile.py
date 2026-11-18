@@ -129,7 +129,7 @@ class MobileCaptureRoutes:
         }}
         role_names = {"head": "Head", "right_hand": "Wrist A", "left_hand": "Wrist B"}
         devices = [{"name": pose.name, "role": pose.teleop_role,
-                    "label": role_names[pose.teleop_role] + " · " + pose.name.split("_")[0].upper()}
+                    "label": role_names.get(pose.teleop_role, pose.teleop_role) + " · " + pose.name.split("_")[0].upper()}
                    for pose in self.context.node.poses]
         heads = {pose.name for pose in self.context.node.poses if pose.teleop_role == "head"}
         preview_cameras = sorted(self.context.node.cameras, key=lambda camera: camera.device_name not in heads)

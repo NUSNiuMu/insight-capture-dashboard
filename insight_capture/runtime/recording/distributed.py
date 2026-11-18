@@ -92,12 +92,12 @@ class DistributedRecordingManager:
             raise RuntimeError("设备校时检查失败：" + ("、".join(names) or "设备间偏差界限超过门槛"))
         return {"ok": True, "clocks": clocks, "ego_storage": {k: remote["storage"].get(k) for k in ("path", "free_bytes", "mounted", "writable")}}
 
-    def start(self, topics=None, bag_name=None, recording_mode="capture", output_subdirectory=None, task=None):
+    def start(self, topics=None, bag_name=None, recording_mode="capture", output_subdirectory=None, task=None, require_global_pose=True):
         if recording_mode != "capture":
             if self._session and self._session.get("phase") not in TERMINAL:
                 raise RuntimeError("上一条双端录制尚未结束")
             self._bypass = True
-            return self.local.start(topics, bag_name, recording_mode, output_subdirectory)
+            return self.local.start(topics, bag_name, recording_mode, output_subdirectory, require_global_pose=require_global_pose)
         if not self._lifecycle.acquire(blocking=False):
             raise RuntimeError("双端录制正在启停，请稍候")
         try:
@@ -134,6 +134,7 @@ class DistributedRecordingManager:
                     "take_id": task.get("take_id"), "ego_url": self.ego.base,
                     "start_command": "dashboard_start_" + sid, "stop_command": "dashboard_stop_" + sid,
                     "created_at_epoch_s": time.time(), "stop_requested": False,
+                    "require_global_pose": bool(require_global_pose),
                     "jetson_path": str(root / "_distributed" / (sid + "_jetson")),
                     "ego_copy_path": str(root / "_distributed" / (sid + "_ego")),
                     "output_path": str(target),
@@ -146,7 +147,7 @@ class DistributedRecordingManager:
                 self._save()
             try:
                 # Extra lead-in permits DDS warm-up and a complete head keyframe before action.
-                self.local.start(selected, sid + "_jetson", "capture", "_distributed")
+                self.local.start(selected, sid + "_jetson", "capture", "_distributed", require_global_pose=require_global_pose)
                 self._update(jetson_path=self.local.output_path, local_started_at_epoch_s=time.time(), remote_start_attempted=True)
                 try:
                     self.ego.request("/api/recording/start", {"command_id": self._session["start_command"], "session_id": sid, "task_id": task_id},
@@ -172,7 +173,7 @@ class DistributedRecordingManager:
                     raise RuntimeError("起录过程中设备时钟检查失败")
                 self._update(phase="recording", remote_recording_id=record["id"], remote_path=record["path"], ready_at_epoch_s=time.time())
             except Exception as exc:
-                self._update(stop_requested=True, phase="stop_pending", start_error=str(exc))
+                self._update(stop_requested=True, phase="stop_pending", start_error=str(exc), stopped_at_epoch_s=time.time())
                 if self.local.is_recording():
                     self.local.stop()
                 self._update(local_saved=Path(self._session["jetson_path"], "metadata.yaml").is_file())
@@ -375,6 +376,7 @@ class DistributedRecordingManager:
 
     def status(self):
         result = self.local.status()
+        local_recording = result.get("recording", False)
         if self._bypass:
             return result
         with self._lock:
@@ -384,13 +386,14 @@ class DistributedRecordingManager:
             if session:
                 if not active:
                     result.update(session.get("local_status", {}))
-                result.update(recording=active, output_path=session["output_path"],
+                result.update(recording=active or local_recording, output_path=session["output_path"],
+                              require_global_pose=session.get("require_global_pose", True),
                               merge_state="saved" if phase == "saved" else "done" if phase == "done" else "error" if phase == "error" else "merging" if phase in {"copying", "merging"} else "finalizing" if phase == "stop_pending" else "idle",
                               merge_error=session.get("error"))
                 if phase == "done":
                     result["merge_timings"] = {
                         "method": "distributed_copy_merge",
-                        "total_sec": round(session["finished_at_epoch_s"] - session.get("merge_started_at_epoch_s", session["stopped_at_epoch_s"]), 3),
+                        "total_sec": round(session["finished_at_epoch_s"] - session.get("merge_started_at_epoch_s", session.get("stopped_at_epoch_s", session["finished_at_epoch_s"])), 3),
                     }
             result["distributed"] = {
                 "enabled": True, "phase": phase, "session_id": session.get("session_id"),
