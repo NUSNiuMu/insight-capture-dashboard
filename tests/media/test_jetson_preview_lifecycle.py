@@ -146,6 +146,27 @@ def test_failed_decoder_is_removed_and_replacement_waits_for_an_idr(monkeypatch,
         owner.close()
 
 
+def test_overview_shows_latest_live_tiles_without_waiting_for_a_match(cpu_pipeline):
+    regions = [{**REGION, 'id': name} for name in ('head', 'wrist', 'stale')]
+    encoder = preview.OverviewEncoder(
+        {'id': '__overview__', 'width': 64, 'height': 64, 'regions': regions},
+        lambda *_: None, lambda *_: None)
+    try:
+        encoder.stopped.set()
+        encoder.thread.join(timeout=1)
+        now = 1_000_000_000
+        head = (200_000_000, now, None, None)
+        wrist = (100_000_000, now - 5_000_000, None, None)
+        stale = (head[0], now - preview.STALE_NS - 1, None, None)
+        assert encoder._select({
+            'head': [(wrist[0], wrist[1], None, None), head],
+            'wrist': [wrist],
+            'stale': [stale],
+        }, now) == {'head': head, 'wrist': wrist}
+    finally:
+        encoder.close()
+
+
 @pytest.mark.parametrize('selection', [False, True])
 def test_h264_selection_probe_does_not_retain_closed_decoder(monkeypatch, selection):
     from insight_capture.media.h264_decode import H264Decoder

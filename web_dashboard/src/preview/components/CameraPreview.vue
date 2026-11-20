@@ -85,10 +85,14 @@ function start() {
     onStats: () => {},
   })
 }
-watch([() => selected.value, () => props.preview?.transport, () => props.online, () => props.preview?.video_error, previewPaused, paused, sourceSignature],
+watch([() => selected.value, () => props.preview?.transport, () => props.preview?.video_error, previewPaused, paused, sourceSignature],
   () => {
   failed.value = false; failure.value = ''
   start()
+}, { flush: 'post' })
+// A failed status request does not tell us whether the established media stream failed.
+watch(() => props.online, online => {
+  if (online && !rtcSession) start()
 }, { flush: 'post' })
 function openPreview(id) {
   if (!expanded.value) returnToOverview = isOverview.value
@@ -176,7 +180,7 @@ onBeforeUnmount(() => {
     <div class="preview-controls">
     <div class="preview-toolbar">
     <div class="preview-head"><span><i></i>{{ t("相机预览") }}</span><small id="preview-topic">
-      {{ !online ? t('设备离线') : previewPaused ? t('预览已暂停') : `${t(isOverview ? overview?.label || '三路总览' : source?.label || '等待相机')} · ${t(!ready ? '等待画面' : failed ? '等待重试' : '实时预览')}` }}
+      {{ previewPaused ? t('预览已暂停') : !online && !ready ? t('设备离线') : `${t(isOverview ? overview?.label || '三路总览' : source?.label || '等待相机')} · ${t(!ready ? '等待画面' : failed ? '等待重试' : '实时预览')}` }}
     </small><button v-show="!expanded" id="preview-expand" :aria-label="t(&quot;放大预览&quot;)" :disabled="!online || previewPaused" @click="openPreview()">↗</button></div>
     <div v-if="expanded" class="preview-actions">
       <button v-if="expanded && fullscreenAvailable" @click="fullscreen">{{ t("系统全屏") }}</button>

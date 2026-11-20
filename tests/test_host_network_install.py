@@ -1,6 +1,7 @@
 """Exercise owned host files and service ordering without touching the real host."""
 
 import importlib.util
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -84,6 +85,39 @@ def apply(host, **kwargs):
 def file_snapshot(root):
     return {str(path.relative_to(root)): (path.read_bytes(), path.stat().st_mode, path.stat().st_mtime_ns)
             for path in root.rglob("*") if path.is_file()}
+
+
+@pytest.mark.parametrize("station_connected", [True, False])
+def test_hotspot_disables_radio_power_save_without_reconnecting(tmp_path, station_connected):
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    calls = tmp_path / "calls"
+    shim = tools / "shim"
+    shim.write_text('''#!/usr/bin/env bash
+name=${0##*/}
+printf '%s %s\\n' "$name" "$*" >> "$CALLS"
+case "$name $*" in
+    'iw dev wlan-site link')
+        if [[ $STATION_CONNECTED == yes ]]; then echo 'Connected to fixture'; fi ;;
+    'iw dev capture_ap info'|'iw dev wlan-site info') echo 'channel 149' ;;
+    'iw dev capture_ap get power_save'|'iw dev wlan-site get power_save') echo 'Power save: on' ;;
+    'nmcli -g GENERAL.CONNECTION device show capture_ap') echo jetson-capture-hotspot ;;
+    'sleep 5') exit 91 ;;
+esac
+''')
+    shim.chmod(0o755)
+    for command in ("iw", "ip", "nmcli", "sleep"):
+        (tools / command).symlink_to(shim)
+    script = (ROOT / "deploy/hotspot/start.sh").read_text()
+    script = script.replace("source /etc/insight-capture-hotspot.conf", "UPLINK=wlan-site", 1)
+    result = subprocess.run(["bash", "-c", script], timeout=5,
+                            env={**os.environ, "PATH": f"{tools}:{os.environ['PATH']}",
+                                 "CALLS": str(calls), "STATION_CONNECTED": "yes" if station_connected else "no"})
+    assert result.returncode == 91
+    operations = calls.read_text().splitlines()
+    assert operations.count("iw dev capture_ap set power_save off") == 1
+    assert ("iw dev wlan-site set power_save off" in operations) is station_connected
+    assert not any(line.startswith(("nmcli connection modify", "nmcli --wait")) for line in operations)
 
 
 def test_existing_hotspot_gets_all_owned_files_and_keeps_site_settings(host):

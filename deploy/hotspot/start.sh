@@ -4,12 +4,22 @@ source /etc/insight-capture-hotspot.conf
 AP_CHANNEL=${AP_CHANNEL:-36}
 AP_BAND=${AP_BAND:-a}
 profile=jetson-capture-hotspot
+
+disable_power_save() {
+    local device=$1
+    if [[ $(iw dev "$device" get power_save 2>/dev/null) == 'Power save: on' ]]; then
+        iw dev "$device" set power_save off 2>/dev/null || true
+    fi
+}
+
 while true; do
     if ! ip link show capture_ap >/dev/null 2>&1; then sleep 2; continue; fi
     channel=$AP_CHANNEL
     band=$AP_BAND
     station_channel=
     if iw dev "$UPLINK" link | grep -q '^Connected to '; then
+        # The uplink shares this radio with the phone-facing AP.
+        disable_power_save "$UPLINK"
         # A single radio can run STA + AP only on its current station channel.
         station_channel=$(iw dev "$UPLINK" info | awk '$1 == "channel" {print $2}')
         if [[ -n "$station_channel" ]]; then
@@ -37,5 +47,6 @@ while true; do
         nmcli connection modify "$profile" 802-11-wireless.band "$band" 802-11-wireless.channel "$channel"
         nmcli --wait 25 connection up "$profile" ifname capture_ap || { sleep 3; continue; }
     fi
+    disable_power_save capture_ap
     sleep 5
 done
