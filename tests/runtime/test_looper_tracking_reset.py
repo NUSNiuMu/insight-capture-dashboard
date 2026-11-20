@@ -88,6 +88,96 @@ def advance(node, *, wrist_x=0., seconds=21):
         node.on_vio(name, value)
         node.on_frame_pose(name, value.header, value.pose)
 
+def publish_frame(node, wrist_x=2.):
+    node.now += 100_000_000
+    for name in node.names:
+        value = message(0, wrist_x if name == "wrist" else 0.)
+        value.header.stamp.sec, value.header.stamp.nanosec = divmod(node.now, 1_000_000_000)
+        node.on_frame_pose(name, value.header, value.pose)
+    node.publish_poses()
+
+
+def wrist_match(node, correction, *, stamp=None):
+    state = node.cameras["wrist"]
+    odom = np.eye(4)
+    odom[0, 3] = state.buffer.lookup(state.latest_source_ns).translation[0]
+    matched_pose = odom.copy()
+    matched_pose[0, 3] += correction
+    item = S(view="wrist", generation=node.generation, tracking_epoch=state.tracking_epoch,
+             stamp_ns=node.now if stamp is None else stamp)
+    return node.commit_result(item, {
+        "localized": True, "map_from_imu": matched_pose, "verified_relocalization": False,
+        "map_revision": 2, "matches": 22, "inliers": 16, "grid_cells": 5,
+        "reprojection_rms_px": .8, "gripper_mask_height_ratio": 0.,
+    }, odom)
+
+
+def test_stationary_wrist_holds_its_map_transform_and_uses_its_vio(mapper):
+    wrist = mapper.cameras["wrist"]
+    mapper.on_tracking("wrist", "TRACKING_STATIC")
+    publish_frame(mapper)
+    assert wrist.stationary_correction[0, 3] == pytest.approx(10.)
+    assert not wrist_match(mapper, 10.030)
+
+    head_pose, wrist_pose, wrist_odom = np.eye(4), np.eye(4), np.eye(4)
+    head_pose[0, 3], wrist_pose[0, 3], wrist_odom[0, 3] = .020, 12.030, 2.
+    assert mapper.commit_result(S(view="head", generation=0, tracking_epoch=0, stamp_ns=mapper.now), {
+        "mapped": True, "map_from_imu": head_pose, "verified_relocalization": True,
+        "map_revision": 2, "landmarks": 20, "raw_landmarks": 20, "keyframes": 3,
+        "localization_ready": True, "wrist_updates": [{
+            "camera_id": 2, "localized": True, "tracking_epoch": 0,
+            "map_from_imu": wrist_pose, "odom_from_imu": wrist_odom,
+            "source_ns": wrist.fusion.source_ns, "map_revision": 2,
+            "reason": None, "alignment": {},
+        }],
+    }, np.eye(4))
+    for _ in range(5):
+        publish_frame(mapper, wrist_x=2.002)
+    assert mapper.pose_publishers["head"].values[-1].pose.position.x > .001
+    assert mapper.pose_publishers["wrist"].values[-1].pose.position.x == pytest.approx(12.002)
+    assert wrist.fusion.raw[0, 3] == pytest.approx(10.)
+
+
+def test_short_wrist_movement_reacquires_before_returning_to_hold(mapper):
+    wrist = mapper.cameras["wrist"]
+    mapper.on_tracking("wrist", "TRACKING_STATIC")
+    publish_frame(mapper)
+    last_static = mapper.now
+    mapper.on_tracking("wrist", "TRACKING")
+    publish_frame(mapper, wrist_x=2.02)
+    mapper.on_tracking("wrist", "TRACKING_STATIC")
+
+    assert wrist.resume_after_ns == last_static
+    assert not wrist_match(mapper, 10.03, stamp=last_static)
+    assert not wrist_match(mapper, 10.06)
+    assert mapper.pose_publishers["wrist"].values[-1].pose.position.x == pytest.approx(12.02)
+    assert wrist.stationary_correction is not None
+    assert wrist_match(mapper, 10.03)
+    assert wrist.resume_after_ns is None and wrist.stationary_correction is None
+    assert wrist.correction[0, 3] == pytest.approx(10.)
+
+    for _ in range(15):
+        publish_frame(mapper, wrist_x=2.02)
+    assert 12.025 < mapper.pose_publishers["wrist"].values[-1].pose.position.x < 12.05
+    assert wrist.stationary_correction is not None
+    assert not mapper.wrist_match_allowed(wrist, mapper.now)
+
+
+def test_static_wrist_can_localize_again_after_reset(mapper):
+    wrist = mapper.cameras["wrist"]
+    mapper.on_tracking("wrist", "TRACKING_STATIC")
+    publish_frame(mapper)
+    assert wrist.stationary_correction is not None
+    mapper.on_tracking("wrist", "RESTARTING")
+    mapper.on_tracking("wrist", "TRACKING_STATIC")
+    advance(mapper, wrist_x=2.)
+
+    assert wrist.stationary_correction is None and wrist.resume_after_ns is None
+    assert wrist_match(mapper, 10.)
+    mapper.publish_poses()
+    assert wrist.stationary_correction[0, 3] == pytest.approx(10.)
+
+
 @pytest.mark.parametrize("name", ["head", "wrist"])
 @pytest.mark.parametrize("status", RESET_STATES)
 def test_sdk_restart_never_reuses_old_common_map_without_a_new_match(mapper, name, status):

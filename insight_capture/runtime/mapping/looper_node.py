@@ -62,6 +62,8 @@ class CameraState:
     odometry: FrameOdometry = field(default_factory=FrameOdometry)
     fusion: PoseCorrectionFilter = field(default_factory=PoseCorrectionFilter)
     correction: object = None
+    stationary_correction: np.ndarray | None = None
+    resume_after_ns: int | None = None
     info: object = None
     center: object = None
     geometry_id: object = None
@@ -250,6 +252,8 @@ class LooperNode(Node):
                         state.tracking_epoch += 1
                         state.last_pose_reset_wall_ns = self.get_clock().now().nanoseconds
                         state.correction = None
+                        state.stationary_correction = None
+                        state.resume_after_ns = None
                         state.fusion = PoseCorrectionFilter()
                         state.last_match = 0.
                     self.backend.request("camera", camera_id=self.names.index(name) + 1, camera=models[0])
@@ -281,6 +285,8 @@ class LooperNode(Node):
             state.reset_source_ns = state.latest_source_ns
             state.last_pose_reset_wall_ns = self.last_reset_wall_ns
             state.correction = None
+            state.stationary_correction = None
+            state.resume_after_ns = None
             state.fusion = PoseCorrectionFilter()
             state.next_image = 0
             state.diagnostics = {}
@@ -325,6 +331,14 @@ class LooperNode(Node):
                      and tracking != state.tracking
                      and (state.last_raw_received_ns or state.latest_source_ns
                           or state.correction is not None))
+            if (name != self.head and tracking == "TRACKING" and state.tracking != tracking
+                    and (state.tracking == "TRACKING_STATIC" or state.stationary_correction is not None)):
+                state.resume_after_ns = state.latest_source_ns
+                state.next_image = 0
+                head_correction = self.cameras[self.head].correction
+                if (state.stationary_correction is None and state.correction is not None
+                        and head_correction is not None):
+                    state.stationary_correction = head_correction @ state.correction
             state.tracking = tracking
         if reset:
             self.invalidate_camera(name)
@@ -335,6 +349,8 @@ class LooperNode(Node):
         with self.lock:
             state = self.cameras[name]
             state.correction = None
+            state.stationary_correction = None
+            state.resume_after_ns = None
             state.fusion = PoseCorrectionFilter()
             state.tracking_epoch += 1
             state.last_pose_reset_wall_ns = self.get_clock().now().nanoseconds
@@ -439,11 +455,13 @@ class LooperNode(Node):
             first_tick = latest_tick if self.last_pose_tick is None else self.last_pose_tick + 1
             for tick in range(first_tick, latest_tick + 1):
                 stamp = tick * 1_000_000_000 // 30
+                refining = {name: state for name, state in states.items()
+                            if state.stationary_correction is None}
                 positions = {name: (state.correction @ anchors[name])[:3, 3]
-                             for name, state in states.items()}
+                             for name, state in refining.items()}
                 positions[self.head] = head.fusion.native[:3, 3]
                 relative_step = 0.
-                for name, state in states.items():
+                for name, state in refining.items():
                     if name == self.head:
                         continue
                     native = anchors[name]
@@ -455,13 +473,23 @@ class LooperNode(Node):
                 if self.head in states:
                     lever = max(np.linalg.norm((state.correction @ anchors[name])[:3, 3]
                                               - anchors[self.head][:3, 3])
-                                for name, state in states.items())
+                                for name, state in refining.items())
                     head.correction = head.fusion.output(anchors[self.head], stamp,
                         speed=max(0., .15 - relative_step * 30.), lever_arm=lever)
-                # Retain one common correction per tick, so late cameras use
-                # the same world transform as cameras already published.
-                corrections = {name: (state.tracking_epoch, (head.correction if name == self.head
-                    else head.correction @ state.correction).copy()) for name, state in states.items()}
+                corrections = {}
+                for name, state in states.items():
+                    correction = head.correction
+                    if name != self.head:
+                        correction = state.stationary_correction
+                        if correction is None:
+                            correction = head.correction @ state.correction
+                            native = anchors[name]
+                            if (state.tracking == "TRACKING_STATIC" and state.resume_after_ns is None
+                                    and np.allclose(state.fusion.posterior @ native, state.correction @ native,
+                                                    atol=1e-4, rtol=0)):
+                                state.stationary_correction = correction.copy()
+                    corrections[name] = (state.tracking_epoch, correction.copy())
+                # Late VIO samples use the correction recorded for their tick.
                 self.pose_corrections.append((tick, corrections))
                 self.last_pose_tick = tick
             transforms = []
@@ -535,6 +563,13 @@ class LooperNode(Node):
         native = matrix_from_pose(pose) @ state.center
         if state is not self.cameras[self.head]:
             correction = np.linalg.solve(self.head_raw_correction, correction)
+            if state.stationary_correction is not None:
+                # Start smoothing from the map transform that is actually being published.
+                head_correction = self.cameras[self.head].correction
+                if head_correction is None:
+                    return False
+                seed = np.linalg.solve(head_correction, state.stationary_correction)
+                state.fusion.emitted = state.fusion.posterior = seed
         accepted = method(correction, native, state.latest_source_ns + state.clock.offset_ns, source_ns)
         state.correction = state.fusion.emitted if state.fusion.valid else None
         return accepted
@@ -560,6 +595,10 @@ class LooperNode(Node):
                     wrist = self.cameras[self.names[int(update["camera_id"]) - 1]]
                     if update["tracking_epoch"] != wrist.tracking_epoch:
                         continue
+                    wrist.map_revision = update["map_revision"]
+                    if (wrist.resume_after_ns is not None or wrist.stationary_correction is not None
+                            or wrist.tracking == "TRACKING_STATIC"):
+                        continue
                     if update["localized"]:
                         accepted = self.update_correction(
                             wrist, np.asarray(update["map_from_imu"]) @ np.linalg.inv(update["odom_from_imu"]),
@@ -572,16 +611,19 @@ class LooperNode(Node):
                         geometric_match=bool(update["localized"]), confirmed=accepted,
                         reason=update["reason"] if not update["localized"] else wrist.fusion.diagnostics["mode"])
                     wrist.diagnostics["map_update_alignment"] = update["alignment"]
-                    wrist.map_revision = update["map_revision"]
                 self.stats = {"state": "mapping" if result["localization_ready"] else "building", "map_point_count": result["landmarks"],
                               "geometric_match": result["verified_relocalization"],
                               "keyframes": result["keyframes"], "raw_landmarks": result["raw_landmarks"]}
             else:
+                if not self.wrist_match_allowed(state, item.stamp_ns):
+                    return False
                 M = np.asarray(result["map_from_imu"]) if result["localized"] else None
                 confirmed = (M is not None and self.update_correction(
                     state, M @ np.linalg.inv(O), item.stamp_ns,
                     partial(state.fusion.observe, verified=result["verified_relocalization"])))
                 if confirmed:
+                    state.stationary_correction = None
+                    state.resume_after_ns = None
                     state.last_match = time.monotonic()
                 state.map_revision = result["map_revision"]
                 state.diagnostics = {"state": "tracking" if state.correction is not None else "searching",
@@ -589,6 +631,13 @@ class LooperNode(Node):
                                      "reason": result.get("reason"), **{key: result[key] for key in
                                       ("matches", "inliers", "grid_cells", "reprojection_rms_px", "gripper_mask_height_ratio") if key in result}}
             return item.view == self.head or confirmed
+
+    @staticmethod
+    def wrist_match_allowed(state, stamp):
+        if state.resume_after_ns is not None:
+            return state.tracking in {"TRACKING", "TRACKING_STATIC"} and stamp > state.resume_after_ns
+        return state.tracking == "TRACKING" or (
+            state.tracking == "TRACKING_STATIC" and state.correction is None)
 
     def prepare(self, item):
         try:
@@ -600,6 +649,8 @@ class LooperNode(Node):
                 or item.tracking_epoch != self.cameras[item.view].tracking_epoch):
             return
         state = self.cameras[item.view]
+        if item.view != self.head and not self.wrist_match_allowed(state, item.stamp_ns):
+            return
         infos = (state.info, self.right_info)
         if any(image.header.frame_id != info.header.frame_id
                for image, info in zip(item.images, infos)):
@@ -638,6 +689,8 @@ class LooperNode(Node):
         if item.view == self.head:
             result = self.request(item, "map", images=item.gray, arrays=item.arrays, **metadata)
         else:
+            if not self.wrist_match_allowed(state, item.stamp_ns):
+                return
             result = self.request(item, "localize", images=item.gray, arrays=item.arrays,
                                   camera_id=self.names.index(item.view) + 1, **metadata)
             if result is not None:
@@ -705,8 +758,11 @@ class LooperNode(Node):
                 if name != self.head:
                     age = time.monotonic() - state.last_match if state.last_match else None
                     payload["match_age_sec"] = age
+                    payload["holding_map_correction"] = state.stationary_correction is not None
+                    payload["waiting_for_fresh_match"] = state.resume_after_ns is not None
                     payload["tracking_mode"] = ("unlocalized" if not localized else
-                        "map_match" if payload.get("confirmed") and age is not None and age < 1. else "vio_only")
+                        "map_match" if state.stationary_correction is None and payload.get("confirmed")
+                            and age is not None and age < 1. else "vio_only")
                 self.status_publishers[name].publish(String(data=json.dumps(payload)))
 
     def destroy_node(self):
