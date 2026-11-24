@@ -176,27 +176,39 @@ def test_recording_status_uses_current_clock_not_start_snapshot(monkeypatch, tmp
     assert value['recording'] is True
 
 @pytest.mark.parametrize('phase', ['recording', 'starting', 'saving'])
-def test_mobile_storage_is_live_without_rerunning_preflight(tmp_path, monkeypatch, phase):
+@pytest.mark.parametrize('nvme_mount', ['recording', 'results', None])
+def test_mobile_storage_is_live_without_rerunning_preflight(tmp_path, monkeypatch, phase, nvme_mount):
     from insight_capture.api.routes import mobile
     node = SimpleNamespace(cameras=[], poses=[], _preview_manager=SimpleNamespace(paused=True))
+    recording_root = tmp_path / 'recording'
     context = SimpleNamespace(results_root=tmp_path, node=node,
-        recording_manager=SimpleNamespace(rosbag_root=tmp_path, status=lambda: {'recording': True}),
+        recording_manager=SimpleNamespace(rosbag_root=recording_root, status=lambda: {'recording': True}),
         prepared_playback_manager=SimpleNamespace(status=lambda: {'state': 'idle'}),
         take_store=SimpleNamespace(task_status=lambda: {'active': True}, current=lambda: None),
         capture_preflight=SimpleNamespace(camera_stale_sec=2, evaluate=lambda **kw: pytest.fail('reran preflight')))
     monkeypatch.setattr(mobile, 'evaluate_calibration_cameras', lambda *a: ({}, []))
     monkeypatch.setattr(mobile, 'resolved_cameras', lambda: [])
+    nvme_path = {'recording': recording_root, 'results': tmp_path}.get(nvme_mount)
+    monkeypatch.setattr(mobile, 'is_nvme_filesystem', lambda path: path == nvme_path)
     route = mobile.MobileCaptureRoutes(context, None)
     route._last_preflight = {'ok': True, 'storage': {'free_bytes': 20, 'minimum_free_bytes': 5}}
     if phase != 'recording':
         route._task = SimpleNamespace(done=lambda: False)
         route._operation = {'action': 'start' if phase == 'starting' else 'stop', 'accepted_at_epoch_s': 100}
     for free in [18, 10, None]:
-        monkeypatch.setattr(mobile, 'read_disk_space', lambda path: {'path': str(path), 'free_bytes': free})
+        monkeypatch.setattr(mobile, 'read_disk_space', lambda path: {
+            'path': str(path), 'free_bytes': free if path == recording_root else 25, 'total_bytes': 100,
+        })
         value = route._snapshot()
         assert value['preflight']['storage']['free_bytes'] == free
         assert value['preflight']['storage']['minimum_free_bytes'] == 5
         assert value['preflight']['ok'] is True
+        if nvme_mount is None:
+            assert value['nvme_storage'] is None
+        elif nvme_mount == 'recording':
+            assert value['nvme_storage']['free_bytes'] == free
+        else:
+            assert value['nvme_storage'] == {'path': str(tmp_path), 'free_bytes': 25, 'total_bytes': 100}
     assert route._last_preflight['storage']['free_bytes'] == 20
 
 

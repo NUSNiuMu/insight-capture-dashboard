@@ -54,6 +54,8 @@ const task=computed(()=>status.value?.task_status?.active?status.value.task_stat
 const elapsed=computed(()=>takeDuration(status.value?.current_take,status.value));
 const health=computed(()=>status.value?.preflight?.camera_health||{});
 const clocks=computed(()=>status.value?.preflight?.clocks||{});
+const nvmeStorage=computed(()=>online.value?status.value?.nvme_storage:null);
+const recordingStorage=computed(()=>status.value?.preflight?.storage);
 const devices=computed(()=>[...(status.value?.devices||[])].sort((a,b)=>({head:0,left_hand:1,right_hand:2}[a.role]-{head:0,left_hand:1,right_hand:2}[b.role])));
 const attentionDevice=computed(()=>online.value&&!active.value&&task.value?devices.value.find(d=>stage(d)!==t('已就绪')):null);
 const readinessIssues=computed(()=>[...(status.value?.preflight?.failures||[]),...(status.value?.preflight?.warnings||[])]);
@@ -225,6 +227,7 @@ watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=tas
 </button>
 <div class="capture-view-switch" role="group" :aria-label="t('采集视图')"><button :aria-pressed="route==='capture'" @click="navigate('capture')">{{t('画面')}}</button><button :aria-pressed="route==='capture/trajectory'" @click="navigate('capture/trajectory')">{{t('轨迹')}}</button></div>
 </div>
+<p v-if="page==='capture'&&nvmeStorage?.free_bytes!=null" class="section-description">{{t('Jetson NVMe 可用 {0}',size(nvmeStorage.free_bytes))}}</p>
 </div>
 <div v-show="page==='capture'">
 <section v-if="savedTake" class="card save-result"><strong role="status">Take {{savedTake.take_id}} · {{t('保存完成')}}</strong><a class="route-link secondary compact" :href="`#history/${savedTake.task_id}/${savedTake.take_id}`" @click="navigate(`history/${savedTake.task_id}/${savedTake.take_id}`,$event)">{{t('查看记录')}}</a></section>
@@ -248,7 +251,13 @@ watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=tas
 <div v-for="d in devices" :key="d.name"><dt>{{roleLabel(d.role)}}</dt><dd>{{status?.system?.camera_links?.find(p=>p.namespace===d.name)?.host||'—'}}</dd></div>
 </dl></details></section>
 <section v-if="!active&&readinessIssues.length" id="readiness-details" class="card"><h2>{{t('采集前检查')}}</h2><p v-if="!online" class="section-description">{{t('连接已断开，以下提醒来自最后一次设备状态。')}}</p><p v-for="(issue,index) in status?.preflight?.failures" :key="`failure-${index}`" class="issue error">{{t(issue.message)}}</p><p v-for="(issue,index) in status?.preflight?.warnings" :key="`warning-${index}`" class="issue warning">{{t(issue.message)}}</p></section>
-<section class="card"><div class="section-title"><h2>{{t('存储')}}</h2><strong>{{size(status?.preflight?.storage?.free_bytes)}} {{t('可用')}}</strong></div><details class="secondary-details"><summary>{{t('数据位置')}}</summary><p class="storage-path">{{status?.storage?.active_path||'—'}}</p></details></section>
+<section class="card"><h2>Jetson NVMe</h2>
+<dl class="device-facts">
+<div><dt>{{t('可用空间')}}</dt><dd>{{size(nvmeStorage?.free_bytes)}}</dd></div>
+<div><dt>{{t('总容量')}}</dt><dd>{{size(nvmeStorage?.total_bytes)}}</dd></div>
+<div v-if="online&&recordingStorage?.path&&recordingStorage.path!==nvmeStorage?.path"><dt>{{t('录制盘可用空间')}}</dt><dd>{{size(recordingStorage.free_bytes)}}</dd></div>
+</dl>
+<details class="secondary-details"><summary>{{t('数据位置')}}</summary><p class="storage-path">{{status?.storage?.active_path||'—'}}</p></details></section>
 <section class="card"><div class="section-title"><h2>{{t('时间同步')}}</h2><button id="resync-time" type="button" class="secondary compact" :disabled="busy||!online||status?.state==='playback'" @click="synchronizeTime">{{t('重新校时')}}</button></div>
 <p class="section-description sync-state" :class="{bad:!clocks.ok}" role="status">{{t(status?.time_sync?.state==='syncing'?'正在校时':clocks.ok?'已就绪':'测量中')}}</p>
 <p v-if="status?.time_sync?.state==='error'" class="issue error" role="alert">{{t('校时未完成，请重试。')}}</p>
