@@ -184,7 +184,7 @@ def restart_acquisition(camera):
                 raise RuntimeError(f"{camera['namespace']}: {result}")
 
 
-def synchronize_phone_clock(body, recovery):
+def synchronize_phone_clock(body):
     """A fixed idle-only operation; never accept commands or paths from a client."""
     epoch, received = body.get('epoch_s'), body.get('received_monotonic_s')
     if (type(epoch) not in (int, float) or not math.isfinite(epoch)
@@ -216,17 +216,15 @@ def synchronize_phone_clock(body, recovery):
         if status.get('recording') or status.get('state') in {'starting', 'recording', 'saving', 'playback'}:
             return {'state': 'deferred'}
         offset = epoch + time.monotonic() - received - time.time()
-        if abs(offset) > 1 or recovery.get('required') or resync:
+        if abs(offset) > 1 or resync:
             cameras = resolved_cameras()
-            recovery['required'] = True
-            if abs(offset) > 1:
+            if not resync:
                 time.clock_settime(time.CLOCK_REALTIME, time.time() + offset)
             with ThreadPoolExecutor(max_workers=3) as pool:
                 futures = [pool.submit(restart_acquisition, camera) for camera in cameras]
                 # All submitted camera work finishes before releasing capture admission.
                 for future in futures:
                     future.result()
-            recovery['required'] = False
         return {'state': 'synced', 'synced_at_epoch_s': time.time(), 'correction_s': offset}
     finally:
         os.close(descriptor)
@@ -236,7 +234,6 @@ def serve_phone_clock():
     """Root-only Unix socket, shared through the existing read-only runtime mount."""
     path = SNAPSHOT.with_name('phone-clock.sock')
     path.unlink(missing_ok=True)
-    recovery = {}
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
         listener.bind(str(path))
         path.chmod(0o600)
@@ -254,7 +251,7 @@ def serve_phone_clock():
                     body = json.loads(data)
                     if not isinstance(body, dict):
                         raise ValueError('Expected a clock sample')
-                    result = synchronize_phone_clock(body, recovery)
+                    result = synchronize_phone_clock(body)
                 except Exception as exc:
                     result = {'state': 'error', 'error': str(exc)}
                 try:

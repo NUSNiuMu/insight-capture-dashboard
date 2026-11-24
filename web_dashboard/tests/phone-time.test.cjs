@@ -11,13 +11,17 @@ test('recording, saving, preparing and hidden tabs never send time',async()=>{co
 test('retry is throttled and uses a new request after reconnect',async()=>{const f=fixture();await f.sync(status());await f.sync(status());assert.equal(f.calls.length,2);await f.sync(null,false);f.advance();await f.sync(status());assert.equal(f.calls.length,4);});
 test('a corrected clock needs no repeated writes',async()=>{const calls=[];const sync=phoneTimeSync(async(path,body)=>{calls.push(body);return {server_time:1794900000}},{now:()=>1794900000000,monotonic:()=>10,visible:()=>true});await sync({...status(),server_time:1794900000});assert.equal(calls.length,1);assert.equal(calls[0],undefined);});
 
-test('manual resync sends a fresh sample even when the host clock already matches',async()=>{
- const calls=[];const sync=phoneTimeSync(async(path,body)=>{calls.push(body);return {server_time:1794900000}},{now:()=>1794900000000,monotonic:()=>10,visible:()=>true});
- await sync({...status(),server_time:1794900000},true,true);
- assert.equal(calls.length,2);assert.equal(calls[1].resync_cameras,true);
+test('a failed phone clock write with large skew does not retry',async()=>{
+ const f=fixture();const failed={...status(),time_sync:{state:'error'}};
+ await f.sync(failed);f.advance();await f.sync(failed);
+ assert.deepEqual(f.calls,[]);
 });
-test('manual resync still refuses recording and reports failed requests',async()=>{
- const f=fixture();await f.sync(status('recording'),true,true);assert.equal(f.calls.length,0);
- const sync=phoneTimeSync(async()=>{throw Error('offline')},{now:()=>1794900000000,monotonic:()=>10,visible:()=>true});
- await assert.rejects(sync(status(),true,true),/offline/);
+test('an already corrected phone clock can be reverified after error',async()=>{
+ const calls=[];const sync=phoneTimeSync(async(path,body)=>{calls.push(body);return {server_time:1794900000}},{now:()=>1794900000000,monotonic:()=>10,visible:()=>true});
+ await sync({...status(),server_time:1794900000,time_sync:{state:'error'}});
+ assert.deepEqual(calls,[undefined,{epoch_ms:1794900000000,rtt_ms:0}]);
+});
+test('background phone setup waits for camera recovery',async()=>{
+ const f=fixture();await f.sync({...status(),camera_time_sync:{state:'syncing'}});
+ assert.deepEqual(f.calls,[]);
 });

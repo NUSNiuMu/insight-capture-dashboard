@@ -117,10 +117,14 @@ class MobileCaptureRoutes:
             if pipeline:
                 report["image_clocks"] = pipeline.clock_status()
         phone_time = dict(getattr(self.context, "phone_time_sync", {}))
+        camera_time = dict(getattr(self.context, "camera_time_sync", {}))
         if phone_time.get("state") in {"syncing", "error"}:
-            message = "正在同步手机时间，请稍候。" if phone_time["state"] == "syncing" else "时间同步未完成，正在重试。"
+            message = "正在同步手机时间，请稍候。" if phone_time["state"] == "syncing" else "Jetson 时间同步失败。"
             report = {**report, "ok": False, "failures": [*report.get("failures", []),
                        {"code": "phone_time_sync", "message": message}]}
+        if camera_time.get("state") == "syncing":
+            report = {**report, "ok": False, "failures": [*report.get("failures", []),
+                       {"code": "camera_time_sync", "message": "正在校时"}]}
         # Admission checks are a start-time snapshot; capacity is live operator
         # information and must keep decreasing while the writer is running.
         recording_root = manager.rosbag_root
@@ -152,7 +156,8 @@ class MobileCaptureRoutes:
             "output_path": status.get("output_path"),
             "started_at_epoch_s": getattr(manager, "started_at", None),
             "recording_timing": timing,
-            "server_time": time.time(), "time_sync": phone_time, "operation": self._operation,
+            "server_time": time.time(), "time_sync": phone_time, "camera_time_sync": camera_time,
+            "operation": self._operation,
             "preflight": report, "devices": devices, "task_status": task_status,
             "current_take": current_take, "live_alerts": live_alerts,
             "preview": preview_description(self.context.node.cameras, self.context.node.poses, paused=self.context.node._preview_manager.paused),

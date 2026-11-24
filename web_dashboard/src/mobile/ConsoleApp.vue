@@ -4,9 +4,9 @@ import CameraPreview from '../preview/components/CameraPreview.vue';
 import { guardModalScroll } from '../modal-scroll.js';
 import RecordsPage from './RecordsPage.vue';
 import TrajectoryPanel from './TrajectoryPanel.vue';
-import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration, deviceStage, deviceHint } from './useCapture.js';
+import { useCapture, api, roleLabel, stateLabel, size, duration, takeDuration, deviceStage, deviceHint, cameraClocks, deviceClock } from './useCapture.js';
 import { t, language, setLanguage } from './i18n.js';
-const {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,deleteTask,deleteTake,leaveTaskCreation,synchronizeTime,calibrate,loadTasks}=useCapture();
+const {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,checkingCameraClock,action,record,createAndActivateTask,deleteTask,deleteTake,leaveTaskCreation,synchronizeTime,calibrate,loadTasks}=useCapture();
 const endpoint=location.host;
 const selectedTask=ref(''),openedTaskId=ref(''),taskDialogKey=ref(0),fieldErrors=ref({}),fieldAnnouncement=ref('');
 let fieldFrame,announceTimer,taskOpenGeneration=0,releaseModalScroll;
@@ -53,7 +53,14 @@ const showDock=computed(()=>page.value==='capture'||active.value);
 const task=computed(()=>status.value?.task_status?.active?status.value.task_status.task:null);
 const elapsed=computed(()=>takeDuration(status.value?.current_take,status.value));
 const health=computed(()=>status.value?.preflight?.camera_health||{});
-const clocks=computed(()=>status.value?.preflight?.clocks||{});
+const clocks=computed(()=>cameraClocks(status.value));
+const cameraClockState=computed(()=>status.value?.camera_time_sync?.state);
+const offerClockRecovery=computed(()=>!clocks.value.ok&&['needs_recovery','error'].includes(cameraClockState.value));
+const clockStatus=computed(()=>{
+ if(checkingCameraClock.value||cameraClockState.value==='syncing')return '正在校时';
+ if(clocks.value.ok)return cameraClockState.value==='synced'?'已确认同步':'已同步';
+ return clocks.value.checked_at_epoch_s?'未同步':'测量中';
+});
 const nvmeStorage=computed(()=>online.value?status.value?.nvme_storage:null);
 const recordingStorage=computed(()=>status.value?.preflight?.storage);
 const devices=computed(()=>[...(status.value?.devices||[])].sort((a,b)=>({head:0,left_hand:1,right_hand:2}[a.role]-{head:0,left_hand:1,right_hand:2}[b.role])));
@@ -258,12 +265,13 @@ watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=tas
 <div v-if="online&&recordingStorage?.path&&recordingStorage.path!==nvmeStorage?.path"><dt>{{t('录制盘可用空间')}}</dt><dd>{{size(recordingStorage.free_bytes)}}</dd></div>
 </dl>
 <details class="secondary-details"><summary>{{t('数据位置')}}</summary><p class="storage-path">{{status?.storage?.active_path||'—'}}</p></details></section>
-<section class="card"><div class="section-title"><h2>{{t('时间同步')}}</h2><button id="resync-time" type="button" class="secondary compact" :disabled="busy||!online||status?.state==='playback'" @click="synchronizeTime">{{t('重新校时')}}</button></div>
-<p class="section-description sync-state" :class="{bad:!clocks.ok}" role="status">{{t(status?.time_sync?.state==='syncing'?'正在校时':clocks.ok?'已就绪':'测量中')}}</p>
-<p v-if="status?.time_sync?.state==='error'" class="issue error" role="alert">{{t('校时未完成，请重试。')}}</p>
+<section class="card"><div class="section-title"><h2>{{t('时间同步')}}</h2><button id="resync-time" type="button" class="secondary compact" :disabled="busy||!online||status?.state==='playback'" @click="synchronizeTime(offerClockRecovery)">{{t(offerClockRecovery?'恢复相机校时':'重新校时')}}</button></div>
+<p class="section-description sync-state" :class="{bad:!clocks.ok}" role="status">{{t(clockStatus)}}</p>
+<p v-if="cameraClockState==='error'&&!clocks.ok" class="issue error" role="alert">{{t('校时未完成，请重试。')}}</p>
+<p v-if="offerClockRecovery" class="section-description">{{t('恢复校时会暂时停止相机采集。')}}</p>
 <details class="secondary-details"><summary>{{t('NTP 偏差')}}</summary>
-<div v-for="d in devices" :key="d.name" class="device-row"><strong>{{roleLabel(d.role)}}</strong><span v-if="clocks.devices?.[d.name]?.offset_ms!=null">{{clocks.devices[d.name].offset_ms.toFixed(3)}} ms</span><span v-else>—</span></div>
-<p class="section-description">{{t('相机相对 Jetson 的 NTP 偏差；不代表曝光同步精度。')}}</p><p class="section-description">{{t('两机误差保守上界')}}：{{clocks.pairwise_clock_bound_ms?.toFixed(2)||'—'}} / {{clocks.max_pairwise_clock_bound_ms||20}} ms</p></details></section>
+<div v-for="d in devices" :key="d.name" class="device-row"><strong>{{roleLabel(d.role)}}</strong><span>{{deviceClock(d,status)?.offset_ms?.toFixed(3)??'—'}} ms</span></div>
+<p class="section-description">{{t('相机相对 Jetson 的 NTP 偏差；不代表曝光同步精度。')}}</p><p class="section-description">{{t('两机误差保守上界')}}：{{clocks.pairwise_clock_bound_ms?.toFixed(2)??'—'}} / {{clocks.max_pairwise_clock_bound_ms??'—'}} ms</p></details></section>
 <section class="card settings-links"><a href="#settings/language" class="route-link settings-link" @click="navigate('settings/language',$event)"><span>{{t('语言')}}</span><small>{{language==='en'?'English':'简体中文'}}</small><b aria-hidden="true">›</b></a><a href="#settings/diagnostics" class="route-link settings-link" @click="navigate('settings/diagnostics',$event)"><span>{{t('诊断')}}</span><b aria-hidden="true">›</b></a></section>
 </template>
 <section v-else-if="route==='settings/language'" class="card" :aria-label="t('界面语言')"><div class="language-options"><button :aria-pressed="language==='zh'" @click="setLanguage('zh')">简体中文</button><button :aria-pressed="language==='en'" @click="setLanguage('en')">English</button></div></section>

@@ -75,7 +75,7 @@ class DistributedRecordingManager:
             self._session.update(values)
             self._save()
 
-    def _clocks(self):
+    def measure_camera_clocks(self):
         report = measure_clocks(self.config)
         with self._lock:
             self._clock = report
@@ -86,7 +86,7 @@ class DistributedRecordingManager:
         if self._session and self._session.get("phase") not in TERMINAL:
             raise RuntimeError("上一条双端录制尚未保存，或正在手动合包，请先等待")
         remote = self.ego.preflight()
-        clocks = self._clocks()
+        clocks = self.measure_camera_clocks()
         if not clocks["ok"]:
             names = [name for name, item in clocks["devices"].items() if not item["ok"]]
             raise RuntimeError("设备校时检查失败：" + ("、".join(names) or "设备间偏差界限超过门槛"))
@@ -169,7 +169,7 @@ class DistributedRecordingManager:
                     raise RuntimeError("Ego 起录确认超时")
                 # At least one full GOP after the recording becomes active, before displaying ready.
                 time.sleep(float(self.config.get("keyframe_lead_in_sec", 1.1)))
-                clocks = self._clocks()
+                clocks = self.measure_camera_clocks()
                 self._session["clock_samples"].append(clocks)
                 if not clocks["ok"]:
                     raise RuntimeError("起录过程中设备时钟检查失败")
@@ -211,7 +211,7 @@ class DistributedRecordingManager:
                 result = self.local.stop(timeout_sec)
                 self._update(local_saved=result.get("merge_state") == "done", local_error=result.get("merge_error"))
             remote_thread.join(timeout=self.ego.timeout * 2 + 1)
-            clocks = self._clocks()
+            clocks = self.measure_camera_clocks()
             self._record_clock(clocks)
             self._save()
             return self.status()
@@ -337,7 +337,7 @@ class DistributedRecordingManager:
                     continue
                 if phase == "recording":
                     if time.monotonic() - self._last_clock_mono >= float(self.config.get("clock_sample_interval_sec", 5)):
-                        self._record_clock(self._clocks())
+                        self._record_clock(self.measure_camera_clocks())
                     record = self.ego.lookup(self._session)
                     if not record or record["status"] != "recording" or not self.local.is_recording():
                         self._update(stop_requested=True, phase="stop_pending", start_error="某一端提前结束录制", stopped_at_epoch_s=time.time())
