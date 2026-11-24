@@ -234,6 +234,8 @@ until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
     sleep 2
 done
 
+bash "${SCRIPT_DIR}/deploy/install_power_button.sh" "${SCRIPT_DIR}" "${PORT}"
+
 log "Removing superseded Release images and installation packages ..."
 python3 "${SCRIPT_DIR}/deploy/cleanup_release.py" "${SCRIPT_DIR}" "${version}" \
     --installer "${INSIGHT_RELEASE_INSTALLER:-${tarball}}" \

@@ -1,0 +1,18 @@
+[Unit]
+Description=Insight Jetson power button
+After=systemd-udev-trigger.service
+Before=display-manager.service docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/insight-power-button.conf
+ExecStart=/usr/bin/python3 -B /usr/local/libexec/insight-power-button.py ${INSIGHT_CAPTURE_LOCK}
+LogsDirectory=insight-power-button
+LogsDirectoryMode=0750
+TimeoutStartSec=10
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

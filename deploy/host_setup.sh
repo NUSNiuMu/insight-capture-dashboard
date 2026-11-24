@@ -112,4 +112,6 @@ if command -v nvpmodel >/dev/null 2>&1; then
     fi
 fi
 
+"${SCRIPT_DIR}/install_power_button.sh" "${ROOT_DIR}" "${DASHBOARD_PORT:-8765}"
+
 log "host setup complete."

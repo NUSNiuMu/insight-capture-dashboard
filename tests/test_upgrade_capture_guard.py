@@ -171,6 +171,30 @@ def test_installer_lock_rejects_start_before_preflight_or_take(installation, mon
     asyncio.run(scenario())
 
 
+
+def test_poweroff_lock_blocks_manual_merge_admission(installation, monkeypatch):
+    lock_path = installation / "config/.capture-upgrade.lock"
+    lock_path.touch()
+    monkeypatch.setattr(upgrade, "LOCK_PATH", lock_path)
+    called = []
+    manager = SimpleNamespace(start_merge=lambda session: called.append(session) or {})
+    routes = RecordingRoutes(SimpleNamespace(recording_manager=manager))
+    request = SimpleNamespace(
+        can_read_body=True, json=AsyncMock(return_value={"session_id": "fixture"})
+    )
+
+    async def scenario():
+        with lock_path.open("rb") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with pytest.raises(RuntimeError, match="准备关机"):
+                await routes._handle_saved_recording_merge(request)
+        assert called == []
+        assert (await routes._handle_saved_recording_merge(request)).status == 202
+        assert called == ["fixture"]
+
+    asyncio.run(scenario())
+
+
 def test_start_holds_lock_through_async_preflight(installation, monkeypatch):
     lock_path = installation / "config/.capture-upgrade.lock"
     monkeypatch.setattr(upgrade, "LOCK_PATH", lock_path)
