@@ -214,7 +214,7 @@ export function useCapture() {
 }
 export const roleLabel=role=>t({head:'头部相机',left_hand:'左腕相机',right_hand:'右腕相机'}[role]||role);
 export const stateLabel=state=>t({idle:'准备就绪',starting:'正在准备',recording:'正在录制',saving:'正在保存',saved:'保存完成',error:'操作失败',playback:'桌面回放中'}[state]||'连接中');
-export const size=bytes=>bytes==null?'—':`${(bytes/1024**3).toFixed(1)} GB`;
+export const size=bytes=>bytes==null?'—':`${(bytes/1024**3).toFixed(1)} GiB`;
 export function duration(seconds) {seconds=Math.max(0,Math.floor(seconds||0));return `${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;}
 function isCurrentTake(take,status) {
  const current=status?.current_take;

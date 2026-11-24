@@ -75,6 +75,16 @@ def read_system_load() -> Dict[str, object]:
     }
 
 
+def is_nvme_filesystem(path: Path) -> bool:
+    """Identify the backing block device even when path is a bind mount."""
+    try:
+        device = path.stat().st_dev
+        block = Path("/sys/dev/block") / f"{os.major(device)}:{os.minor(device)}"
+        return block.resolve(strict=True).name.startswith("nvme")
+    except OSError:
+        return False
+
+
 def read_disk_space(path: Path) -> Dict[str, object]:
     """Return capacity and free space for the filesystem containing path."""
     try:

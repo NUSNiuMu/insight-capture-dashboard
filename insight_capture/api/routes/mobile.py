@@ -11,7 +11,7 @@ from insight_capture.runtime.discovery import resolved_cameras, startup_ready
 from aiohttp import web
 
 from insight_capture.media.preview_config import preview_description
-from insight_capture.api.support import read_disk_space, read_json_body
+from insight_capture.api.support import is_nvme_filesystem, read_disk_space, read_json_body
 from insight_capture.runtime.camera_health import evaluate_calibration_cameras
 from insight_capture.runtime.mobile_commands import MobileCommandStore
 
@@ -123,9 +123,16 @@ class MobileCaptureRoutes:
                        {"code": "phone_time_sync", "message": message}]}
         # Admission checks are a start-time snapshot; capacity is live operator
         # information and must keep decreasing while the writer is running.
+        recording_root = manager.rosbag_root
+        recording_space = read_disk_space(recording_root)
+        nvme_space = None
+        if is_nvme_filesystem(recording_root):
+            nvme_space = recording_space
+        elif is_nvme_filesystem(self.context.results_root):
+            nvme_space = read_disk_space(self.context.results_root)
         report = {**report, "storage": {
             **(report.get("storage") or {}),
-            **read_disk_space(manager.rosbag_root),
+            **recording_space,
         }}
         role_names = {"head": "Head", "right_hand": "Wrist A", "left_hand": "Wrist B"}
         devices = [{"name": pose.name, "role": pose.teleop_role,
@@ -152,6 +159,7 @@ class MobileCaptureRoutes:
             "preview_cameras": [{"name": c.name, "label": c.label} for c in preview_cameras],
             "distributed": status.get("distributed"),
             "storage": status.get("storage", {}),
+            "nvme_storage": nvme_space,
             "error": status.get("merge_error"),
         }
 
