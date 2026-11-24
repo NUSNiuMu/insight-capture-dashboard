@@ -2,9 +2,8 @@
 .preview-dialog:modal { overscroll-behavior: contain; }
 .preview-dialog::backdrop { background: #0b1020; overflow: hidden; overscroll-behavior: contain; }
 .preview-card { overflow: hidden; border-radius: 18px; background: #0b1020; margin-bottom: 12px; border: 1px solid #20283a; }
-.preview-head { min-height: 48px; padding: 4px 14px 8px; display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 0 8px; align-items: center; color: #fff; }
-.preview-head > span { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 0.8125rem; }
-.preview-head small { grid-column: 1 / -1; grid-row: 2; min-width: 0; color: #c4cbd7; white-space: normal; overflow-wrap: anywhere; }
+.preview-head { min-height: 48px; padding: 4px 10px 4px 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 8px; align-items: center; color: #fff; }
+.preview-head p { margin: 0; color: #e1e6ef; font-size: 0.8125rem; overflow-wrap: anywhere; }
 #preview-failure { display: block; padding: 0 12px 10px; color: #fcd34d; font-size: 0.8125rem; line-height: 1.6; }
 #preview-failure button { min-height: 44px; margin-left: 6px; }
 .camera-switch { min-height: 54px; padding: 0 10px 10px; display: grid; grid-template-columns: repeat(var(--preview-source-count, 4), minmax(0, 1fr)); gap: 6px; }
