@@ -235,6 +235,7 @@ until curl -sf "http://localhost:${PORT}/healthz" >/dev/null 2>&1; do
 done
 
 bash "${SCRIPT_DIR}/deploy/install_power_button.sh" "${SCRIPT_DIR}" "${PORT}"
+bash "${SCRIPT_DIR}/deploy/configure_jetson_fan.sh"
 
 log "Removing superseded Release images and installation packages ..."
 python3 "${SCRIPT_DIR}/deploy/cleanup_release.py" "${SCRIPT_DIR}" "${version}" \
