@@ -95,5 +95,6 @@ onBeforeUnmount(()=>{pointers.clear();alive=false;clearTimeout(timer);socket?.cl
 </svg>
 <p v-if="!plotted.length || !plotted.some(p=>p.points.length)" class="empty">{{t(connected?'等待公共地图定位':'正在连接轨迹')}}</p>
 <div class="health-summary"><span v-for="p in plotted" :key="p.name" :style="{color:p.color,borderBottom:`2px ${p.role==='left_hand'?'dashed':p.role==='right_hand'?'dotted':'solid'} currentColor`}">{{roleLabel(p.role)}}</span></div>
+<details class="secondary-details"><summary>{{t('轨迹操作')}}</summary>
 <p class="section-description">{{t('单指旋转，双指缩放和平移；切换平移模式可单指移动。')}}</p>
-<p class="section-description">{{t('仅显示已定位设备的公共坐标轨迹；校准完成不代表精度已验收。')}}</p></section></template>
+<p class="section-description">{{t('仅显示已定位设备的公共坐标轨迹；校准完成不代表精度已验收。')}}</p></details></section></template>

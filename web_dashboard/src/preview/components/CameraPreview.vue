@@ -179,9 +179,9 @@ onBeforeUnmount(() => {
     :aria-label="t(&quot;相机预览&quot;)" tabindex="-1">
     <div class="preview-controls">
     <div class="preview-toolbar">
-    <div class="preview-head"><span><i></i>{{ t("相机预览") }}</span><small id="preview-topic">
+    <div class="preview-head"><p id="preview-topic" role="status">
       {{ previewPaused ? t('预览已暂停') : !online && !ready ? t('设备离线') : `${t(isOverview ? overview?.label || '三路总览' : source?.label || '等待相机')} · ${t(!ready ? '等待画面' : failed ? '等待重试' : '实时预览')}` }}
-    </small><button v-show="!expanded" id="preview-expand" :aria-label="t(&quot;放大预览&quot;)" :disabled="!online || previewPaused" @click="openPreview()">↗</button></div>
+    </p><button v-show="!expanded" id="preview-expand" :aria-label="t(&quot;放大预览&quot;)" :disabled="!online || previewPaused" @click="openPreview()">↗</button></div>
     <div v-if="expanded" class="preview-actions">
       <button v-if="expanded && fullscreenAvailable" @click="fullscreen">{{ t("系统全屏") }}</button>
       <button v-if="expanded" class="preview-close" @click="closePreview">{{ t("关闭预览") }}</button>
