@@ -208,9 +208,13 @@ class RecordingRoutes:
         if self.busy:
             raise RuntimeError("A recording operation is still running.")
 
+        def admit():
+            with recording_start_lock():
+                return manager.start_merge(payload.get("session_id"))
+
         async def start_merge():
             async with self._transition:
-                return await asyncio.to_thread(manager.start_merge, payload.get("session_id"))
+                return await asyncio.to_thread(admit)
 
         admission = asyncio.create_task(start_merge())
         try:

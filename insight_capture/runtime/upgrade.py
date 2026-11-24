@@ -1,4 +1,4 @@
-"""Coordinate capture admission with the offline installer on the shared config mount."""
+"""Coordinate capture admission with host installation and shutdown."""
 
 from contextlib import contextmanager
 import fcntl
@@ -19,7 +19,7 @@ def recording_start_lock():
         try:
             fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise RuntimeError("系统正在升级，请等待升级完成后再开始录制。") from exc
+            raise RuntimeError("系统正在升级或准备关机，请稍后再开始录制或合包。") from exc
         yield
     finally:
         os.close(descriptor)

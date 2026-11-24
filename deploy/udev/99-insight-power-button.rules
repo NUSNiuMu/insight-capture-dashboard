@@ -1,0 +1,2 @@
+# Route the Jetson carrier's gpio-keys through insight-power-button.
+SUBSYSTEM=="input", KERNEL=="event*", KERNELS=="gpio-keys", ENV{ID_PATH}=="platform-gpio-keys", ENV{LIBINPUT_IGNORE_DEVICE}="1", TAG-="power-switch"
