@@ -239,8 +239,10 @@ RUN pip3 install --no-cache-dir \
 # the apt layer at the top) so the cached model and Python layers do not rebuild.
 # plugins-bad (webrtcbin/dtls/srtp/h264parse) + nice (ICE) serve the WebRTC
 # camera streams in insight_capture/media/webrtc.py; the H.264 encoder itself is the
-# host-injected nvv4l2h264enc. Interrupted MCAP recovery uses rosbag2 reindex.
+# host-injected nvv4l2h264enc. The Jetson V4L2 plugin uses lsmod to select its
+# hardware properties. Interrupted MCAP recovery uses rosbag2 reindex.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    kmod \
     gstreamer1.0-tools \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
