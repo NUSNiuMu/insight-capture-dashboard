@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Apply shared, idempotent Jetson network and camera boot tuning.
+# Apply shared, idempotent Jetson host tuning.
 
 set -euo pipefail
 
@@ -13,6 +13,8 @@ if [[ -f /.dockerenv ]]; then
     echo "[host_setup] ERROR: run this on the host, not inside the container." >&2
     exit 1
 fi
+
+bash "${SCRIPT_DIR}/configure_jetson_fan.sh"
 
 # The optional post-reboot phase alignment uses Paramiko so one credential can
 # arm all camera timers concurrently without exposing a password in ps output.

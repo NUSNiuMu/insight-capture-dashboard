@@ -44,6 +44,8 @@ node web_dashboard/build.js
 
 ## 首次安装与升级
 
+宿主机准备、首次安装和升级会安装 Jetson 温控曲线，需要 `sudo` 权限。CPU、GPU 和 SoC 的加权温度在 45°C 以下时 PWM 为 145，55°C 时为 180，65°C 时为 220，75°C 起为满速 255。档位之间连续调速，`nvfancontrol` 在开机时加载此配置。
+
 停止录制、等待保存完成，关闭 Qt，然后执行：
 
 ```bash
