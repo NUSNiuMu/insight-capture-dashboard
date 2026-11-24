@@ -58,6 +58,7 @@ const devices=computed(()=>[...(status.value?.devices||[])].sort((a,b)=>({head:0
 const attentionDevice=computed(()=>online.value&&!active.value&&task.value?devices.value.find(d=>stage(d)!==t('已就绪')):null);
 const readinessIssues=computed(()=>[...(status.value?.preflight?.failures||[]),...(status.value?.preflight?.warnings||[])]);
 const readinessSummary=computed(()=>t(readinessIssues.value.find(issue=>issue.code!=='task_inactive')?.message||''));
+const offline=computed(()=>!online.value&&connectionFailed.value);
 const captureNeedsAttention=computed(()=>online.value&&!active.value&&(attentionDevice.value||readinessSummary.value||(task.value&&!status.value?.preflight?.ok)||uiState.value==='playback'));
 const dockLabel=computed(()=>!online.value?t('连接中，录制状态待确认'):stateLabel(uiState.value));
 const head=computed(()=>devices.value.find(d=>d.role==='head'));
@@ -200,12 +201,20 @@ watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=tas
 <a class="skip-navigation" href="#primary-navigation" @click.prevent="footer.querySelector('nav').focus()">{{t('跳到主导航')}}</a><header class="topbar"><button v-if="route.includes('/') && route!=='capture/trajectory'" class="icon-button" :aria-label="t('返回')" @click="back">‹</button><h1 tabindex="-1">{{title}}</h1><span id="device-state" class="pill" :class="{online}"><i></i>{{t(online?'在线':connectionFailed?'离线':'连接中')}}</span></header>
 <main>
 <div class="capture-intro">
-<section v-if="!online&&connectionFailed" class="card readiness-card readiness-warning" role="status">
+<section v-if="offline||(page==='capture'&&captureNeedsAttention)" class="card readiness-card" :class="offline||status?.preflight?.ok?'readiness-warning':'readiness-blocked'">
+<div class="readiness-title">
+<span class="readiness-mark" aria-hidden="true"></span>
+<strong role="status">
+<template v-if="offline">{{t('已离线')}}</template>
+<template v-else-if="attentionDevice">{{roleLabel(attentionDevice.role)}}<small>{{stage(attentionDevice)}}</small></template>
+<template v-else>{{uiState==='playback'?stateLabel(uiState):readinessSummary||t('等待采集就绪')}}</template>
+</strong>
+<a v-if="page!=='settings'" id="view-device-status" href="#settings" class="route-link text-link" @click="navigate('settings',$event)">{{t(!offline&&readinessIssues.length?'查看状态（{0}）':'查看状态',readinessIssues.length)}} <span aria-hidden="true">›</span></a>
+</div>
+<template v-if="offline">
 <p class="section-description">{{t('网页断开不会停止设备上的录制。')}}</p>
 <p class="section-description">{{t('请检查手机是否切换了 Wi-Fi；使用采集热点时，系统提示无法上网也请选择保持连接。')}}</p>
-</section>
-<section v-else-if="page==='capture'&&captureNeedsAttention" class="card readiness-card" :class="status?.preflight?.ok?'readiness-warning':'readiness-blocked'">
-<div class="readiness-title"><strong role="status"><template v-if="attentionDevice">{{roleLabel(attentionDevice.role)}}<small>{{stage(attentionDevice)}}</small></template><template v-else>{{uiState==='playback'?stateLabel(uiState):readinessSummary||t('等待采集就绪')}}</template></strong><a id="view-device-status" href="#settings" class="route-link text-link" @click="navigate('settings',$event)">{{t(readinessIssues.length?'查看状态（{0}）':'查看状态',readinessIssues.length)}} <span aria-hidden="true">›</span></a></div>
+</template>
 </section>
 <p v-if="error||captureError||status?.operation?.error||(page==='capture'&&!active&&previewError)" role="alert" class="global-error">{{t(error||captureError||status?.operation?.error||previewError)}}</p>
 <p v-if="status?.state==='saving'" role="status" class="save-progress">{{t('正在保存，请保持设备供电。')}}</p>

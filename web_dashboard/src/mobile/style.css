@@ -35,11 +35,10 @@ button:focus-visible, .route-link:focus-visible, select:focus-visible, input:foc
 .compact { min-height: 40px; padding: 8px 12px; font-size: 0.8125rem; }
 .icon-button { width: 44px; min-width: 44px; padding: 0; border-radius: 50%; background: #e9edf2; color: #263143; font-size: 1.5rem; }
 select, input { width: 100%; min-height: 46px; border: 1px solid #7b8494; border-radius: 12px; background: #fff; padding: 12px 13px; color: #111827; outline: none; }
-.readiness-card { padding: 15px 16px; border-left: 5px solid #22a05a; }
-.readiness-card.readiness-blocked { border-left-color: #d92d20; }
-.readiness-card.readiness-warning { border-left-color: #dc8a05; }
+.readiness-card { --readiness-color: #dc8a05; padding: 10px 12px; border-left: 3px solid var(--readiness-color); }
+.readiness-card.readiness-blocked { --readiness-color: #d92d20; }
 .readiness-title { display: flex; align-items: center; gap: 9px; }
-.readiness-title strong { font-size: 1.0625rem; }
+.readiness-mark { flex: 0 0 10px; height: 10px; border-radius: 50%; background: var(--readiness-color); }
 .health-summary { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
 .health-summary span { padding: 6px 9px; border-radius: 99px; background: #edf7f1; color: #17663d; font-size: 0.75rem; }
 .health-summary span.bad { background: #fff0ef; color: #a52118; }
@@ -94,7 +93,6 @@ select, input { width: 100%; min-height: 46px; border: 1px solid #7b8494; border
 .bottom-nav .route-link { display: grid; justify-items: center; gap: 4px; padding: 7px; background: transparent; color: #697386; font-size: 0.75rem; border-radius: 12px; }
 .bottom-nav svg { width: 22px; height: 22px; }
 .bottom-nav .route-link[aria-current="page"] { color: #17663d; background: #edf7f1; }
-.readiness-card { padding: 10px 12px; border-left-width: 3px; }
 .health-summary { margin-top: 0; gap: 5px; }
 .health-summary span { background: transparent; padding: 5px; }
 .readiness-title strong { font-size: 0.875rem; flex: 1; min-width: 0; overflow-wrap: anywhere; }
