@@ -175,6 +175,30 @@ def test_recording_status_uses_current_clock_not_start_snapshot(monkeypatch, tmp
     assert value['preflight']['image_clocks']['ok'] is False
     assert value['recording'] is True
 
+
+def test_mobile_refreshes_cached_graph_when_distributed_inputs_recover(tmp_path):
+    from insight_capture.api.routes.mobile import MobileCaptureRoutes
+
+    calls = []
+
+    def evaluate(*, refresh_topics, require_global_pose):
+        calls.append(refresh_topics)
+        return {
+            'camera_health': {name: {'ready': True} for name in ('head', 'left', 'right')},
+            'clocks': None,
+            'distributed': {'clocks': {'ok': True}},
+            'image_clocks': {'ok': True},
+            'topics': {'missing': [] if refresh_topics else ['/egohalo/camera/vio_100hz']},
+        }
+
+    context = SimpleNamespace(results_root=tmp_path, capture_preflight=SimpleNamespace(evaluate=evaluate))
+    route = MobileCaptureRoutes(context, None)
+    route._next_discovery = time.monotonic() + 10
+    report = route._idle_preflight(task_active=True)
+    assert calls == [False, True]
+    assert report['topics']['recovery_refresh']['missing_after'] == []
+
+
 @pytest.mark.parametrize('phase', ['recording', 'starting', 'saving'])
 @pytest.mark.parametrize('nvme_mount', ['recording', 'results', None])
 def test_mobile_storage_is_live_without_rerunning_preflight(tmp_path, monkeypatch, phase, nvme_mount):

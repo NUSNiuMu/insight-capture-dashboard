@@ -476,6 +476,21 @@ function cameraStatus(state='NOT_INITED') {
   camera_health:{head:{image_fresh:true,vio_fresh:false,vio_status:state,vio_status_fresh:true}},
  }};
 }
+test('head stage follows its distributed clock check and recovers on live frames',()=>{
+ const device={name:'head'},status=cameraStatus();
+ status.system.camera_links[0].host='169.254.10.1';
+ status.preflight.clocks=null;
+ status.distributed={clock:{devices:{}}};
+ assert.equal(deviceStage(device,status),'等待校时结果');
+ const clock={host:'169.254.10.1',ok:false,error:'UDP NTP refused'};
+ status.distributed.clock.devices.EgoHalo=clock;
+ assert.equal(deviceStage(device,status),'校时校验失败');
+ clock.ok=true;
+ assert.equal(deviceStage(device,status),'定位尚未初始化');
+ assert.ok(deviceHint(device,status));
+ status.preflight.camera_health.head.vio_fresh=true;
+ assert.equal(deviceStage(device,status),'已就绪');
+});
 test('native VIO states distinguish initialization, tracking, calibration and recovery',()=>{
  for(const [state,label] of Object.entries({NOT_INITED:'定位尚未初始化',NO_CALIBRATION:'缺少相机标定',TRACKING_LOST:'定位跟踪丢失',RESTARTING:'正在恢复定位',STOPPED:'定位已停止',DATA_LOST:'定位输入中断'})){
   const status=cameraStatus(state);

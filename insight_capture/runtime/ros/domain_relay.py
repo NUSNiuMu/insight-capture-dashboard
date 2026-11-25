@@ -9,7 +9,19 @@ import multiprocessing
 from pathlib import Path
 
 from insight_capture.core.config import dashboard_streams, enabled_cameras
+from insight_capture.runtime.discovery import camera_links
 from insight_capture.runtime.ros.network import local_ipv4_addresses
+
+
+def _active_sources(groups):
+    addresses = local_ipv4_addresses()
+    links = camera_links()
+    active = {}
+    for source, cameras in groups.items():
+        required = {camera["relay_host_address"] for camera in cameras if camera.get("relay_host_address")}
+        if required <= addresses:
+            active[source] = frozenset(link for link in links if link.address in required)
+    return active
 
 
 def relay_topics(camera):
@@ -49,6 +61,14 @@ def _relay_domain(domain, source, cameras):
     contexts.append(output_context)
     output = rclpy.create_node("device_domain_relay_output", context=output_context)
     nodes.append(output)
+    last_data, states = {}, {}
+
+    def forward(publisher, topic):
+        def receive(data):
+            publisher.publish(data)
+            last_data[topic] = time.monotonic()
+        return receive
+
     try:
         context = Context()
         rclpy.init(context=context, domain_id=source, signal_handler_options=SignalHandlerOptions.NO)
@@ -62,7 +82,11 @@ def _relay_domain(domain, source, cameras):
                 # Image publishers are reliable; preserve complete encoded AUs.
                 qos = 30 if kind.endswith(("Image", "CameraInfo")) else qos_profile_sensor_data
                 # Forward CDR bytes verbatim instead of copying image arrays through Python.
-                node.create_subscription(cls, topic, publisher.publish, qos, raw=True)
+                callback = publisher.publish
+                if kind.endswith("Image") or topic.endswith("/vio_100hz"):
+                    last_data[topic] = None
+                    callback = forward(publisher, topic)
+                node.create_subscription(cls, topic, callback, qos, raw=True)
         prefixes = tuple(str(c["namespace"]) + "_" for c in cameras)
         static_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         publisher = output.create_publisher(TFMessage, "/tf_static", static_qos)
@@ -81,8 +105,25 @@ def _relay_domain(domain, source, cameras):
         executor.add_node(node)
         executors.append(executor)
         print(f"Relaying device topics from domain {source} to {domain}", flush=True)
+        next_check = time.monotonic() + 2
         while context.ok():
             executor.spin_once(timeout_sec=.1)
+            now = time.monotonic()
+            if now < next_check:
+                continue
+            next_check = now + 2
+            for topic, last in last_data.items():
+                publishers = node.count_publishers(topic)
+                if last is not None and now - last <= 2:
+                    state = "forwarding"
+                elif publishers:
+                    state = "publishers visible, no recent samples"
+                else:
+                    state = "no source publisher discovered"
+                if states.get(topic) != state:
+                    print(f"ROS domain {source} -> {domain} {topic}: {state} (source publishers={publishers})",
+                          flush=True)
+                    states[topic] = state
     except KeyboardInterrupt:
         pass
     finally:
@@ -112,39 +153,40 @@ def main():
     workers = {}
     if not groups:
         return
+    for source, cameras in groups.items():
+        required = sorted({camera["relay_host_address"] for camera in cameras if camera.get("relay_host_address")})
+        if required:
+            print(f"Source domain {source} requires local interfaces at {', '.join(required)}", flush=True)
     try:
         while True:
-            addresses = local_ipv4_addresses()
-            active = {
-                source for source, cameras in groups.items()
-                if all(not camera.get("relay_host_address")
-                       or camera["relay_host_address"] in addresses for camera in cameras)
-            }
-            for source in set(workers) - active:
-                worker = workers.pop(source)
+            active = _active_sources(groups)
+            for source, (worker, links) in list(workers.items()):
+                if active.get(source) == links:
+                    if worker.exitcode is not None:
+                        raise RuntimeError(f"Device relay exited unexpectedly: {worker.exitcode}")
+                    continue
+                del workers[source]
                 if worker.is_alive():
-                    os.kill(worker.pid, signal.SIGINT)
+                    worker.terminate()
                 worker.join(timeout=6)
                 if worker.is_alive():
                     worker.kill()
                     worker.join()
-                print(f"Source domain {source} USB link absent; relay disposed", flush=True)
-            for source, worker in workers.items():
-                if worker.exitcode is not None:
-                    raise RuntimeError(f"Device relay exited unexpectedly: {worker.exitcode}")
-            for source in active - workers.keys():
+                reason = "changed" if source in active else "absent"
+                print(f"Source domain {source} USB link {reason}; relay disposed", flush=True)
+            for source in active.keys() - workers.keys():
                 worker = context.Process(target=_relay_domain, args=(domain, source, groups[source]))
                 worker.start()
-                workers[source] = worker
+                workers[source] = (worker, active[source])
             # Disposing a removed link also withdraws its target-domain locators.
             time.sleep(.5)
     except KeyboardInterrupt:
         pass
     finally:
-        for worker in workers.values():
+        for worker, _ in workers.values():
             if worker.is_alive():
-                os.kill(worker.pid, signal.SIGINT)
-        for worker in workers.values():
+                worker.terminate()
+        for worker, _ in workers.values():
             worker.join(timeout=6)
             if worker.is_alive():
                 worker.kill()

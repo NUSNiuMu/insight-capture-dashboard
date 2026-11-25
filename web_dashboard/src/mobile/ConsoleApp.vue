@@ -285,11 +285,11 @@ watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=tas
 <p class="section-description sync-state" :class="{bad:!clocks.ok}" role="status">{{t('录制配置相机')}} · {{t(clockStatus)}}</p>
 <p v-if="cameraClockState==='error'&&!clocks.ok" class="issue error" role="alert">{{t('校时未完成，请重试。')}}</p>
 <p v-if="offerClockRecovery" class="section-description">{{t('恢复校时会暂时停止相机采集。')}}</p>
-<details class="secondary-details"><summary>{{t('NTP 偏差')}}</summary>
+<details class="secondary-details"><summary>{{t('相机时钟偏差')}}</summary>
 <div v-for="d in devices" :key="d.name" class="device-row"><strong>{{roleLabel(d.role)}}</strong><span>{{deviceClock(d,status)?.offset_ms?.toFixed(3)??'—'}} ms</span></div>
 <div v-for="(clock,name) in clocks.extra_usb_devices" :key="name" class="device-row"><strong>{{name}} · {{t('录制配置外')}}</strong><span>{{clock.ok?clock.offset_ms.toFixed(3)+' ms':t('未同步')}}</span></div>
 <p v-if="online && clockMeasurementTime" class="section-description"><time :datetime="new Date(clocks.checked_at_epoch_s*1000).toISOString()">{{t('上次测量 {0}', clockMeasurementTime)}}</time></p>
-<p class="section-description">{{t('相机相对 Jetson 的 NTP 偏差；不代表曝光同步精度。')}}</p><p class="section-description">{{t('两机误差保守上界')}}：{{clocks.pairwise_clock_bound_ms?.toFixed(2)??'—'}} / {{clocks.max_pairwise_clock_bound_ms??'—'}} ms</p></details></section>
+<p class="section-description">{{t('这里测量相机与 Jetson 的系统时钟偏差。')}}</p><p class="section-description">{{t('两机误差保守上界')}}：{{clocks.pairwise_clock_bound_ms?.toFixed(2)??'—'}} / {{clocks.max_pairwise_clock_bound_ms??'—'}} ms</p></details></section>
 <section class="card settings-links"><a href="#settings/language" class="route-link settings-link" @click="navigate('settings/language',$event)"><span>{{t('语言')}}</span><small>{{language==='en'?'English':'简体中文'}}</small><b aria-hidden="true">›</b></a><a href="#settings/diagnostics" class="route-link settings-link" @click="navigate('settings/diagnostics',$event)"><span>{{t('诊断')}}</span><b aria-hidden="true">›</b></a></section>
 </template>
 <section v-else-if="route==='settings/language'" class="card" :aria-label="t('界面语言')"><div class="language-options"><button :aria-pressed="language==='zh'" @click="setLanguage('zh')">简体中文</button><button :aria-pressed="language==='en'" @click="setLanguage('en')">English</button></div></section>
