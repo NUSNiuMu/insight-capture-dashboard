@@ -12,7 +12,7 @@ const vioHints={
 };
 export function deviceHint(device,status) {
  const health=status?.preflight?.camera_health?.[device.name];
- if(!health||health.vio_fresh||!health.image_fresh||!status?.preflight?.clocks?.devices?.[device.name]?.ok||!status?.system?.camera_links?.some(link=>link.namespace===device.name))return '';
+ if(!health||health.vio_fresh||!health.image_fresh||!deviceClock(device,status)?.ok||!status?.system?.camera_links?.some(link=>link.namespace===device.name))return '';
  if(status.system.managed_camera_startup&&!status.system.camera_startup?.[device.name])return '';
  const imageClock=status?.preflight?.image_clocks?.devices?.[device.name];
  if(imageClock&&!imageClock.ok)return '';
@@ -28,7 +28,11 @@ export function deviceClock(device,status) {
 export function deviceStage(device, status) {
   const name=device.name;
   if(!status?.system?.camera_links?.some(link=>link.namespace===name))return t('等待 USB 连接');
-  if(!deviceClock(device,status)?.ok)return t('正在校时');
+  const clock=deviceClock(device,status);
+  if(!clock?.ok){
+    if(status?.camera_time_sync?.state==='syncing')return t('正在校时');
+    return t(clock?'校时校验失败':'等待校时结果');
+  }
   if(status.system.managed_camera_startup&&!status.system.camera_startup?.[name])return t('正在恢复采集');
   if(!status?.preflight?.camera_health?.[name]?.image_fresh)return t('等待图像');
   const imageClock=status?.preflight?.image_clocks?.devices?.[name];

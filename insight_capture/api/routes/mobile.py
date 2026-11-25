@@ -58,10 +58,11 @@ class MobileCaptureRoutes:
     @staticmethod
     def _camera_inputs_ready(report):
         cameras = report.get("camera_health") or {}
+        clocks = report.get("clocks") or (report.get("distributed") or {}).get("clocks") or {}
         return (
             len(cameras) == 3
             and all(camera.get("ready") for camera in cameras.values())
-            and bool((report.get("clocks") or {}).get("ok"))
+            and bool(clocks.get("ok"))
             and bool((report.get("image_clocks") or {}).get("ok"))
         )
 

@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import concurrent.futures
-from insight_capture.runtime.discovery import json_request, startup_ready
-import socket
-import re
 import ipaddress
-import subprocess
+import re
+import secrets
+import socket
 import struct
+import subprocess
 import time
-from insight_capture.runtime.discovery import resolved_cameras
+from urllib.parse import urlsplit
+
+from insight_capture.runtime.discovery import json_request, resolved_cameras, startup_ready
 
 
 NTP_EPOCH = 2_208_988_800
@@ -23,7 +25,7 @@ def _wall_clock_sample():
     wall = time.time()
     after = time.monotonic()
     if after - before > CLOCK_SAMPLE_TOLERANCE_SEC:
-        raise ValueError("Local clock sampling was delayed; retry NTP measurement")
+        raise ValueError("Local clock sampling was delayed; retry measurement")
     return wall, before, after
 
 
@@ -98,12 +100,42 @@ def ssh_ntp_sample(device):
             "offset_bound_ms": round(abs(offset) + max(0, delay) / 2, 4)}
 
 
+def ego_http_clock_sample(host):
+    """Bracket the OTA service's wall timestamp without changing either clock."""
+    host = str(ipaddress.IPv4Address(host))
+    measurement_id = secrets.randbits(31)
+    sent, before_send, _ = _wall_clock_sample()
+    request = {"clientTime": int(sent * 1000), "measurementId": measurement_id}
+    reply = json_request(f"http://{host}/api/time-sync/ping", request, timeout=0.5)
+    received, _, after_receive = _wall_clock_sample()
+    server_ns = reply.get("serverTimeNanos") if isinstance(reply, dict) else None
+    if (type(server_ns) is not int or not 0 < server_ns < 2**63
+            or reply.get("measurementId") != measurement_id
+            or reply.get("timestamp") != request["clientTime"]):
+        raise ValueError("Invalid EgoHalo clock probe reply")
+    wall_elapsed = received - sent
+    monotonic_elapsed = after_receive - before_send
+    if wall_elapsed < 0 or abs(wall_elapsed - monotonic_elapsed) > CLOCK_SAMPLE_TOLERANCE_SEC:
+        raise ValueError("Jetson wall clock stepped during EgoHalo clock probe")
+    server = server_ns / 1e9
+    offset = server - (sent + wall_elapsed / 2)
+    delay = max(wall_elapsed, monotonic_elapsed)
+    return {
+        "host": host, "checked_at_epoch_s": received,
+        "method": "EgoHalo OTA HTTP wall clock; device minus Jetson",
+        "offset_ms": round(offset * 1000, 4), "round_trip_ms": round(delay * 1000, 4),
+        "offset_bound_ms": round((abs(offset) + delay / 2) * 1000, 4),
+    }
+
+
 def measure_clocks(config: dict, *, include_usb_devices=False) -> dict:
     """Use each device's least delayed sample; fail closed on missing clocks."""
     devices = config["clock_devices"]
     peers = resolved_cameras() if config.get('discover_usb') else None
     limit = float(config.get("max_clock_bound_ms", 10))
     rtt_limit = float(config.get("max_ntp_rtt_ms", 10))
+    ego_host = urlsplit(config["ego_url"]).hostname if config.get("ego_url") else None
+    ntp_samples = int(config.get("ntp_samples", 3))
 
     def measure(device):
         device = dict(device)
@@ -113,13 +145,29 @@ def measure_clocks(config: dict, *, include_usb_devices=False) -> dict:
                 return device['name'], {'ok': False, 'error': f'Expected one USB camera named {device["name"]}, found {len(matches)}'}
             device.update(host=matches[0]['host'], ntp_server=matches[0]['address'])
         samples, errors = [], []
-        for _ in range(1 if device.get("method") == "ssh_ntpdate" else int(config.get("ntp_samples", 3))):
+        ssh_ntp = device.get("method") == "ssh_ntpdate"
+        for _ in range(1 if ssh_ntp else ntp_samples):
             try:
-                samples.append(ssh_ntp_sample(device) if device.get("method") == "ssh_ntpdate" else ntp_sample(device["host"]))
+                samples.append(ssh_ntp_sample(device) if ssh_ntp else ntp_sample(device["host"]))
             except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
-                errors.append(str(exc))
+                errors.append(exc)
+        if (not samples and not ssh_ntp and ego_host == device["host"] and errors
+                and all(isinstance(error, ConnectionRefusedError) for error in errors)):
+            # Client-only EgoHalo firmware sets its wall clock from the Jetson but
+            # has no UDP 123 listener. Measure the wall clock through the OTA API.
+            http_errors = []
+            for _ in range(ntp_samples):
+                try:
+                    samples.append(ego_http_clock_sample(ego_host))
+                except (OSError, ValueError) as exc:
+                    http_errors.append(str(exc))
+            if not samples:
+                return device["name"], {
+                    "ok": False, "host": device["host"],
+                    "error": f"UDP NTP refused; EgoHalo OTA clock probe failed: {http_errors[-1]}",
+                }
         if not samples:
-            return device["name"], {"ok": False, "host": device["host"], "error": "; ".join(errors)}
+            return device["name"], {"ok": False, "host": device["host"], "error": "; ".join(map(str, errors))}
         best = min(samples, key=lambda sample: sample["round_trip_ms"])
         if config.get('continuous_camera_clock'):
             # chronyd serves its corrected estimate, which can differ from the
@@ -145,7 +193,7 @@ def measure_clocks(config: dict, *, include_usb_devices=False) -> dict:
     boot_ready = not config.get('continuous_camera_clock') or set(results).issubset(startup_ready())
     report = {
         "startup_ready": boot_ready,
-        "method": "NTP measurement; device minus Jetson; method recorded per device",
+        "method": "Clock measurement; device minus Jetson; method recorded per device",
         "checked_at_epoch_s": time.time(), "max_clock_bound_ms": limit,
         "max_ntp_rtt_ms": rtt_limit, "devices": results,
         "pairwise_clock_bound_ms": round(pairwise_bound, 4) if pairwise_bound is not None and pairwise_bound != float("inf") else None,

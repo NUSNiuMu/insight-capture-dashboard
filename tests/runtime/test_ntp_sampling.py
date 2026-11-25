@@ -62,3 +62,70 @@ def test_actual_wall_clock_step_remains_invalid(monkeypatch, step):
     monkeypatch.setattr(clocks.time, 'time', lambda: 1000 + clock['elapsed'] + (step if clock['elapsed'] else 0))
     with pytest.raises(ValueError, match='wall clock stepped'):
         clocks.ntp_sample('192.0.2.1')
+
+
+@pytest.mark.parametrize('fault', [None, 'wrong_id', 'clock_step'])
+def test_ego_http_clock_probe_validates_and_bounds_fresh_sample(monkeypatch, fault):
+    readings = iter([(1000.0, 0.0, 0.0),
+                     (1000.024 if fault == 'clock_step' else 1000.004, .004, .004)])
+    monkeypatch.setattr(clocks, '_wall_clock_sample', lambda: next(readings))
+
+    def request(url, body, *, timeout):
+        assert url == 'http://169.254.10.1/api/time-sync/ping'
+        assert body['clientTime'] == 1000000
+        return {'timestamp': body['clientTime'],
+                'measurementId': body['measurementId'] + (fault == 'wrong_id'),
+                'serverTimeNanos': 1_000_003_000_000}
+
+    monkeypatch.setattr(clocks, 'json_request', request)
+    if fault:
+        with pytest.raises(ValueError, match='Invalid EgoHalo|wall clock stepped'):
+            clocks.ego_http_clock_sample('169.254.10.1')
+    else:
+        result = clocks.ego_http_clock_sample('169.254.10.1')
+        assert result['offset_ms'] == 1
+        assert result['round_trip_ms'] == 4
+        assert result['offset_bound_ms'] == 3
+
+
+@pytest.mark.parametrize('bound,delay,passing', [(2, 4, True), (9.5, 4, False), (6, 12, False)])
+def test_only_client_ego_falls_back_and_keeps_recording_limits(monkeypatch, bound, delay, passing):
+    ego, wrist = '169.254.10.1', '169.254.20.1'
+    config = {'ego_url': f'http://{ego}:8765', 'max_pairwise_clock_bound_ms': 10, 'ntp_samples': 1,
+              'clock_devices': [{'name': 'EgoHalo', 'host': ego}, {'name': 'Wrist', 'host': wrist}]}
+
+    def ntp(host):
+        if host == ego:
+            raise ConnectionRefusedError('no UDP listener')
+        return {'host': host, 'offset_bound_ms': 1, 'round_trip_ms': 1}
+
+    def http(host):
+        assert host == ego
+        return {'host': host, 'method': 'HTTP', 'offset_bound_ms': bound, 'round_trip_ms': delay}
+
+    monkeypatch.setattr(clocks, 'ntp_sample', ntp)
+    monkeypatch.setattr(clocks, 'ego_http_clock_sample', http)
+    report = clocks.measure_clocks(config)
+    assert report['ok'] is passing
+    assert report['devices']['EgoHalo']['method'] == 'HTTP'
+    assert report['devices']['Wrist']['ok']
+    monkeypatch.setattr(clocks, 'ntp_sample', lambda host: ntp(ego))
+    assert not clocks.measure_clocks(config)['devices']['Wrist']['ok']
+
+
+def test_failed_ego_fallback_reports_both_transports(monkeypatch):
+    def no_ntp(host):
+        raise ConnectionRefusedError('no UDP listener')
+
+    def no_http(host):
+        raise ValueError('bad timestamp')
+
+    monkeypatch.setattr(clocks, 'ntp_sample', no_ntp)
+    monkeypatch.setattr(clocks, 'ego_http_clock_sample', no_http)
+    report = clocks.measure_clocks({
+        'ego_url': 'http://169.254.10.1:8765', 'ntp_samples': 1,
+        'clock_devices': [{'name': 'EgoHalo', 'host': '169.254.10.1'}],
+    })
+    assert not report['ok']
+    assert report['devices']['EgoHalo']['error'] == (
+        'UDP NTP refused; EgoHalo OTA clock probe failed: bad timestamp')
