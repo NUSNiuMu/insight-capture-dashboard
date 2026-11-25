@@ -22,7 +22,7 @@ Qt Quick Controls 控制界面、Qt Quick 3D 模型/轨迹、GStreamer H.264 硬
 
 断外网使用的准备要求和验证范围见 [离线使用](OFFLINE.md)。已准备好的可执行文件和运行库可直接启动，不需要 Docker 构建；如果只有 `qt-runtime.tar` 而运行库未解包，启动脚本会从本地归档恢复它。
 
-`--server` 可以指定后端地址。本机 loopback 地址且后端支持时，Insight3 原始图像通过 `/ws/native` 直接进入 VIC 显示；Ego 原始 H.264 通过同一通道进入 NVDEC。远程地址、旧后端和旧 Insight9 JPEG 输入使用 WebRTC，端口取相机 API，仍需 ICE 可达。可用 `INSIGHT_NATIVE_TRANSPORT=webrtc ./native_dashboard/run.sh` 作旧链路对照。当前客户端使用 Jetson 专用解码器，尚未适配普通 PC。
+`--server` 可以指定后端地址。本机 loopback 地址且后端支持时，Insight3 原始图像、Insight9 JPEG 和 Ego 原始 H.264 都通过 `/ws/native` 预览。Insight9 在 Qt 端使用 Jetson JPEG 硬件解码。远程地址和旧后端使用 WebRTC，端口取相机 API，仍需 ICE 可达。可用 `INSIGHT_NATIVE_TRANSPORT=webrtc ./native_dashboard/run.sh` 作旧链路对照。当前客户端使用 Jetson 专用解码器，尚未适配普通 PC。
 
 `--fps 25` / `--fps 30` 设置预览目标，也可在界面顶部切换。它控制服务端请求目标，不保证最终显示率。
 
@@ -34,7 +34,7 @@ native_dashboard/run.sh --fps 30 --quit-after 60 --diagnostics /tmp/insight-nati
 
 ## 已接入的功能
 
-- 本机直接预览（Insight3 两路或加 Ego 四路），以及兼容的 WebRTC 视频：`webrtcbin → rtph264depay → h264parse → nvv4l2decoder → nv3dsink`，使用 NVMM 硬件解码结果。
+- 本机直接预览 Insight3 腕部、Insight9 或 Ego 头部。WebRTC 视频通过 `webrtcbin → rtph264depay → h264parse → nvv4l2decoder → nv3dsink` 使用 NVMM 硬件解码结果。
 - 实时姿态、三模型、夹爪开合、轨迹显示/保留/清除；支持鼠标旋转、平移、缩放。遵循后端姿态可见性和轨迹 generation/sequence；断线隐藏过期姿态并重连获取快照。
 - GLB 模型缓存；为 Qt 6.2 转换 `KHR_mesh_quantization` 和 `EXT_texture_webp`，保持原模型内容。
 - 任务进入/结束、录制启停、作废最近一条、采集检查、新建地图。

@@ -586,11 +586,6 @@ class PoseBridgeNode(Node):
         )
 
 
-    @staticmethod
-    def _jpeg_dimensions(data: bytes) -> Tuple[int, int]:
-        return ImagePipeline._jpeg_dimensions(data)
-
-
     def _record_pose_sample(self, pose_name: str, pose_sample: PoseSample, source_stamp_ns=0,
                             is_live=None) -> None:
         received = time.monotonic()
