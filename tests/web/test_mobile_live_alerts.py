@@ -164,3 +164,56 @@ def test_malformed_history_does_not_break_mobile_status(capture):
 def test_unknown_camera_role_still_produces_mobile_status(capture):
     capture.route.context.node.poses = [SimpleNamespace(name="custom_a", teleop_role="custom")]
     assert capture.route._snapshot()["devices"][0]["label"] == "custom · CUSTOM"
+
+
+@pytest.mark.parametrize("publisher_restored", [True, False])
+def test_mobile_preflight_refreshes_topics_once_when_all_inputs_recover(
+    capture, monkeypatch, publisher_restored
+):
+    capture.state["recording"] = False
+    now = 100.0
+    camera_ready = image_clock_ok = ntp_ok = publisher_present = True
+    cached_present = True
+    graph_reads = []
+    monkeypatch.setattr(mobile.time, "monotonic", lambda: now)
+
+    def evaluate(*, refresh_topics, require_global_pose):
+        nonlocal cached_present
+        if refresh_topics:
+            cached_present = publisher_present
+            graph_reads.append(now)
+        missing = [] if cached_present else ["/head/camera/imu"]
+        failures = [] if not missing else [{"code": "recorder_topics_missing"}]
+        if not (camera_ready and image_clock_ok and ntp_ok):
+            failures.append({"code": "camera_inputs_missing"})
+        return {
+            "ok": not failures,
+            "failures": failures,
+            "camera_health": {name: {"ready": camera_ready} for name in ("head", "left", "right")},
+            "clocks": {"ok": ntp_ok},
+            "image_clocks": {"ok": image_clock_ok},
+            "topics": {"missing": missing},
+        }
+
+    capture.route.context.capture_preflight.evaluate = evaluate
+    assert capture.route._snapshot()["preflight"]["ok"]
+    now = 110.0
+    camera_ready = image_clock_ok = ntp_ok = publisher_present = False
+    assert not capture.route._snapshot()["preflight"]["ok"]
+    now = 114.0
+    camera_ready = True
+    assert not capture.route._snapshot()["preflight"]["ok"]
+    now = 115.0
+    image_clock_ok = True
+    assert not capture.route._snapshot()["preflight"]["ok"]
+    assert graph_reads == [100.0, 110.0]
+    now = 115.7
+    ntp_ok = True
+    publisher_present = publisher_restored
+    report = capture.route._snapshot()["preflight"]
+    assert report["ok"] is publisher_restored
+    assert graph_reads == [100.0, 110.0, 115.7]
+    assert report["topics"]["recovery_refresh"]["missing_before"] == ["/head/camera/imu"]
+    now = 116.5
+    assert capture.route._snapshot()["preflight"]["ok"] is publisher_restored
+    assert graph_reads == [100.0, 110.0, 115.7]

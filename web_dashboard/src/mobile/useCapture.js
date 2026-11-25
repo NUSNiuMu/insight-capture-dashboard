@@ -221,7 +221,22 @@ export function useCapture() {
     finally {checkingCameraClock.value=false;pending.value=false;await refresh();}
   }
   async function calibrate() { await action('/api/mapping/reset'); }
-  async function poll() { await refresh(); if(alive) timer=setTimeout(poll,document.hidden?4000:1500); }
+  let recoveryPollUntil=null;
+  async function poll() {
+    await refresh();
+    if(!alive)return;
+    const current=status.value;
+    const waitingForRecovery=online.value && (
+      current?.camera_time_sync?.state==='syncing' ||
+      (['idle','saved'].includes(current?.state) && current.preflight?.failures?.some(({code})=>
+        ['camera_inputs_missing','clock_not_ready','image_clock_unavailable','image_clock_invalid','recorder_topics_missing'].includes(code)))
+    );
+    const now=performance.now();
+    if(!waitingForRecovery)recoveryPollUntil=null;
+    else if(recoveryPollUntil===null)recoveryPollUntil=now+30000;
+    const delay=document.hidden?4000:recoveryPollUntil>now?500:1500;
+    timer=setTimeout(poll,delay);
+  }
   async function pollMap() { try { mapping.value=await api('/api/mapping'); } catch { mapping.value=null; }
     if(alive) mapTimer=setTimeout(pollMap,document.hidden?5000:2000); }
   watch(online,value=>{if(value)loadTasks().catch(()=>{});});
