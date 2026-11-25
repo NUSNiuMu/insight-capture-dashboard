@@ -110,6 +110,18 @@ def resolved_cameras(path=SNAPSHOT):
 
 
 STARTUP = SNAPSHOT.with_name('startup.json')
+PHONE_CLOCK = SNAPSHOT.with_name('phone-clock.json')
+
+
+def phone_clock_status():
+    try:
+        result = json.loads(PHONE_CLOCK.read_text())
+        if result.get('state') == 'synced':
+            return result
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {'state': 'idle', 'source': 'phone'}
+
 
 def json_request(url, body=None, timeout=4):
     data = None if body is None else json.dumps(body).encode()
@@ -212,6 +224,10 @@ def synchronize_phone_clock(body):
     descriptor = os.open(config / '.capture-upgrade.lock', os.O_RDONLY | os.O_CREAT | os.O_CLOEXEC, 0o644)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not resync:
+            previous = phone_clock_status()
+            if previous['state'] == 'synced':
+                return previous
         status = json_request('http://127.0.0.1:8765/api/mobile/status')
         if status.get('recording') or status.get('state') in {'starting', 'recording', 'saving', 'playback'}:
             return {'state': 'deferred'}
@@ -225,7 +241,15 @@ def synchronize_phone_clock(body):
                 # All submitted camera work finishes before releasing capture admission.
                 for future in futures:
                     future.result()
-        return {'state': 'synced', 'synced_at_epoch_s': time.time(), 'correction_s': offset}
+        result = {'state': 'synced', 'synced_at_epoch_s': time.time(), 'correction_s': offset}
+        if not resync:
+            # /run survives service restarts, and is recreated on the next host boot.
+            result.update(source='phone', adjusted=abs(offset) > 1)
+            temporary = PHONE_CLOCK.with_suffix('.tmp')
+            temporary.write_text(json.dumps(result))
+            temporary.chmod(0o644)
+            os.replace(temporary, PHONE_CLOCK)
+        return result
     finally:
         os.close(descriptor)
 

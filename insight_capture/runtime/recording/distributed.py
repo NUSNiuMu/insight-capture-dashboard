@@ -35,8 +35,6 @@ class DistributedRecordingManager:
         self._bypass = False
         if state_path.exists():
             self._session = json.loads(state_path.read_text())
-            samples = self._session.get("clock_samples") or []
-            self._clock = deepcopy(samples[-1]) if samples else {}
             if self._session.get("phase") not in TERMINAL:
                 if self._session.get("ego_url") != self.ego.base:
                     raise RuntimeError("未完成的双端录制属于另一台 Ego，请先恢复原连接")
@@ -44,6 +42,7 @@ class DistributedRecordingManager:
                 self._save()
         self.local.add_recording_completed_callback(self._local_completed)
         threading.Thread(target=self._monitor, daemon=True, name="distributed-recording").start()
+        threading.Thread(target=self._monitor_idle_clocks, daemon=True, name="distributed-clock-display").start()
 
     def __getattr__(self, name):
         return getattr(self.local, name)
@@ -75,11 +74,16 @@ class DistributedRecordingManager:
             self._session.update(values)
             self._save()
 
-    def measure_camera_clocks(self):
-        report = measure_clocks(self.config)
+    def measure_camera_clocks(self, *, for_display=False):
+        report = measure_clocks(self.config, include_usb_devices=for_display)
         with self._lock:
-            self._clock = report
-            self._last_clock_mono = time.monotonic()
+            if for_display and self._session.get("phase") not in TERMINAL | {None}:
+                return report
+            extra = (report.get("extra_usb_devices") if for_display
+                     else self._clock.get("extra_usb_devices"))
+            self._clock = {**report, "extra_usb_devices": extra or {}}
+            if not for_display:
+                self._last_clock_mono = time.monotonic()
         return report
 
     def distributed_preflight(self):
@@ -326,6 +330,18 @@ class DistributedRecordingManager:
             self._worker.start()
         return self.status()
 
+    def _monitor_idle_clocks(self):
+        interval = float(self.config.get("clock_sample_interval_sec", 5))
+        while True:
+            if not self._session or self._session.get("phase") in TERMINAL:
+                try:
+                    self.measure_camera_clocks(for_display=True)
+                except Exception as exc:
+                    with self._lock:
+                        if self._session.get("phase") in TERMINAL | {None}:
+                            self._clock = {"ok": False, "devices": {}, "error": str(exc)}
+            time.sleep(interval)
+
     def _monitor(self):
         while True:
             time.sleep(1)
@@ -404,12 +420,15 @@ class DistributedRecordingManager:
                         "method": "distributed_copy_merge",
                         "total_sec": round(session["finished_at_epoch_s"] - session.get("merge_started_at_epoch_s", session.get("stopped_at_epoch_s", session["finished_at_epoch_s"])), 3),
                     }
+            clock = deepcopy(self._clock)
+            if active:
+                clock.pop("extra_usb_devices", None)
             result["distributed"] = {
                 "enabled": True, "phase": phase, "session_id": session.get("session_id"),
                 "task_id": session.get("task_id"), "take_id": session.get("take_id"),
                 "ego_path": session.get("remote_path"), "jetson_path": session.get("jetson_path"),
                 "local_saved": session.get("local_saved", False), "remote_saved": session.get("remote_saved", False),
-                "clock": deepcopy(self._clock), "clock_violations": session.get("clock_violations", []),
+                "clock": clock, "clock_violations": session.get("clock_violations", []),
                 "quality_issues": session.get("alignment", {}).get("video_header_quality", {}).get("issues", []),
                 "error": self._last_error or session.get("error"),
             }

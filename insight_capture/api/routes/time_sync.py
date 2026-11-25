@@ -11,6 +11,7 @@ from aiohttp import web
 
 from insight_capture.api.context import capture_transition_lock
 from insight_capture.api.support import read_json_body
+from insight_capture.runtime.discovery import phone_clock_status
 
 
 class TimeSyncRoutes:
@@ -18,7 +19,7 @@ class TimeSyncRoutes:
         self.context = context
         self.transition = capture_transition_lock(context)
         self._task = None
-        context.phone_time_sync = {"state": "idle", "source": "phone"}
+        context.phone_time_sync = phone_clock_status()
         context.camera_time_sync = {"state": "idle", "source": "cameras"}
 
     async def snapshot(self, _request):
@@ -34,6 +35,8 @@ class TimeSyncRoutes:
         recover = body.get("recover_cameras", False)
         if type(recover) is not bool or (recover and not resync):
             raise ValueError("recover_cameras requires a camera time check")
+        if not resync and self.context.phone_time_sync["state"] == "synced":
+            return web.json_response(self.context.phone_time_sync)
         if self.transition.locked() or (self._task and not self._task.done()):
             raise RuntimeError("设备忙，空闲后再校时。")
         if resync:
@@ -51,10 +54,6 @@ class TimeSyncRoutes:
             offset = epoch + time.monotonic() - received - now
             if abs(offset) > 1:
                 return web.json_response(self.context.phone_time_sync, status=409)
-            result = {"state": "synced", "source": "phone", "synced_at_epoch_s": now,
-                      "correction_s": offset}
-            self.context.phone_time_sync = result
-            return web.json_response(result)
         self.context.phone_time_sync = {"state": "syncing", "source": "phone"}
         self._task = asyncio.create_task(self._synchronize(epoch, received))
         return web.json_response({"state": "syncing"}, status=202)

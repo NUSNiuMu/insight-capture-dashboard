@@ -98,7 +98,7 @@ def ssh_ntp_sample(device):
             "offset_bound_ms": round(abs(offset) + max(0, delay) / 2, 4)}
 
 
-def measure_clocks(config: dict) -> dict:
+def measure_clocks(config: dict, *, include_usb_devices=False) -> dict:
     """Use each device's least delayed sample; fail closed on missing clocks."""
     devices = config["clock_devices"]
     peers = resolved_cameras() if config.get('discover_usb') else None
@@ -143,7 +143,7 @@ def measure_clocks(config: dict) -> dict:
     pairwise_bound = sum(bounds[:2]) if bounds else None
     pairwise_limit = float(config.get("max_pairwise_clock_bound_ms", 20))
     boot_ready = not config.get('continuous_camera_clock') or set(results).issubset(startup_ready())
-    return {
+    report = {
         "startup_ready": boot_ready,
         "method": "NTP measurement; device minus Jetson; method recorded per device",
         "checked_at_epoch_s": time.time(), "max_clock_bound_ms": limit,
@@ -152,6 +152,20 @@ def measure_clocks(config: dict) -> dict:
         "max_pairwise_clock_bound_ms": pairwise_limit,
         "ok": boot_ready and bool(results) and all(item["ok"] for item in results.values()) and pairwise_bound <= pairwise_limit,
     }
+
+    if include_usb_devices:
+        try:
+            attached = resolved_cameras()
+        except (OSError, ValueError, KeyError):
+            attached = []
+        configured_hosts = {device.get("host") for device in results.values()}
+        extra = [{"name": peer["namespace"], "host": peer["host"]}
+                 for peer in attached if peer["host"] not in configured_hosts]
+        if extra:
+            extra_config = {**config, "clock_devices": extra, "discover_usb": False,
+                            "continuous_camera_clock": True}
+            report["extra_usb_devices"] = measure_clocks(extra_config)["devices"]
+    return report
 
 
 class ClockMonitor:

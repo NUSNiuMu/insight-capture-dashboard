@@ -78,7 +78,7 @@ export function useCapture() {
       if(alive&&generation===statusGeneration){status.value=value;online.value=true;}
       return value;
     }
-    catch { if(alive&&generation===statusGeneration){online.value=false;connectionFailed.value=true;syncPhoneTime(null,false);}return null; }
+    catch { if(alive&&generation===statusGeneration){online.value=false;connectionFailed.value=true;}return null; }
   }
   async function loadTasks() {
     const generation=++tasksGeneration;

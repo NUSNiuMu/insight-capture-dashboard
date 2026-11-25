@@ -22,7 +22,8 @@ class Request:
 class PhoneClockTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.context = SimpleNamespace(node=SimpleNamespace(get_logger=lambda: SimpleNamespace(warning=lambda *_: None)))
-        self.route = module.TimeSyncRoutes(self.context)
+        with mock.patch.object(module, "phone_clock_status", return_value={"state": "idle", "source": "phone"}):
+            self.route = module.TimeSyncRoutes(self.context)
 
     async def test_phone_sample_goes_to_fixed_host_helper(self):
         with mock.patch.object(self.route, "_host_sync", return_value={"state": "synced"}) as helper:
@@ -42,13 +43,23 @@ class PhoneClockTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(self.route, "_host_sync", side_effect=OSError("unavailable")):
             await self.route.synchronize(Request());await self.route._task
             self.assertEqual(self.context.phone_time_sync["state"], "error")
-        with mock.patch.object(self.route, "_host_sync") as helper:
+        with mock.patch.object(self.route, "_host_sync", return_value={"state": "synced", "adjusted": False}) as helper:
             refused = await self.route.synchronize(Request())
             accepted = await self.route.synchronize(Request(epoch_ms=time.time() * 1000))
             self.assertEqual(refused.status, 409)
-            self.assertEqual(accepted.status, 200)
+            self.assertEqual(accepted.status, 202)
+            await self.route._task
             self.assertEqual(self.context.phone_time_sync["state"], "synced")
-            helper.assert_not_called()
+            helper.assert_called_once()
+
+    async def test_persisted_confirmation_blocks_phone_writes_after_api_restart(self):
+        confirmed = {"state": "synced", "adjusted": False, "source": "phone"}
+        with mock.patch.object(module, "phone_clock_status", return_value=confirmed):
+            route = module.TimeSyncRoutes(self.context)
+        with mock.patch.object(route, "_host_sync") as helper:
+            response = await route.synchronize(Request())
+        self.assertEqual(json.loads(response.text), confirmed)
+        helper.assert_not_called()
 
     def camera_manager(self, measure):
         self.context.recording_manager = SimpleNamespace(
@@ -87,6 +98,15 @@ class PhoneClockTest(unittest.IsolatedAsyncioTestCase):
             self.assertAlmostEqual(args["epoch_s"], time.time(), delta=1)
             self.assertEqual(measure.call_count, 3)
 
+    async def test_active_take_rejects_both_camera_clock_actions(self):
+        measurement = mock.Mock()
+        self.camera_manager(measurement)
+        self.context.recording_manager.status = lambda: {"recording": True}
+        for recover in [False, True]:
+            with self.assertRaisesRegex(RuntimeError, "设备忙"):
+                await self.route.synchronize(Request(resync_cameras=True, recover_cameras=recover))
+        measurement.assert_not_called()
+
     async def test_nonfinite_dates_and_long_rtt_rejected(self):
         for body in [{"epoch_ms": 0}, {"epoch_ms": float("nan")}, {"epoch_ms": True}, {"rtt_ms": -1}, {"rtt_ms": 3000}]:
             with self.assertRaises(ValueError):await self.route.synchronize(Request(**body))
@@ -97,6 +117,8 @@ from insight_capture.runtime import discovery
 class HostClockTest(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory();self.addCleanup(self.directory.cleanup)
+        snapshot = mock.patch.object(discovery, "PHONE_CLOCK", Path(self.directory.name) / "phone-clock.json")
+        snapshot.start();self.addCleanup(snapshot.stop)
         wall = mock.patch.object(discovery.time, 'time', return_value=1700000000.0)
         wall.start();self.addCleanup(wall.stop)
         mounts = [{"Source": self.directory.name, "Destination": "/workspaces/insight_capture/config", "Type": "bind"}]
@@ -121,7 +143,11 @@ class HostClockTest(unittest.TestCase):
 
     def test_small_offset_avoids_camera_restart(self):
         with mock.patch.object(discovery, "json_request", return_value={"state": "idle"}), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "resolved_cameras") as peers:
-            self.assertEqual(discovery.synchronize_phone_clock(self.sample(time.time()))["state"], "synced")
+            first = discovery.synchronize_phone_clock(self.sample(time.time()))
+            self.assertEqual(first["state"], "synced")
+            self.assertFalse(first["adjusted"])
+            self.assertEqual(discovery.phone_clock_status(), first)
+            self.assertEqual(discovery.synchronize_phone_clock(self.sample()), first)
             setter.assert_not_called();peers.assert_not_called()
 
     def test_failed_camera_recovery_does_not_restart_if_host_is_aligned(self):
@@ -173,3 +199,27 @@ class HostClockTest(unittest.TestCase):
         with mock.patch.object(discovery,'json_request',side_effect=request),ThreadPoolExecutor(max_workers=2)as pool:
             list(pool.map(discovery.restart_acquisition,[camera,camera]))
         self.assertEqual(calls,['insight-stop','insight-start','insight-stop','insight-start'])
+
+
+def test_usb_display_measurement_keeps_recording_profile_gate():
+    from insight_capture.runtime.recording import clock_sync
+
+    config = {"clock_devices": [{"name": "configured_head", "host": "169.254.10.1"}], "ntp_samples": 1}
+    attached = [{"namespace": "usb_head", "host": "169.254.40.1"}]
+
+    def sample(host):
+        if host == "169.254.10.1":
+            raise TimeoutError()
+        return {"host": host, "offset_ms": 0.1, "round_trip_ms": 1.0, "offset_bound_ms": 0.6}
+
+    with mock.patch.object(clock_sync, "resolved_cameras", return_value=attached) as discovery, \
+         mock.patch.object(clock_sync, "ntp_sample", side_effect=sample), \
+         mock.patch.object(clock_sync, "json_request", return_value={"data": {"synced": True}}):
+        capture_report = clock_sync.measure_clocks(config)
+        discovery.assert_not_called()
+        display_report = clock_sync.measure_clocks(config, include_usb_devices=True)
+
+    assert not capture_report["ok"]
+    assert not display_report["ok"]
+    assert set(display_report["devices"]) == {"configured_head"}
+    assert display_report["extra_usb_devices"]["usb_head"]["ok"]

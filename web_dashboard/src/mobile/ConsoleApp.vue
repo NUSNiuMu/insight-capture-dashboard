@@ -55,11 +55,26 @@ const elapsed=computed(()=>takeDuration(status.value?.current_take,status.value)
 const health=computed(()=>status.value?.preflight?.camera_health||{});
 const clocks=computed(()=>cameraClocks(status.value));
 const cameraClockState=computed(()=>status.value?.camera_time_sync?.state);
+const phoneClock=computed(()=>status.value?.time_sync);
+const phoneClockStatus=computed(()=>{
+ if(!online.value)return '等待连接';
+ if(phoneClock.value?.state==='synced')return phoneClock.value.adjusted===false?'时间已一致':'已同步';
+ if(phoneClock.value?.state==='syncing')return '正在校时';
+ if(phoneClock.value?.state==='error')return 'Jetson 时间同步失败。';
+ return '等待本次开机首次校时';
+});
+const phoneConfirmedTime=computed(()=>phoneClock.value?.synced_at_epoch_s
+ ?new Date(phoneClock.value.synced_at_epoch_s*1000).toLocaleString()
+ :'');
+const clockMeasurementTime=computed(()=>clocks.value.checked_at_epoch_s
+ ?new Date(clocks.value.checked_at_epoch_s*1000).toLocaleTimeString()
+ :'');
 const offerClockRecovery=computed(()=>!clocks.value.ok&&['needs_recovery','error'].includes(cameraClockState.value));
 const clockStatus=computed(()=>{
+ if(!online.value)return '等待连接';
  if(checkingCameraClock.value||cameraClockState.value==='syncing')return '正在校时';
  if(clocks.value.ok)return cameraClockState.value==='synced'?'已确认同步':'已同步';
- return clocks.value.checked_at_epoch_s?'未同步':'测量中';
+ return clocks.value.checked_at_epoch_s||clocks.value.error?'未同步':'测量中';
 });
 const nvmeStorage=computed(()=>online.value?status.value?.nvme_storage:null);
 const recordingStorage=computed(()=>status.value?.preflight?.storage);
@@ -266,11 +281,14 @@ watch(creating,async value=>{if(!value)selectedTask.value=openedTaskId.value=tas
 </dl>
 <details class="secondary-details"><summary>{{t('数据位置')}}</summary><p class="storage-path">{{status?.storage?.active_path||'—'}}</p></details></section>
 <section class="card"><div class="section-title"><h2>{{t('时间同步')}}</h2><button id="resync-time" type="button" class="secondary compact" :disabled="busy||!online||status?.state==='playback'" @click="synchronizeTime(offerClockRecovery)">{{t(offerClockRecovery?'恢复相机校时':'重新校时')}}</button></div>
-<p class="section-description sync-state" :class="{bad:!clocks.ok}" role="status">{{t(clockStatus)}}</p>
+<p class="section-description sync-state" :class="{bad:phoneClock?.state==='error'}" role="status">{{t('手机与 Jetson')}} · {{t(phoneClockStatus)}}<span v-if="online && phoneConfirmedTime"> · {{t('确认于 {0}', phoneConfirmedTime)}}</span></p>
+<p class="section-description sync-state" :class="{bad:!clocks.ok}" role="status">{{t('录制配置相机')}} · {{t(clockStatus)}}</p>
 <p v-if="cameraClockState==='error'&&!clocks.ok" class="issue error" role="alert">{{t('校时未完成，请重试。')}}</p>
 <p v-if="offerClockRecovery" class="section-description">{{t('恢复校时会暂时停止相机采集。')}}</p>
 <details class="secondary-details"><summary>{{t('NTP 偏差')}}</summary>
 <div v-for="d in devices" :key="d.name" class="device-row"><strong>{{roleLabel(d.role)}}</strong><span>{{deviceClock(d,status)?.offset_ms?.toFixed(3)??'—'}} ms</span></div>
+<div v-for="(clock,name) in clocks.extra_usb_devices" :key="name" class="device-row"><strong>{{name}} · {{t('录制配置外')}}</strong><span>{{clock.ok?clock.offset_ms.toFixed(3)+' ms':t('未同步')}}</span></div>
+<p v-if="online && clockMeasurementTime" class="section-description"><time :datetime="new Date(clocks.checked_at_epoch_s*1000).toISOString()">{{t('上次测量 {0}', clockMeasurementTime)}}</time></p>
 <p class="section-description">{{t('相机相对 Jetson 的 NTP 偏差；不代表曝光同步精度。')}}</p><p class="section-description">{{t('两机误差保守上界')}}：{{clocks.pairwise_clock_bound_ms?.toFixed(2)??'—'}} / {{clocks.max_pairwise_clock_bound_ms??'—'}} ms</p></details></section>
 <section class="card settings-links"><a href="#settings/language" class="route-link settings-link" @click="navigate('settings/language',$event)"><span>{{t('语言')}}</span><small>{{language==='en'?'English':'简体中文'}}</small><b aria-hidden="true">›</b></a><a href="#settings/diagnostics" class="route-link settings-link" @click="navigate('settings/diagnostics',$event)"><span>{{t('诊断')}}</span><b aria-hidden="true">›</b></a></section>
 </template>
