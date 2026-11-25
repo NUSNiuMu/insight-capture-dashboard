@@ -1,6 +1,7 @@
 """Regression checks for USB link changes that preserve the assigned IPv4 address."""
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -24,7 +25,8 @@ def test_same_address_after_usb_link_recovery_restarts_relay(
     }))
     links = iter([{CameraLink('enx020000000a01', index, address)} for index in indices])
     counts = iter(carrier_counts)
-    monkeypatch.setattr(domain_relay, '_carrier_up_count', lambda link: next(counts))
+    monkeypatch.setattr(domain_relay, 'camera_link_generations',
+                        lambda links: frozenset((link, next(counts)) for link in links))
     monkeypatch.setattr(domain_relay, 'local_ipv4_addresses', lambda: {address})
 
     def camera_links():
@@ -62,3 +64,28 @@ def test_same_address_after_usb_link_recovery_restarts_relay(
     domain_relay.main()
     assert lifecycle == ['start', 'terminate', 'start', 'terminate']
     assert 'USB link changed; relay disposed' in capsys.readouterr().out
+
+
+def test_camera_input_renews_after_carrier_recovers_on_same_interface(monkeypatch):
+    pytest.importorskip('rclpy')
+    from insight_capture.runtime import ros_inputs
+
+    link = CameraLink('enx020000000a01', 3, '169.254.10.2')
+    link_set = {link}
+    counts = iter(['1\n', '2\n'])
+
+    def read_counter(path):
+        assert path == Path('/sys/class/net/enx020000000a01/carrier_up_count')
+        return next(counts)
+
+    monkeypatch.setattr(Path, 'read_text', read_counter)
+    monkeypatch.setattr(ros_inputs, 'camera_links', lambda: link_set)
+    waits = iter([False, True])
+    renewals = []
+    inputs = SimpleNamespace(
+        closed=SimpleNamespace(wait=lambda _: next(waits)),
+        _link_generations=ros_inputs.camera_link_generations(link_set),
+        refresh=renewals.append,
+    )
+    ros_inputs.CameraInputs._monitor(inputs)
+    assert renewals == [link_set]

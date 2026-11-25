@@ -52,6 +52,18 @@ def camera_links() -> set[CameraLink]:
     return links
 
 
+def camera_link_generations(links):
+    """Include carrier recoveries that retain the interface index and address."""
+    generations = set()
+    for link in links:
+        try:
+            count = int((Path("/sys/class/net") / link.name / "carrier_up_count").read_text())
+        except (OSError, ValueError):
+            count = None
+        generations.add((link, count))
+    return frozenset(generations)
+
+
 def dhcp_peer(link):
     """Resolve the actual peer early, before the camera HTTP service starts."""
     result = subprocess.run(

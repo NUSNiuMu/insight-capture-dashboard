@@ -9,6 +9,7 @@ from rclpy.context import Context
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 
+from insight_capture.runtime.discovery import camera_link_generations
 from insight_capture.runtime.ros.network import camera_transport_links, refresh_ros_network
 
 
@@ -22,6 +23,7 @@ class CameraInputs:
         self.generation = 0
         self.thread = None
         self.links = camera_transport_links()
+        self._link_generations = camera_link_generations(self.links)
         self._create_node(self.links)
 
     def _create_node(self, links):
@@ -78,6 +80,7 @@ class CameraInputs:
                 self.node.create_subscription(*args, **kwargs)
             self.generation += 1
             self.links = links
+            self._link_generations = camera_link_generations(links)
             self._start_executor()
             self.owner.events.changed("camera_transport", self.owner.get_name(), "reconnected",
                 f"Input participant renewed, generation={self.generation}",
@@ -90,7 +93,7 @@ class CameraInputs:
             except OSError as exc:
                 self.owner.events.changed("camera_transport", self.owner.get_name(), "scan_failed", str(exc), level="warning")
                 continue
-            if links != self.links:
+            if camera_link_generations(links) != self._link_generations:
                 try:
                     self.refresh(links)
                 except Exception:
