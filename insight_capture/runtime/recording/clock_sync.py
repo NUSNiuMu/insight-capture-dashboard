@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import concurrent.futures
+from contextlib import closing
+from http.client import HTTPConnection, HTTPException
 import ipaddress
+import json
 import re
 import secrets
 import socket
@@ -104,10 +107,22 @@ def ego_http_clock_sample(host):
     """Bracket the OTA service's wall timestamp without changing either clock."""
     host = str(ipaddress.IPv4Address(host))
     measurement_id = secrets.randbits(31)
-    sent, before_send, _ = _wall_clock_sample()
-    request = {"clientTime": int(sent * 1000), "measurementId": measurement_id}
-    reply = json_request(f"http://{host}/api/time-sync/ping", request, timeout=0.5)
-    received, _, after_receive = _wall_clock_sample()
+    try:
+        with closing(HTTPConnection(host, timeout=0.5)) as connection:
+            # Only the request/response brackets the server reading.
+            connection.connect()
+            sent, before_send, _ = _wall_clock_sample()
+            request = {"clientTime": int(sent * 1000), "measurementId": measurement_id}
+            connection.request("POST", "/api/time-sync/ping", body=json.dumps(request),
+                               headers={"Content-Type": "application/json"})
+            with connection.getresponse() as response:
+                if response.status != 200:
+                    raise ValueError(f"EgoHalo clock probe returned HTTP {response.status}")
+                payload = response.read()
+                received, _, after_receive = _wall_clock_sample()
+    except HTTPException as exc:
+        raise ValueError(f"Invalid EgoHalo clock probe response: {exc}") from exc
+    reply = json.loads(payload)
     server_ns = reply.get("serverTimeNanos") if isinstance(reply, dict) else None
     if (type(server_ns) is not int or not 0 < server_ns < 2**63
             or reply.get("measurementId") != measurement_id

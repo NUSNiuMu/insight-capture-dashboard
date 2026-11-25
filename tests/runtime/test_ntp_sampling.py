@@ -1,4 +1,5 @@
 """Real clock steps, sample uncertainty, and work after receipt are distinct."""
+import json
 import struct
 
 import pytest
@@ -66,18 +67,47 @@ def test_actual_wall_clock_step_remains_invalid(monkeypatch, step):
 
 @pytest.mark.parametrize('fault', [None, 'wrong_id', 'clock_step'])
 def test_ego_http_clock_probe_validates_and_bounds_fresh_sample(monkeypatch, fault):
-    readings = iter([(1000.0, 0.0, 0.0),
-                     (1000.024 if fault == 'clock_step' else 1000.004, .004, .004)])
-    monkeypatch.setattr(clocks, '_wall_clock_sample', lambda: next(readings))
+    elapsed = [0.0]
+    monkeypatch.setattr(clocks.time, 'monotonic', lambda: elapsed[0])
+    monkeypatch.setattr(clocks.time, 'time',
+                        lambda: 1000 + elapsed[0] + (.02 if fault == 'clock_step' and elapsed[0] > .025 else 0))
 
-    def request(url, body, *, timeout):
-        assert url == 'http://169.254.10.1/api/time-sync/ping'
-        assert body['clientTime'] == 1000000
-        return {'timestamp': body['clientTime'],
-                'measurementId': body['measurementId'] + (fault == 'wrong_id'),
-                'serverTimeNanos': 1_000_003_000_000}
+    class Connection:
+        def __init__(self, host, *, timeout):
+            assert (host, timeout) == ('169.254.10.1', .5)
 
-    monkeypatch.setattr(clocks, 'json_request', request)
+        def connect(self):
+            elapsed[0] += .025
+
+        def request(self, method, path, *, body, headers):
+            assert (method, path) == ('POST', '/api/time-sync/ping')
+            assert headers['Content-Type'] == 'application/json'
+            self.request_body = json.loads(body)
+            assert self.request_body['clientTime'] == 1000025
+
+        def getresponse(self):
+            return self
+
+        def read(self):
+            elapsed[0] += .004
+            return json.dumps({'timestamp': self.request_body['clientTime'],
+                               'measurementId': self.request_body['measurementId'] + (fault == 'wrong_id'),
+                               'serverTimeNanos': 1_000_028_000_000}).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            elapsed[0] += .050
+
+        status = 200
+
+        def close(self):
+            elapsed[0] += .050
+
+    monkeypatch.setattr(clocks, 'HTTPConnection', Connection, raising=False)
+    monkeypatch.setattr(clocks, 'json_request',
+                        lambda *args, **kwargs: pytest.fail('The clock probe must connect before timing'))
     if fault:
         with pytest.raises(ValueError, match='Invalid EgoHalo|wall clock stepped'):
             clocks.ego_http_clock_sample('169.254.10.1')
@@ -86,6 +116,7 @@ def test_ego_http_clock_probe_validates_and_bounds_fresh_sample(monkeypatch, fau
         assert result['offset_ms'] == 1
         assert result['round_trip_ms'] == 4
         assert result['offset_bound_ms'] == 3
+    assert elapsed[0] == pytest.approx(.129)
 
 
 @pytest.mark.parametrize('bound,delay,passing', [(2, 4, True), (9.5, 4, False), (6, 12, False)])
