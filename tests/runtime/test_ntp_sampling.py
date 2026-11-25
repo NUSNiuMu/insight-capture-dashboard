@@ -128,4 +128,36 @@ def test_failed_ego_fallback_reports_both_transports(monkeypatch):
     })
     assert not report['ok']
     assert report['devices']['EgoHalo']['error'] == (
-        'UDP NTP refused; EgoHalo OTA clock probe failed: bad timestamp')
+        'UDP NTP unavailable (no UDP listener); EgoHalo OTA clock probe failed: bad timestamp')
+
+
+@pytest.mark.parametrize('failures,use_http', [
+    ((ConnectionRefusedError, TimeoutError), True),
+    ((TimeoutError, TimeoutError), True),
+    ((TimeoutError, ValueError), False),
+    ((ConnectionRefusedError, None), False),
+])
+def test_ego_http_fallback_requires_no_usable_udp_reply(monkeypatch, failures, use_http):
+    host = '169.254.10.1'
+    errors = iter(failures)
+    ntp_result = {'host': host, 'offset_bound_ms': 1, 'round_trip_ms': 2}
+    http_calls = []
+
+    def ntp(hostname):
+        failure = next(errors)
+        if failure:
+            raise failure(failure.__name__)
+        return dict(ntp_result)
+
+    def http(hostname):
+        http_calls.append(hostname)
+        return {**ntp_result, 'method': 'HTTP'}
+
+    monkeypatch.setattr(clocks, 'ntp_sample', ntp)
+    monkeypatch.setattr(clocks, 'ego_http_clock_sample', http)
+    report = clocks.measure_clocks({
+        'ego_url': f'http://{host}:8765', 'ntp_samples': 2,
+        'clock_devices': [{'name': 'EgoHalo', 'host': host}],
+    })
+    assert http_calls == ([host] * 2 if use_http else [])
+    assert report['ok'] == (use_http or None in failures)

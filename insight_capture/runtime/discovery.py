@@ -232,19 +232,32 @@ def synchronize_phone_clock(body):
         if status.get('recording') or status.get('state') in {'starting', 'recording', 'saving', 'playback'}:
             return {'state': 'deferred'}
         offset = epoch + time.monotonic() - received - time.time()
-        if abs(offset) > 1 or resync:
-            cameras = resolved_cameras()
-            if not resync:
-                time.clock_settime(time.CLOCK_REALTIME, time.time() + offset)
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                futures = [pool.submit(restart_acquisition, camera) for camera in cameras]
-                # All submitted camera work finishes before releasing capture admission.
-                for future in futures:
-                    future.result()
+        adjusted = not resync and abs(offset) > 1
+        if adjusted:
+            time.clock_settime(time.CLOCK_REALTIME, time.time() + offset)
         result = {'state': 'synced', 'synced_at_epoch_s': time.time(), 'correction_s': offset}
+        if adjusted or resync:
+            recovery_errors = {}
+            try:
+                cameras = resolved_cameras()
+            except (OSError, ValueError, KeyError) as exc:
+                cameras = []
+                recovery_errors["discovery"] = str(exc)
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                futures = [(camera["namespace"], pool.submit(restart_acquisition, camera)) for camera in cameras]
+                # Finish all camera work before releasing capture admission.
+                for name, future in futures:
+                    try:
+                        future.result()
+                    except Exception as exc:
+                        recovery_errors[name] = str(exc)
+            if recovery_errors:
+                if resync:
+                    raise RuntimeError("; ".join(f"{name}: {error}" for name, error in recovery_errors.items()))
+                result["camera_recovery_errors"] = recovery_errors
         if not resync:
             # /run survives service restarts, and is recreated on the next host boot.
-            result.update(source='phone', adjusted=abs(offset) > 1)
+            result.update(source='phone', adjusted=adjusted)
             temporary = PHONE_CLOCK.with_suffix('.tmp')
             temporary.write_text(json.dumps(result))
             temporary.chmod(0o644)

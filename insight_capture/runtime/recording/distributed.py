@@ -18,6 +18,13 @@ from .ego_participant import EgoParticipant
 TERMINAL = {"saved", "done", "error"}
 
 
+class CameraClockNotReady(RuntimeError):
+    def __init__(self, clocks):
+        self.clocks = clocks
+        names = [name for name, item in clocks["devices"].items() if not item["ok"]]
+        super().__init__("设备校时检查失败：" + ("、".join(names) or "设备间偏差界限超过门槛"))
+
+
 class DistributedRecordingManager:
     def __init__(self, local, config: dict, state_path: Path):
         self.local, self.config, self.state_path = local, config, state_path
@@ -92,8 +99,7 @@ class DistributedRecordingManager:
         remote = self.ego.preflight()
         clocks = self.measure_camera_clocks()
         if not clocks["ok"]:
-            names = [name for name, item in clocks["devices"].items() if not item["ok"]]
-            raise RuntimeError("设备校时检查失败：" + ("、".join(names) or "设备间偏差界限超过门槛"))
+            raise CameraClockNotReady(clocks)
         return {"ok": True, "clocks": clocks, "ego_storage": {k: remote["storage"].get(k) for k in ("path", "free_bytes", "mounted", "writable")}}
 
     def start(self, topics=None, bag_name=None, recording_mode="capture", output_subdirectory=None, task=None, require_global_pose=True):

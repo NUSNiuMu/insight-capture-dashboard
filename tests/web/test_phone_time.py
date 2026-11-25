@@ -52,6 +52,21 @@ class PhoneClockTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.context.phone_time_sync["state"], "synced")
             helper.assert_called_once()
 
+    async def test_legacy_helper_failure_reports_clock_verified_after_time_step(self):
+        wall = [1700000000.0]
+
+        def adjust_then_fail(payload):
+            wall[0] = payload["epoch_s"]
+            raise RuntimeError("egohalo: already running")
+
+        with mock.patch.object(module.time, "time", side_effect=lambda: wall[0]), \
+             mock.patch.object(self.route, "_host_sync", side_effect=adjust_then_fail):
+            self.assertEqual((await self.route.synchronize(Request())).status, 202)
+            await self.route._task
+        status = self.context.phone_time_sync
+        self.assertEqual(status["state"], "synced")
+        self.assertEqual(status["camera_recovery_errors"], {"host": "egohalo: already running"})
+
     async def test_persisted_confirmation_blocks_phone_writes_after_api_restart(self):
         confirmed = {"state": "synced", "adjusted": False, "source": "phone"}
         with mock.patch.object(module, "phone_clock_status", return_value=confirmed):
@@ -150,15 +165,25 @@ class HostClockTest(unittest.TestCase):
             self.assertEqual(discovery.synchronize_phone_clock(self.sample()), first)
             setter.assert_not_called();peers.assert_not_called()
 
-    def test_failed_camera_recovery_does_not_restart_if_host_is_aligned(self):
+    def test_failed_camera_recovery_preserves_host_success_and_does_not_repeat(self):
         peers = [{"host": "169.254.40.1", "namespace": "head"}]
-        with mock.patch.object(discovery, "json_request", return_value={"state": "idle"}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime"), mock.patch.object(discovery, "restart_acquisition", side_effect=OSError("offline")):
-            with self.assertRaises(OSError):
-                discovery.synchronize_phone_clock(self.sample())
+        with mock.patch.object(discovery, "json_request", return_value={"state": "idle"}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition", side_effect=OSError("offline")):
+            first = discovery.synchronize_phone_clock(self.sample())
+            setter.assert_called_once()
+        self.assertEqual(first["state"], "synced")
+        self.assertEqual(first["camera_recovery_errors"], {"head": "offline"})
+        self.assertEqual(discovery.phone_clock_status(), first)
         with mock.patch.object(discovery, "json_request", return_value={"state": "idle"}), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition") as restart:
-            discovery.synchronize_phone_clock(self.sample(time.time()))
+            self.assertEqual(discovery.synchronize_phone_clock(self.sample(time.time())), first)
             setter.assert_not_called()
             restart.assert_not_called()
+
+    def test_requested_camera_recovery_still_reports_restart_failure(self):
+        peers = [{"host": "169.254.40.1", "namespace": "head"}]
+        with mock.patch.object(discovery, "json_request", return_value={"state": "idle"}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition", side_effect=RuntimeError("already running")):
+            with self.assertRaisesRegex(RuntimeError, "head: already running"):
+                discovery.synchronize_phone_clock({**self.sample(), "resync_cameras": True})
+            setter.assert_not_called()
 
     def test_expired_sample_rejected(self):
         body=self.sample();body["received_monotonic_s"]-=10
