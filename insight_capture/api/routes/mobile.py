@@ -6,6 +6,7 @@ import asyncio
 import time
 import json
 from pathlib import Path
+from threading import Lock
 from insight_capture.runtime.discovery import resolved_cameras, startup_ready
 
 from aiohttp import web
@@ -51,7 +52,48 @@ class MobileCaptureRoutes:
         self._commands = MobileCommandStore(context.results_root / "mobile_commands.sqlite3")
         self._last_status = {}
         self._next_discovery = 0.0
+        self._preflight_lock = Lock()
         self._command_lock = asyncio.Lock()
+
+    @staticmethod
+    def _camera_inputs_ready(report):
+        cameras = report.get("camera_health") or {}
+        return (
+            len(cameras) == 3
+            and all(camera.get("ready") for camera in cameras.values())
+            and bool((report.get("clocks") or {}).get("ok"))
+            and bool((report.get("image_clocks") or {}).get("ok"))
+        )
+
+    def _idle_preflight(self, task_active):
+        with self._preflight_lock:
+            now = time.monotonic()
+            refresh = now >= self._next_discovery
+            evaluate = self.context.capture_preflight.evaluate
+            report = evaluate(refresh_topics=refresh, require_global_pose=False)
+            if self._camera_inputs_ready(report):
+                previous_topics = self._last_preflight.get("topics") or {}
+                recovery = previous_topics.get("recovery_refresh")
+                if not refresh and not self._camera_inputs_ready(self._last_preflight):
+                    # The graph cached during a dropout can outlive the first live frames.
+                    missing_before = report["topics"]["missing"]
+                    started = time.monotonic()
+                    report = evaluate(refresh_topics=True, require_global_pose=False)
+                    recovery = {
+                        "missing_before": missing_before,
+                        "missing_after": report["topics"]["missing"],
+                        "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+                    }
+                    refresh = True
+                if recovery:
+                    report["topics"] = {**report["topics"], "recovery_refresh": recovery}
+            if refresh:
+                self._next_discovery = now + 10.0
+            if not task_active:
+                report["failures"].append({"code": "task_inactive", "message": "请先创建或选择任务"})
+                report["ok"] = False
+            self._last_preflight = report
+            return report
 
     def _snapshot(self):
         manager = self.context.recording_manager
@@ -92,19 +134,7 @@ class MobileCaptureRoutes:
             state = "playback"
             report = {**self._last_preflight, "ok": False, "failures": [], "camera_health": {}}
         elif not busy and not status.get("recording") and state != "saving":
-            now = time.monotonic()
-            refresh = now >= self._next_discovery
-            self._last_preflight = self.context.capture_preflight.evaluate(
-                refresh_topics=refresh, require_global_pose=False
-            )
-            if not task_status.get("active"):
-                self._last_preflight["failures"].append({
-                    "code": "task_inactive", "message": "请先创建或选择任务"
-                })
-                self._last_preflight["ok"] = False
-            if refresh:
-                self._next_discovery = now + 10.0
-            report = self._last_preflight
+            report = self._idle_preflight(task_status.get("active"))
         else:
             health, _ = evaluate_calibration_cameras(
                 self.context.node, self.context.capture_preflight.camera_stale_sec
@@ -117,10 +147,14 @@ class MobileCaptureRoutes:
             if pipeline:
                 report["image_clocks"] = pipeline.clock_status()
         phone_time = dict(getattr(self.context, "phone_time_sync", {}))
+        camera_time = dict(getattr(self.context, "camera_time_sync", {}))
         if phone_time.get("state") in {"syncing", "error"}:
-            message = "正在同步手机时间，请稍候。" if phone_time["state"] == "syncing" else "时间同步未完成，正在重试。"
+            message = "正在同步手机时间，请稍候。" if phone_time["state"] == "syncing" else "Jetson 时间同步失败。"
             report = {**report, "ok": False, "failures": [*report.get("failures", []),
                        {"code": "phone_time_sync", "message": message}]}
+        if camera_time.get("state") == "syncing":
+            report = {**report, "ok": False, "failures": [*report.get("failures", []),
+                       {"code": "camera_time_sync", "message": "正在校时"}]}
         # Admission checks are a start-time snapshot; capacity is live operator
         # information and must keep decreasing while the writer is running.
         recording_root = manager.rosbag_root
@@ -152,7 +186,8 @@ class MobileCaptureRoutes:
             "output_path": status.get("output_path"),
             "started_at_epoch_s": getattr(manager, "started_at", None),
             "recording_timing": timing,
-            "server_time": time.time(), "time_sync": phone_time, "operation": self._operation,
+            "server_time": time.time(), "time_sync": phone_time, "camera_time_sync": camera_time,
+            "operation": self._operation,
             "preflight": report, "devices": devices, "task_status": task_status,
             "current_take": current_take, "live_alerts": live_alerts,
             "preview": preview_description(self.context.node.cameras, self.context.node.poses, paused=self.context.node._preview_manager.paused),

@@ -49,7 +49,7 @@ def _capture_fixture(root, monkeypatch, kind="local", mode="capture"):
         manager._worker, manager._callbacks, manager._finished_callbacks = None, [], []
         manager._session = {"output_path": output_path, "phase": "recording", "session_id": "dummy"}
         manager.ego = SimpleNamespace(timeout=.1, cancel=lambda session: cancelled.append(session["output_path"]))
-        manager._clocks = lambda: {"ok": True}
+        manager.measure_camera_clocks = lambda: {"ok": True}
         manager._save = lambda: None
     context = SimpleNamespace(recording_manager=manager, take_store=store,
         node=SimpleNamespace(get_logger=lambda: SimpleNamespace(error=lambda message: None)))

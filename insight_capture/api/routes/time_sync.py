@@ -1,4 +1,4 @@
-"""Set the offline capture clock from a connected phone while capture is idle."""
+"""Keep phone clock setup separate from camera clock checks and recovery."""
 
 import asyncio
 import math
@@ -11,6 +11,7 @@ from aiohttp import web
 
 from insight_capture.api.context import capture_transition_lock
 from insight_capture.api.support import read_json_body
+from insight_capture.runtime.discovery import phone_clock_status
 
 
 class TimeSyncRoutes:
@@ -18,7 +19,8 @@ class TimeSyncRoutes:
         self.context = context
         self.transition = capture_transition_lock(context)
         self._task = None
-        context.phone_time_sync = {"state": "idle", "source": "phone"}
+        context.phone_time_sync = phone_clock_status()
+        context.camera_time_sync = {"state": "idle", "source": "cameras"}
 
     async def snapshot(self, _request):
         return web.json_response({**deepcopy(self.context.phone_time_sync),
@@ -27,6 +29,18 @@ class TimeSyncRoutes:
     async def synchronize(self, request):
         received = time.monotonic()
         body = await read_json_body(request)
+        resync = body.get("resync_cameras", False)
+        if type(resync) is not bool:
+            raise ValueError("resync_cameras must be a boolean")
+        recover = body.get("recover_cameras", False)
+        if type(recover) is not bool or (recover and not resync):
+            raise ValueError("recover_cameras requires a camera time check")
+        if not resync and self.context.phone_time_sync["state"] == "synced":
+            return web.json_response(self.context.phone_time_sync)
+        if self.transition.locked() or (self._task and not self._task.done()):
+            raise RuntimeError("设备忙，空闲后再校时。")
+        if resync:
+            return await self._check_cameras(recover)
         epoch_ms, rtt_ms = body.get("epoch_ms"), body.get("rtt_ms", 0)
         if (type(epoch_ms) not in (int, float) or not math.isfinite(epoch_ms)
                 or not 946684800000 <= epoch_ms < 4102444800000):
@@ -34,31 +48,66 @@ class TimeSyncRoutes:
         if (type(rtt_ms) not in (int, float) or not math.isfinite(rtt_ms)
                 or not 0 <= rtt_ms <= 2000):
             raise ValueError("网络延迟较大，稍后重新校时。")
-        resync = body.get('resync_cameras', False)
-        if type(resync) is not bool:
-            raise ValueError('resync_cameras must be a boolean')
-        if self.transition.locked() or (self._task and not self._task.done()):
-            raise RuntimeError("设备忙，空闲后自动校时。")
-        # A disconnected browser must not abandon camera recovery halfway.
+        epoch = epoch_ms / 1000 + rtt_ms / 2000
+        if self.context.phone_time_sync["state"] == "error":
+            now = time.time()
+            offset = epoch + time.monotonic() - received - now
+            if abs(offset) > 1:
+                return web.json_response(self.context.phone_time_sync, status=409)
         self.context.phone_time_sync = {"state": "syncing", "source": "phone"}
-        self._task = asyncio.create_task(self._synchronize(epoch_ms / 1000, rtt_ms / 2000, received, resync))
+        self._task = asyncio.create_task(self._synchronize(epoch, received))
         return web.json_response({"state": "syncing"}, status=202)
 
-    async def _synchronize(self, epoch, half_rtt, received, resync=False):
+    def _measure_camera_clocks(self):
+        manager = self.context.recording_manager
+        measure = getattr(manager, "measure_camera_clocks", None)
+        if measure:
+            return measure()
+        if manager.clock_monitor:
+            return manager.clock_monitor.measure()
+        raise RuntimeError("相机校时监测未启用。")
+
+    async def _check_cameras(self, recover):
+        async with self.transition:
+            status = await asyncio.to_thread(self.context.recording_manager.status)
+            if (status.get("recording") or status.get("merge_state") in {"finalizing", "merging"}
+                    or self.context.prepared_playback_manager.status()["state"] == "playing"):
+                raise RuntimeError("设备忙，空闲后再校时。")
+            clocks = await asyncio.to_thread(self._measure_camera_clocks)
+            if clocks["ok"]:
+                result = {"state": "synced", "source": "cameras"}
+                self.context.camera_time_sync = result
+                return web.json_response({**result, "clock": clocks})
+            if not recover:
+                result = {"state": "needs_recovery", "source": "cameras"}
+                self.context.camera_time_sync = result
+                return web.json_response({**result, "clock": clocks})
+            result = {"state": "syncing", "source": "cameras"}
+            self.context.camera_time_sync = result
+            # The host uses its own clock for camera recovery.
+            self._task = asyncio.create_task(self._synchronize(time.time(), time.monotonic(), resync=True))
+            return web.json_response(result, status=202)
+
+    async def _synchronize(self, epoch, received, resync=False):
+        key, source = ("camera_time_sync", "cameras") if resync else ("phone_time_sync", "phone")
         try:
             if self.transition.locked():
-                self.context.phone_time_sync = {"state": "deferred", "source": "phone"}
+                setattr(self.context, key, {"state": "deferred", "source": source})
                 return
             async with self.transition:
                 result = await asyncio.to_thread(self._host_sync, {
-                    "epoch_s": epoch + half_rtt,
+                    "epoch_s": epoch,
                     "received_monotonic_s": received,
                     "resync_cameras": resync,
                 })
-                self.context.phone_time_sync = {**result, "source": "phone"}
+                if resync and result["state"] == "synced":
+                    clocks = await asyncio.to_thread(self._measure_camera_clocks)
+                    if not clocks["ok"]:
+                        raise RuntimeError("相机校时未达到录制门槛。")
+                setattr(self.context, key, {**result, "source": source})
         except Exception as exc:
-            self.context.phone_time_sync = {"state": "error", "source": "phone", "error": str(exc)}
-            self.context.node.get_logger().warning(f"Phone time synchronization: {exc}")
+            setattr(self.context, key, {"state": "error", "source": source, "error": str(exc)})
+            self.context.node.get_logger().warning(f"Time synchronization ({source}): {exc}")
 
     @staticmethod
     def _host_sync(body):

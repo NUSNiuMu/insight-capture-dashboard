@@ -63,6 +63,9 @@
   "本次启动尚无已识别命令": "No recognized commands since startup",
   "设备时间": "Device time",
   "已同步": "Synced",
+  "已确认同步": "Synchronization confirmed",
+  "恢复相机校时": "Restore camera sync",
+  "恢复校时会暂时停止相机采集。": "Restoring synchronization temporarily stops camera capture.",
   "未同步": "Not synced",
   "同步手机时间": "Sync phone time",
   "设备诊断": "Diagnostics",
@@ -794,6 +797,14 @@
   "采集任务已变更，请确认当前任务后再开始录制。": "The capture task has changed. Confirm the current task before recording.",
   "存储": "Storage",
   "时间同步": "Clock synchronization",
+  "手机与 Jetson": "Phone and Jetson",
+  "录制配置相机": "Recording profile cameras",
+  "录制配置外": "Outside recording profile",
+  "时间已一致": "Clocks already aligned",
+  "等待本次开机首次校时": "Waiting for first sync since boot",
+  "等待连接": "Waiting for connection",
+  "确认于 {0}": "Confirmed at {0}",
+  "上次测量 {0}": "Last measured at {0}",
   "诊断": "Diagnostics",
   "语言": "Language",
   "保存异常": "Save failed",
@@ -886,5 +897,7 @@
   "已删除 Take {0}。": "Deleted Take {0}.",
   "录制未删除，请查看提示后重试。": "Recording was not deleted. Check the message and try again.",
   "重新校时": "Sync time again",
-  "校时未完成，请重试。": "Time synchronization did not finish. Please try again."
+  "校时未完成，请重试。": "Time synchronization did not finish. Please try again.",
+  "Jetson 时间同步失败。": "Jetson time synchronization failed.",
+  "设备忙，空闲后再校时。": "Time synchronization is available while the device is idle."
 }

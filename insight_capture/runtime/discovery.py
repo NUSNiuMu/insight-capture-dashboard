@@ -110,6 +110,18 @@ def resolved_cameras(path=SNAPSHOT):
 
 
 STARTUP = SNAPSHOT.with_name('startup.json')
+PHONE_CLOCK = SNAPSHOT.with_name('phone-clock.json')
+
+
+def phone_clock_status():
+    try:
+        result = json.loads(PHONE_CLOCK.read_text())
+        if result.get('state') == 'synced':
+            return result
+    except (OSError, ValueError, AttributeError):
+        pass
+    return {'state': 'idle', 'source': 'phone'}
+
 
 def json_request(url, body=None, timeout=4):
     data = None if body is None else json.dumps(body).encode()
@@ -184,7 +196,7 @@ def restart_acquisition(camera):
                 raise RuntimeError(f"{camera['namespace']}: {result}")
 
 
-def synchronize_phone_clock(body, recovery):
+def synchronize_phone_clock(body):
     """A fixed idle-only operation; never accept commands or paths from a client."""
     epoch, received = body.get('epoch_s'), body.get('received_monotonic_s')
     if (type(epoch) not in (int, float) or not math.isfinite(epoch)
@@ -212,22 +224,32 @@ def synchronize_phone_clock(body, recovery):
     descriptor = os.open(config / '.capture-upgrade.lock', os.O_RDONLY | os.O_CREAT | os.O_CLOEXEC, 0o644)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not resync:
+            previous = phone_clock_status()
+            if previous['state'] == 'synced':
+                return previous
         status = json_request('http://127.0.0.1:8765/api/mobile/status')
         if status.get('recording') or status.get('state') in {'starting', 'recording', 'saving', 'playback'}:
             return {'state': 'deferred'}
         offset = epoch + time.monotonic() - received - time.time()
-        if abs(offset) > 1 or recovery.get('required') or resync:
+        if abs(offset) > 1 or resync:
             cameras = resolved_cameras()
-            recovery['required'] = True
-            if abs(offset) > 1:
+            if not resync:
                 time.clock_settime(time.CLOCK_REALTIME, time.time() + offset)
             with ThreadPoolExecutor(max_workers=3) as pool:
                 futures = [pool.submit(restart_acquisition, camera) for camera in cameras]
                 # All submitted camera work finishes before releasing capture admission.
                 for future in futures:
                     future.result()
-            recovery['required'] = False
-        return {'state': 'synced', 'synced_at_epoch_s': time.time(), 'correction_s': offset}
+        result = {'state': 'synced', 'synced_at_epoch_s': time.time(), 'correction_s': offset}
+        if not resync:
+            # /run survives service restarts, and is recreated on the next host boot.
+            result.update(source='phone', adjusted=abs(offset) > 1)
+            temporary = PHONE_CLOCK.with_suffix('.tmp')
+            temporary.write_text(json.dumps(result))
+            temporary.chmod(0o644)
+            os.replace(temporary, PHONE_CLOCK)
+        return result
     finally:
         os.close(descriptor)
 
@@ -236,7 +258,6 @@ def serve_phone_clock():
     """Root-only Unix socket, shared through the existing read-only runtime mount."""
     path = SNAPSHOT.with_name('phone-clock.sock')
     path.unlink(missing_ok=True)
-    recovery = {}
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
         listener.bind(str(path))
         path.chmod(0o600)
@@ -254,7 +275,7 @@ def serve_phone_clock():
                     body = json.loads(data)
                     if not isinstance(body, dict):
                         raise ValueError('Expected a clock sample')
-                    result = synchronize_phone_clock(body, recovery)
+                    result = synchronize_phone_clock(body)
                 except Exception as exc:
                     result = {'state': 'error', 'error': str(exc)}
                 try:

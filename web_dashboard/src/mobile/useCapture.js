@@ -19,10 +19,16 @@ export function deviceHint(device,status) {
  if(!health.vio_status_fresh)return t('暂未收到新的相机定位状态，请检查连接；持续异常时保存诊断。');
  return t(vioHints[health.vio_status]||'尚未收到新的定位数据，当前状态不能确认原因；持续异常时保存诊断。');
 }
+export const cameraClocks=status=>status?.distributed?.clock??status?.preflight?.clocks??{};
+export function deviceClock(device,status) {
+  const devices=cameraClocks(status).devices||{};
+  const host=status?.system?.camera_links?.find(link=>link.namespace===device.name)?.host;
+  return devices[device.name]??(host?Object.values(devices).find(clock=>clock.host===host):undefined);
+}
 export function deviceStage(device, status) {
   const name=device.name;
   if(!status?.system?.camera_links?.some(link=>link.namespace===name))return t('等待 USB 连接');
-  if(!status?.preflight?.clocks?.devices?.[name]?.ok)return t('正在校时');
+  if(!deviceClock(device,status)?.ok)return t('正在校时');
   if(status.system.managed_camera_startup&&!status.system.camera_startup?.[name])return t('正在恢复采集');
   if(!status?.preflight?.camera_health?.[name]?.image_fresh)return t('等待图像');
   const imageClock=status?.preflight?.image_clocks?.devices?.[name];
@@ -50,9 +56,9 @@ function sameTask(task,draft) { return task?.task_id===draft.id&&task.name===dra
 function confirmedRecord(command,current) { return [current?.operation,current?.requested_operation].find(operation=>operation?.command_id===command.command_id&&operation.action===command.action); }
 export function useCapture() {
   const status=ref(null), mapping=ref(null), tasks=ref([]), tasksError=ref(''), online=ref(false), connectionFailed=ref(false), pending=ref(false), recordPending=ref(null), error=ref('');
-  const taskDraft=ref(taskDraftFromSession()),unconfirmedRecord=ref(readSession('record-command'));
+  const taskDraft=ref(taskDraftFromSession()),unconfirmedRecord=ref(readSession('record-command')),checkingCameraClock=ref(false);
   if(unconfirmedRecord.value)error.value=t('连接中断，操作结果待确认；重连后会核对设备状态。');
-  const busy=computed(()=>pending.value || status.value?.time_sync?.state==='syncing' || ['starting','recording','saving'].includes(status.value?.state));
+  const busy=computed(()=>pending.value || status.value?.time_sync?.state==='syncing' || status.value?.camera_time_sync?.state==='syncing' || ['starting','recording','saving'].includes(status.value?.state));
   let alive=true, timer, mapTimer, statusGeneration=0, tasksGeneration=0;
   const syncPhoneTime=phoneTimeSync(api,{visible:()=>alive&&!document.hidden});
   async function refresh() {
@@ -72,7 +78,7 @@ export function useCapture() {
       if(alive&&generation===statusGeneration){status.value=value;online.value=true;}
       return value;
     }
-    catch { if(alive&&generation===statusGeneration){online.value=false;connectionFailed.value=true;syncPhoneTime(null,false);}return null; }
+    catch { if(alive&&generation===statusGeneration){online.value=false;connectionFailed.value=true;}return null; }
   }
   async function loadTasks() {
     const generation=++tasksGeneration;
@@ -196,21 +202,47 @@ export function useCapture() {
       unconfirmedRecord.value=null;writeSession('record-command',null);
     }
   });
-  async function synchronizeTime() {
+  async function synchronizeTime(recover=false) {
     if(busy.value||!online.value)return;
-    pending.value=true;error.value='';
-    try { await syncPhoneTime(status.value,true,true); }
+    pending.value=true;checkingCameraClock.value=true;error.value='';
+    try {
+      const {clock,...result}=await api('/api/system/time',{resync_cameras:true,...(recover?{recover_cameras:true}:{})});
+      ++statusGeneration;
+      if(alive){
+        const current={...status.value,camera_time_sync:result};
+        if(clock){
+          if(current.distributed?.clock)current.distributed={...current.distributed,clock};
+          else current.preflight={...current.preflight,clocks:clock};
+        }
+        status.value=current;
+      }
+    }
     catch(e){error.value=t(e.message);}
-    finally {pending.value=false;await refresh();}
+    finally {checkingCameraClock.value=false;pending.value=false;await refresh();}
   }
   async function calibrate() { await action('/api/mapping/reset'); }
-  async function poll() { await refresh(); if(alive) timer=setTimeout(poll,document.hidden?4000:1500); }
+  let recoveryPollUntil=null;
+  async function poll() {
+    await refresh();
+    if(!alive)return;
+    const current=status.value;
+    const waitingForRecovery=online.value && (
+      current?.camera_time_sync?.state==='syncing' ||
+      (['idle','saved'].includes(current?.state) && current.preflight?.failures?.some(({code})=>
+        ['camera_inputs_missing','clock_not_ready','image_clock_unavailable','image_clock_invalid','recorder_topics_missing'].includes(code)))
+    );
+    const now=performance.now();
+    if(!waitingForRecovery)recoveryPollUntil=null;
+    else if(recoveryPollUntil===null)recoveryPollUntil=now+30000;
+    const delay=document.hidden?4000:recoveryPollUntil>now?500:1500;
+    timer=setTimeout(poll,delay);
+  }
   async function pollMap() { try { mapping.value=await api('/api/mapping'); } catch { mapping.value=null; }
     if(alive) mapTimer=setTimeout(pollMap,document.hidden?5000:2000); }
   watch(online,value=>{if(value)loadTasks().catch(()=>{});});
   onMounted(()=>{poll();pollMap();});
   onBeforeUnmount(()=>{alive=false;clearTimeout(timer);clearTimeout(mapTimer);});
-  return {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,action,record,createAndActivateTask,deleteTask,deleteTake,leaveTaskCreation,synchronizeTime,calibrate,loadTasks};
+  return {status,mapping,tasks,tasksError,taskDraft,online,connectionFailed,pending,recordPending,error,busy,checkingCameraClock,action,record,createAndActivateTask,deleteTask,deleteTake,leaveTaskCreation,synchronizeTime,calibrate,loadTasks};
 }
 export const roleLabel=role=>t({head:'头部相机',left_hand:'左腕相机',right_hand:'右腕相机'}[role]||role);
 export const stateLabel=state=>t({idle:'准备就绪',starting:'正在准备',recording:'正在录制',saving:'正在保存',saved:'保存完成',error:'操作失败',playback:'桌面回放中'}[state]||'连接中');
