@@ -131,11 +131,15 @@ class MobileCaptureRoutes:
         if busy and self._operation["action"] == "stop" and timing and timing.get("started_at_epoch_s") is not None:
             stopped = self._operation["accepted_at_epoch_s"]
             timing.update(stopped_at_epoch_s=stopped, duration_s=max(0.0, stopped - timing["started_at_epoch_s"]))
+        distributed = status.get("distributed")
         if playing:
             state = "playback"
             report = {**self._last_preflight, "ok": False, "failures": [], "camera_health": {}}
         elif not busy and not status.get("recording") and state != "saving":
             report = self._idle_preflight(task_status.get("active"))
+            clock = (report.get("distributed") or {}).get("clocks")
+            if distributed is not None and clock is not None:
+                distributed = {**distributed, "clock": {**(distributed.get("clock") or {}), **clock}}
         else:
             health, _ = evaluate_calibration_cameras(
                 self.context.node, self.context.capture_preflight.camera_stale_sec
@@ -193,7 +197,7 @@ class MobileCaptureRoutes:
             "current_take": current_take, "live_alerts": live_alerts,
             "preview": preview_description(self.context.node.cameras, self.context.node.poses, paused=self.context.node._preview_manager.paused),
             "preview_cameras": [{"name": c.name, "label": c.label} for c in preview_cameras],
-            "distributed": status.get("distributed"),
+            "distributed": distributed,
             "storage": status.get("storage", {}),
             "nvme_storage": nvme_space,
             "error": status.get("merge_error"),

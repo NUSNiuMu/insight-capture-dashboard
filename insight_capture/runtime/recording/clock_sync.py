@@ -152,9 +152,9 @@ def measure_clocks(config: dict, *, include_usb_devices=False) -> dict:
             except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
                 errors.append(exc)
         if (not samples and not ssh_ntp and ego_host == device["host"] and errors
-                and all(isinstance(error, ConnectionRefusedError) for error in errors)):
+                and all(isinstance(error, (ConnectionRefusedError, TimeoutError)) for error in errors)):
             # Client-only EgoHalo firmware sets its wall clock from the Jetson but
-            # has no UDP 123 listener. Measure the wall clock through the OTA API.
+            # has no UDP 123 listener. ICMP rate limiting can turn refusals into timeouts.
             http_errors = []
             for _ in range(ntp_samples):
                 try:
@@ -162,9 +162,10 @@ def measure_clocks(config: dict, *, include_usb_devices=False) -> dict:
                 except (OSError, ValueError) as exc:
                     http_errors.append(str(exc))
             if not samples:
+                ntp_error = "; ".join(dict.fromkeys(map(str, errors)))
                 return device["name"], {
                     "ok": False, "host": device["host"],
-                    "error": f"UDP NTP refused; EgoHalo OTA clock probe failed: {http_errors[-1]}",
+                    "error": f"UDP NTP unavailable ({ntp_error}); EgoHalo OTA clock probe failed: {http_errors[-1]}",
                 }
         if not samples:
             return device["name"], {"ok": False, "host": device["host"], "error": "; ".join(map(str, errors))}

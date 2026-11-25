@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Dict, Optional, Sequence
 
+from insight_capture.runtime.recording.distributed import CameraClockNotReady
 from insight_capture.runtime.recording.storage import probe_recording_root
 from insight_capture.runtime.recording.recorder import VIO_CALIBRATION_CAMERA_NAMES
 from insight_capture.runtime.camera_health import evaluate_cameras, evaluate_calibration_cameras
@@ -206,6 +207,9 @@ class CapturePreflight:
             if callable(check_distributed):
                 try:
                     distributed = check_distributed()
+                except CameraClockNotReady as exc:
+                    distributed = {"ok": False, "clocks": exc.clocks}
+                    failures.append(self._failure("distributed_not_ready", str(exc)))
                 except Exception as exc:
                     failures.append(self._failure("distributed_not_ready", str(exc)))
 

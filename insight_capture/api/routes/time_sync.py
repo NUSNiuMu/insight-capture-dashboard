@@ -90,6 +90,7 @@ class TimeSyncRoutes:
 
     async def _synchronize(self, epoch, received, resync=False):
         key, source = ("camera_time_sync", "cameras") if resync else ("phone_time_sync", "phone")
+        initial_offset = epoch + time.monotonic() - received - time.time()
         try:
             if self.transition.locked():
                 setattr(self.context, key, {"state": "deferred", "source": source})
@@ -105,7 +106,20 @@ class TimeSyncRoutes:
                     if not clocks["ok"]:
                         raise RuntimeError("相机校时未达到录制门槛。")
                 setattr(self.context, key, {**result, "source": source})
+                for name, error in result.get("camera_recovery_errors", {}).items():
+                    self.context.node.get_logger().warning(f"Camera recovery after Jetson clock sync ({name}): {error}")
         except Exception as exc:
+            now = time.time()
+            offset = epoch + time.monotonic() - received - now
+            if not resync and abs(initial_offset) > 1 and abs(offset) <= 1:
+                # A legacy host helper may step the clock before camera recovery fails.
+                self.context.phone_time_sync = {
+                    "state": "synced", "source": source, "adjusted": True,
+                    "synced_at_epoch_s": now, "correction_s": initial_offset,
+                    "camera_recovery_errors": {"host": str(exc)},
+                }
+                self.context.node.get_logger().warning(f"Jetson clock aligned after incomplete camera recovery: {exc}")
+                return
             setattr(self.context, key, {"state": "error", "source": source, "error": str(exc)})
             self.context.node.get_logger().warning(f"Time synchronization ({source}): {exc}")
 

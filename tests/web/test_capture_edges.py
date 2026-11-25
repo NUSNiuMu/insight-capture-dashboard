@@ -41,7 +41,7 @@ from insight_capture.runtime.preflight import CapturePreflight
 from insight_capture.runtime.recording import clock_sync as clocks
 from insight_capture.media.image_pipeline import ImagePipeline
 
-@pytest.mark.parametrize('fault,code', [('healthy', None), ('image', 'camera_inputs_missing'), ('vio', 'camera_inputs_missing'), ('ntp', 'clock_not_ready'), ('epoch', 'image_clock_invalid'), ('stale', 'image_clock_unavailable'), ('stale_epoch', 'image_clock_unavailable'), ('missing_stamp', 'image_clock_unavailable'), ('disk_full', 'storage_low'), ('readonly', 'storage_unwritable'), ('publisher', 'recorder_topics_missing')])
+@pytest.mark.parametrize('fault,code', [('healthy', None), ('image', 'camera_inputs_missing'), ('vio', 'camera_inputs_missing'), ('ntp', 'clock_not_ready'), ('distributed_ntp', 'distributed_not_ready'), ('epoch', 'image_clock_invalid'), ('stale', 'image_clock_unavailable'), ('stale_epoch', 'image_clock_unavailable'), ('missing_stamp', 'image_clock_unavailable'), ('disk_full', 'storage_low'), ('readonly', 'storage_unwritable'), ('publisher', 'recorder_topics_missing')])
 def test_preflight_fault_matrix(tmp_path, monkeypatch, fault, code):
     now = time.monotonic()
     names = ['insight3_a', 'insight3_b', 'insight9_a']
@@ -63,6 +63,12 @@ def test_preflight_fault_matrix(tmp_path, monkeypatch, fault, code):
         node.camera_liveness_times[names[0]] = 0
     topics = [c.topic for c in cameras]
     manager = SimpleNamespace(rosbag_root=tmp_path, default_topics=topics, storage_status={}, clock_monitor=SimpleNamespace(status=lambda: {'ok': fault != 'ntp'}), current_topic_catalog=lambda **kw: {'topics': topics[:-1] if fault == 'publisher' else topics})
+    if fault == 'distributed_ntp':
+        from insight_capture.runtime.recording.distributed import CameraClockNotReady
+        measured = {'ok': False, 'devices': {'egohalo': {'ok': False, 'error': 'timed out'}}}
+        def distributed_preflight():
+            raise CameraClockNotReady(measured)
+        manager.distributed_preflight = distributed_preflight
     import insight_capture.runtime.preflight as pre
     monkeypatch.setattr(pre.shutil, 'disk_usage', lambda p: SimpleNamespace(free=0 if fault == 'disk_full' else 10 * 1024 ** 3))
     monkeypatch.setattr(pre, 'probe_recording_root', lambda p: 'readonly' if fault == 'readonly' else None)
@@ -72,6 +78,8 @@ def test_preflight_fault_matrix(tmp_path, monkeypatch, fault, code):
         assert code in {f['code'] for f in r['failures']}
     if fault != 'epoch':
         assert 'image_clock_invalid' not in {f['code'] for f in r['failures']}
+    if fault == 'distributed_ntp':
+        assert r['distributed'] == {'ok': False, 'clocks': measured}
 
 @pytest.mark.parametrize('difference,age,good', [(0, 0, True), (-2, 0, True), (1, 0, True), (-2.001, 0, False), (1.001, 0, False), (0, 2.1, False)])
 def test_image_epoch_boundaries(difference, age, good):
@@ -174,6 +182,27 @@ def test_recording_status_uses_current_clock_not_start_snapshot(monkeypatch, tmp
     assert value['preflight']['clocks'] == current
     assert value['preflight']['image_clocks']['ok'] is False
     assert value['recording'] is True
+
+
+def test_mobile_uses_distributed_clock_from_same_preflight(monkeypatch, tmp_path):
+    from insight_capture.api.routes import mobile
+
+    clock = {'ok': False, 'devices': {'egohalo': {'ok': False, 'error': 'timed out'}}}
+    device_status = {'clock': {'ok': True, 'extra_usb_devices': {'spare': {'ok': True}}}}
+    report = {'distributed': {'ok': False, 'clocks': clock}, 'ok': False,
+              'failures': [{'code': 'distributed_not_ready'}]}
+    node = SimpleNamespace(cameras=[], poses=[], _preview_manager=SimpleNamespace(paused=False))
+    manager = SimpleNamespace(rosbag_root=tmp_path, status=lambda: {'recording': False, 'distributed': device_status})
+    context = SimpleNamespace(results_root=tmp_path, node=node, recording_manager=manager,
+        prepared_playback_manager=SimpleNamespace(status=lambda: {'state': 'idle'}),
+        take_store=SimpleNamespace(task_status=lambda: {'active': True}, current=lambda: None))
+    monkeypatch.setattr(mobile, 'resolved_cameras', lambda: [])
+    route = mobile.MobileCaptureRoutes(context, None)
+    monkeypatch.setattr(route, '_idle_preflight', lambda task_active: report)
+    status = route._snapshot()
+    assert status['distributed']['clock'] == {**clock, 'extra_usb_devices': {'spare': {'ok': True}}}
+    assert status['preflight']['failures'] == [{'code': 'distributed_not_ready'}]
+    assert device_status['clock']['ok']
 
 
 def test_mobile_refreshes_cached_graph_when_distributed_inputs_recover(tmp_path):
