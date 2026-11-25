@@ -19,7 +19,7 @@ def recording_start_lock():
         try:
             fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as exc:
-            raise RuntimeError("系统正在升级或准备关机，请稍后再开始录制或合包。") from exc
+            raise RuntimeError("系统正在升级、准备关机或切换相机配置，请稍后重试。") from exc
         yield
     finally:
         os.close(descriptor)

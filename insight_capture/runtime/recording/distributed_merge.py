@@ -76,6 +76,7 @@ def merge_session(session: dict, config: dict, ego: Path, wrists: Path, output: 
     image_topics = config["image_topics"]
     descriptors, header_topics, stats = {}, set(), {}
     reference_trackers = {}
+    configured_rates = config.get("image_rates", {})
     lower = int((session["created_at_epoch_s"] - 60) * 1e9)
     upper = int((session.get("stopped_at_epoch_s", time.time()) + 60) * 1e9)
     for part in (wrists, ego):
@@ -96,7 +97,7 @@ def merge_session(session: dict, config: dict, ego: Path, wrists: Path, output: 
             stat = stats.setdefault(topic, {"count": 0, "first_ns": stamp, "last_ns": stamp, "rollbacks": 0, "missing": 0})
             if stat["count"] and stamp < stat["last_ns"]:
                 stat["rollbacks"] += 1
-            rate = 30.0 if topic in image_topics else nominal_for(topic)
+            rate = configured_rates.get(topic, 30.0) if topic in image_topics else nominal_for(topic)
             if rate and stat["count"] and stamp - stat["last_ns"] > 1.5e9 / rate:
                 stat["missing"] += max(0, round((stamp - stat["last_ns"]) * rate / 1e9) - 1)
             stat["count"] += 1

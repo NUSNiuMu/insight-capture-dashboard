@@ -16,12 +16,14 @@ if config.get("egohalo_rectification"):
     print("egohalo-stereo-rectifier")
 if config.get("recording_h264", {}).get("input_topics"):
     print("recording-h264-encoder")
+if any(c.get("enabled", True) and c.get("local_uvc") for c in config["cameras"]):
+    print("uvc-wrist-inputs")
 PY
 )" || return
     local values
     mapfile -t values <<< "${settings}"
     export ROS_DOMAIN_ID="${values[0]}"
-    optional_device_services=(device-domain-relay egohalo-stereo-rectifier recording-h264-encoder)
+    optional_device_services=(device-domain-relay egohalo-stereo-rectifier recording-h264-encoder uvc-wrist-inputs)
     selected_device_services=("${values[@]:1}")
     device_services=(superglue-inference insight9-sparse-mapper
         "${selected_device_services[@]}" insight3-global-localizer insight-dashboard)
@@ -86,8 +88,8 @@ prepare_recording_bind_source() {
 }
 
 start_device_services() {
-    load_device_services
-    prepare_recording_bind_source
+    load_device_services || return
+    prepare_recording_bind_source || return
     local service inactive=()
     for service in "${optional_device_services[@]}"; do
         if [[ " ${selected_device_services[*]} " != *" ${service} "* ]]; then
@@ -95,7 +97,7 @@ start_device_services() {
         fi
     done
     if (( ${#inactive[@]} )); then
-        docker compose stop "${inactive[@]}"
+        docker compose stop "${inactive[@]}" || return
     fi
     # Explicit service names activate optional Compose services without a second profile switch.
     docker compose up -d "${device_services[@]}"
@@ -119,6 +121,33 @@ wait_for_backend_health() {
     done
 }
 
+switch_camera_profile() (
+    set -e
+    local settings="$1" profile="$2" previous marker
+    load_device_services "$settings"
+    previous="$(mktemp "${ROOT_DIR}/config/.previous-cameras.XXXXXX")"
+    cp -p "${ROOT_DIR}/config/cameras.json" "$previous"
+    marker="$(mktemp "${ROOT_DIR}/config/.next-device.XXXXXX")"
+    printf '%s\n' "$profile" > "$marker"
+    chmod 0644 "$marker"
+    trap 'rm -f -- "$previous" "$marker"' EXIT
+    # The watcher holds the exclusive capture lock and has rechecked hardware and idle state.
+    if docker compose stop insight-dashboard insight3-global-localizer insight9-sparse-mapper \
+            "${optional_device_services[@]}" &&
+            mv "$settings" "${ROOT_DIR}/config/cameras.json" &&
+            start_device_services && wait_for_backend_health &&
+            mv "$marker" "${ROOT_DIR}/config/.device"; then
+        return 0
+    else
+        log "Camera profile failed. Restoring previous configuration."
+        docker compose stop insight-dashboard insight3-global-localizer insight9-sparse-mapper \
+            "${optional_device_services[@]}" || true
+        mv "$previous" "${ROOT_DIR}/config/cameras.json"
+        start_device_services && wait_for_backend_health
+        return 1
+    fi
+)
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     set -euo pipefail
     ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -128,6 +157,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
     case "${1:-}" in
         start) require_capture_idle; start_device_services; wait_for_backend_health ;;
         stop) stop_device_services ;;
+        switch) switch_camera_profile "$2" "$3" ;;
         *) echo "Usage: $0 <start|stop>" >&2; exit 1 ;;
     esac
 fi

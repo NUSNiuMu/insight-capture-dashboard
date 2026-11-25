@@ -66,9 +66,9 @@ def dhcp_peer(link):
     return host
 
 
-def discover_camera(link):
+def discover_camera(link, *, host=None):
     """Use the USB DHCP server and camera API, never a guessed .1 endpoint."""
-    host = dhcp_peer(link)
+    host = host or dhcp_peer(link)
     opener = build_opener(ProxyHandler({}))
     def get(path):
         with opener.open(f'http://{host}/api/{path}', timeout=1) as response:

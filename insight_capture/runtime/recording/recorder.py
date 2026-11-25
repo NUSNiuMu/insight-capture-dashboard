@@ -77,6 +77,11 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         pose_topic = _camera_pose_topic(namespace, str(camera.get("dashboard_pose_stream", "vio_100hz")))
         if pose_topic:
             topics.append(pose_topic)
+        else:
+            for stream in dashboard_streams(camera):
+                topics.append(stream["topic"])
+            topics.extend(camera.get("record_topics", []))
+            continue
         # Keep the native VIO stream even when the dashboard renders a mapped
         # global pose. UMI single-arm export requires this local trajectory.
         topics.append(f"{camera_base(namespace)}/vio_100hz")

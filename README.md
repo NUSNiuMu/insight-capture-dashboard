@@ -17,6 +17,8 @@ Qt 默认连接 `http://127.0.0.1:8765`。退出 Qt 不停止后端，也不停�
 
 ## 设备配置
 
+四套常用组合支持空闲时自动切换。识别条件和双 UVC 首次绑定见[相机组合自动识别与切换](docs/CAMERA_PROFILE_AUTO_SWITCH.md)。
+
 | 配置 | 设备组合 |
 | --- | --- |
 | `jetson-nx` | Insight9 + 双 Insight3 |

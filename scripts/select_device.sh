@@ -25,6 +25,12 @@ PORT="${DASHBOARD_PORT:-8765}"
 log() { echo "$*"; }
 source "${ROOT_DIR}/deploy/device_services.sh"
 cd "${ROOT_DIR}"
+lock_file=config/.capture-upgrade.lock
+if [[ ! -e "$lock_file" ]]; then
+    (umask 022; set -o noclobber; : > "$lock_file") 2>/dev/null || [[ -e "$lock_file" ]]
+fi
+exec {profile_lock_fd}<"$lock_file"
+flock -n -x "$profile_lock_fd" || { echo 'Capture start or another configuration change is active.' >&2; exit 1; }
 load_device_services "${profile_dir}/cameras.json"
 python3 -m json.tool "${profile_dir}/runtime.json" >/dev/null
 if [[ "${no_start}" == false ]]; then

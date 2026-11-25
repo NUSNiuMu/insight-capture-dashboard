@@ -7,6 +7,7 @@ import math
 from aiohttp import web
 
 from insight_capture.api.context import DashboardContext, capture_transition_lock
+from insight_capture.runtime.upgrade import recording_start_lock
 
 
 class PlaybackRoutes:
@@ -39,9 +40,10 @@ class PlaybackRoutes:
             raise RuntimeError("A capture operation is still running.")
         async with self._transition:
             self._require_idle_capture()
-            status = self.context.prepared_playback_manager.activate(bag_name)
-            # Gate live display callbacks only after activation is admitted.
-            self.context.node.set_playback_mode(True)
+            with recording_start_lock():
+                status = self.context.prepared_playback_manager.activate(bag_name)
+                # Gate live display callbacks only after activation is admitted.
+                self.context.node.set_playback_mode(True)
             return web.json_response(status)
 
     async def _handle_playback_stop(self, _request: web.Request) -> web.Response:

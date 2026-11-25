@@ -47,7 +47,9 @@ def evaluate_calibration_cameras(
     groups = {}
     for camera in node.cameras:
         groups.setdefault(getattr(camera, "device_name", "") or camera.name, []).append(camera)
-    required_names = [pose.name for pose in getattr(node, "poses", [])] or CALIBRATION_CAMERA_NAMES
+    poses = getattr(node, "poses", [])
+    required_names = [pose.name for pose in poses] or CALIBRATION_CAMERA_NAMES
+    image_only = {pose.name for pose in poses if getattr(pose, "topic", None) == ""}
     image_health, _ = evaluate_cameras(node, stale_sec, now=current)
     health: Dict[str, Dict] = {}
     unavailable: list[Dict] = []
@@ -75,7 +77,7 @@ def evaluate_calibration_cameras(
         else:
             if not image_fresh:
                 missing.append("image")
-            if not vio_fresh:
+            if not vio_fresh and name not in image_only:
                 missing.append("vio")
         entry = {
             "configured": camera is not None,

@@ -308,6 +308,8 @@ class PoseBridgeNode(Node):
         pose_qos = make_qos()
         liveness_qos = make_image_qos(depth=5, reliability="best_effort")
         for pose in self.poses:
+            if not pose.topic:
+                continue
             sub = self.create_subscription(
                 PoseStamped,
                 pose.topic,

@@ -50,6 +50,8 @@ fi
 
 # Shared host tuning is also bundled for customer deployments.
 "${SCRIPT_DIR}/host_setup.sh"
+sudo bash "${SCRIPT_DIR}/install_camera_discovery.sh"
+sudo DASHBOARD_PORT="${DASHBOARD_PORT:-8765}" bash "${SCRIPT_DIR}/install_camera_profiles.sh"
 
 # ── 4. build the dashboard image ────────────────────────────────────────────
 "${ROOT_DIR}/native_dashboard/build.sh"
