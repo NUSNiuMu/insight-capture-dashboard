@@ -20,6 +20,9 @@ from insight_capture.runtime.discovery import camera_links, dhcp_peer, discover_
 ROOT = Path(__file__).resolve().parents[2]
 BINDINGS = "uvc-bindings.json"
 ROLES = ("left", "right")
+UQ2168_PRODUCT = "1bcf:28c4"
+UQ2168_MODE = (1920, 1200, 90)
+UQ2168_DATA = ("frame_timing", "imu_raw", "uvc_metadata")
 HEAD = "egohalo"
 BASE_EGO = "jetson-nx-egohalo"
 PROFILES = {
@@ -203,6 +206,12 @@ def render(config, candidate, status):
 
     active = (config / ".device").read_text().strip()
     cameras = read_json(config / "cameras.json") if active == profile else None
+    is_uvc = profile.endswith("-uvc")
+    uq2168 = is_uvc and all(candidate["usb"][role]["product"] == UQ2168_PRODUCT for role in ROLES)
+    if is_uvc and cameras is not None:
+        existing = bool(cameras["distributed_recording"].get("required_aux_topics"))
+        if existing != uq2168:
+            cameras = None
     if cameras is None:
         cameras = read_json(config / "devices" / BASE_EGO / "cameras.json")
         if profile != BASE_EGO:
@@ -230,6 +239,20 @@ def render(config, candidate, status):
                 }
                 distributed["image_topics"].append(stream["topic"])
                 distributed.setdefault("image_rates", {})[stream["topic"]] = 0
+                if uq2168:
+                    width, height, fps = UQ2168_MODE
+                    stream.update(width=width, height=height)
+                    camera = cameras["cameras"][index]
+                    camera["uq2168"] = True
+                    topics = [f"/{name}/camera/{leaf}" for leaf in UQ2168_DATA]
+                    camera["record_topics"].extend(topics)
+                    distributed.setdefault("required_aux_topics", []).extend(topics[:2])
+                    distributed["image_rates"][stream["topic"]] = fps
+    if uq2168:
+        bindings = read_json(config / BINDINGS, {})
+        for camera in cameras["cameras"]:
+            if camera.get("uq2168"):
+                camera["uvc_binding"] = bindings.get(camera["name"].removeprefix("uvc_"), {})
     head = next(camera for camera in cameras["cameras"] if camera["teleop_role"] == "head")
     head["relay_host_address"] = peers[HEAD]["address"]
     distributed = cameras["distributed_recording"]

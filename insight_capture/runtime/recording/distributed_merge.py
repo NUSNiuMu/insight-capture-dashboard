@@ -76,6 +76,8 @@ def merge_session(session: dict, config: dict, ego: Path, wrists: Path, output: 
     image_topics = config["image_topics"]
     descriptors, header_topics, stats = {}, set(), {}
     reference_trackers = {}
+    aux_topics = set(config.get("required_aux_topics", ()))
+    aux_seen = set()
     configured_rates = config.get("image_rates", {})
     lower = int((session["created_at_epoch_s"] - 60) * 1e9)
     upper = int((session.get("stopped_at_epoch_s", time.time()) + 60) * 1e9)
@@ -89,6 +91,8 @@ def merge_session(session: dict, config: dict, ego: Path, wrists: Path, output: 
                 header_topics.add(descriptor.name)
         while reader.has_next():
             topic, raw, receipt = reader.read_next()
+            if part == wrists and topic in aux_topics:
+                aux_seen.add(topic)
             if topic not in header_topics:
                 continue
             stamp = header_ns(raw)
@@ -116,6 +120,8 @@ def merge_session(session: dict, config: dict, ego: Path, wrists: Path, output: 
     missing = [topic for topic in image_topics if topic not in stats or stats[topic]["count"] < 2]
     if missing:
         raise RuntimeError("合并缺少必要图像：" + ", ".join(missing))
+    if aux_topics - aux_seen:
+        raise RuntimeError("合并缺少 UQ2168 原始数据：" + ", ".join(sorted(aux_topics - aux_seen)))
     if any(stat["rollbacks"] for stat in stats.values()):
         raise RuntimeError("检测到采集时间戳回退，原始文件保留，禁止自动合并")
     starts = {}
@@ -186,6 +192,13 @@ def merge_session(session: dict, config: dict, ego: Path, wrists: Path, output: 
         raise RuntimeError("合并后 MCAP 消息计数校验失败")
     write_json(temporary / "distributed_session.json", session)
     write_json(temporary / "time_alignment.json", report)
-    write_json(temporary / "recording_manifest.json", {"format": "rosbag2", "storage_id": "mcap", "distributed": True, "require_global_pose": session.get("require_global_pose", True), "session_id": session["session_id"], "raw_parts": [str(wrists), str(ego)]})
+    manifest = {"format": "rosbag2", "storage_id": "mcap", "distributed": True, "require_global_pose": session.get("require_global_pose", True), "session_id": session["session_id"], "raw_parts": [str(wrists), str(ego)]}
+    if aux_topics:
+        local_manifest = wrists / "recording_manifest.json"
+        if local_manifest.is_file():
+            camera_config = json.loads(local_manifest.read_text()).get("camera_configuration")
+            if camera_config:
+                manifest["camera_configuration"] = camera_config
+    write_json(temporary / "recording_manifest.json", manifest)
     os.replace(temporary, output)
     return report

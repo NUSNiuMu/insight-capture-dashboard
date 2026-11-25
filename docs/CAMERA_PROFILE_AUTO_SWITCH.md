@@ -25,3 +25,25 @@ python3 -m insight_capture.runtime.camera_profiles bind-uvc --left 1-2.1 --right
 安装或升级启用主机上的 `insight-capture-camera-profiles.service`。可用 `python3 -m insight_capture.runtime.camera_profiles scan` 查当前匹配结果，用 `cat config/.device` 查已启用的配置。
 
 开发机用源代码部署时，可在安装目录运行 `bash deploy/install_camera_profiles.sh --user`，由有 Docker 权限的部署用户运行开机服务。
+
+## EgoHalo 与双 UQ2168
+
+左右腕都绑定为 UQ2168（`1bcf:28c4`）时，`jetson-nx-egohalo-uvc` 使用原生采集器协商 `1920×1200 MJPEG @ 90 fps`。按常规方式在手机或 Qt 进入任务、启停录制。EgoHalo 保存头部原件，Jetson 保存两腕，采集结束后在录制库按共同编号回传并合包。打开合成的 Take 可生成四路头部加两路腕部的同步回放。
+
+每只腕的 `/uvc_{left,right}/camera/` 下有以下数据。
+
+- `image_raw/compressed` 为相机原始 JPEG。图像 Header 时间来自 V4L2 单调时钟和采集进程启动时测得的 UTC 偏移。
+- `frame_timing` 依次保存 V4L2 帧序号、驱动单调时刻、收到图像时的 Jetson 单调时刻、图像 Header UTC，时间单位均为纳秒。
+- `imu_raw` 前两个小端 `uint64` 是 USB 请求开始、结束的 Jetson 单调纳秒，后接 128 字节原始 IMU 响应。设备采样时刻和 USB 请求时刻要分别解释。
+- `uvc_metadata` 沿用同一封装，两个数依次为缓冲序号和读取时刻，后接驱动送出的原始载荷。
+
+合包要求两腕均有图像、时序和 IMU 数据，原始两端文件随 Take 保留。先用三设备同时工作的一条 60 秒诊断 Take 核对六路画面，再录实际任务长度，检查每腕的实收帧率、帧序号缺口、IMU 连续性和共同有效区间。曝光同步精度需单独测量。
+
+在 Jetson 空闲时，用该条合包 Take 和左右相机各自的鱼眼标定做离线定位。后两个参数是左右的图像安装旋转，可省略，默认都是 0°。
+
+```bash
+./scripts/localize_egohalo_uq2168.sh /path/to/Take /path/to/new-report.json \
+  /path/to/left/mono.calibration.json /path/to/right/mono.calibration.json 0 180
+```
+
+脚本在私有建图进程中用 Take 中的 EgoHalo 前置双目、CameraInfo、静态 TF 和同曝光 VIO 建图。两腕只查询这张地图。报告给出每腕有效定位数、几何内点、重投影误差及通过验证的光学坐标位姿。返回 0 表示采集审计通过、两腕均有有效定位且至少一组定位相距不超过 50 ms。返回 2 时可从报告查看头部地图、左右腕和时序的各自结果。

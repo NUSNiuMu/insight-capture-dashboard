@@ -274,7 +274,8 @@ RUN chmod +x /entrypoint.sh
 # layer: code-only changes rebuild in seconds, everything above stays cached.
 # .dockerignore keeps runtime data, .git, and release/ tarballs out.
 COPY . /workspaces/insight_capture
-RUN bash /workspaces/insight_capture/deploy/build_dds_network.sh \
+RUN g++ -std=c++17 -O2 -pthread /workspaces/insight_capture/deploy/uq2168_stream.cpp -o /usr/local/bin/uq2168_stream \
+    && bash /workspaces/insight_capture/deploy/build_dds_network.sh \
     && rm -rf /workspaces/insight_capture/.native-build/fastdds-build
 COPY .native-build/insight-native .native-build/qt-runtime.tar /opt/insight/native/
 

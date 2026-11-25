@@ -1,10 +1,12 @@
 """Publish the two bound wrist cameras, reopening V4L2 after hotplug."""
 
+import json
 from pathlib import Path
 import threading
 import time
 
 from insight_capture.runtime.camera_profiles import BINDINGS, ROLES, bound_uvc, read_json, uvc_devices
+from insight_capture.runtime import uq2168
 from insight_capture.core.paths import PROJECT_ROOT
 
 
@@ -42,14 +44,17 @@ def stream_camera(source, role, publisher, stop, gst, compressed_image):
             return
 
 
-def run_camera(node, role, publisher, stop, gst, compressed_image, gst_error):
+def run_camera(node, role, publisher, stop, gst, compressed_image, gst_error, *, raw_publishers=None):
     path = PROJECT_ROOT / "config" / BINDINGS
     while not stop.is_set():
         try:
             device = bound_uvc(uvc_devices(), read_json(path, {})).get(role)
             if device is not None:
                 source = Path("/host-dev") / device["node"]
-                stream_camera(source, role, publisher, stop, gst, compressed_image)
+                if raw_publishers is None:
+                    stream_camera(source, role, publisher, stop, gst, compressed_image)
+                else:
+                    uq2168.stream(source, role, raw_publishers, stop)
         except (OSError, ValueError, KeyError, RuntimeError, gst_error) as exc:
             if not stop.is_set():
                 node.get_logger().warning(f"UVC {role}: {exc}")
@@ -63,7 +68,10 @@ def main():
     import rclpy
     from rclpy.executors import ExternalShutdownException
     from sensor_msgs.msg import CompressedImage
+    from std_msgs.msg import UInt8MultiArray, UInt64MultiArray
 
+    config = json.loads((PROJECT_ROOT / "config" / "cameras.json").read_text())
+    native = {camera["name"] for camera in config["cameras"] if camera.get("uq2168")}
     Gst.init(None)
     rclpy.init()
     node = rclpy.create_node("uvc_wrist_inputs")
@@ -71,9 +79,19 @@ def main():
     workers = []
     try:
         for role in ROLES:
-            publisher = node.create_publisher(CompressedImage, f"/uvc_{role}/camera/image_raw/compressed", 10)
+            prefix = f"/uvc_{role}/camera"
+            publisher = node.create_publisher(CompressedImage, prefix + "/image_raw/compressed", 10)
+            raw_publishers = None
+            if f"uvc_{role}" in native:
+                raw_publishers = {
+                    "image": publisher,
+                    "frame_timing": node.create_publisher(UInt64MultiArray, prefix + "/frame_timing", 10),
+                    "imu_raw": node.create_publisher(UInt8MultiArray, prefix + "/imu_raw", 10),
+                    "uvc_metadata": node.create_publisher(UInt8MultiArray, prefix + "/uvc_metadata", 10),
+                }
             worker = threading.Thread(target=run_camera, args=(
-                node, role, publisher, stop, Gst, CompressedImage, GLib.Error), name=f"uvc-{role}")
+                node, role, publisher, stop, Gst, CompressedImage, GLib.Error),
+                kwargs={"raw_publishers": raw_publishers}, name=f"uvc-{role}")
             worker.start()
             workers.append(worker)
         rclpy.spin(node)

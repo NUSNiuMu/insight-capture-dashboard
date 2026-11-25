@@ -501,6 +501,16 @@ class PreparedPlaybackManager:
             if recording_manager.processes:
                 raise RuntimeError("Cannot prepare playback while recording is active.")
         recording_mode = _recording_mode(bag_path)
+        manifest_path = bag_path / MANIFEST_NAME
+        if manifest_path.is_file():
+            try:
+                raw_config = json.loads(manifest_path.read_text()).get("camera_configuration") or {}
+            except (OSError, ValueError, AttributeError):
+                raw_config = {}
+            if raw_config.get("distributed_recording", {}).get("required_aux_topics"):
+                from insight_capture.core.config import build_dashboard_config
+                recorded = build_dashboard_config(raw_config)
+                cameras, poses = recorded["cameras"], recorded["poses"]
         cameras, poses = _select_recorded_streams(
             _read_bag_topics(bag_path),
             cameras,

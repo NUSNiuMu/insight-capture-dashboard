@@ -125,6 +125,9 @@ class DistributedRecordingManager:
             required = [topic for topic in self.config["image_topics"] if not topic.startswith(self.config["ego_topic_prefix"])]
             if not all(topic in selected for topic in required):
                 raise RuntimeError("双端录制必须包含左右腕部图像")
+            missing = set(self.config.get("required_aux_topics", ())).difference(selected)
+            if missing:
+                raise RuntimeError("双端录制缺少 UQ2168 原始话题：" + ", ".join(sorted(missing)))
             # Resolve storage before assigning both participant paths to the same filesystem.
             with self.local._lock:
                 self.local._refresh_recording_storage_unlocked()
@@ -143,7 +146,8 @@ class DistributedRecordingManager:
                     "task_id": task.get("task_id") or output_subdirectory, "task_name": task_name,
                     "take_id": task.get("take_id"), "ego_url": self.ego.base,
                     "merge_video": {key: deepcopy(self.config[key]) for key in (
-                        "image_topics", "image_rates", "max_video_header_gap_pct") if key in self.config},
+                        "image_topics", "image_rates", "max_video_header_gap_pct",
+                        "required_aux_topics") if key in self.config},
                     "start_command": "dashboard_start_" + sid, "stop_command": "dashboard_stop_" + sid,
                     "created_at_epoch_s": time.time(), "stop_requested": False,
                     "require_global_pose": bool(require_global_pose),

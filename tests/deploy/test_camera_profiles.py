@@ -18,7 +18,7 @@ def network(*names):
 
 
 def uvc(port, node, serial=""):
-    return {"product": "1bcf:28c4", "port": port, "serial": serial, "node": node}
+    return {"product": "1234:5678", "port": port, "serial": serial, "node": node}
 
 
 @pytest.fixture
