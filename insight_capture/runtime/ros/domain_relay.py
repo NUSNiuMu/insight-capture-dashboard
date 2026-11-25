@@ -13,6 +13,13 @@ from insight_capture.runtime.discovery import camera_links
 from insight_capture.runtime.ros.network import local_ipv4_addresses
 
 
+def _carrier_up_count(link):
+    try:
+        return int((Path("/sys/class/net") / link.name / "carrier_up_count").read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def _active_sources(groups):
     addresses = local_ipv4_addresses()
     links = camera_links()
@@ -20,7 +27,8 @@ def _active_sources(groups):
     for source, cameras in groups.items():
         required = {camera["relay_host_address"] for camera in cameras if camera.get("relay_host_address")}
         if required <= addresses:
-            active[source] = frozenset(link for link in links if link.address in required)
+            # A carrier bounce may finish between polls without changing the ifindex or IP.
+            active[source] = frozenset((link, _carrier_up_count(link)) for link in links if link.address in required)
     return active
 
 
