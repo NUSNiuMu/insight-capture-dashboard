@@ -136,6 +136,8 @@ if __name__ == "__main__":
         parser.error("Run with sudo on the Jetson host")
     try:
         result = install(Path(__file__).resolve().parent, hotspot=args.hotspot, defer_start=args.defer_start)
+    except subprocess.CalledProcessError as exc:
+        parser.exit(1, f"Network service installation failed: {exc}\n{exc.stderr or ''}")
     except (OSError, RuntimeError, SyntaxError, subprocess.SubprocessError) as exc:
         parser.exit(1, f"Network service installation failed: {exc}\n")
     print(json.dumps(result, ensure_ascii=False, indent=2))

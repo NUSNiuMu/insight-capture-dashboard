@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the capture hotspot after repair
+After=NetworkManager.service
+ConditionPathExists=/var/lib/insight-capture-hotspot/pending-verification
+
+[Service]
+Type=exec
+ExecStart=/bin/bash /usr/local/libexec/insight-hotspot-init/verify.sh
+
+[Install]
+WantedBy=multi-user.target

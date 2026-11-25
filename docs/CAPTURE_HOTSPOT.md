@@ -6,6 +6,24 @@
 
 ## 安装到另一台同配置 Jetson
 
+现场修复使用 `insight-hotspot-init-r3.run`。在录制、保存和合包结束后，只需运行一次：
+
+```bash
+sudo bash ./insight-hotspot-init-r3.run
+```
+
+已有采集热点会沿用原密码。首次创建热点使用修复包预设的初始密码，终端会显示。
+
+看到“热点检查通过”即可用手机连接终端显示的 Wi-Fi，打开 **http://10.77.0.1:8765/mobile**。
+若提示“等待重启验证”，在设备空闲时重启一次。Jetson 会自动检查 AP 接口、地址、DHCP 服务和手机页面，
+等待约三分钟让服务就绪，然后更新包旁边的 `insight-hotspot-result.*.txt`。
+安装或开机检查失败时，同一文件会包含失败阶段、安装输出、网卡和驱动、服务日志及页面状态。
+包所在目录无法写入时，可查看终端打印的本机结果文件路径。
+
+维护者使用 `bash deploy/hotspot-init/build.sh OFFLINE_DEBS DRIVERS OUTPUT.run` 重新打包。
+`OFFLINE_DEBS` 包含 ARM64 软件包和对应的 `Packages` 索引，
+`DRIVERS` 按 `内核版本/rtl8822ce.ko` 存放驱动。
+
 以下是需要下载驱动源码的开发安装流程。离线设备使用预先构建、随 InsightCapture 交付的驱动与资源；运行热点不要求办公室 Wi-Fi 已连接。
 
 ```bash
