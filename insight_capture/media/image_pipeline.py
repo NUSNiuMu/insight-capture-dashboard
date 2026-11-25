@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from typing import Tuple
 
 try:
     import rclpy
@@ -15,7 +14,7 @@ from insight_capture.core.performance import track
 from insight_capture.core.models import CameraFrame
 from insight_capture.core.timing import source_clock_consistent
 from insight_capture.media.cdr import compressed_image_view
-
+from insight_capture.media.jpeg import jpeg_dimensions
 
 
 class ImagePipeline:
@@ -137,7 +136,7 @@ class ImagePipeline:
         if topic_type == "compressed":
             data = bytes(msg.data)
             self._encoding_paths[camera_name] = ("source-jpeg", time.monotonic())
-            width, height = self.owner._jpeg_dimensions(data)
+            width, height = jpeg_dimensions(data)
             return CameraFrame(
                 data=data,
                 stamp_ns=stamp_ns,
@@ -161,31 +160,3 @@ class ImagePipeline:
             height=height,
             version=version,
         )
-
-    @staticmethod
-    def _jpeg_dimensions(data: bytes) -> Tuple[int, int]:
-        # Fast JPEG SOF scan so compressed display does not need a full decode.
-        try:
-            index = 2
-            length = len(data)
-            while index + 9 < length:
-                if data[index] != 0xFF:
-                    index += 1
-                    continue
-                marker = data[index + 1]
-                index += 2
-                if marker in {0xD8, 0xD9, 0x01} or 0xD0 <= marker <= 0xD7:
-                    continue
-                if index + 2 > length:
-                    break
-                segment_length = int.from_bytes(data[index:index + 2], byteorder="big")
-                if segment_length < 2 or index + segment_length > length:
-                    break
-                if marker in {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}:
-                    height = int.from_bytes(data[index + 3:index + 5], byteorder="big")
-                    width = int.from_bytes(data[index + 5:index + 7], byteorder="big")
-                    return width, height
-                index += segment_length
-        except Exception:
-            pass
-        return 0, 0

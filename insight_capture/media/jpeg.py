@@ -1,4 +1,4 @@
-"""Persistent Jetson NVJPEG hardware encoding pipelines."""
+"""JPEG header parsing and persistent Jetson NVJPEG encoding pipelines."""
 
 import threading
 from typing import Dict, Optional, Tuple
@@ -14,6 +14,34 @@ except Exception:  # pragma: no cover - non-Jetson dev machines
 
 _REQUIRED_ELEMENTS = ("nvjpegenc", "nvvidconv")
 _PULL_TIMEOUT_NS = int(1e9)
+_SOF_MARKERS = {0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF}
+
+
+def jpeg_dimensions(data: bytes) -> Tuple[int, int]:
+    """Read width and height from a JPEG header without decoding its pixels."""
+    if not data.startswith(b"\xff\xd8"):
+        return 0, 0
+    index = 2
+    while index < len(data) and data[index] == 0xFF:
+        while index < len(data) and data[index] == 0xFF:
+            index += 1
+        if index == len(data):
+            break
+        marker = data[index]
+        index += 1
+        if marker in (0xD9, 0xDA) or index + 2 > len(data):
+            break
+        if marker == 0x01 or 0xD0 <= marker <= 0xD7:
+            continue
+        size = int.from_bytes(data[index:index + 2], "big")
+        if size < 2 or index + size > len(data):
+            break
+        if marker in _SOF_MARKERS and size >= 8:
+            height = int.from_bytes(data[index + 3:index + 5], "big")
+            width = int.from_bytes(data[index + 5:index + 7], "big")
+            return width, height
+        index += size
+    return 0, 0
 
 
 class _Pipeline:

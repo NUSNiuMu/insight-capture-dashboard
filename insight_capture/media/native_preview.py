@@ -8,6 +8,7 @@ import threading
 import time
 
 from .h264 import H264Queue
+from .jpeg import jpeg_dimensions
 from .rate import select_frame
 
 # Versioned network-order header: magic, version, format, reserved, width,
@@ -17,11 +18,15 @@ FORMATS = {"GRAY8": 1, "NV12": 2, "JPEG": 3, "H264": 4}
 
 
 def image_packet(message, topic_type, width, height, received_ns):
-    """Pack one ROS image without decoding or encoding its pixels."""
+    """Pack a ROS image for Qt, skipping JPEGs without supported dimensions."""
     stamp = int(message.header.stamp.sec) * 1_000_000_000 + int(message.header.stamp.nanosec)
     if topic_type in ("compressed", "h264"):
         fmt = "H264" if topic_type == "h264" else "JPEG"
         data = bytes(message.data)
+        if fmt == "JPEG":
+            width, height = jpeg_dimensions(data)
+            if not (0 < width <= 8192 and 0 < height <= 8192):
+                return None
     else:
         width, height, step = int(message.width), int(message.height), int(message.step)
         encoding = str(message.encoding).lower()
@@ -93,8 +98,11 @@ class NativePreviewClient:
         if not selected or expired:
             self.expired += int(expired)
             return []
+        packet = image_packet(message, self.spec.topic_type, self.spec.width, self.spec.height, received)
+        if packet is None:
+            return []
         self.selected_packets += 1
-        return [image_packet(message, self.spec.topic_type, self.spec.width, self.spec.height, received)]
+        return [packet]
 
     def close(self):
         with self.lock:
@@ -106,7 +114,10 @@ class NativePreviewClient:
 
 class NativePreviewHub:
     def __init__(self, cameras):
-        self.specs = {camera.name: camera for camera in cameras}
+        self.specs = {
+            camera.name: camera for camera in cameras
+            if camera.topic_type in ("image", "compressed", "h264")
+        }
         self._lock = threading.Lock()
         self._clients = {}
         self.paused = False

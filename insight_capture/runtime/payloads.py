@@ -133,6 +133,7 @@ class PayloadBuilder:
         now = time.monotonic()
         inputs = input_snapshot(self.owner, now)
         cameras = []
+        native_preview = getattr(self.owner, "native_preview", None)
         with self.owner._webrtc_metrics_lock:
             main_metrics = {
                 name: dict(metrics)
@@ -170,12 +171,10 @@ class PayloadBuilder:
                         "name": camera.name,
                         **evidence,
                         "native_preview_available": (
-                            getattr(self.owner, "native_preview", None) is not None
-                            and camera.topic_type in ("image", "h264")
+                            native_preview is not None and camera.name in native_preview.specs
                         ),
                         "native_preview": (
-                            self.owner.native_preview.status(camera.name)
-                            if getattr(self.owner, "native_preview", None) is not None else {}
+                            native_preview.status(camera.name) if native_preview is not None else {}
                         ),
                         "label": camera.label,
                         "device_name": camera.device_name or camera.name,
