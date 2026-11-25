@@ -63,3 +63,8 @@ config/.capture-upgrade.lock
 .ruff_cache/
 .mypy_cache/
 *.egg-info/
+
+config/uvc-bindings.json
+config/.camera-profile-*
+config/.previous-cameras.*
+config/.next-device.*

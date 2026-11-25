@@ -37,13 +37,14 @@ class CameraInputs:
         self.specs.append((args, kwargs))
         return self.node.create_subscription(*args, **kwargs)
 
-    def published_topics(self):
+    def published_topics(self, *, with_types=False):
         """Read the live input participant, including after a USB/IP renewal."""
         with self.lock:
             if self.closed.is_set():
                 raise RuntimeError("Camera input participant is closed")
-            return [name for name, _ in self.node.get_topic_names_and_types()
-                    if self.node.count_publishers(name) > 0]
+            topics = {name: types for name, types in self.node.get_topic_names_and_types()
+                      if self.node.count_publishers(name) > 0}
+            return topics if with_types else list(topics)
 
     def _spin(self):
         try:

@@ -190,6 +190,25 @@ services:
     stop_signal: SIGINT
     restart: unless-stopped
 
+
+  uvc-wrist-inputs:
+    profiles: ["uvc"]
+    image: insight-dashboard:${INSIGHT_VERSION:?Set INSIGHT_VERSION}
+    network_mode: host
+    ipc: host
+    init: true
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
+    device_cgroup_rules:
+      - 'c 81:* rw'
+    volumes:
+      - ./config:/workspaces/insight_capture/config:ro
+      - /dev:/host-dev:ro
+      - /run/udev/data:/run/udev/data:ro
+    command: ["python3", "-u", "-m", "insight_capture.runtime.uvc_bridge"]
+    stop_signal: SIGINT
+    restart: unless-stopped
+
 volumes:
   looper-ipc:
   superglue-ipc:

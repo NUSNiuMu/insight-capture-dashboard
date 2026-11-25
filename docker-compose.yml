@@ -191,6 +191,25 @@ services:
     stop_signal: SIGINT
     restart: unless-stopped
 
+
+  uvc-wrist-inputs:
+    profiles: ["uvc"]
+    image: insight-dashboard:latest
+    network_mode: host
+    ipc: host
+    init: true
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
+    device_cgroup_rules:
+      - 'c 81:* rw'
+    volumes:
+      - .:/workspaces/insight_capture:ro
+      - /dev:/host-dev:ro
+      - /run/udev/data:/run/udev/data:ro
+    command: ["python3", "-u", "-m", "insight_capture.runtime.uvc_bridge"]
+    stop_signal: SIGINT
+    restart: unless-stopped
+
 volumes:
   superglue-ipc:
   superglue-engines:

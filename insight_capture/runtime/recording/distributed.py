@@ -132,6 +132,8 @@ class DistributedRecordingManager:
                     "schema_version": 1, "session_id": sid, "phase": "starting",
                     "task_id": task.get("task_id") or output_subdirectory, "task_name": task_name,
                     "take_id": task.get("take_id"), "ego_url": self.ego.base,
+                    "merge_video": {key: deepcopy(self.config[key]) for key in (
+                        "image_topics", "image_rates", "max_video_header_gap_pct") if key in self.config},
                     "start_command": "dashboard_start_" + sid, "stop_command": "dashboard_stop_" + sid,
                     "created_at_epoch_s": time.time(), "stop_requested": False,
                     "require_global_pose": bool(require_global_pose),
@@ -256,7 +258,14 @@ class DistributedRecordingManager:
             hashes = [{"name": path.name, "sha256": file_hash(path), "bytes": path.stat().st_size} for path in wrists.glob("*.mcap")]
             self._update(jetson_files=hashes)
             output.parent.mkdir(parents=True, exist_ok=True)
-            report = merge_session(deepcopy(self._session), self.config, ego, wrists, output)
+            video = self._session.get("merge_video")
+            if video is None:
+                # Takes from before automatic switching have their capture profile in the local bag.
+                manifest_path = wrists / "recording_manifest.json"
+                if manifest_path.is_file():
+                    manifest = json.loads(manifest_path.read_text())
+                    video = manifest.get("camera_configuration", {}).get("distributed_recording")
+            report = merge_session(deepcopy(self._session), video or self.config, ego, wrists, output)
             self._update(phase="done", alignment=report, finished_at_epoch_s=time.time(), error=None)
             write_json(output / "distributed_session.json", deepcopy(self._session))
             self._last_error = None

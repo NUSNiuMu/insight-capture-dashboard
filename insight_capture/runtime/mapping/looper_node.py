@@ -91,7 +91,9 @@ class LooperNode(Node):
         self.runtime_config = args.runtime_config
         load_gripper_mask_height_ratio(self.runtime_config)
         self.head = next(c["name"] for c in config["cameras"] if c.get("teleop_role") == "head")
-        self.names = (self.head, "insight3_a", "insight3_b")
+        wrists = [c["name"] for c in config["cameras"] if c.get("enabled", True)
+                  and c.get("teleop_role") in {"right_hand", "left_hand"} and c.get("dashboard_pose_stream")]
+        self.names = (self.head, *wrists)
         self.inputs = {name: {
             "left_info_topic": f"/{name}/camera/infra1/camera_info",
             "left_image_topic": f"/{name}/camera/infra1/image_rect_raw",

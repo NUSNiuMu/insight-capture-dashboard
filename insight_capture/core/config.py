@@ -94,7 +94,8 @@ def dashboard_streams(camera: Dict) -> List[Dict]:
             raise ValueError("Every image stream needs a name and absolute ROS topic")
         if item.get("type") not in {"image", "compressed", "h264"}:
             raise ValueError(f"Unsupported image stream type: {item.get('type')}")
-        if not str(item.get("camera_info_topic", "")).startswith("/"):
+        info = item.get("camera_info_topic", "")
+        if (info or camera.get("dashboard_pose_stream", "vio_100hz")) and not str(info).startswith("/"):
             raise ValueError("Every image stream needs an absolute camera_info_topic")
         item.update(namespace=camera["namespace"], device_name=camera["name"])
         item.setdefault("label", camera.get("dashboard_label", item["name"]))

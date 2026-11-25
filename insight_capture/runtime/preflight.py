@@ -108,7 +108,7 @@ class CapturePreflight:
         # from each stereo image topic before starting the recorder.
 
         mapping = self.node.build_mapping_payload() if global_capture else {}
-        global_poses = self.node.poses if global_capture else ()
+        global_poses = [pose for pose in self.node.poses if pose.topic] if global_capture else ()
         statuses = mapping.get("statuses") if isinstance(mapping, dict) else {}
         statuses = statuses if isinstance(statuses, dict) else {}
         insight9 = statuses.get("insight9") if isinstance(statuses.get("insight9"), dict) else {}
@@ -119,7 +119,10 @@ class CapturePreflight:
         ):
             failures.append(self._failure("mapping_not_ready", "头部建图状态未就绪"))
         if global_capture and self.require_localization:
-            for name in ("insight3_a", "insight3_b"):
+            for pose in global_poses:
+                name = pose.name
+                if getattr(pose, "teleop_role", None) not in {"left_hand", "right_hand"}:
+                    continue
                 status = statuses.get(name) if isinstance(statuses.get(name), dict) else {}
                 if not status.get("online") or not status.get("localized"):
                     failures.append(self._failure(

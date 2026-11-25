@@ -73,13 +73,20 @@ class RecordingRoutes:
         manager = self.context.recording_manager
         return BagLibrary(manager.storage_browse_roots, lambda: manager.rosbag_root)
 
-    async def _handle_recording_status(self, _request: web.Request) -> web.Response:
-        return web.json_response(await asyncio.to_thread(self._recording_status_snapshot))
+    async def _handle_recording_status(self, request: web.Request) -> web.Response:
+        return web.json_response(await asyncio.to_thread(
+            self._recording_status_snapshot, camera_topics=request.query.get("camera_topics") == "1",
+        ))
 
-    def _recording_status_snapshot(self) -> dict[str, object]:
+    def _recording_status_snapshot(self, *, camera_topics=False) -> dict[str, object]:
         payload = self.context.recording_manager.status()
         payload["operation_in_progress"] = self.busy
         payload["upgrade_lock_supported"] = True
+        playback = getattr(self.context, "prepared_playback_manager", None)
+        payload["playback_state"] = playback.status()["state"] if playback is not None else None
+        if camera_topics:
+            inputs = self.context.node.camera_inputs
+            payload["camera_topics"] = inputs.published_topics(with_types=True)
         payload["system_load"] = read_system_load()
         payload["disk_space"] = read_disk_space(self.context.recording_manager.rosbag_root)
         take_store = getattr(self.context, "take_store", None)

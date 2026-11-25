@@ -61,6 +61,13 @@ def migrate(root: Path, templates: Path) -> dict:
     cameras = read(config / "cameras.json", {})
     head = next((c for c in cameras.get("cameras", []) if c.get("teleop_role") == "head"), {})
     profile = "jetson-nx-egohalo" if "ego" in str(head.get("name", "")).lower() or cameras.get("egohalo_rectification") else "jetson-nx"
+    marker = config / ".device"
+    saved_profile = marker.read_text().strip() if marker.is_file() else ""
+    if profile == "jetson-nx-egohalo" and saved_profile in {
+            "jetson-nx-egohalo-insight1", "jetson-nx-egohalo-uvc"}:
+        selected_profile = saved_profile
+    else:
+        selected_profile = profile
     defaults = read(templates / "devices" / profile / "cameras.json", {})
     legacy = not cameras.get("mapping")
     if legacy:
@@ -136,10 +143,9 @@ def migrate(root: Path, templates: Path) -> dict:
             task.pop("voice_aliases", None)
             write(path, task)
     write(config / "capture_tasks.json", tasks)
-    marker = config / ".device"
-    if not marker.exists() or marker.read_text().strip() != profile:
-        marker.write_text(profile + "\n")
-    return {"profile": profile, "changed": changed, "warnings": warnings,
+    if not marker.exists() or saved_profile != selected_profile:
+        marker.write_text(selected_profile + "\n")
+    return {"profile": selected_profile, "changed": changed, "warnings": warnings,
             "backup": str(backup) if backup.exists() else None}
 
 

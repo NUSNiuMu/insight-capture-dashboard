@@ -1,0 +1,234 @@
+import fcntl
+from pathlib import Path
+import shutil
+from types import SimpleNamespace
+
+import pytest
+
+from insight_capture.runtime import camera_profiles as profiles
+from insight_capture.core.config import build_dashboard_config
+from insight_capture.runtime.recording.recorder import build_default_topics
+from insight_capture.runtime import uvc_bridge
+
+
+def network(*names):
+    return [{"namespace": name, "index": index, "port": f"2-{index}",
+             "host": f"169.254.{index}.1", "address": f"169.254.{index}.2"}
+            for index, name in enumerate(names, 1)]
+
+
+def uvc(port, node, serial=""):
+    return {"product": "1bcf:28c4", "port": port, "serial": serial, "node": node}
+
+
+@pytest.fixture
+def config(tmp_path):
+    shutil.copytree(profiles.ROOT / "config" / "devices", tmp_path / "devices")
+    (tmp_path / ".device").write_text("jetson-nx\n")
+    shutil.copyfile(tmp_path / "devices/jetson-nx/cameras.json", tmp_path / "cameras.json")
+    return tmp_path
+
+
+@pytest.mark.parametrize("profile", profiles.PROFILES)
+def test_only_a_complete_unambiguous_set_can_match(profile):
+    names = sorted(profiles.PROFILES[profile] - {"uvc_left", "uvc_right"})
+    peers = network(*names)
+    wrists = {"left": uvc("3-1", "video0"), "right": uvc("3-2", "video1")} if profile.endswith("-uvc") else {}
+    assert profiles.detect(peers, wrists)["profile"] == profile
+    assert profiles.detect(peers[:-1], wrists) is None
+    assert profiles.detect(peers + [peers[0]], wrists) is None
+    if wrists:
+        assert profiles.detect(peers, {"left": wrists["left"]}) is None
+        assert profiles.detect(peers, {**wrists, "left": uvc(peers[0]["port"], "video4")}) is None
+
+
+def test_two_egohalo_combinations_connected_never_switch():
+    peers = network("egohalo", "insight3_a", "insight3_b", "insight1_a", "insight1_b")
+    assert profiles.detect(peers, {}) is None
+    assert profiles.detect(peers[:3], {"left": uvc("3-1", "video0"), "right": uvc("3-2", "video1")}) is None
+
+
+def test_binding_survives_replug_and_node_renumbering(tmp_path, monkeypatch):
+    left, right = uvc("3-1", "video0", "L"), uvc("3-2", "video2")
+    path = tmp_path / profiles.BINDINGS
+    monkeypatch.setattr(profiles, "uvc_devices", lambda: [left, right])
+    profiles.bind_uvc(path, "3-1", "3-2")
+    binding = profiles.read_json(path)
+    assert profiles.bound_uvc([right], binding) == {"right": right}
+    left = uvc("3-3", "video12", "L")
+    right = uvc("3-2", "video8")
+    assert profiles.bound_uvc([right, left], binding) == {"left": left, "right": right}
+    assert "left" not in profiles.bound_uvc([left, right, uvc("3-4", "video6", "L")], binding)
+
+
+def test_insight1_uses_live_topics_and_egohalo_link(config):
+    candidate = profiles.detect(network("egohalo", "insight1_a", "insight1_b"), {})
+    graph = {
+        "/insight1_a/camera/left/image_raw": ["sensor_msgs/msg/Image"],
+        "/insight1_b/camera/left/image_raw/compressed": ["sensor_msgs/msg/CompressedImage"],
+    }
+    assert profiles.render(config, candidate, {}) is None
+    settings = profiles.render(config, candidate, {"camera_topics": graph})
+    head = settings["cameras"][-1]
+    assert head["relay_host_address"] == candidate["peers"]["egohalo"]["address"]
+    assert settings["distributed_recording"]["ego_url"] == "http://169.254.1.1:8765"
+    assert set(graph).issubset(build_default_topics(settings))
+    assert build_dashboard_config(settings)["cameras"][1]["type"] == "compressed"
+    assert all("/insight3_" not in topic for topic in build_default_topics(settings))
+
+
+def test_uvc_profile_records_jpeg_without_synthetic_vio(config):
+    peers = network("egohalo")
+    candidate = profiles.detect(peers, {"left": uvc("3-1", "video0"), "right": uvc("3-2", "video2")})
+    settings = profiles.render(config, candidate, {})
+    dashboard = build_dashboard_config(settings)
+    wrist_poses = [pose for pose in dashboard["poses"] if pose["teleop_role"] != "head"]
+    assert all(not pose["topic"] for pose in wrist_poses)
+    for side in ("left", "right"):
+        root = f"/uvc_{side}/camera"
+        topics = [topic for topic in build_default_topics(settings) if topic.startswith(root)]
+        assert topics == [root + "/image_raw/compressed"]
+
+
+def test_camera_set_and_capture_state_are_checked_under_the_existing_lock(config, monkeypatch):
+    candidate = profiles.detect(network("egohalo", "insight3_a", "insight3_b"), {})
+    idle = {"upgrade_lock_supported": True, "recording": False, "operation_in_progress": False,
+            "merge_state": "idle"}
+    status = dict(idle, recording=True)
+    attempts = []
+    monkeypatch.setattr(profiles, "capture_status", lambda port: status)
+    monkeypatch.setattr(profiles.subprocess, "run", lambda *a, **kw: attempts.append(a))
+    monkeypatch.setattr(profiles, "scan", lambda config: candidate)
+    assert not profiles.activate(config, candidate, 8765)
+    assert not attempts
+
+    status = dict(idle, current_take={"state": "saving"})
+    assert not profiles.activate(config, candidate, 8765)
+    status = idle
+    with (config / ".capture-upgrade.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+        assert not profiles.activate(config, candidate, 8765)
+
+    monkeypatch.setattr(profiles, "scan", lambda config: None)
+    assert not profiles.activate(config, candidate, 8765)
+    assert not attempts
+    monkeypatch.setattr(profiles, "scan", lambda config: candidate)
+
+    def check_exclusive(args, **kwargs):
+        with (config / ".capture-upgrade.lock").open() as lock:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        settings = profiles.read_json(Path(args[2]))
+        assert settings["distributed_recording"]["ego_url"] == "http://169.254.1.1:8765"
+        attempts.append(args)
+
+    monkeypatch.setattr(profiles.subprocess, "run", check_exclusive)
+    assert profiles.activate(config, candidate, 8765)
+    assert len(attempts) == 1
+    assert attempts[0][1] == "switch"
+
+
+def test_same_profile_replug_does_not_take_capture_lock(config, monkeypatch):
+    candidate = profiles.detect(network("egohalo", "insight3_a", "insight3_b"), {})
+    profiles.write_json(config / "cameras.json", profiles.render(config, candidate, {}))
+    (config / ".device").write_text("jetson-nx-egohalo\n")
+    monkeypatch.setattr(profiles, "capture_status", lambda port: pytest.fail("No restart for an unchanged profile"))
+    assert not profiles.activate(config, candidate, 8765)
+
+
+def test_uvc_reader_reopens_new_video_node_on_same_ros_topic(monkeypatch):
+    left, replugged = uvc("3-1", "video0", "L"), uvc("3-2", "video8", "L")
+    binding = {"left": {"serial": "L", "product": left["product"]},
+               "right": {"port": "3-4", "product": left["product"]}}
+    scans = iter([[left], [], [replugged]])
+    monkeypatch.setattr(uvc_bridge, "read_json", lambda *args: binding)
+    monkeypatch.setattr(uvc_bridge, "uvc_devices", lambda: next(scans))
+    active = True
+    opened, closed, frames = [], [], []
+
+    class Pipeline:
+        def __init__(self, spec):
+            opened.append(spec.split()[1])
+            self.delivered = False
+
+        def set_state(self, state):
+            if state == "null":
+                closed.append(state)
+
+        def get_by_name(self, name):
+            return self
+
+        def get_clock(self):
+            return None
+
+        def emit(self, *args):
+            if self.delivered:
+                return None
+            self.delivered = True
+            buffer = SimpleNamespace(pts=0, get_size=lambda: 4,
+                                     extract_dup=lambda *args: b"jpeg")
+            return SimpleNamespace(get_buffer=lambda: buffer)
+
+    def publish(message):
+        nonlocal active
+        frames.append(message)
+        active = len(frames) < 2
+
+    gst = SimpleNamespace(parse_launch=Pipeline, State=SimpleNamespace(PLAYING="playing", NULL="null"),
+                          StateChangeReturn=SimpleNamespace(FAILURE="failure"), SECOND=10**9,
+                          CLOCK_TIME_NONE=-1)
+    stop = SimpleNamespace(is_set=lambda: not active, wait=lambda delay: None)
+    image = lambda: SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
+    uvc_bridge.run_camera(None, "left", SimpleNamespace(publish=publish), stop, gst, image, RuntimeError)
+    assert opened == ["device=/host-dev/video0", "device=/host-dev/video8"]
+    assert len(closed) == 2
+    assert all(frame.header.frame_id == "uvc_left_optical" for frame in frames)
+
+
+@pytest.mark.parametrize("fail_start", [False, True])
+def test_service_switch_publishes_marker_only_after_restart(config, tmp_path_factory, monkeypatch, fail_start):
+    import os
+    import subprocess
+
+    root = tmp_path_factory.mktemp("installation")
+    shutil.copytree(config, root / "config")
+    (root / "deploy").mkdir()
+    helper = root / "deploy/device_services.sh"
+    shutil.copy2(profiles.ROOT / "deploy/device_services.sh", helper)
+    old_settings = (root / "config/cameras.json").read_bytes()
+    candidate = profiles.detect(network("egohalo"), {"left": uvc("3-1", "video0"), "right": uvc("3-2", "video2")})
+    settings = root / "next.json"
+    new = profiles.render(config, candidate, {})
+    profiles.write_json(settings, new)
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text("""#!/bin/bash
+if [[ "$*" == "compose up -d "* ]]; then
+    echo "$*" >> compose.log
+    if [[ "${FAIL_TEST_UVC:-}" == 1 && "$*" == *uvc-wrist-inputs* ]]; then
+        exit 44
+    fi
+fi
+""")
+    curl = bin_dir / "curl"
+    curl.write_text("#!/bin/bash\nexit 0\n")
+    for script in (docker, curl):
+        script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + ":" + os.environ["PATH"])
+    monkeypatch.setenv("FAIL_TEST_UVC", "1" if fail_start else "0")
+    result = subprocess.run([str(helper), "switch", str(settings), candidate["profile"]],
+                            capture_output=True, text=True, timeout=10)
+    marker = (root / "config/.device").read_text().strip()
+    live = root / "config/cameras.json"
+    attempts = (root / "compose.log").read_text().splitlines()
+    assert "uvc-wrist-inputs" in attempts[0]
+    if fail_start:
+        assert result.returncode != 0
+        assert marker == "jetson-nx"
+        assert live.read_bytes() == old_settings
+        assert "uvc-wrist-inputs" not in attempts[-1]
+    else:
+        assert result.returncode == 0
+        assert marker == candidate["profile"]
+        assert profiles.read_json(live) == new
