@@ -8,8 +8,8 @@ import re
 import subprocess
 
 
-VERSION = re.compile(r"v(\d+)\.(\d+)\.(\d+)$")
-PACKAGE = re.compile(r"insight-dashboard(?:-deploy)?-(v\d+\.\d+\.\d+)\.(?:run|tar\.gz)$")
+VERSION = re.compile(r"v(\d+)\.(\d+)\.(\d+)(?:[-.][a-zA-Z0-9][a-zA-Z0-9.-]*)?")
+PACKAGE = re.compile(r"insight-dashboard(?:-deploy)?-(v[0-9][a-zA-Z0-9.-]*)\.(?:run|tar\.gz)$")
 
 
 def version(value):
@@ -67,7 +67,8 @@ def cleanup(root, release, services, installer=None, previous_inference=""):
             if not path.is_file() or path.is_symlink() or path == installer:
                 continue
             match = PACKAGE.fullmatch(path.name)
-            if not (match and version(match[1]) < current or path.name == "insight-superglue-validation-25.04.tar.gz"):
+            old = version(match[1]) if match else None
+            if not (old and old < current or path.name == "insight-superglue-validation-25.04.tar.gz"):
                 continue
             try:
                 path.unlink()
