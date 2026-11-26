@@ -192,6 +192,7 @@ def test_dynamic_network_refresh_keeps_exclusions(tmp_path, monkeypatch):
     monkeypatch.delenv('FASTDDS_DEFAULT_PROFILES_FILE', raising=False)
     monkeypatch.setattr(network, '_dynamic_profile', None)
     monkeypatch.setattr(network, '_dynamic_excluded', frozenset())
+    monkeypatch.setattr(network, '_dynamic_namespaces', None)
     monkeypatch.setattr(network, '_transport_library', library)
     monkeypatch.setattr(network, 'camera_links', lambda: [SimpleNamespace(address='192.0.2.1'), SimpleNamespace(address='192.0.2.2')])
     profile = network.configure_ros_network({'ros_transport': {
