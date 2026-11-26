@@ -164,12 +164,14 @@ void NativeVideo::syncWindow() {
                     m_displaySize = frameSize;
                     emit frameSizeChanged();
                 }
-                size = QSizeF(info.width, info.height).scaled(size, Qt::KeepAspectRatio);
             }
             gst_caps_unref(caps);
         }
         gst_object_unref(pad);
     }
+    const QSize aspectSize = m_useNative && !m_nativeSize.isEmpty() ? m_nativeSize : m_displaySize;
+    if (!aspectSize.isEmpty())
+        size = QSizeF(aspectSize).scaled(size, Qt::KeepAspectRatio);
     m_surface->setGeometry(qRound(pos.x() + (width() - size.width()) / 2),
                            qRound(pos.y() + (height() - size.height()) / 2), qMax(1, qRound(size.width())),
                            qMax(1, qRound(size.height())));

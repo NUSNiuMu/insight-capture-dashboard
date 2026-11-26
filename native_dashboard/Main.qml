@@ -37,8 +37,13 @@ ApplicationWindow {
         }
     }
     property bool spatialActive: currentPage === "spatial"
+    property string selectedWristPreview: ""
+    readonly property var wristPreviewCameras: wristPreviewOptions()
     readonly property var cameraLayout: cameraGroups()
-    readonly property bool sixCameraOverview: cameraLayout.length > 0 && cameraLayout[0].sixView === true
+    onWristPreviewCamerasChanged: {
+        if (!wristPreviewCameras.some(camera => camera.name === selectedWristPreview))
+            selectedWristPreview = ""
+    }
     property var frameSizes: ({})
     property int previewFps: dashboard.targetFps
     property real sceneFps: view.renderStats.fps
@@ -106,7 +111,7 @@ ApplicationWindow {
         for(var key in items) { var item=items[key];var p=item.mapToItem(null,item.width/2,item.height/2);result[key]={x:p.x,y:p.y,width:item.width,height:item.height,enabled:item.enabled} }
         var nav = root.findChildrenForDiagnostics(sidebar)
         for(var j=0;j<nav.length;++j){var button=nav[j];var pos=button.mapToItem(null,button.width/2,button.height/2);result[button.objectName]={x:pos.x,y:pos.y,width:button.width,height:button.height,enabled:button.enabled}}
-        var controls=root.findChildrenForDiagnostics(pageLoader).concat(root.findChildrenForDiagnostics(Overlay.overlay))
+        var controls=root.findChildrenForDiagnostics(pageLoader).concat(root.findChildrenForDiagnostics(Overlay.overlay), root.findChildrenForDiagnostics(wristPreviewControls))
         for(var k=0;k<controls.length;++k){var c=controls[k];var cp=c.mapToItem(null,c.width/2,c.height/2);result[c.objectName]={x:cp.x,y:cp.y,width:c.width,height:c.height,enabled:c.enabled,visible:c.visible,text:c.text===undefined ? "" : c.text,checked:c.checked===undefined ? false : c.checked}}
         return result
     }
@@ -127,16 +132,22 @@ ApplicationWindow {
     function allVideos(fn) {
         for (var i=0; i<cameraRepeater.count; ++i) cameraRepeater.itemAt(i).eachVideo(fn)
     }
+    function wristPreviewOptions() {
+        if (dashboard.playback || dashboard.cameras.length !== 6 ||
+                dashboard.cameras.filter(camera => camera.device === "egohalo").length !== 4)
+            return []
+        const wrists = ["uvc_left", "uvc_right"].map(name =>
+            dashboard.cameras.find(camera => camera.uq2168 && camera.name === name))
+        return wrists.every(camera => camera) ? wrists : []
+    }
     function cameraGroups() {
-        if (!dashboard.playback && dashboard.cameras.length === 6) {
-            const head = dashboard.cameras.filter(camera => camera.device === "egohalo")
-            const left = dashboard.cameras.find(camera => camera.uq2168 && camera.name === "uvc_left")
-            const right = dashboard.cameras.find(camera => camera.uq2168 && camera.name === "uvc_right")
-            if (head.length === 4 && left && right)
-                return head.concat([left, right]).map((camera, index) => ({
-                    name: camera.name, row: Math.floor(index / 2), column: index % 2,
-                    columns: 1, rowSpan: 1, streams: [camera], sixView: true
-                }))
+        if (wristPreviewCameras.length) {
+            const wrist = wristPreviewCameras.find(camera => camera.name === selectedWristPreview)
+            const visible = wrist ? [wrist] : dashboard.cameras.filter(camera => camera.device === "egohalo")
+            return visible.map((camera, index) => ({
+                name: camera.name, row: Math.floor(index / 2), column: index % 2,
+                columns: 1, rowSpan: 1, streams: [camera]
+            }))
         }
         var groups=[], positions={}
         for (var i=0; i<dashboard.cameras.length; ++i) {
@@ -217,6 +228,28 @@ ApplicationWindow {
             BusyIndicator { running: Object.keys(workspace.busy).some(function(k){return workspace.busy[k]}); visible: running; implicitWidth: 18; implicitHeight: 18 }
             Label { text: Object.keys(workspace.errors).map(function(k){return Ui.Texts.value(workspace.errors[k])}).join(" · ") || Ui.Texts.value(dashboard.state.captureError) || (!root.taskActive && dashboard.connected && !dashboard.playback ? "Select a task to record." : ""); textFormat: Text.PlainText; color: "#c2453d"; elide: Text.ElideRight; Layout.fillWidth: true; ToolTip.visible: errorMouse.containsMouse; ToolTip.text: text; MouseArea { id: errorMouse; anchors.fill: parent; hoverEnabled: true } }
         }
+        RowLayout {
+            id: wristPreviewControls
+            visible: root.spatialActive && root.wristPreviewCameras.length > 0
+            Layout.fillWidth: true
+            Ui.Button {
+                objectName: "preview-head"
+                text: "四路总览"
+                highlighted: root.selectedWristPreview === ""
+                onClicked: root.selectedWristPreview = ""
+            }
+            Repeater {
+                model: root.wristPreviewCameras
+                delegate: Ui.Button {
+                    required property var modelData
+                    objectName: "preview-" + modelData.name
+                    text: Ui.Texts.value(modelData.label)
+                    highlighted: root.selectedWristPreview === modelData.name
+                    onClicked: root.selectedWristPreview = modelData.name
+                }
+            }
+            Item { Layout.fillWidth: true }
+        }
         WorkspacePages {
             id: pageLoader; Layout.fillWidth: true; Layout.fillHeight: true
             visible: !root.spatialActive; page: root.spatialActive ? "" : root.currentPage
@@ -231,10 +264,10 @@ ApplicationWindow {
             GridLayout {
                 id: cameraDock
                 Layout.row: 0; Layout.column: 0
-                Layout.preferredWidth: root.sixCameraOverview ? Math.min(680, spatialWorkspace.width * 0.58) : root.cameraDockWidth(spatialWorkspace.height)
+                Layout.preferredWidth: root.wristPreviewCameras.length ? Math.min(680, spatialWorkspace.width * 0.58) : root.cameraDockWidth(spatialWorkspace.height)
                 Layout.minimumWidth: 0
-                Layout.preferredHeight: root.sixCameraOverview ? 600 : -1
-                Layout.maximumHeight: root.sixCameraOverview ? Number.POSITIVE_INFINITY : -1
+                Layout.preferredHeight: root.wristPreviewCameras.length ? 600 : -1
+                Layout.maximumHeight: root.wristPreviewCameras.length ? Number.POSITIVE_INFINITY : -1
                 Layout.fillWidth: false; Layout.fillHeight: true
                 columns: root.cameraLayout.reduce(function(columns, group) { return Math.max(columns, group.column + group.columns) }, 1)
                 rowSpacing: 10; columnSpacing: 12
@@ -249,7 +282,7 @@ ApplicationWindow {
                         Layout.columnSpan: modelData.columns
                         Layout.rowSpan: modelData.rowSpan
                         Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0
-                        Layout.preferredWidth: modelData.sixView ? 1 : root.cameraGroupWidth(modelData, cameraDock.height)
+                        Layout.preferredWidth: root.wristPreviewCameras.length ? 1 : root.cameraGroupWidth(modelData, cameraDock.height)
                         Layout.preferredHeight: Layout.rowSpan
                         function eachVideo(fn) { for(var j=0;j<streamRepeater.count;++j)fn(streamRepeater.itemAt(j).player) }
                         Repeater {
