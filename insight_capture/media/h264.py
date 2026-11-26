@@ -177,6 +177,7 @@ class H264Queue:
         self.overflows = 0
         self.waiting_drops = 0
         self.reference_gaps = 0
+        self.last_reference_gap = None
         self._trace_enabled = os.environ.get("INSIGHT_LATENCY_TRACE") == "1"
         self._trace = deque(maxlen=120)
 
@@ -188,6 +189,7 @@ class H264Queue:
                 "timestamp_rollbacks": self.timestamp_rollbacks,
                 "overflows": self.overflows, "waiting_drops": self.waiting_drops,
                 "reference_gaps": self.reference_gaps,
+                "last_reference_gap": self.last_reference_gap,
                 "expiries": self.expiries,
                 "queued_frames": len(self._frames), "queued_bytes": self._bytes,
                 "waiting_for_idr": self._gate.waiting,
@@ -212,8 +214,14 @@ class H264Queue:
             if stamp_ns is not None and self._stamp is not None:
                 self.timestamp_gaps += int(stamp_ns - self._stamp > self.max_gap_ns)
                 self.timestamp_rollbacks += int(stamp_ns <= self._stamp)
+            previous_frame_num = self._sequence.previous
             contiguous = self._sequence.observe(data)
-            self.reference_gaps += int(contiguous is False)
+            if contiguous is False:
+                self.reference_gaps += 1
+                self.last_reference_gap = {
+                    "previous_stamp_ns": self._stamp, "stamp_ns": stamp_ns,
+                    "previous_frame_num": previous_frame_num, "frame_num": self._sequence.previous,
+                }
             gap_ns = None if stamp_ns is None or self._stamp is None else stamp_ns - self._stamp
             # Never infer continuity across a complete frame_num wrap or a long outage.
             capture_gap = contiguous is True and gap_ns is not None and 0 < gap_ns < min(8, self._sequence.modulus - 1) * 1e9 / self.fps

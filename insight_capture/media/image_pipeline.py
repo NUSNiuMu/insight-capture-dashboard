@@ -83,7 +83,6 @@ class ImagePipeline:
             if native is not None:
                 native.submit(camera_name, msg)
             if topic_type == "h264":
-                self.owner._worker_supervisor.queue_h264(camera_name, msg)
                 return
             self.owner._pending_frames[camera_name] = msg
             event.set()

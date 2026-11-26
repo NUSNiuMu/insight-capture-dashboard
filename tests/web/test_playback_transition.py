@@ -20,11 +20,21 @@ def fixture(root):
     prepared=PreparedPlaybackManager(root,root/"cache")
     # A previous, successfully prepared take; no media decoding or ROS I/O.
     prepared._state="ready";prepared._bag_name="old_take"
-    node=SimpleNamespace(_playback_mode=False,pose_lock=threading.Lock(),get_logger=lambda:SimpleNamespace(info=lambda _:None),clear_traces=lambda:calls.append("clear"))
+    node=SimpleNamespace(_playback_mode=False,pose_lock=threading.Lock(),get_logger=lambda:SimpleNamespace(info=lambda _:None),clear_traces=lambda:calls.append("clear"),cameras=[])
     node.set_playback_mode=lambda enabled:PoseBridgeNode.set_playback_mode(node,enabled)
     context=SimpleNamespace(recording_manager=manager,prepared_playback_manager=prepared,node=node,
         capture_preflight=SimpleNamespace(evaluate=lambda *a,**kw:{"ok":True}))
     return context,PlaybackRoutes(context),RecordingRoutes(context),calls,state
+
+
+def test_h264_preview_worker_switches_topics_only_when_playback_changes(tmp_path):
+    context, _, _, calls, _ = fixture(tmp_path)
+    node = context.node
+    node.cameras = [SimpleNamespace(topic_type="h264")]
+    node.stop_webrtc_worker = lambda: calls.append(node._playback_mode)
+    for enabled in (True, True, False, False):
+        node.set_playback_mode(enabled)
+    assert calls == [True, False]
 
 async def response(call):
     try:return (await call).status

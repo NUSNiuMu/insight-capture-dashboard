@@ -653,7 +653,11 @@ class PoseBridgeNode(Node):
     def set_playback_mode(self, enabled: bool) -> None:
         # Topic remapping, not boot-relative timestamps, separates playback.
         with self.pose_lock:
+            changed = self._playback_mode != enabled
             self._playback_mode = enabled
+        # A newly requested worker subscribes only to the selected topic set.
+        if changed and any(camera.topic_type == "h264" for camera in self.cameras):
+            self.stop_webrtc_worker()
         self.get_logger().info(f"Playback mode {'ON' if enabled else 'OFF'}")
 
     def build_pose_payload(

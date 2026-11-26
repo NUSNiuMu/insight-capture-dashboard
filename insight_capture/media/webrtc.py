@@ -9,10 +9,15 @@ import subprocess
 import sys
 import tempfile
 import threading
+from time import monotonic
 from urllib.parse import quote
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
+from .h264 import nal_units
 from .preview_config import FPS
+
+
+NVMM_RETRY_SEC = 5
 
 
 # A fresh interpreter avoids preexec_fn in this threaded worker. Bind the relay
@@ -45,9 +50,10 @@ def validate_signal(raw, offered):
 
 
 class WebRtcStreams:
-    def __init__(self, description, port, on_session_state_change, log=print, *, software_jpeg_sources=()):
+    def __init__(self, description, port, on_session_state_change, log=print, *, passthrough=(), software_jpeg_sources=()):
         self.description, self.port, self.log = description, port, log
         self.changed = on_session_state_change
+        self.passthrough = set(passthrough)
         self.software_jpeg_sources = software_jpeg_sources
         self.sources = {s["id"]: {**s, "regions": [dict(id=s["id"], x=0, y=0, width=s["width"], height=s["height"])]}
                         for s in description["sources"]}
@@ -55,6 +61,7 @@ class WebRtcStreams:
             self.sources["__overview__"] = description["overview"]
         self.lock = threading.Lock()
         self.producers = {}
+        self._nvmm_retry_at = 0.0
         self.watchers = {}
         self.clients = set()
         self.services = {}
@@ -179,48 +186,83 @@ class WebRtcStreams:
             await ws.close()
         return ws
 
+    def _publish_h264(self, name, data, keyframe):
+        def enqueue():
+            for pending, listener in self.listeners.get(name, {}).items():
+                if listener["overflow"]:
+                    continue
+                if not listener["started"]:
+                    if not keyframe:
+                        continue
+                    listener["started"] = True
+                if pending.full():
+                    # Reconnect this viewer at a new GOP.
+                    listener["overflow"] = True
+                else:
+                    pending.put_nowait(data)
+        self.loop.call_soon_threadsafe(enqueue)
+
+    def _new_encoder(self, name, deliver):
+        from .jetson_preview import OverviewEncoder
+
+        description = self.sources[name]
+        regions = description["regions"]
+        if (name == "__overview__" and len(regions) == 4 and monotonic() >= self._nvmm_retry_at
+                and all(region["id"] in self.passthrough for region in regions)):
+            try:
+                from .nvmm_preview import NvmmOverviewEncoder
+
+                return NvmmOverviewEncoder(description, deliver, self.log)
+            except Exception as exc:
+                self._fallback_nvmm(exc, retry=False)
+        return OverviewEncoder(description, deliver, self.log, software_jpeg_sources=self.software_jpeg_sources)
+
+    def _fallback_nvmm(self, reason, *, retry=True):
+        now = monotonic()
+        if now >= self._nvmm_retry_at:
+            self._nvmm_retry_at = now + NVMM_RETRY_SEC if retry else float("inf")
+            retry_message = f"; retry on a new encoder after {NVMM_RETRY_SEC}s" if retry else ""
+            self.log(f"NVMM overview unavailable; using the regular encoder: {reason}{retry_message}")
+
     async def h264(self, request):
         # This endpoint is bound to loopback with the worker and only go2rtc uses it.
         name = request.match_info["source"]
         if name not in self.sources or self.watchers.get(name, 0) == 0:
             raise web.HTTPNotFound()
-        from .jetson_preview import OverviewEncoder
         queue = asyncio.Queue(maxsize=16)
         state = {"overflow": False, "started": False}
-        def deliver(data, keyframe):
-            def enqueue():
-                for pending, listener in self.listeners.get(name, {}).items():
-                    if listener["overflow"]:
-                        continue
-                    if not listener["started"]:
-                        if not keyframe:
-                            continue
-                        listener["started"] = True
-                    if pending.full():
-                        # Reconnect this viewer at a new GOP, without disturbing
-                        # other links consuming the shared encoded output.
-                        listener["overflow"] = True
-                    else:
-                        pending.put_nowait(data)
-            self.loop.call_soon_threadsafe(enqueue)
         async with self.producer_lock:
             self.listeners.setdefault(name, {})[queue] = state
-            if name not in self.producers:
+            if name not in self.passthrough and name not in self.producers:
+                def deliver(data, keyframe):
+                    self._publish_h264(name, data, keyframe)
+
                 try:
-                    producer = await asyncio.to_thread(
-                        OverviewEncoder, self.sources[name], deliver, self.log, software_jpeg_sources=self.software_jpeg_sources,
-                    )
+                    producer = await asyncio.to_thread(self._new_encoder, name, deliver)
                 except BaseException:
                     self.listeners[name].pop(queue, None)
                     raise
                 with self.lock:
                     self.producers[name] = producer
+            with self.lock:
+                producer = self.producers.get(name)
+        native = getattr(producer, "native_overview", False)
         response = web.StreamResponse(headers={"Content-Type": "video/h264", "Cache-Control": "no-store"})
         try:
             await response.prepare(request)
+            timeout = 6 if native else 3 if name in self.passthrough else 5
             while self.watchers.get(name, 0) and not state["overflow"]:
-                data = await asyncio.wait_for(queue.get(), timeout=3)
+                if native and producer.error is not None:
+                    self._fallback_nvmm(producer.error)
+                    break
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    if native and self.watchers.get(name, 0) and self.producers.get(name) is producer:
+                        self._fallback_nvmm(f"no encoded frames for {timeout}s")
+                    break
                 await asyncio.wait_for(response.write(data), timeout=2)
+                timeout = 3
         except (ConnectionError, asyncio.TimeoutError):
             pass
         finally:
@@ -234,6 +276,8 @@ class WebRtcStreams:
         return response
 
     def push_resolved_frame(self, name, fmt, width, height, data, stamp):
+        if fmt == "H264" and name in self.passthrough and self.watchers.get(name, 0):
+            self._publish_h264(name, data, any(kind == 5 for kind, _ in nal_units(data)))
         with self.lock:
             producers = list(self.producers.values())
         for producer in producers:

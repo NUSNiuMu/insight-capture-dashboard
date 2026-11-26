@@ -20,29 +20,12 @@ except Exception:  # pragma: no cover - host-side tools may import without ROS
 
 from insight_capture.media.jpeg import HwJpegCodec
 from insight_capture.media.rate import select_frame
-from insight_capture.media.h264 import H264Queue
-
-
 
 class WorkerSupervisor:
     _WEBRTC_MODULE = "insight_capture.media.webrtc_worker"
 
     def __init__(self, owner) -> None:
         self.owner = owner
-        self._h264_queues = {}
-
-    def queue_h264(self, camera_name, message):
-        """Keep encoded dependencies intact; never put H.264 in latest-frame slots."""
-        if not self.owner._webrtc_has_sessions.get(camera_name):
-            return
-        if str(message.format).lower() != "h264":
-            return
-        queue = self._h264_queues.setdefault(camera_name, H264Queue())
-        stamp = self.owner._stamp_to_ns(message.header.stamp)
-        if queue.push(bytes(message.data), stamp):
-            with self.owner._webrtc_metrics_lock:
-                self.owner._webrtc_main_metrics[camera_name]["queued"] += 1
-            self.owner._webrtc_frame_event.set()
 
     def _queue_webrtc_frame(
         self,
@@ -112,26 +95,24 @@ class WorkerSupervisor:
             env["LD_PRELOAD"] = " ".join(preload + [env.get("LD_PRELOAD", "")]).strip()
         log_path = self.owner.project_root / "outputs" / "webrtc_worker.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_file = open(log_path, "a", buffering=1)
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                self._WEBRTC_MODULE,
-                "--config",
-                str(self.owner.config_path),
-                "--webrtc-port",
-                str(self.owner.webrtc_port),
-                "--ipc-socket",
-                self.owner._webrtc_ipc_path,
-            ],
-            cwd=str(self.owner.project_root),
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        log_file.close()
+        command = [
+            sys.executable, "-m", self._WEBRTC_MODULE,
+            "--config", str(self.owner.config_path),
+            "--webrtc-port", str(self.owner.webrtc_port),
+            "--ipc-socket", self.owner._webrtc_ipc_path,
+            "--ros-domain-id", str(self.owner.context.get_domain_id()),
+        ]
+        if self.owner._playback_mode:
+            command.append("--playback")
+        with log_path.open("a", buffering=1) as log_file:
+            proc = subprocess.Popen(
+                command,
+                cwd=str(self.owner.project_root),
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
         self.owner.get_logger().info(f"webrtc: spawned webrtc_worker.py pid={proc.pid} port={self.owner.webrtc_port}")
         return proc
 
@@ -183,8 +164,6 @@ class WorkerSupervisor:
                             self.owner._webrtc_session_fps[camera_name] = target_fps
                             self.owner._webrtc_has_sessions[camera_name] = target_fps > 0
                             self.owner._next_webrtc_frame_at[camera_name] = 0.0
-                            if target_fps == 0 and camera_name in self._h264_queues:
-                                self._h264_queues[camera_name].reset()
                     if self.owner._webrtc_frame_event.wait(timeout=0.05):
                         self.owner._webrtc_frame_event.clear()
                         for camera_name in list(self.owner._pending_webrtc_frames.keys()):
@@ -197,17 +176,9 @@ class WorkerSupervisor:
                             conn.send((camera_name,) + payload)
                             with self.owner._webrtc_metrics_lock:
                                 self.owner._webrtc_main_metrics[camera_name]["ipc_sent"] += 1
-                        for camera_name, queue in list(self._h264_queues.items()):
-                            spec = next(c for c in self.owner.cameras if c.name == camera_name)
-                            for data, stamp, received in queue.drain_with_metadata():
-                                conn.send((camera_name, "H264", spec.width, spec.height, data, stamp or 0))
-                                with self.owner._webrtc_metrics_lock:
-                                    self.owner._webrtc_main_metrics[camera_name]["ipc_sent"] += 1
             except (EOFError, OSError) as exc:
                 self.owner.get_logger().warning(f"webrtc ipc: lost connection to worker ({exc}); reconnecting")
             finally:
-                for queue in list(self._h264_queues.values()):
-                    queue.reset()
                 with contextlib.suppress(Exception):
                     conn.close()
             time.sleep(1.0)
@@ -220,6 +191,7 @@ class WorkerSupervisor:
         while rclpy is not None and rclpy.ok():
             available = False
             worker_stats = {}
+            h264_stats = {}
             proc = getattr(self.owner, "_webrtc_proc", None)
             if proc is None or proc.poll() is not None:
                 self.owner._webrtc_available_cached = False
@@ -235,6 +207,7 @@ class WorkerSupervisor:
                     raw_stats = payload.get("cameras", {})
                     if isinstance(raw_stats, dict):
                         worker_stats = raw_stats
+                    h264_stats = payload.get("h264_inputs", {})
                 finally:
                     conn.close()
             except Exception:
@@ -244,8 +217,8 @@ class WorkerSupervisor:
             self.owner._webrtc_available_cached = available
             with self.owner._webrtc_metrics_lock:
                 for camera_name, metrics in self.owner._webrtc_main_metrics.items():
-                    if camera_name in self._h264_queues:
-                        metrics["h264"] = self._h264_queues[camera_name].stats()
+                    if camera_name in h264_stats:
+                        metrics["h264"] = h264_stats[camera_name]
                     prior = previous_main.get(camera_name, {})
                     for total_key, rate_key in (
                         ("queued", "queued_fps"),

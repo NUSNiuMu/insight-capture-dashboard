@@ -2,7 +2,7 @@
 
 Layout, black/neutral planes and contain-fit semantics were ported from the
 independently copied Ego preview design. All hardware calls here are Jetson's.
-There is no ROS subscription: only the dashboard's authenticated frame IPC.
+The encoder receives frames from the preview worker.
 """
 from collections import deque
 import threading
@@ -16,9 +16,11 @@ gi.require_version("Gst", "1.0")
 gi.require_version("GstVideo", "1.0")
 from gi.repository import Gst, GstVideo
 from .h264 import H264Gate
-from .preview_config import FPS, GOP, PREVIEW_BITRATE, STALE_NS
+from .preview_config import FPS, GOP, OVERVIEW_HOLD_NS, PREVIEW_BITRATE, STALE_NS
 
 Gst.init(None)
+
+STARTUP_WAIT_NS = 500_000_000
 
 
 def fit(width, height, region):
@@ -79,6 +81,12 @@ class Decoder:
         # already sheds whole GOPs; raw/JPEG can safely replace older buffers.
         queue = "max-buffers=32 max-bytes=8388608" if fmt == "H264" else "max-buffers=2 leaky-type=downstream"
         raw_format = "I420" if fmt == "JPEG" else "NV12"
+        # The output caps below fix the format and dimensions. Set up the plane
+        # layout before concurrent appsink callbacks start.
+        info = GstVideo.VideoInfo()
+        if not info.set_format(GstVideo.VideoFormat.from_string(raw_format), self.width, self.height):
+            raise RuntimeError(f"Invalid {raw_format} preview output size: {self.width}x{self.height}")
+        self.plane_offsets, self.plane_strides = info.offset, info.stride
         # Separate color conversion from hardware decode/scale without a backlog.
         color_queue = ("queue max-size-buffers=2 max-size-bytes=0 max-size-time=0 leaky=downstream ! "
                        if fmt == "JPEG" else "")
@@ -98,16 +106,16 @@ class Decoder:
         if sample is None:
             return Gst.FlowReturn.EOS
         buf = sample.get_buffer()
-        info = GstVideo.VideoInfo.new_from_caps(sample.get_caps())
         data = buf.extract_dup(0, buf.get_size())
+        offsets, strides = self.plane_offsets, self.plane_strides
         if self.layout[0] == "JPEG":
             planes = [np.ndarray((self.height // (2 if i else 1), self.width // (2 if i else 1)),
-                                 np.uint8, data, offset=info.offset[i], strides=(info.stride[i], 1))
+                                 np.uint8, data, offset=offsets[i], strides=(strides[i], 1))
                       for i in range(3)]
             y, uv = _jpeg_video_planes(*planes)
         else:
-            y = np.ndarray((self.height, self.width), np.uint8, data, offset=info.offset[0], strides=(info.stride[0], 1)).copy()
-            uv = np.ndarray((self.height // 2, self.width), np.uint8, data, offset=info.offset[1], strides=(info.stride[1], 1)).copy()
+            y = np.ndarray((self.height, self.width), np.uint8, data, offset=offsets[0], strides=(strides[0], 1)).copy()
+            uv = np.ndarray((self.height // 2, self.width), np.uint8, data, offset=offsets[1], strides=(strides[1], 1)).copy()
         with self.lock:
             self.frames.append((int(buf.pts), time.monotonic_ns(), y, uv))
         return Gst.FlowReturn.OK
@@ -172,6 +180,7 @@ class OverviewEncoder:
         self.thread = None
         self.frames_encoded = 0
         self.stale = list(self.regions)
+        self._last_tiles = {}
         # Keep motion and frequent keyframes from driving unbounded bitrate on the hotspot.
         rate = f"control-rate=1 bitrate={PREVIEW_BITRATE} preset-level=1"
         self.pipeline = Gst.parse_launch(
@@ -225,38 +234,53 @@ class OverviewEncoder:
             self.error = str(exc)
             self.log(f"preview decode {name}: {exc}")
 
-    @staticmethod
-    def _select(snapshots, now):
-        return {
-            name: frames[-1] for name, frames in snapshots.items()
-            if frames and now - frames[-1][1] <= STALE_NS
-        }
+    def _compose(self, now):
+        with self.lock:
+            decoders = dict(self.decoders)
+        for name, decoder in decoders.items():
+            frames = decoder.snapshot()
+            if frames:
+                _, received, y, uv = frames[-1]
+                if y.shape == (decoder.height, decoder.width):
+                    self._last_tiles[name] = received, decoder.x, decoder.y, y, uv
+
+        pixels = np.empty((self.height * 3 // 2, self.width), np.uint8)
+        pixels[:self.height].fill(16)
+        pixels[self.height:].fill(128)
+        stale = []
+        for name in self.regions:
+            tile = self._last_tiles.get(name)
+            if tile is None or now - tile[0] > STALE_NS:
+                stale.append(name)
+            if tile is None:
+                continue
+            received, x, top, y, uv = tile
+            if now - received > OVERVIEW_HOLD_NS:
+                del self._last_tiles[name]
+                continue
+            height, width = y.shape
+            pixels[top:top + height, x:x + width] = y
+            pixels[self.height + top // 2:self.height + (top + height) // 2, x:x + width] = uv
+        self.stale = stale
+        return pixels
 
     def _render(self):
         deadline = time.monotonic()
+        first_tile_ns = None
         try:
             while not self.stopped.is_set():
                 now = time.monotonic_ns()
-                with self.lock:
-                    decoders = dict(self.decoders)
-                selected = self._select({name: d.snapshot() for name, d in decoders.items()}, now)
-                pixels = np.empty((self.height * 3 // 2, self.width), np.uint8)
-                pixels[:self.height].fill(16)
-                pixels[self.height:].fill(128)
-                self.stale = [name for name in self.regions if name not in selected]
-                for name, frame in selected.items():
-                    d = decoders.get(name)
-                    if d is None:
-                        continue
-                    _, _, y, uv = frame
-                    if y.shape != (d.height, d.width):
-                        continue
-                    pixels[d.y:d.y + d.height, d.x:d.x + d.width] = y
-                    pixels[self.height + d.y // 2:self.height + (d.y + d.height) // 2, d.x:d.x + d.width] = uv
-                buf = Gst.Buffer.new_wrapped(pixels.tobytes())
-                buf.duration = Gst.SECOND // FPS
-                if self.source.emit("push-buffer", buf) != Gst.FlowReturn.OK:
-                    break
+                pixels = self._compose(now)
+                any_tile = len(self.stale) < len(self.regions)
+                if any_tile and first_tile_ns is None:
+                    first_tile_ns = now
+                # Give the other cameras time to deliver their first IDR.
+                partial_ready = any_tile and now - first_tile_ns >= STARTUP_WAIT_NS
+                if self.frames_encoded or not self.stale or partial_ready:
+                    buf = Gst.Buffer.new_wrapped(pixels.tobytes())
+                    buf.duration = Gst.SECOND // FPS
+                    if self.source.emit("push-buffer", buf) != Gst.FlowReturn.OK:
+                        break
                 message = self.pipeline.get_bus().pop_filtered(Gst.MessageType.ERROR)
                 if message:
                     raise RuntimeError(str(message.parse_error()[0]))

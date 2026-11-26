@@ -10,6 +10,7 @@ class ProjectStructureTest(unittest.TestCase):
     def test_scripts_contains_only_field_entry_points(self) -> None:
         expected = {
             "check_bag.py",
+            "localize_egohalo_uq2168.sh",
             "reboot_cameras.sh",
             "run_dashboard.sh",
             "select_device.sh",

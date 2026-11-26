@@ -79,7 +79,7 @@ def test_camera_input_renews_after_carrier_recovers_on_same_interface(monkeypatc
         return next(counts)
 
     monkeypatch.setattr(Path, 'read_text', read_counter)
-    monkeypatch.setattr(ros_inputs, 'camera_links', lambda: link_set)
+    monkeypatch.setattr(ros_inputs, 'camera_transport_links', lambda: link_set)
     waits = iter([False, True])
     renewals = []
     inputs = SimpleNamespace(

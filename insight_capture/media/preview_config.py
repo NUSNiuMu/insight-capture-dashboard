@@ -5,6 +5,7 @@ GOP = 10
 PREVIEW_BITRATE = 2_500_000
 MAX_PREVIEW_SIDE = 1280
 STALE_NS = 500_000_000
+OVERVIEW_HOLD_NS = 2_000_000_000
 
 
 def preview_description(cameras, poses, *, paused=False):
