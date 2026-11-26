@@ -16,6 +16,7 @@ from insight_capture.core.paths import PROJECT_ROOT
 _dynamic_profile = None
 _dynamic_excluded = frozenset()
 _dynamic_namespaces = None
+_dynamic_relay_addresses = {}
 _transport_library = None
 
 
@@ -41,9 +42,17 @@ def camera_transport_links():
     try:
         cameras = resolved_cameras()
     except (OSError, ValueError, KeyError):
-        return set()
-    return {CameraLink(camera["name"], camera["index"], camera["address"])
-            for camera in cameras if camera["namespace"] in _dynamic_namespaces}
+        cameras = []
+    links = {CameraLink(camera["name"], camera["index"], camera["address"])
+             for camera in cameras if camera["namespace"] in _dynamic_namespaces}
+    seen_names = {camera["namespace"] for camera in cameras}
+    seen_addresses = {camera["address"] for camera in cameras}
+    # The configured relay can still be live while its camera HTTP probe is unavailable.
+    relay_addresses = {address for namespace, address in _dynamic_relay_addresses.items()
+                       if namespace not in seen_names and address not in seen_addresses}
+    if relay_addresses:
+        links.update(link for link in camera_links() if link.address in relay_addresses)
+    return links
 
 
 def configure_ros_network(config, *, include_relay_links=False):
@@ -65,16 +74,21 @@ def configure_ros_network(config, *, include_relay_links=False):
         return None
 
     if dynamic:
-        global _dynamic_profile, _dynamic_excluded, _dynamic_namespaces
+        global _dynamic_profile, _dynamic_excluded, _dynamic_namespaces, _dynamic_relay_addresses
         domain = int(config.get("ros_domain_id", 0))
         cameras = [camera for camera in config.get("cameras", []) if camera.get("enabled", True)]
         _dynamic_namespaces = None
+        _dynamic_relay_addresses = {}
         if any(int(camera.get("ros_domain_id", domain)) != domain for camera in cameras):
-            # The Dashboard also needs the relay interface when no wrist links are active.
+            if include_relay_links:
+                _dynamic_relay_addresses = {
+                    camera["namespace"]: camera["relay_host_address"] for camera in cameras
+                    if int(camera.get("ros_domain_id", domain)) != domain and camera.get("relay_host_address")
+                }
             _dynamic_namespaces = {
                 camera["namespace"] for camera in cameras
                 if int(camera.get("ros_domain_id", domain)) == domain
-                or (include_relay_links and camera.get("relay_host_address"))
+                or camera["namespace"] in _dynamic_relay_addresses
             }
         _dynamic_excluded = frozenset(excluded)
     links = camera_transport_links() if dynamic else set()

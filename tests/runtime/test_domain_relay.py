@@ -89,3 +89,19 @@ def test_camera_input_renews_after_carrier_recovers_on_same_interface(monkeypatc
     )
     ros_inputs.CameraInputs._monitor(inputs)
     assert renewals == [link_set]
+
+
+def test_relay_accepts_new_verified_lease_before_configuration_is_rewritten(monkeypatch):
+    configured = "169.254.10.2"
+    renewed = CameraLink("usb-head", 12, "169.254.10.3")
+    cameras = {0: [{"namespace": "egohalo", "relay_host_address": configured}]}
+    camera = {**vars(renewed), "namespace": "egohalo"}
+    monkeypatch.setattr(domain_relay, "local_ipv4_addresses", lambda: {renewed.address})
+    monkeypatch.setattr(domain_relay, "camera_links", lambda: {renewed})
+    monkeypatch.setattr(domain_relay, "resolved_cameras", lambda: [camera])
+    monkeypatch.setattr(domain_relay, "camera_link_generations", frozenset)
+
+    assert domain_relay._active_sources(cameras) == {0: frozenset({renewed})}
+
+    camera["namespace"] = "insight3_a"
+    assert domain_relay._active_sources(cameras) == {}

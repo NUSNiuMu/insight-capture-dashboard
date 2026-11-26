@@ -44,7 +44,8 @@ def test_ego_mapping_services_can_read_the_host_discovery_snapshot(compose):
     root = Path(__file__).resolve().parents[2]
     path = "/run/insight-capture-network"
     services = yaml.safe_load((root / compose).read_text())["services"]
-    for name in ("insight-dashboard", "insight3-global-localizer", "egohalo-stereo-rectifier"):
+    for name in ("insight-dashboard", "insight3-global-localizer", "egohalo-stereo-rectifier",
+                 "device-domain-relay"):
         assert f"{path}:{path}:ro" in services[name]["volumes"], name
 
 NETWORK = '[Match]\nName=usb0\n[Network]\nAddress=169.254.40.1/24\n'
@@ -164,6 +165,7 @@ def test_mixed_domain_camera_transport_follows_verified_usb_leases(
     monkeypatch.setattr(network, '_transport_library', SimpleNamespace(
         insight_set_capture_addresses=lambda value: configured.append(value.decode()) or 0))
     monkeypatch.setattr(network, 'resolved_cameras', lambda: peers.copy())
+    monkeypatch.setattr(network, 'camera_links', set)
 
     peers.extend([
         dict(name='usb-head', index=11, address='192.0.2.2', namespace='egohalo'),
@@ -190,3 +192,76 @@ def test_mixed_domain_camera_transport_follows_verified_usb_leases(
     finally:
         path.unlink(missing_ok=True)
         monkeypatch.delenv('FASTRTPS_DEFAULT_PROFILES_FILE', raising=False)
+
+
+@pytest.mark.parametrize("snapshot_error", [FileNotFoundError, ValueError])
+def test_live_configured_relay_survives_missing_or_stale_discovery(monkeypatch, snapshot_error):
+    from insight_capture.runtime.ros import network
+
+    relay = network.CameraLink("usb-head", 11, "169.254.10.2")
+    other = network.CameraLink("usb-other", 12, "169.254.20.2")
+    links = {relay, other}
+    peers = None
+    updates = []
+
+    def resolved():
+        if peers is None:
+            raise snapshot_error
+        return peers
+
+    monkeypatch.delenv("FASTRTPS_DEFAULT_PROFILES_FILE", raising=False)
+    monkeypatch.delenv("FASTDDS_DEFAULT_PROFILES_FILE", raising=False)
+    monkeypatch.setenv("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
+    for name in ("_dynamic_profile", "_dynamic_namespaces", "_dynamic_relay_addresses", "_dynamic_excluded"):
+        monkeypatch.setattr(network, name, getattr(network, name))
+    monkeypatch.setattr(network, "resolved_cameras", resolved)
+    monkeypatch.setattr(network, "camera_links", lambda: links.copy())
+    monkeypatch.setattr(network, "_transport_library", SimpleNamespace(
+        insight_set_capture_addresses=lambda value: updates.append(value.decode()) or 0))
+    config_path = Path(__file__).resolve().parents[2] / "config/devices/jetson-nx-egohalo/cameras.json"
+    profile = network.configure_ros_network(json.loads(config_path.read_text()), include_relay_links=True)
+
+    try:
+        assert updates[-1] == f"127.0.0.1,{relay.address}"
+        assert relay.address in profile.read_text()
+        links.remove(relay)
+        network.refresh_ros_network()
+        assert updates[-1] == "127.0.0.1"
+        links.add(relay)
+        network.refresh_ros_network()
+        assert updates[-1] == f"127.0.0.1,{relay.address}"
+
+        peers = [{**vars(relay), "namespace": "insight9_extra"},
+                 {**vars(other), "namespace": "egohalo"}]
+        network.refresh_ros_network()
+        assert updates[-1] == f"127.0.0.1,{other.address}"
+    finally:
+        profile.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+def test_release_migration_retires_only_the_old_relay_exclusion(tmp_path, mixed):
+    from deploy.migrate_release import migrate
+
+    templates = Path(__file__).resolve().parents[2] / "config"
+    config = tmp_path / "config"
+    config.mkdir()
+    path = config / "cameras.json"
+    cameras = json.loads((templates / "devices/jetson-nx-egohalo/cameras.json").read_text())
+    excluded = ["169.254.10.2"]
+    cameras["ros_transport"] = {"exclude_host_addresses": excluded}
+    if mixed:
+        excluded.append("192.0.2.1")
+        cameras["ros_transport"]["camera_usb_only"] = True
+    path.write_text(json.dumps(cameras))
+
+    change = migrate(tmp_path, templates)
+
+    current = json.loads(path.read_text())
+    expected = {"camera_usb_only": True}
+    if mixed:
+        expected["exclude_host_addresses"] = ["192.0.2.1"]
+    assert current["ros_transport"] == expected
+    assert current["cameras"] == cameras["cameras"]
+    assert json.loads((Path(change["backup"]) / "config/cameras.json").read_text()) == cameras
+    assert "config/cameras.json" not in migrate(tmp_path, templates)["changed"]

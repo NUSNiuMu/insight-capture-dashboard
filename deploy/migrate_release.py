@@ -89,8 +89,16 @@ def migrate(root: Path, templates: Path) -> dict:
     if profile == 'jetson-nx-egohalo':
         relay_addresses = sorted({camera['relay_host_address'] for camera in cameras['cameras']
                                   if camera.get('relay_host_address')})
-        if relay_addresses and cameras.get('ros_transport') == {'exclude_host_addresses': relay_addresses}:
-            cameras['ros_transport'] = {'camera_usb_only': True}
+        transport = cameras.get('ros_transport', {})
+        excluded = transport.get('exclude_host_addresses', [])
+        remaining = [address for address in excluded if address not in relay_addresses]
+        if remaining != excluded:
+            if remaining:
+                transport['exclude_host_addresses'] = remaining
+            else:
+                transport.pop('exclude_host_addresses')
+            if not transport:
+                transport['camera_usb_only'] = True
             write(config / 'cameras.json', cameras)
     if profile == 'jetson-nx' and cameras.get('clock_sync', {}).get('enabled'):
         cameras['ros_transport'] = {'camera_usb_only': True}

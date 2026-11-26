@@ -9,16 +9,21 @@ import multiprocessing
 from pathlib import Path
 
 from insight_capture.core.config import dashboard_streams, enabled_cameras
-from insight_capture.runtime.discovery import camera_link_generations, camera_links
+from insight_capture.runtime.discovery import camera_link_generations, camera_links, resolved_cameras
 from insight_capture.runtime.ros.network import local_ipv4_addresses
 
 
 def _active_sources(groups):
     addresses = local_ipv4_addresses()
     links = camera_links()
+    try:
+        discovered = {peer["namespace"]: peer["address"] for peer in resolved_cameras()}
+    except (OSError, ValueError, KeyError):
+        discovered = {}
     active = {}
     for source, cameras in groups.items():
-        required = {camera["relay_host_address"] for camera in cameras if camera.get("relay_host_address")}
+        required = {discovered.get(camera.get("namespace"), camera["relay_host_address"])
+                    for camera in cameras if camera.get("relay_host_address")}
         if required <= addresses:
             active[source] = camera_link_generations(link for link in links if link.address in required)
     return active
@@ -156,7 +161,8 @@ def main():
     for source, cameras in groups.items():
         required = sorted({camera["relay_host_address"] for camera in cameras if camera.get("relay_host_address")})
         if required:
-            print(f"Source domain {source} requires local interfaces at {', '.join(required)}", flush=True)
+            print(f"Source domain {source}: configured USB addresses {', '.join(required)}; "
+                  "verified discovery takes precedence", flush=True)
     try:
         while True:
             active = _active_sources(groups)

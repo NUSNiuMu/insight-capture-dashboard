@@ -155,6 +155,7 @@ services:
     network_mode: host
     ipc: host
     volumes:
+      - /run/insight-capture-network:/run/insight-capture-network:ro
       - ./config:/workspaces/insight_capture/config
     command: ["python3", "-u", "-m", "insight_capture.runtime.ros.domain_relay", "--config", "/workspaces/insight_capture/config/cameras.json"]
     stop_signal: SIGINT
