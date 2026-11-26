@@ -17,7 +17,7 @@ def display():
              ("local", "/camera/camera/vio_100hz", "right_hand")]
     node = S(pose_lock=threading.Lock(), trace_generation=1, pose_timeout_sec=2.,
              display_fps_limit=30., max_points=100, _playback_mode=False,
-             _native_vio_pose_names=set(), _common_pose_stamp_floor={},
+             cameras=(), _native_vio_pose_names=set(), _common_pose_stamp_floor={},
              get_clock=lambda:S(now=lambda:S(nanoseconds=1_000_000_000_000_000_000)),
              poses=[PoseSpec(n, topic, role, None, 1., (0.,0.,0.), (0.,0.,0.))
                     for n, topic, role in specs], local_vio_samples={})
