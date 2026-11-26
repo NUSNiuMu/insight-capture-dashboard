@@ -16,14 +16,6 @@ IMAGE_STREAMS = {
 
 # Model defaults apply when cameras.json omits an explicit transform.
 AVATAR_MODEL_DEFAULTS = {
-    "MaleBaseModel_BravFG.glb": {
-        "avatar_scale": 0.024,
-        "avatar_rotation_deg_xyz": [-90.0, 180.0, 90.0],
-    },
-    "ArmBaseModel_BravFG.glb": {
-        "avatar_scale": 0.015,
-        "avatar_rotation_deg_xyz": [0.0, 0.0, 180.0],
-    },
     "vis_assembly.glb": {
         "avatar_scale": 3.0,
         "avatar_rotation_deg_xyz": [0.0, 90.0, 0.0],
@@ -31,10 +23,6 @@ AVATAR_MODEL_DEFAULTS = {
     "iron-man_helmet_mk3_optimized.glb": {
         "avatar_scale": 0.5,
         "avatar_rotation_deg_xyz": [90.0, 0.0, -90.0],
-    },
-    "glove.glb": {
-        "avatar_scale": 0.005,
-        "avatar_rotation_deg_xyz": [-90.0, 0.0, -180.0],
     },
 }
 
