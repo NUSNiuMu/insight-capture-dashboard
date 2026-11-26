@@ -1,6 +1,7 @@
 """Exercise the SDK's generated command, including its original missing mask."""
 import importlib.util
 import ipaddress
+import json
 import os
 from pathlib import Path
 import shlex
@@ -100,3 +101,55 @@ def test_failure_keeps_original_files_and_cleans_staging(usb_network, tmp_path, 
 def test_mismatched_startup_address_is_not_rewritten(usb_network):
     with pytest.raises(ValueError, match='does not match'):
         usb_network.repaired_scripts(NETWORK, BOOT.replace('169.254.40.1', '169.254.50.1'), GENERATOR)
+
+
+@pytest.mark.parametrize('include_relay_links, head_addresses', [
+    (False, ['127.0.0.1']),
+    (True, ['127.0.0.1', '192.0.2.2']),
+], ids=['other-services', 'dashboard'])
+def test_mixed_domain_camera_transport_follows_verified_usb_leases(
+    monkeypatch, include_relay_links, head_addresses,
+):
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        'camera_transport', root / 'insight_capture/runtime/ros/network.py')
+    network = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(network)
+    profile = root / 'config/devices/jetson-nx-egohalo/cameras.json'
+    config = json.loads(profile.read_text())
+    peers, configured = [], []
+    monkeypatch.delenv('FASTRTPS_DEFAULT_PROFILES_FILE', raising=False)
+    monkeypatch.delenv('FASTDDS_DEFAULT_PROFILES_FILE', raising=False)
+    monkeypatch.setenv('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp')
+    monkeypatch.setattr(network, '_dynamic_profile', None)
+    monkeypatch.setattr(network, '_dynamic_excluded', frozenset())
+    monkeypatch.setattr(network, '_dynamic_namespaces', None)
+    monkeypatch.setattr(network, '_transport_library', SimpleNamespace(
+        insight_set_capture_addresses=lambda value: configured.append(value.decode()) or 0))
+    monkeypatch.setattr(network, 'resolved_cameras', lambda: peers.copy())
+
+    peers.extend([
+        dict(name='usb-head', index=11, address='192.0.2.2', namespace='egohalo'),
+        dict(name='usb-extra', index=20, address='192.0.2.3', namespace='insight9_extra'),
+    ])
+    options = {'include_relay_links': True} if include_relay_links else {}
+    path = network.configure_ros_network(config, **options)
+    try:
+        assert configured == [','.join(head_addresses)]
+
+        peers.append(dict(name='usb-wrist', index=12, address='198.51.100.2', namespace='insight3_a'))
+        network.refresh_ros_network(network.camera_transport_links())
+        assert configured[-1] == ','.join([*head_addresses, '198.51.100.2'])
+
+        peers.pop(0)
+        peers[-1].update(name='usb-reconnected', index=13, address='203.0.113.2')
+        network.refresh_ros_network(network.camera_transport_links())
+        assert configured[-1] == '127.0.0.1,203.0.113.2'
+        profile = path.read_text()
+        assert '203.0.113.2' in profile
+        assert '192.0.2.2' not in profile
+        assert '192.0.2.3' not in profile
+        assert '198.51.100.2' not in profile
+    finally:
+        path.unlink(missing_ok=True)
+        monkeypatch.delenv('FASTRTPS_DEFAULT_PROFILES_FILE', raising=False)

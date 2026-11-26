@@ -9,8 +9,7 @@ from rclpy.context import Context
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 
-from insight_capture.runtime.discovery import camera_links
-from insight_capture.runtime.ros.network import refresh_ros_network
+from insight_capture.runtime.ros.network import camera_transport_links, refresh_ros_network
 
 
 class CameraInputs:
@@ -22,11 +21,11 @@ class CameraInputs:
         self.closed = threading.Event()
         self.generation = 0
         self.thread = None
-        self.links = camera_links()
-        self._create_node()
+        self.links = camera_transport_links()
+        self._create_node(self.links)
 
-    def _create_node(self):
-        refresh_ros_network()
+    def _create_node(self, links):
+        refresh_ros_network(links)
         self.context = Context()
         self.context.init(domain_id=self.domain)
         self.node = Node(self.owner.get_name() + "_inputs", context=self.context)
@@ -74,7 +73,7 @@ class CameraInputs:
             if self.closed.is_set():
                 return
             self._stop_executor()
-            self._create_node()
+            self._create_node(links)
             for args, kwargs in self.specs:
                 self.node.create_subscription(*args, **kwargs)
             self.generation += 1
@@ -87,7 +86,7 @@ class CameraInputs:
     def _monitor(self):
         while not self.closed.wait(5.):
             try:
-                links = camera_links()
+                links = camera_transport_links()
             except OSError as exc:
                 self.owner.events.changed("camera_transport", self.owner.get_name(), "scan_failed", str(exc), level="warning")
                 continue

@@ -230,8 +230,6 @@
     "opencv_threads": 1
   },
   "ros_transport": {
-    "exclude_host_addresses": [
-      "169.254.10.2"
-    ]
+    "camera_usb_only": true
   }
 }

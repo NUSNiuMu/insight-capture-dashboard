@@ -136,6 +136,7 @@ services:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
       - OPENBLAS_NUM_THREADS=1
     volumes:
+      - /run/insight-capture-network:/run/insight-capture-network:ro
       - ./config:/workspaces/insight_capture/config
       - superglue-ipc:/run/superglue
       - looper-ipc:/run/looper
@@ -170,6 +171,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:
+      - /run/insight-capture-network:/run/insight-capture-network:ro
       - ./config:/workspaces/insight_capture/config
     command: ["python3", "-u", "-m", "insight_capture.runtime.recording.h264_node"]
     stop_signal: SIGINT

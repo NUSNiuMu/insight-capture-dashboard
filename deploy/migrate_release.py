@@ -86,6 +86,12 @@ def migrate(root: Path, templates: Path) -> dict:
             camera["avatar_model"] = model.replace("iron-man_helmet_mk3_clean.glb", "iron-man_helmet_mk3_optimized.glb")
         cameras = upgraded
         write(config / "cameras.json", cameras)
+    if profile == 'jetson-nx-egohalo':
+        relay_addresses = sorted({camera['relay_host_address'] for camera in cameras['cameras']
+                                  if camera.get('relay_host_address')})
+        if relay_addresses and cameras.get('ros_transport') == {'exclude_host_addresses': relay_addresses}:
+            cameras['ros_transport'] = {'camera_usb_only': True}
+            write(config / 'cameras.json', cameras)
     if profile == 'jetson-nx' and cameras.get('clock_sync', {}).get('enabled'):
         cameras['ros_transport'] = {'camera_usb_only': True}
         clocks = cameras['clock_sync']

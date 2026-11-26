@@ -122,7 +122,7 @@ def main() -> None:
         raise RuntimeError("rclpy is not available in this environment")
 
     os.environ.setdefault("ROS_DOMAIN_ID", str(settings.ros_domain_id))
-    configure_ros_network(settings.raw_config)
+    configure_ros_network(settings.raw_config, include_relay_links=True)
     rclpy.init(args=None)
     # Child ROS processes must use the middleware selected by this backend.
     os.environ["RMW_IMPLEMENTATION"] = rclpy.get_rmw_implementation_identifier()

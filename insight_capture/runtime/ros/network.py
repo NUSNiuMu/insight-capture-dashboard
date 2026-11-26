@@ -10,11 +10,12 @@ import socket
 import struct
 import tempfile
 import xml.etree.ElementTree as ET
-from insight_capture.runtime.discovery import camera_links
+from insight_capture.runtime.discovery import CameraLink, camera_links, resolved_cameras
 from insight_capture.core.paths import PROJECT_ROOT
 
 _dynamic_profile = None
 _dynamic_excluded = frozenset()
+_dynamic_namespaces = None
 _transport_library = None
 
 
@@ -34,7 +35,18 @@ def local_ipv4_addresses():
     return addresses
 
 
-def configure_ros_network(config):
+def camera_transport_links():
+    if _dynamic_namespaces is None:
+        return camera_links()
+    try:
+        cameras = resolved_cameras()
+    except (OSError, ValueError, KeyError):
+        return set()
+    return {CameraLink(camera["name"], camera["index"], camera["address"])
+            for camera in cameras if camera["namespace"] in _dynamic_namespaces}
+
+
+def configure_ros_network(config, *, include_relay_links=False):
     """Apply an optional Fast DDS transport profile before the first ROS init."""
     transport = config.get("ros_transport", {})
     included = transport.get("include_host_addresses", [])
@@ -52,7 +64,21 @@ def configure_ros_network(config):
     )):
         return None
 
-    addresses = ({link.address for link in camera_links()} if dynamic else local_ipv4_addresses()) - excluded
+    if dynamic:
+        global _dynamic_profile, _dynamic_excluded, _dynamic_namespaces
+        domain = int(config.get("ros_domain_id", 0))
+        cameras = [camera for camera in config.get("cameras", []) if camera.get("enabled", True)]
+        _dynamic_namespaces = None
+        if any(int(camera.get("ros_domain_id", domain)) != domain for camera in cameras):
+            # The Dashboard also needs the relay interface when no wrist links are active.
+            _dynamic_namespaces = {
+                camera["namespace"] for camera in cameras
+                if int(camera.get("ros_domain_id", domain)) == domain
+                or (include_relay_links and camera.get("relay_host_address"))
+            }
+        _dynamic_excluded = frozenset(excluded)
+    links = camera_transport_links() if dynamic else set()
+    addresses = ({link.address for link in links} if dynamic else local_ipv4_addresses()) - excluded
     if included and not dynamic:
         addresses &= {str(ipaddress.IPv4Address(address)) for address in included}
     addresses.add("127.0.0.1")
@@ -60,10 +86,8 @@ def configure_ros_network(config):
     atexit.register(path.unlink, missing_ok=True)
     os.environ["FASTRTPS_DEFAULT_PROFILES_FILE"] = str(path)
     if dynamic:
-        global _dynamic_profile, _dynamic_excluded
         _dynamic_profile = path
-        _dynamic_excluded = frozenset(excluded)
-        refresh_ros_network()
+        refresh_ros_network(links)
     return path
 
 
@@ -98,11 +122,13 @@ def write_profile(addresses, path=None):
     return path
 
 
-def refresh_ros_network():
+def refresh_ros_network(links=None):
     """Update both future child processes and Fast DDS's in-process QoS cache."""
     if _dynamic_profile is None:
         return
-    addresses = sorted({'127.0.0.1'} | ({link.address for link in camera_links()} - _dynamic_excluded))
+    if links is None:
+        links = camera_transport_links()
+    addresses = sorted({'127.0.0.1'} | ({link.address for link in links} - _dynamic_excluded))
     global _transport_library
     if _transport_library is None:
         _transport_library = ctypes.CDLL(str(PROJECT_ROOT / '.native-build/libinsight_dds_network.so'))
