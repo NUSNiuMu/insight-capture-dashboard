@@ -197,6 +197,7 @@ class PayloadBuilder:
                         "width": camera.width if frame is None else frame.width,
                         "height": camera.height if frame is None else frame.height,
                         "source_width": camera.width,
+                        "uq2168": getattr(camera, "uq2168", False),
                         "source_height": camera.height,
                         "version": 0 if frame is None else frame.version,
                         "frame_url": "" if camera.topic_type == "h264" else f"/api/cameras/{quote(camera.name, safe='')}/frame",

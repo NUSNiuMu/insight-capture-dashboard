@@ -51,7 +51,7 @@ def _jpeg_video_planes(raw_y, u, v):
 
 
 class Decoder:
-    def __init__(self, fmt, width, height, region):
+    def __init__(self, fmt, width, height, region, *, software_jpeg=False):
         self.layout = (fmt, width, height)
         self.x, self.y, self.width, self.height = fit(width, height, region)
         self.frames = deque(maxlen=8)
@@ -62,9 +62,10 @@ class Decoder:
         self.gate = H264Gate() if fmt == "H264" else None
         if fmt == "JPEG":
             caps = f"image/jpeg,width={width},height={height},framerate={FPS}/1"
-            # L4T36.4.3 retains exported NVMM JPEG mappings across stream restarts.
-            # Keep hardware decode, passing I420 system memory to the scaler.
-            decode = "nvjpegdec ! video/x-raw,format=I420 ! "
+            # UQ2168 uses Y42B. Decode it to I420 without retaining hardware
+            # decoder mappings when switching between overview and single cameras.
+            decode = ("jpegdec idct-method=ifast ! video/x-raw,format=I420 ! " if software_jpeg
+                      else "nvjpegdec ! video/x-raw,format=I420 ! ")
         elif fmt == "H264":
             caps = "video/x-h264,stream-format=byte-stream,alignment=au"
             decode = "h264parse ! nvv4l2decoder disable-dpb=true ! "
@@ -157,10 +158,11 @@ class Decoder:
 
 
 class OverviewEncoder:
-    def __init__(self, description, deliver, log):
+    def __init__(self, description, deliver, log, *, software_jpeg_sources=()):
         self.description, self.deliver, self.log = description, deliver, log
         self.width, self.height = description["width"], description["height"]
         self.regions = {r["id"]: r for r in description["regions"]}
+        self.software_jpeg_sources = software_jpeg_sources
         self.decoders = {}
         self.lock = threading.Lock()
         self.stopped = threading.Event()
@@ -210,7 +212,9 @@ class OverviewEncoder:
                     self.decoders.pop(name)
                     decoder = None
                 if decoder is None:
-                    decoder = self.decoders[name] = Decoder(fmt, width, height, self.regions[name])
+                    decoder = self.decoders[name] = Decoder(
+                        fmt, width, height, self.regions[name], software_jpeg=name in self.software_jpeg_sources,
+                    )
                 try:
                     decoder.push(data, stamp)
                 except Exception:

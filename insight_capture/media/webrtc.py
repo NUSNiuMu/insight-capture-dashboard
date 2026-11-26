@@ -45,9 +45,10 @@ def validate_signal(raw, offered):
 
 
 class WebRtcStreams:
-    def __init__(self, description, port, on_session_state_change, log=print):
+    def __init__(self, description, port, on_session_state_change, log=print, *, software_jpeg_sources=()):
         self.description, self.port, self.log = description, port, log
         self.changed = on_session_state_change
+        self.software_jpeg_sources = software_jpeg_sources
         self.sources = {s["id"]: {**s, "regions": [dict(id=s["id"], x=0, y=0, width=s["width"], height=s["height"])]}
                         for s in description["sources"]}
         if description["overview"]:
@@ -206,7 +207,9 @@ class WebRtcStreams:
             self.listeners.setdefault(name, {})[queue] = state
             if name not in self.producers:
                 try:
-                    producer = await asyncio.to_thread(OverviewEncoder, self.sources[name], deliver, self.log)
+                    producer = await asyncio.to_thread(
+                        OverviewEncoder, self.sources[name], deliver, self.log, software_jpeg_sources=self.software_jpeg_sources,
+                    )
                 except BaseException:
                     self.listeners[name].pop(queue, None)
                     raise

@@ -139,6 +139,7 @@ class PoseBridgeNode(Node):
                 device_name=item["device_name"],
                 width=int(item.get("width", 0)),
                 height=int(item.get("height", 0)),
+                uq2168=bool(item.get("uq2168")),
             )
             for item in config.get("cameras", [])
         ]

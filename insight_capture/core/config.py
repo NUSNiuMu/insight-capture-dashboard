@@ -99,6 +99,9 @@ def dashboard_streams(camera: Dict) -> List[Dict]:
             raise ValueError("Every image stream needs an absolute camera_info_topic")
         item.update(namespace=camera["namespace"], device_name=camera["name"])
         item.setdefault("label", camera.get("dashboard_label", item["name"]))
+        if camera.get("uq2168"):
+            item["uq2168"] = True
+            item["label"] = {"left_hand": "左腕", "right_hand": "右腕"}.get(camera.get("teleop_role"), item["label"])
         item.setdefault("rotation_deg", int(camera.get("dashboard_rotation_deg", 0)))
         item.setdefault("row", int(camera.get("dashboard_row", 0)))
         item.setdefault("column", int(camera.get("dashboard_column", 0)))

@@ -19,6 +19,20 @@ function block(source, marker) {
     throw Error('Unclosed handler: ' + marker);
 }
 const main = fs.readFileSync('native_dashboard/Main.qml', 'utf8');
+const cameraGroups = new Function('dashboard', block(main, 'function cameraGroups()'));
+const headCameras = ['side_left', 'stereo_left', 'stereo_right', 'side_right'].map(name => ({
+    name, device: 'egohalo', row: 0, column: 1,
+}));
+const wristCameras = ['right', 'left'].map((side, row) => ({
+    name: `uvc_${side}`, device: `uvc_${side}`, row, column: 0, uq2168: true,
+}));
+const sixCameras = [...wristCameras, ...headCameras];
+assert.deepEqual(cameraGroups({playback: false, cameras: sixCameras}).map(({name, row, column}) => [name, row, column]), [
+    ['side_left', 0, 0], ['stereo_left', 0, 1], ['stereo_right', 1, 0], ['side_right', 1, 1],
+    ['uvc_left', 2, 0], ['uvc_right', 2, 1],
+]);
+assert.equal(cameraGroups({playback: false, cameras: sixCameras.map(camera => ({...camera, uq2168: false}))}).length, 3);
+
 const dashboard = {playback:true, cameras:[{name:'head'}, {name:'wrist'}], times:[],
     setPlaybackTime(value) {this.times.push(value)}};
 const players = ['head', 'wrist'].map(name => ({cameraName:name, playbackReady:false, position:0,

@@ -7,6 +7,7 @@ import pytest
 
 from insight_capture.runtime import camera_profiles as profiles
 from insight_capture.core.config import build_dashboard_config
+from insight_capture.media.preview_config import preview_description
 from insight_capture.runtime.recording.recorder import build_default_topics
 from insight_capture.runtime import uvc_bridge
 
@@ -88,6 +89,30 @@ def test_uvc_profile_records_jpeg_without_synthetic_vio(config):
         root = f"/uvc_{side}/camera"
         topics = [topic for topic in build_default_topics(settings) if topic.startswith(root)]
         assert topics == [root + "/image_raw/compressed"]
+
+
+def test_uq2168_preview_puts_both_wrists_below_the_four_head_views(config):
+    wrists = {
+        "left": dict(uvc("3-1", "video2"), product=profiles.UQ2168_PRODUCT),
+        "right": dict(uvc("3-2", "video0"), product=profiles.UQ2168_PRODUCT),
+    }
+    candidate = profiles.detect(network("egohalo"), wrists)
+    dashboard = build_dashboard_config(profiles.render(config, candidate, {}))
+    preview = preview_description(
+        [SimpleNamespace(**camera) for camera in dashboard["cameras"]],
+        [SimpleNamespace(**pose) for pose in dashboard["poses"]],
+    )
+    overview = preview["overview"]
+    assert preview["default_source"] == overview["id"] == "__overview__"
+    assert overview["label"] == "六路总览"
+    assert [region["id"] for region in overview["regions"]] == [
+        "egohalo_side_left", "egohalo_stereo_left", "egohalo_stereo_right", "egohalo_side_right",
+        "uvc_left", "uvc_right",
+    ]
+    assert [(region["x"], region["y"], region["width"], region["height"])
+            for region in overview["regions"][-2:]] == [(0, 976, 480, 304), (480, 976, 480, 304)]
+    assert [(source["label"], source["width"], source["height"])
+            for source in preview["sources"][-2:]] == [("左腕", 1280, 800), ("右腕", 1280, 800)]
 
 
 def test_camera_set_and_capture_state_are_checked_under_the_existing_lock(config, monkeypatch):

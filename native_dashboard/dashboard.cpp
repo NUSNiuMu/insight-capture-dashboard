@@ -191,6 +191,7 @@ void Dashboard::poll() {
                                     {"row", c["row"].toInt()},
                                     {"column", c["column"].toInt()},
                                     {"label", c["label"].toString()},
+                                    {"uq2168", c["uq2168"].toBool()},
                                     {"endpoint", u},
                                     {"nativeEndpoint", local},
                                     {"media", QUrl()}});

@@ -34,6 +34,7 @@ class CameraSpec:
     device_name: str = ""
     width: int = 0
     height: int = 0
+    uq2168: bool = False
 
 
 @dataclass

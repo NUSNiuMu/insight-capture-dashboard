@@ -37,6 +37,8 @@ ApplicationWindow {
         }
     }
     property bool spatialActive: currentPage === "spatial"
+    readonly property var cameraLayout: cameraGroups()
+    readonly property bool sixCameraOverview: cameraLayout.length > 0 && cameraLayout[0].sixView === true
     property var frameSizes: ({})
     property int previewFps: dashboard.targetFps
     property real sceneFps: view.renderStats.fps
@@ -126,6 +128,16 @@ ApplicationWindow {
         for (var i=0; i<cameraRepeater.count; ++i) cameraRepeater.itemAt(i).eachVideo(fn)
     }
     function cameraGroups() {
+        if (!dashboard.playback && dashboard.cameras.length === 6) {
+            const head = dashboard.cameras.filter(camera => camera.device === "egohalo")
+            const left = dashboard.cameras.find(camera => camera.uq2168 && camera.name === "uvc_left")
+            const right = dashboard.cameras.find(camera => camera.uq2168 && camera.name === "uvc_right")
+            if (head.length === 4 && left && right)
+                return head.concat([left, right]).map((camera, index) => ({
+                    name: camera.name, row: Math.floor(index / 2), column: index % 2,
+                    columns: 1, rowSpan: 1, streams: [camera], sixView: true
+                }))
+        }
         var groups=[], positions={}
         for (var i=0; i<dashboard.cameras.length; ++i) {
             var camera=dashboard.cameras[i]
@@ -219,14 +231,15 @@ ApplicationWindow {
             GridLayout {
                 id: cameraDock
                 Layout.row: 0; Layout.column: 0
-                Layout.preferredWidth: root.cameraDockWidth(spatialWorkspace.height)
+                Layout.preferredWidth: root.sixCameraOverview ? Math.min(680, spatialWorkspace.width * 0.58) : root.cameraDockWidth(spatialWorkspace.height)
                 Layout.minimumWidth: 0
-                Layout.preferredHeight: -1
+                Layout.preferredHeight: root.sixCameraOverview ? 600 : -1
+                Layout.maximumHeight: root.sixCameraOverview ? Number.POSITIVE_INFINITY : -1
                 Layout.fillWidth: false; Layout.fillHeight: true
-                columns: root.cameraGroups().reduce(function(columns, group) { return Math.max(columns, group.column + group.columns) }, 1)
+                columns: root.cameraLayout.reduce(function(columns, group) { return Math.max(columns, group.column + group.columns) }, 1)
                 rowSpacing: 10; columnSpacing: 12
                 Repeater {
-                    id: cameraRepeater; model: root.cameraGroups()
+                    id: cameraRepeater; model: root.cameraLayout
                     delegate: GridLayout {
                         id: cameraGroup; required property var modelData
                         columns: modelData.columns
@@ -236,7 +249,7 @@ ApplicationWindow {
                         Layout.columnSpan: modelData.columns
                         Layout.rowSpan: modelData.rowSpan
                         Layout.fillWidth: true; Layout.fillHeight: true; Layout.minimumWidth: 0
-                        Layout.preferredWidth: root.cameraGroupWidth(modelData, cameraDock.height)
+                        Layout.preferredWidth: modelData.sixView ? 1 : root.cameraGroupWidth(modelData, cameraDock.height)
                         Layout.preferredHeight: Layout.rowSpan
                         function eachVideo(fn) { for(var j=0;j<streamRepeater.count;++j)fn(streamRepeater.itemAt(j).player) }
                         Repeater {
@@ -250,7 +263,7 @@ ApplicationWindow {
                                     id: cameraStatus
                                     property var localization: dashboard.localization[cameraCard.modelData.device || cameraCard.modelData.name] || {}
                                     anchors.top: cameraTitle.bottom; anchors.left: parent.left; anchors.margins: 10
-                                    text: dashboard.playback ? "Playback" : "Image: " + (dashboard.cameraAvailability[cameraCard.modelData.name] === true ? "Receiving" : "No input") + " · " + (localization.label || "Waiting for pose")
+                                    text: dashboard.playback ? "Playback" : "Image: " + (dashboard.cameraAvailability[cameraCard.modelData.name] === true ? "Receiving" : "No input") + (cameraCard.modelData.uq2168 ? "" : " · " + (localization.label || "Waiting for pose"))
                                     elide: Text.ElideRight; width: parent.width-20; font.pixelSize: 11
                                     color: dashboard.playback ? "#51778e" : (localization.color || "#84775f")
                                     ToolTip.visible: statusHover.hovered

@@ -121,8 +121,8 @@ def test_failed_decoder_is_removed_and_replacement_waits_for_an_idr(monkeypatch,
     created = []
 
     class FailingFirst(base):
-        def __init__(self, *args):
-            super().__init__(*args)
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
             created.append(self)
 
         def push(self, data, stamp):

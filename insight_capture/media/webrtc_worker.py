@@ -144,7 +144,9 @@ def main() -> None:
     ipc_server = IpcServer(args.ipc_socket, authkey, camera_topic_types.keys(), log=_log)
     description = preview_description([SimpleNamespace(**c) for c in config["cameras"]],
                                       [SimpleNamespace(**p) for p in config["poses"]])
-    streams = WebRtcStreams(description, args.webrtc_port, ipc_server.on_session_state_change, log=_log)
+    software_jpeg_sources = frozenset(c["name"] for c in config["cameras"] if c.get("uq2168"))
+    streams = WebRtcStreams(description, args.webrtc_port, ipc_server.on_session_state_change,
+                            log=_log, software_jpeg_sources=software_jpeg_sources)
     ipc_server.start(streams)
 
     app = build_app(streams, ipc_server)

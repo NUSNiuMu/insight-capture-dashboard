@@ -17,6 +17,8 @@ const paused = computed(() => hidden.value || !appActive.value || !props.active)
 const placeholder = 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1280"><rect width="100%25" height="100%25" fill="%23151b2c"/></svg>'
 const image = ref(placeholder)
 const sources = computed(() => props.preview?.sources || [])
+const overviewSources = computed(() => sources.value.filter(source =>
+  overview.value?.regions?.some(region => region.id === source.id)))
 const rtc = computed(() => props.preview?.transport === 'webrtc')
 const isOverview = computed(() => rtc.value && selected.value === overview.value?.id)
 const sourceSignature = computed(() => sources.value.map(s => `${s.id}:${s.topic}:${s.width}:${s.height}`).join("|"))
@@ -190,7 +192,7 @@ onBeforeUnmount(() => {
     <small v-if="failure" id="preview-failure">{{ t('实时预览不可用：') }}{{ t(failure) }}
       <button class="secondary" @click="failed = false; failure = ''; start()">{{ t("重试") }}</button></small>
     <div id="preview-source" class="camera-switch"
-      :style="{ '--preview-source-count': sources.length + (overview ? 1 : 0) }" role="group" :aria-label="t(&quot;选择预览相机&quot;)">
+      :style="{ '--preview-source-count': overviewSources.length >= 4 ? 4 : sources.length + (overview ? 1 : 0) }" role="group" :aria-label="t(&quot;选择预览相机&quot;)">
       <button v-if="overview" id="preview-overview" :class="{ active: isOverview }" :aria-pressed="isOverview" :disabled="!online" @click="showOverview">{{ t(overview.label || '三路总览') }}</button>
       <button v-for="item in sources" :id="`preview-source-${item.id}`" :key="item.id" type="button"
         :class="{ active: !isOverview && source?.id === item.id, unavailable: item.publisher_count === 0 && preview?.publishers_checked }"
@@ -202,7 +204,7 @@ onBeforeUnmount(() => {
         <img v-show="!rtc" id="preview-image" :src="image" :alt="t(&quot;相机视频预览&quot;)">
         <video v-show="rtc" id="preview-video" ref="video" muted autoplay playsinline :aria-label="t(&quot;H.264 WebRTC 相机视频预览&quot;)"></video>
         <div v-if="isOverview" class="preview-tiles">
-          <button v-for="item in sources" :key="item.id" :disabled="!online || previewPaused" :style="regionStyle(item.id)"
+          <button v-for="item in overviewSources" :key="item.id" type="button" :disabled="!online || previewPaused" :style="regionStyle(item.id)"
             :aria-label="t('放大{0}', t(item.label)) + t(item.publisher_count === 0 && preview?.publishers_checked ? ' · 未连接' : '')" @click="openPreview(item.id)">
             <span>{{ t(item.label) }}{{ t(item.publisher_count === 0 && preview?.publishers_checked ? ' · 未连接' : '') }}</span>
           </button>
