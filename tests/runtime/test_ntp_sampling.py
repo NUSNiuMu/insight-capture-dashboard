@@ -120,7 +120,7 @@ def test_ego_http_clock_probe_validates_and_bounds_fresh_sample(monkeypatch, fau
 
 
 @pytest.mark.parametrize('bound,delay,passing', [(2, 4, True), (9.5, 4, False), (6, 12, False)])
-def test_only_client_ego_falls_back_and_keeps_recording_limits(monkeypatch, bound, delay, passing):
+def test_only_ego_prefers_http_and_keeps_recording_limits(monkeypatch, bound, delay, passing):
     ego, wrist = '169.254.10.1', '169.254.20.1'
     config = {'ego_url': f'http://{ego}:8765', 'max_pairwise_clock_bound_ms': 10, 'ntp_samples': 1,
               'clock_devices': [{'name': 'EgoHalo', 'host': ego}, {'name': 'Wrist', 'host': wrist}]}
@@ -162,27 +162,27 @@ def test_failed_ego_fallback_reports_both_transports(monkeypatch):
         'UDP NTP unavailable (no UDP listener); EgoHalo OTA clock probe failed: bad timestamp')
 
 
-@pytest.mark.parametrize('failures,use_http', [
-    ((ConnectionRefusedError, TimeoutError), True),
-    ((TimeoutError, TimeoutError), True),
+@pytest.mark.parametrize('failures,passing', [
+    ((ConnectionRefusedError, TimeoutError), False),
     ((TimeoutError, ValueError), False),
-    ((ConnectionRefusedError, None), False),
+    ((ConnectionRefusedError, None), True),
 ])
-def test_ego_http_fallback_requires_no_usable_udp_reply(monkeypatch, failures, use_http):
+def test_older_ego_without_http_probe_falls_back_to_udp(monkeypatch, failures, passing):
     host = '169.254.10.1'
     errors = iter(failures)
     ntp_result = {'host': host, 'offset_bound_ms': 1, 'round_trip_ms': 2}
-    http_calls = []
+    calls = []
 
     def ntp(hostname):
+        calls.append('udp')
         failure = next(errors)
         if failure:
             raise failure(failure.__name__)
         return dict(ntp_result)
 
     def http(hostname):
-        http_calls.append(hostname)
-        return {**ntp_result, 'method': 'HTTP'}
+        calls.append('http')
+        raise ValueError('HTTP 404')
 
     monkeypatch.setattr(clocks, 'ntp_sample', ntp)
     monkeypatch.setattr(clocks, 'ego_http_clock_sample', http)
@@ -190,5 +190,5 @@ def test_ego_http_fallback_requires_no_usable_udp_reply(monkeypatch, failures, u
         'ego_url': f'http://{host}:8765', 'ntp_samples': 2,
         'clock_devices': [{'name': 'EgoHalo', 'host': host}],
     })
-    assert http_calls == ([host] * 2 if use_http else [])
-    assert report['ok'] == (use_http or None in failures)
+    assert calls == ['http', 'udp', 'udp']
+    assert report['ok'] is passing

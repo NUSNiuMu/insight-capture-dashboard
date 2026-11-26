@@ -145,6 +145,7 @@ def ego_http_clock_sample(host):
 
 def measure_clocks(config: dict, *, include_usb_devices=False) -> dict:
     """Use each device's least delayed sample; fail closed on missing clocks."""
+    started = time.monotonic()
     devices = config["clock_devices"]
     peers = resolved_cameras() if config.get('discover_usb') else None
     limit = float(config.get("max_clock_bound_ms", 10))
@@ -161,29 +162,30 @@ def measure_clocks(config: dict, *, include_usb_devices=False) -> dict:
             device.update(host=matches[0]['host'], ntp_server=matches[0]['address'])
         samples, errors = [], []
         ssh_ntp = device.get("method") == "ssh_ntpdate"
-        for _ in range(1 if ssh_ntp else ntp_samples):
-            try:
-                samples.append(ssh_ntp_sample(device) if ssh_ntp else ntp_sample(device["host"]))
-            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
-                errors.append(exc)
-        if (not samples and not ssh_ntp and ego_host == device["host"] and errors
-                and all(isinstance(error, (ConnectionRefusedError, TimeoutError)) for error in errors)):
-            # Client-only EgoHalo firmware sets its wall clock from the Jetson but
-            # has no UDP 123 listener. ICMP rate limiting can turn refusals into timeouts.
-            http_errors = []
+        use_ego_http = ego_host is not None and ego_host == device["host"] and not ssh_ntp
+        http_errors = []
+        if use_ego_http:
+            # The client-only EgoHalo exposes its actual wall clock over OTA.
+            # Try that first instead of waiting for unanswered UDP 123 probes.
             for _ in range(ntp_samples):
                 try:
                     samples.append(ego_http_clock_sample(ego_host))
                 except (OSError, ValueError) as exc:
                     http_errors.append(str(exc))
-            if not samples:
-                ntp_error = "; ".join(dict.fromkeys(map(str, errors)))
-                return device["name"], {
-                    "ok": False, "host": device["host"],
-                    "error": f"UDP NTP unavailable ({ntp_error}); EgoHalo OTA clock probe failed: {http_errors[-1]}",
-                }
+                    # Older firmware without the endpoint can fall back to UDP.
+                    if not samples:
+                        break
         if not samples:
-            return device["name"], {"ok": False, "host": device["host"], "error": "; ".join(map(str, errors))}
+            for _ in range(1 if ssh_ntp else ntp_samples):
+                try:
+                    samples.append(ssh_ntp_sample(device) if ssh_ntp else ntp_sample(device["host"]))
+                except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                    errors.append(exc)
+        if not samples:
+            error = "; ".join(dict.fromkeys(map(str, errors)))
+            if http_errors:
+                error = f"UDP NTP unavailable ({error}); EgoHalo OTA clock probe failed: {http_errors[-1]}"
+            return device["name"], {"ok": False, "host": device["host"], "error": error}
         best = min(samples, key=lambda sample: sample["round_trip_ms"])
         if config.get('continuous_camera_clock'):
             # chronyd serves its corrected estimate, which can differ from the
@@ -196,13 +198,19 @@ def measure_clocks(config: dict, *, include_usb_devices=False) -> dict:
                 return device['name'], {**best, 'ok': False, 'error': str(exc)}
             best['system_clock_correction_bound_ms'] = 5.0
             best['offset_bound_ms'] = round(best['offset_bound_ms'] + 5.0, 4)
-            best['method'] = 'UDP NTP estimate plus verified system correction below 5 ms'
+            best.setdefault('method', 'UDP NTP estimate plus verified system correction below 5 ms')
         best.update(ok=best["offset_bound_ms"] <= float(device.get("max_clock_bound_ms", limit))
                     and best["round_trip_ms"] <= float(device.get("max_ntp_rtt_ms", rtt_limit)))
         return device["name"], best
 
+    def timed_measure(device):
+        started = time.monotonic()
+        name, result = measure(device)
+        result["measurement_ms"] = round((time.monotonic() - started) * 1000)
+        return name, result
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(devices))) as executor:
-        results = dict(executor.map(measure, devices))
+        results = dict(executor.map(timed_measure, devices))
     bounds = sorted((item.get("offset_bound_ms", float("inf")) for item in results.values()), reverse=True)
     pairwise_bound = sum(bounds[:2]) if bounds else None
     pairwise_limit = float(config.get("max_pairwise_clock_bound_ms", 20))
@@ -229,6 +237,7 @@ def measure_clocks(config: dict, *, include_usb_devices=False) -> dict:
             extra_config = {**config, "clock_devices": extra, "discover_usb": False,
                             "continuous_camera_clock": True}
             report["extra_usb_devices"] = measure_clocks(extra_config)["devices"]
+    report["measurement_ms"] = round((time.monotonic() - started) * 1000)
     return report
 
 

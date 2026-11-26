@@ -14,6 +14,22 @@ from insight_capture.api.support import read_json_body
 from insight_capture.runtime.discovery import phone_clock_status
 
 
+def elapsed_ms(started):
+    return round((time.monotonic() - started) * 1000)
+
+
+def recovery_hosts(clocks):
+    devices = list(clocks.get("devices", {}).values())
+    failed = [device for device in devices if not device.get("ok")]
+    if not failed:
+        # Both clocks can pass individually while their combined bound fails.
+        failed = sorted(devices, key=lambda device: device.get("offset_bound_ms", 0), reverse=True)[:2]
+    hosts = sorted({device["host"] for device in failed if device.get("host")})
+    if not hosts:
+        raise RuntimeError("无法识别需校时的 USB 相机。")
+    return hosts
+
+
 class TimeSyncRoutes:
     def __init__(self, context):
         self.context = context
@@ -68,27 +84,74 @@ class TimeSyncRoutes:
         raise RuntimeError("相机校时监测未启用。")
 
     async def _check_cameras(self, recover):
+        started = time.monotonic()
         async with self.transition:
             status = await asyncio.to_thread(self.context.recording_manager.status)
             if (status.get("recording") or status.get("merge_state") in {"finalizing", "merging"}
                     or self.context.prepared_playback_manager.status()["state"] == "playing"):
                 raise RuntimeError("设备忙，空闲后再校时。")
-            clocks = await asyncio.to_thread(self._measure_camera_clocks)
-            if clocks["ok"]:
-                result = {"state": "synced", "source": "cameras"}
+            timings = {"idle_check_ms": elapsed_ms(started)}
+            if recover:
+                result = {"state": "syncing", "source": "cameras", "timings_ms": dict(timings)}
                 self.context.camera_time_sync = result
-                return web.json_response({**result, "clock": clocks})
-            if not recover:
-                result = {"state": "needs_recovery", "source": "cameras"}
-                self.context.camera_time_sync = result
-                return web.json_response({**result, "clock": clocks})
-            result = {"state": "syncing", "source": "cameras"}
-            self.context.camera_time_sync = result
-            # The host uses its own clock for camera recovery.
-            self._task = asyncio.create_task(self._synchronize(time.time(), time.monotonic(), resync=True))
-            return web.json_response(result, status=202)
+                self._task = asyncio.create_task(
+                    self._synchronize(time.time(), started, resync=True, timings=timings)
+                )
+                return web.json_response(result, status=202)
 
-    async def _synchronize(self, epoch, received, resync=False):
+            started = time.monotonic()
+            clocks = await asyncio.to_thread(self._measure_camera_clocks)
+            timings["clock_check_ms"] = elapsed_ms(started)
+            result = {"state": "synced" if clocks["ok"] else "needs_recovery",
+                      "source": "cameras", "timings_ms": timings}
+            self.context.camera_time_sync = result
+            return web.json_response({**result, "clock": clocks})
+
+    async def _recover_cameras(self, timings):
+        started = time.monotonic()
+        clocks = await asyncio.to_thread(self._measure_camera_clocks)
+        timings["initial_clock_check_ms"] = elapsed_ms(started)
+        result = {"state": "synced"}
+        if not clocks["ok"]:
+            started = time.monotonic()
+            try:
+                result = await asyncio.to_thread(self._host_sync, {
+                    "epoch_s": time.time(),
+                    "received_monotonic_s": time.monotonic(),
+                    "resync_cameras": True,
+                    "camera_hosts": recovery_hosts(clocks),
+                })
+            finally:
+                timings["host_recovery_ms"] = elapsed_ms(started)
+            timings.update(result.get("timings_ms", {}))
+            if result["state"] != "synced":
+                return result
+
+            # USB NTP is requested asynchronously. Keep the admission lock
+            # until a fresh measurement passes or the recovery window closes.
+            started = time.monotonic()
+            deadline = started + 12
+            while True:
+                clocks = await asyncio.to_thread(self._measure_camera_clocks)
+                timings["clock_convergence_ms"] = elapsed_ms(started)
+                if clocks["ok"]:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("相机校时未达到录制门槛。")
+                await asyncio.sleep(0.5)
+
+        started = time.monotonic()
+        pipeline = getattr(self.context.node, "_image_pipeline", None)
+        deadline = started + 4
+        while pipeline is not None and not pipeline.clock_status()["ok"]:
+            if time.monotonic() >= deadline:
+                timings["image_validation_ms"] = elapsed_ms(started)
+                raise RuntimeError("相机时钟已对齐，图像时间戳尚未恢复。")
+            await asyncio.sleep(0.25)
+        timings["image_validation_ms"] = elapsed_ms(started)
+        return result
+
+    async def _synchronize(self, epoch, received, resync=False, timings=None):
         key, source = ("camera_time_sync", "cameras") if resync else ("phone_time_sync", "phone")
         initial_offset = epoch + time.monotonic() - received - time.time()
         try:
@@ -96,15 +159,17 @@ class TimeSyncRoutes:
                 setattr(self.context, key, {"state": "deferred", "source": source})
                 return
             async with self.transition:
-                result = await asyncio.to_thread(self._host_sync, {
-                    "epoch_s": epoch,
-                    "received_monotonic_s": received,
-                    "resync_cameras": resync,
-                })
-                if resync and result["state"] == "synced":
-                    clocks = await asyncio.to_thread(self._measure_camera_clocks)
-                    if not clocks["ok"]:
-                        raise RuntimeError("相机校时未达到录制门槛。")
+                if resync:
+                    result = await self._recover_cameras(timings)
+                    timings["total_ms"] = elapsed_ms(received)
+                    result = {**result, "timings_ms": timings}
+                    self.context.node.get_logger().info(
+                        f"Camera time recovery: {json.dumps(timings)}"
+                    )
+                else:
+                    result = await asyncio.to_thread(self._host_sync, {
+                        "epoch_s": epoch, "received_monotonic_s": received, "resync_cameras": False,
+                    })
                 setattr(self.context, key, {**result, "source": source})
                 for name, error in result.get("camera_recovery_errors", {}).items():
                     self.context.node.get_logger().warning(f"Camera recovery after Jetson clock sync ({name}): {error}")
@@ -120,14 +185,21 @@ class TimeSyncRoutes:
                 }
                 self.context.node.get_logger().warning(f"Jetson clock aligned after incomplete camera recovery: {exc}")
                 return
-            setattr(self.context, key, {"state": "error", "source": source, "error": str(exc)})
-            self.context.node.get_logger().warning(f"Time synchronization ({source}): {exc}")
+            error = {"state": "error", "source": source, "error": str(exc)}
+            if resync:
+                timings["total_ms"] = elapsed_ms(received)
+                error["timings_ms"] = timings
+            setattr(self.context, key, error)
+            self.context.node.get_logger().warning(
+                f"Time synchronization ({source}): {exc}" + (f"; timings_ms={timings}" if resync else "")
+            )
 
     @staticmethod
     def _host_sync(body):
         # Only this fixed, local clock operation crosses into the root host helper.
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(180)
+            # Legacy cameras have two sequential 165-second control calls.
+            connection.settimeout(350 if body.get("resync_cameras") else 180)
             connection.connect("/run/insight-capture-network/phone-clock.sock")
             connection.sendall(json.dumps(body).encode() + b"\n")
             with connection.makefile("rb") as stream:

@@ -132,10 +132,11 @@ class MobileCaptureRoutes:
             stopped = self._operation["accepted_at_epoch_s"]
             timing.update(stopped_at_epoch_s=stopped, duration_s=max(0.0, stopped - timing["started_at_epoch_s"]))
         distributed = status.get("distributed")
+        camera_time = dict(getattr(self.context, "camera_time_sync", {}))
         if playing:
             state = "playback"
             report = {**self._last_preflight, "ok": False, "failures": [], "camera_health": {}}
-        elif not busy and not status.get("recording") and state != "saving":
+        elif not busy and not status.get("recording") and state != "saving" and camera_time.get("state") != "syncing":
             report = self._idle_preflight(task_status.get("active"))
             clock = (report.get("distributed") or {}).get("clocks")
             if distributed is not None and clock is not None:
@@ -152,7 +153,6 @@ class MobileCaptureRoutes:
             if pipeline:
                 report["image_clocks"] = pipeline.clock_status()
         phone_time = dict(getattr(self.context, "phone_time_sync", {}))
-        camera_time = dict(getattr(self.context, "camera_time_sync", {}))
         if phone_time.get("state") in {"syncing", "error"}:
             message = "正在同步手机时间，请稍候。" if phone_time["state"] == "syncing" else "Jetson 时间同步失败。"
             report = {**report, "ok": False, "failures": [*report.get("failures", []),

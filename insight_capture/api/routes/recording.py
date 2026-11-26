@@ -82,6 +82,8 @@ class RecordingRoutes:
         payload = self.context.recording_manager.status()
         payload["operation_in_progress"] = self.busy
         payload["upgrade_lock_supported"] = True
+        monitor = getattr(self.context.recording_manager, "clock_monitor", None)
+        payload["managed_camera_startup"] = bool(getattr(monitor, "config", {}).get("continuous_camera_clock"))
         playback = getattr(self.context, "prepared_playback_manager", None)
         payload["playback_state"] = playback.status()["state"] if playback is not None else None
         if camera_topics:

@@ -14,6 +14,7 @@ import struct
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from urllib.request import ProxyHandler, build_opener, Request
 import threading
 
@@ -141,6 +142,22 @@ def json_request(url, body=None, timeout=4):
     with build_opener(ProxyHandler({})).open(request, timeout=timeout) as response:
         return json.load(response)
 
+def capture_busy(status):
+    # operation_in_progress includes this request's own API transition lock.
+    # The host separately holds the exclusive capture/upgrade lock.
+    if type(status.get("recording")) is not bool:
+        raise ValueError("Invalid recording status")
+    busy_states = {"starting", "preparing", "recording", "saving", "finalizing", "merging", "stopping", "playback"}
+    return (status["recording"] or status.get("state") in busy_states
+            or status.get("merge_state") in busy_states
+            or (status.get("current_take") or {}).get("state") in busy_states
+            or status.get("playback_state") in {"playing", "playback"})
+
+
+def recording_status():
+    return json_request('http://127.0.0.1:8765/api/recording/status')
+
+
 def startup_ready():
     try:
         return json.loads(STARTUP.read_text())
@@ -156,6 +173,13 @@ def recover_camera_startup():
     completed = startup_ready()
     while True:
         try:
+            recording = recording_status()
+            if recording.get('managed_camera_startup') is False:
+                time.sleep(5)
+                continue
+            if capture_busy(recording):
+                time.sleep(2)
+                continue
             status = json_request('http://127.0.0.1:8765/api/mobile/status')
             if not status.get('system', {}).get('managed_camera_startup'):
                 time.sleep(5)
@@ -198,14 +222,59 @@ def recover_camera_startup():
         time.sleep(2)
 
 
-def restart_acquisition(camera):
+@contextmanager
+def acquisition_lock(camera, timeout=-1):
+    lock = _acquisition_locks.setdefault(camera["namespace"], threading.Lock())
+    if not lock.acquire(timeout=timeout):
+        raise RuntimeError("设备正在执行另一项采集恢复")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def timed_camera_request(timings, phase, url, body=None, *, timeout=4):
+    started = time.monotonic()
+    try:
+        return json_request(url, body, timeout=timeout)
+    except (OSError, ValueError) as exc:
+        elapsed = round((time.monotonic() - started) * 1000)
+        raise RuntimeError(f"{phase} ({elapsed} ms): {exc}") from exc
+    finally:
+        timings[phase + "_ms"] = round((time.monotonic() - started) * 1000)
+
+
+def restart_acquisition(camera, *, lock_timeout=-1):
     """Start uses the camera's existing stopped-acquisition clock step gate."""
-    # Boot recovery and a manual request may target the same camera together.
-    with _acquisition_locks.setdefault(camera['namespace'], threading.Lock()):
+    timings = {}
+    with acquisition_lock(camera, lock_timeout):
         for operation in ("insight-stop", "insight-start"):
-            result = json_request(f"http://{camera['host']}/api/{operation}", {}, timeout=165)
+            result = timed_camera_request(timings, operation, f"http://{camera['host']}/api/{operation}", {}, timeout=165)
             if not result.get("success"):
-                raise RuntimeError(f"{camera['namespace']}: {result}")
+                raise RuntimeError(f"{operation}: {result}")
+    return timings
+
+
+def recover_camera_clock(camera):
+    if camera["namespace"] != "egohalo":
+        return restart_acquisition(camera, lock_timeout=5)
+
+    # Refresh capture timestamps, then use the device's USB NTP for precision.
+    # The native /api/time also holds the device recorder lease.
+    host = camera["host"]
+    setting_url = f"http://{host}/api/time-sync-setting"
+    timings = {}
+    with acquisition_lock(camera, 5):
+        setting = timed_camera_request(timings, "ntp_setting_check", setting_url)
+        if not setting["data"]["enabled"]:
+            raise RuntimeError("EgoHalo 的 USB NTP 校时未开启")
+        result = timed_camera_request(timings, "image_clock_request", f"http://{host}:8765/api/time",
+                                     {"unix_ms": time.time_ns() // 1_000_000}, timeout=8)
+        if not result.get("time", {}).get("valid"):
+            raise RuntimeError("EgoHalo 图像时钟校时失败")
+        if not timed_camera_request(timings, "ntp_request", setting_url, {"enabled": True}).get("success"):
+            raise RuntimeError("EgoHalo USB NTP 校时请求失败")
+    return timings
 
 
 def synchronize_phone_clock(body):
@@ -219,6 +288,14 @@ def synchronize_phone_clock(body):
     resync = body.get('resync_cameras', False)
     if type(resync) is not bool:
         raise ValueError('resync_cameras must be a boolean')
+    targets = body.get('camera_hosts')
+    if targets is not None and (
+        not resync or not isinstance(targets, list) or not targets
+        or not all(isinstance(host, str) for host in targets)
+    ):
+        raise ValueError('Invalid camera recovery targets')
+    timings = {}
+    started = time.monotonic()
     mounts = json.loads(subprocess.run(
         ['docker', 'inspect', '--format', '{{json .Mounts}}', 'insight-dashboard'],
         capture_output=True, text=True, check=True, timeout=5).stdout)
@@ -240,29 +317,47 @@ def synchronize_phone_clock(body):
             previous = phone_clock_status()
             if previous['state'] == 'synced':
                 return previous
-        status = json_request('http://127.0.0.1:8765/api/mobile/status')
-        if status.get('recording') or status.get('state') in {'starting', 'recording', 'saving', 'playback'}:
-            return {'state': 'deferred'}
+        timings["lock_and_mount_ms"] = round((time.monotonic() - started) * 1000)
+        started = time.monotonic()
+        busy = capture_busy(recording_status())
+        timings["recording_status_ms"] = round((time.monotonic() - started) * 1000)
+        if busy:
+            return {'state': 'deferred', 'timings_ms': timings}
         offset = epoch + time.monotonic() - received - time.time()
         adjusted = not resync and abs(offset) > 1
         if adjusted:
             time.clock_settime(time.CLOCK_REALTIME, time.time() + offset)
         result = {'state': 'synced', 'synced_at_epoch_s': time.time(), 'correction_s': offset}
         if adjusted or resync:
+            started = time.monotonic()
             recovery_errors = {}
             try:
                 cameras = resolved_cameras()
             except (OSError, ValueError, KeyError) as exc:
                 cameras = []
                 recovery_errors["discovery"] = str(exc)
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                futures = [(camera["namespace"], pool.submit(restart_acquisition, camera)) for camera in cameras]
+            if targets is not None:
+                cameras = [camera for camera in cameras if camera["host"] in targets]
+                if {camera["host"] for camera in cameras} != set(targets) or len(cameras) != len(set(targets)):
+                    raise RuntimeError("待校时相机已离线或 USB 连接已变化")
+            camera_timings = {}
+            if resync:
+                result["camera_timings_ms"] = camera_timings
+            operation = recover_camera_clock if resync else restart_acquisition
+            workers = max(1, len(cameras)) if resync else 3
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [(camera["namespace"], pool.submit(operation, camera)) for camera in cameras]
                 # Finish all camera work before releasing capture admission.
                 for name, future in futures:
                     try:
-                        future.result()
+                        camera_timings[name] = future.result()
                     except Exception as exc:
                         recovery_errors[name] = str(exc)
+            timings["camera_requests_ms"] = round((time.monotonic() - started) * 1000)
+            if resync:
+                result["timings_ms"] = timings
+                print("Camera time recovery:", json.dumps({"timings_ms": timings, "cameras": camera_timings,
+                                                            "errors": recovery_errors}), flush=True)
             if recovery_errors:
                 if resync:
                     raise RuntimeError("; ".join(f"{name}: {error}" for name, error in recovery_errors.items()))

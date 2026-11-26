@@ -21,7 +21,7 @@ class Request:
 
 class PhoneClockTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.context = SimpleNamespace(node=SimpleNamespace(get_logger=lambda: SimpleNamespace(warning=lambda *_: None)))
+        self.context = SimpleNamespace(node=SimpleNamespace(get_logger=lambda: SimpleNamespace(warning=lambda *_: None, info=lambda *_: None)))
         with mock.patch.object(module, "phone_clock_status", return_value={"state": "idle", "source": "phone"}):
             self.route = module.TimeSyncRoutes(self.context)
 
@@ -94,9 +94,12 @@ class PhoneClockTest(unittest.IsolatedAsyncioTestCase):
             helper.assert_not_called()
 
     async def test_camera_recovery_is_explicit_once_and_verifies_the_result(self):
-        stale = {"ok": False}
-        measure = mock.Mock(return_value=stale)
+        stale = {"ok": False, "devices": {"egohalo": {"ok": False, "host": "169.254.10.1"},
+                                          "wrist": {"ok": True, "host": "169.254.20.1"}}}
+        measure = mock.Mock(side_effect=[stale, stale, {"ok": True}])
         self.camera_manager(measure)
+        image_clock = mock.Mock(side_effect=[{"ok": False}, {"ok": True}])
+        self.context.node._image_pipeline = SimpleNamespace(clock_status=image_clock)
         with mock.patch.object(self.route, "_host_sync", return_value={"state": "synced"}) as helper:
             check = await self.route.synchronize(Request(resync_cameras=True))
             self.assertEqual(check.status, 200)
@@ -104,14 +107,29 @@ class PhoneClockTest(unittest.IsolatedAsyncioTestCase):
             helper.assert_not_called()
             response = await self.route.synchronize(Request(resync_cameras=True, recover_cameras=True))
             self.assertEqual(response.status, 202)
+            self.assertEqual(measure.call_count, 1)
             await self.route._task
-            self.assertEqual(self.context.camera_time_sync["state"], "error")
+            self.assertEqual(self.context.camera_time_sync["state"], "synced")
             self.assertEqual(self.context.phone_time_sync["state"], "idle")
+            self.assertEqual(set(self.context.camera_time_sync["timings_ms"]),
+                             {"idle_check_ms", "initial_clock_check_ms", "host_recovery_ms",
+                              "clock_convergence_ms", "image_validation_ms", "total_ms"})
             helper.assert_called_once()
             args = helper.call_args.args[0]
             self.assertTrue(args["resync_cameras"])
+            self.assertEqual(args["camera_hosts"], ["169.254.10.1"])
             self.assertAlmostEqual(args["epoch_s"], time.time(), delta=1)
             self.assertEqual(measure.call_count, 3)
+            self.assertEqual(image_clock.call_count, 2)
+
+    async def test_recovery_error_preserves_completed_timings(self):
+        self.camera_manager(lambda: {"ok": False, "devices": {"egohalo": {"ok": False, "host": "169.254.10.1"}}})
+        with mock.patch.object(self.route, "_host_sync", side_effect=OSError("offline")):
+            await self.route.synchronize(Request(resync_cameras=True, recover_cameras=True))
+            await self.route._task
+        self.assertEqual(self.context.camera_time_sync["state"], "error")
+        self.assertEqual(self.context.camera_time_sync["error"], "offline")
+        self.assertIn("host_recovery_ms", self.context.camera_time_sync["timings_ms"])
 
     async def test_active_take_rejects_both_camera_clock_actions(self):
         measurement = mock.Mock()
@@ -145,19 +163,19 @@ class HostClockTest(unittest.TestCase):
 
     def test_idle_step_and_current_dynamic_camera_links(self):
         peers = [{"host": "169.254.40.1", "namespace": "head"}, {"host": "169.254.50.1", "namespace": "wrist"}]
-        with mock.patch.object(discovery, "json_request", return_value={"state": "idle"}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition") as restart:
+        with mock.patch.object(discovery, "json_request", return_value={"state": "idle", "recording": False}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition") as restart:
             result = discovery.synchronize_phone_clock(self.sample())
             setter.assert_called_once();self.assertEqual(restart.call_count, 2)
             self.assertEqual(result["state"], "synced")
 
     def test_busy_never_changes_clock(self):
         for state in ["starting", "recording", "saving", "playback"]:
-            with mock.patch.object(discovery, "json_request", return_value={"state": state}), mock.patch.object(discovery.time, "clock_settime") as setter:
+            with mock.patch.object(discovery, "json_request", return_value={"state": state, "recording": False}), mock.patch.object(discovery.time, "clock_settime") as setter:
                 self.assertEqual(discovery.synchronize_phone_clock(self.sample())["state"], "deferred")
                 setter.assert_not_called()
 
     def test_small_offset_avoids_camera_restart(self):
-        with mock.patch.object(discovery, "json_request", return_value={"state": "idle"}), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "resolved_cameras") as peers:
+        with mock.patch.object(discovery, "json_request", return_value={"state": "idle", "recording": False}), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "resolved_cameras") as peers:
             first = discovery.synchronize_phone_clock(self.sample(time.time()))
             self.assertEqual(first["state"], "synced")
             self.assertFalse(first["adjusted"])
@@ -167,20 +185,20 @@ class HostClockTest(unittest.TestCase):
 
     def test_failed_camera_recovery_preserves_host_success_and_does_not_repeat(self):
         peers = [{"host": "169.254.40.1", "namespace": "head"}]
-        with mock.patch.object(discovery, "json_request", return_value={"state": "idle"}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition", side_effect=OSError("offline")):
+        with mock.patch.object(discovery, "json_request", return_value={"state": "idle", "recording": False}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition", side_effect=OSError("offline")):
             first = discovery.synchronize_phone_clock(self.sample())
             setter.assert_called_once()
         self.assertEqual(first["state"], "synced")
         self.assertEqual(first["camera_recovery_errors"], {"head": "offline"})
         self.assertEqual(discovery.phone_clock_status(), first)
-        with mock.patch.object(discovery, "json_request", return_value={"state": "idle"}), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition") as restart:
+        with mock.patch.object(discovery, "json_request", return_value={"state": "idle", "recording": False}), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition") as restart:
             self.assertEqual(discovery.synchronize_phone_clock(self.sample(time.time())), first)
             setter.assert_not_called()
             restart.assert_not_called()
 
     def test_requested_camera_recovery_still_reports_restart_failure(self):
         peers = [{"host": "169.254.40.1", "namespace": "head"}]
-        with mock.patch.object(discovery, "json_request", return_value={"state": "idle"}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition", side_effect=RuntimeError("already running")):
+        with mock.patch.object(discovery, "json_request", return_value={"state": "idle", "recording": False}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "recover_camera_clock", side_effect=RuntimeError("already running")):
             with self.assertRaisesRegex(RuntimeError, "head: already running"):
                 discovery.synchronize_phone_clock({**self.sample(), "resync_cameras": True})
             setter.assert_not_called()
@@ -202,18 +220,42 @@ class HostClockTest(unittest.TestCase):
         config = Path(self.directory.name) / 'config'
         config.mkdir()
         mounts = [{"Source": self.directory.name, "Destination": "/workspaces/insight_capture", "Type": "bind"}]
-        with mock.patch.object(discovery.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(mounts))), mock.patch.object(discovery, "json_request", return_value={"state": "idle"}):
+        with mock.patch.object(discovery.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(mounts))), mock.patch.object(discovery, "json_request", return_value={"state": "idle", "recording": False}):
             result = discovery.synchronize_phone_clock(self.sample(time.time()))
         self.assertEqual(result['state'], 'synced')
         self.assertTrue((config / '.capture-upgrade.lock').is_file())
         self.assertFalse((Path(self.directory.name) / '.capture-upgrade.lock').exists())
 
-    def test_camera_recovery_never_steps_jetson_clock(self):
-        peers=[{"host":"169.254.40.1","namespace":"head"}]
-        sample={**self.sample(),'resync_cameras':True}
-        with mock.patch.object(discovery, "json_request", return_value={"state":"idle"}), mock.patch.object(discovery, "resolved_cameras", return_value=peers), mock.patch.object(discovery.time, "clock_settime") as setter, mock.patch.object(discovery, "restart_acquisition") as restart:
-            self.assertEqual(discovery.synchronize_phone_clock(sample)['state'],'synced')
-            setter.assert_not_called();restart.assert_called_once_with(peers[0])
+    def test_camera_recovery_checks_lightweight_status_and_only_targets_failed_camera(self):
+        peers=[{"host":"169.254.10.1","namespace":"egohalo"}, {"host":"169.254.40.1","namespace":"head"}]
+        sample={**self.sample(),'resync_cameras':True,'camera_hosts':['169.254.10.1']}
+        status = {"recording": False, "merge_state": "saved", "playback_state": "idle",
+                  "operation_in_progress": True}
+        with mock.patch.object(discovery, "json_request", return_value=status) as request, \
+             mock.patch.object(discovery, "resolved_cameras", return_value=peers), \
+             mock.patch.object(discovery.time, "clock_settime") as setter, \
+             mock.patch.object(discovery, "recover_camera_clock", return_value={"ntp_request_ms": 5}) as recover:
+            result = discovery.synchronize_phone_clock(sample)
+        self.assertEqual(result['state'],'synced')
+        self.assertEqual(result['camera_timings_ms'], {'egohalo': {'ntp_request_ms': 5}})
+        request.assert_called_once_with('http://127.0.0.1:8765/api/recording/status')
+        setter.assert_not_called()
+        recover.assert_called_once_with(peers[0])
+
+    def test_ego_recovery_refreshes_clock_and_requests_usb_ntp_without_restarting(self):
+        camera = {"host": "169.254.10.1", "namespace": "egohalo"}
+        with mock.patch.object(discovery, "json_request", side_effect=[
+            {"data": {"enabled": True}}, {"time": {"valid": True}}, {"success": True},
+        ]) as request, mock.patch.object(discovery, "restart_acquisition") as restart:
+            timings = discovery.recover_camera_clock(camera)
+        self.assertEqual([call.args[0] for call in request.call_args_list], [
+            "http://169.254.10.1/api/time-sync-setting",
+            "http://169.254.10.1:8765/api/time",
+            "http://169.254.10.1/api/time-sync-setting",
+        ])
+        self.assertEqual(request.call_args_list[-1].args[1], {"enabled": True})
+        self.assertEqual(set(timings), {"ntp_setting_check_ms", "image_clock_request_ms", "ntp_request_ms"})
+        restart.assert_not_called()
 
     def test_boot_and_manual_camera_recovery_do_not_interleave(self):
         from concurrent.futures import ThreadPoolExecutor
