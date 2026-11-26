@@ -10,6 +10,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 
 @pytest.mark.parametrize("module_name", ["egohalo_rectifier", "looper_node"])
@@ -36,6 +37,15 @@ def test_mapping_processes_include_egohalo_relay_at_startup(tmp_path, monkeypatc
         monkeypatch.setattr(module, "configure_ros_network", configure)
     with pytest.raises(NetworkConfigured):
         module.main()
+
+
+@pytest.mark.parametrize("compose", ["docker-compose.yml", "deploy/docker-compose.yml"])
+def test_ego_mapping_services_can_read_the_host_discovery_snapshot(compose):
+    root = Path(__file__).resolve().parents[2]
+    path = "/run/insight-capture-network"
+    services = yaml.safe_load((root / compose).read_text())["services"]
+    for name in ("insight-dashboard", "insight3-global-localizer", "egohalo-stereo-rectifier"):
+        assert f"{path}:{path}:ro" in services[name]["volumes"], name
 
 NETWORK = '[Match]\nName=usb0\n[Network]\nAddress=169.254.40.1/24\n'
 BOOT = '#!/bin/bash\nifconfig usb0 169.254.40.1\nroute add default gw 169.254.40.2\n'

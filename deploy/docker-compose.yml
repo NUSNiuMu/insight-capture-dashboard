@@ -186,6 +186,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:
+      - /run/insight-capture-network:/run/insight-capture-network:ro
       - ./config:/workspaces/insight_capture/config
     command: ["python3", "-u", "-m", "insight_capture.runtime.mapping.egohalo_rectifier", "--config", "/workspaces/insight_capture/config/cameras.json"]
     stop_signal: SIGINT
