@@ -145,10 +145,12 @@ def merge_session(session: dict, config: dict, ego: Path, wrists: Path, output: 
         offsets[topic] = {"nearest_header_max_ms": float(deltas.max()), "nearest_header_p95_ms": float(np.percentile(deltas, 95))}
     if output.exists():
         raise RuntimeError("合并输出已存在，拒绝覆盖：" + str(output))
-    temporary = output.with_name("." + output.name + ".merging")
-    if temporary.exists():
+    staging = output.with_name("." + output.name + ".merging")
+    if staging.exists():
         import shutil
-        shutil.rmtree(temporary)
+        shutil.rmtree(staging)
+    staging.mkdir()
+    temporary = staging / output.name
     writer = rosbag2_py.SequentialWriter()
     writer.open(rosbag2_py.StorageOptions(uri=str(temporary), storage_id="mcap"), rosbag2_py.ConverterOptions("", ""))
     for descriptor in descriptors.values():
@@ -201,4 +203,5 @@ def merge_session(session: dict, config: dict, ego: Path, wrists: Path, output: 
                 manifest["camera_configuration"] = camera_config
     write_json(temporary / "recording_manifest.json", manifest)
     os.replace(temporary, output)
+    staging.rmdir()
     return report

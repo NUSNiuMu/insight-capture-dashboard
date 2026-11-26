@@ -75,7 +75,10 @@ class McapRecordingTest(unittest.TestCase):
             )
 
     def test_native_recorder_receives_every_topic_on_one_output(self) -> None:
-        for rmw in ("rmw_fastrtps_cpp", "rmw_cyclonedds_cpp"):
+        for rmw, folder, name in (
+            ("rmw_fastrtps_cpp", "cup_stacking", "single"),
+            ("rmw_cyclonedds_cpp", "堆叠_杯子~0a1b2c3d4e5f6789", "堆叠_杯子_take_0001_0a1b2c3d4e5f6789"),
+        ):
             with self.subTest(rmw=rmw):
                 with tempfile.TemporaryDirectory() as directory:
                     calls = []
@@ -101,9 +104,7 @@ class McapRecordingTest(unittest.TestCase):
                     ) as popen, mock.patch("insight_capture.runtime.recording.manager.os.write"), mock.patch.dict(
                         os.environ, {"RMW_IMPLEMENTATION": rmw, "CYCLONEDDS_URI": "file:///custom.xml"}
                     ):
-                        result = manager.start(
-                            bag_name="single", output_subdirectory="cup_stacking"
-                        )
+                        result = manager.start(bag_name=name, output_subdirectory=folder)
 
                     self.assertEqual(set(calls[0]), {"/camera"})
                     self.assertEqual(len(set(calls[0].values())), 1)
@@ -115,12 +116,12 @@ class McapRecordingTest(unittest.TestCase):
                     self.assertIn("--start-paused", command)
                     self.assertEqual(
                         result["output_path"],
-                        str(Path(directory) / "cup_stacking" / "single"),
+                        str(Path(directory) / folder / name),
                     )
                     target = Path(command[command.index("--output") + 1])
                     self.assertEqual(
                         json.loads((target / ".recording_target.json").read_text()),
-                        {"output_subdirectory": "cup_stacking"},
+                        {"output_subdirectory": folder},
                     )
                     self.assertEqual(
                         popen.call_args.kwargs["env"]["RMW_IMPLEMENTATION"],

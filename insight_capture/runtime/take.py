@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import os
 import shutil
 import threading
 import time
+import unicodedata
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Mapping, Optional
 
 from insight_capture.core.bag import recording_timing
+from .recording.storage import valid_recording_subdirectory
 from .tasks import CaptureTask, CaptureTaskCatalog
 from .recovered_take import recovered_take_info
 
@@ -38,6 +41,17 @@ def _with_recording_timing(payload: Dict) -> Dict:
 def _slug(value: object, fallback: str) -> str:
     normalized = re.sub(r"[^0-9A-Za-z_-]+", "_", str(value or "").strip())
     return normalized.strip("_") or fallback
+
+
+def _task_recording_suffix(task_id: str) -> str:
+    return hashlib.blake2s(task_id.encode(), digest_size=8).hexdigest()
+
+
+def _task_recording_folder(task_id: str, name: str) -> str:
+    label = re.sub(r"[^\w-]+", "_", unicodedata.normalize("NFC", name))
+    # Leave room for take, recovery and file extensions on ext4 and exFAT.
+    label = label.encode()[:96].decode(errors="ignore").strip("_-") or "task"
+    return f"{label}~{_task_recording_suffix(task_id)}"
 
 
 class SessionTakeStore:
@@ -233,7 +247,7 @@ class SessionTakeStore:
         paths = []
         bag_name = payload["bag_name"]
         if folder is None:
-            folder = self._task_set_id(payload["task_id"])
+            folder = payload.get("recording_subdirectory") or self._task_set_id(payload["task_id"])
         if payload.get("bag_path"):
             bag = Path(payload["bag_path"])
             root = next((root for root in roots if bag.is_relative_to(root) and bag != root), None)
@@ -349,14 +363,18 @@ class SessionTakeStore:
             return {"task_id": task_id, "take_id": take_id, "paths": [str(target) for target, _ in paths],
                     "distributed_session_ids": [payload["distributed"]["session_id"]] if payload.get("distributed") else []}
 
-    def delete_task(self, task_id: str, raw_roots, expected_recorded_takes: int) -> Dict:
+    def delete_task(self, task_id: str, raw_roots, expected_recorded_takes: int,
+                    *, protected_paths=()) -> Dict:
         with self._lock:
             task = self._task_catalog.get(task_id)
             current = self.current()
             if current and current.get("state") in {"starting", "recording", "finalizing"}:
                 raise RuntimeError("正在准备、录制或保存，不能删除任务。")
             folder = self._task_set_id(task_id)
-            if any(item["task_id"] != task_id and self._task_set_id(item["task_id"]) == folder
+            suffix = "~" + _task_recording_suffix(task_id)
+            if any(str(item["task_id"]) != task_id and
+                   (self._task_set_id(str(item["task_id"])) == folder or
+                    "~" + _task_recording_suffix(str(item["task_id"])) == suffix)
                    for item in self._task_catalog.list()):
                 raise RuntimeError("任务目录与另一任务重名，不能删除。")
             takes_root = self.sessions_root / folder / "takes"
@@ -381,8 +399,14 @@ class SessionTakeStore:
                         # Unknown ownership must be preserved, not block cleanup
                         # of an unrelated task.
                         continue
-                    if isinstance(target, dict) and target.get("output_subdirectory") == folder:
+                    if not isinstance(target, dict):
+                        continue
+                    destination = target.get("output_subdirectory")
+                    if isinstance(destination, str) and (destination == folder or
+                            (destination.endswith(suffix) and valid_recording_subdirectory(destination))):
                         paths.append((marker.parent, root))
+                paths.extend((named, root) for named in root.glob(f"*{suffix}")
+                             if valid_recording_subdirectory(named.name))
             for root, name in [(Path(root), folder) for root in raw_roots] + [
                 (self.sessions_root, folder),
                 *([(self._task_catalog.managed_root, task_id)] if self._task_catalog.managed_root else []),
@@ -391,7 +415,7 @@ class SessionTakeStore:
                 target = root / name
                 paths.append((target, root))
             paths = list(dict.fromkeys(paths))
-            self._validate_data_paths(paths)
+            self._validate_data_paths(paths, protected_paths)
             # All paths are validated before any removal. Raw data is removed
             # before its catalog entry, so an I/O failure remains visible for retry.
             self._remove_data_paths(paths)
@@ -406,6 +430,7 @@ class SessionTakeStore:
             self._task_catalog.remove(task_id)
             self._stats_cache.clear()
             return {"task_id": task_id, "name": task.name, "recorded_takes": count,
+                    "paths": [str(target) for target, _ in paths],
                     "distributed_session_ids": [take["distributed"]["session_id"] for take in takes if take.get("distributed")]}
 
     def list_tasks(self) -> list[Dict[str, object]]:
@@ -416,7 +441,7 @@ class SessionTakeStore:
             tasks.append({
                 **item,
                 "task_set_id": task_set_id,
-                "recording_subdirectory": task_set_id,
+                "recording_subdirectory": _task_recording_folder(str(item["task_id"]), str(item["name"])),
                 "active": self._active and self.task_id == item.get("task_id"),
                 "stats": self._cached_take_stats(takes_root),
             })
@@ -426,7 +451,7 @@ class SessionTakeStore:
         """Return the stable raw-data folder for the active task set."""
 
         with self._lock:
-            return self._task_set_id(self.task_id) if self._active and self.task_id else None
+            return _task_recording_folder(self.task_id, self.task) if self._active and self.task_id else None
 
     def _path(self, take_id: int) -> Path:
         return self.takes_root / f"take_{int(take_id):04d}.json"
@@ -464,10 +489,11 @@ class SessionTakeStore:
                 if current.get("state") in {"starting", "recording", "finalizing"}:
                     raise RuntimeError("A take is already active.")
             take_id = self._next_take_id()
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            subdirectory = _task_recording_folder(self.task_id, self.task)
+            label, suffix = subdirectory.split("~", 1)
             bag_name = _slug(
                 requested_bag_name,
-                f"{_slug(self.task_id, 'task')}_take_{take_id:04d}_{timestamp}",
+                f"{label}_take_{take_id:04d}_{suffix}",
             )
             payload = {
                 "schema_version": 1,
@@ -481,6 +507,7 @@ class SessionTakeStore:
                 "operator": self.operator,
                 "trigger": str(trigger or "web"),
                 "bag_name": bag_name,
+                "recording_subdirectory": subdirectory,
                 "bag_path": None,
                 "state": "starting",
                 "start_epoch_s": time.time(),
@@ -502,10 +529,11 @@ class SessionTakeStore:
                 raise RuntimeError("No take is reserved.")
             payload["state"] = "recording"
             payload["bag_path"] = str(output_path or "") or None
-            payload["recording_timing"] = deepcopy((recording_status or {}).get("recording_timing"))
-            payload["require_global_pose"] = (recording_status or {}).get("require_global_pose", True)
-            if (recording_status or {}).get("distributed"):
-                payload["distributed"] = recording_status["distributed"]
+            status = recording_status or {}
+            payload["recording_timing"] = deepcopy(status.get("recording_timing"))
+            payload["require_global_pose"] = status.get("require_global_pose", True)
+            if status.get("distributed"):
+                payload["distributed"] = status["distributed"]
             self._write_json(self._path(payload["take_id"]), payload)
             return deepcopy(payload)
 

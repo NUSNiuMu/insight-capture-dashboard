@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import time
 from typing import Dict, Optional
@@ -29,6 +30,10 @@ DEFAULT_POST_PROCESSING_CONFIG = {
         "minimum_free_gb": 2.0,
     },
 }
+
+
+def valid_recording_subdirectory(value: str) -> bool:
+    return re.fullmatch(r"[0-9A-Za-z_-]+|[\w-]+~[0-9a-f]{16}", value) is not None
 
 
 def load_post_processing_config(config_path: Path) -> Dict:

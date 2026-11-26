@@ -5,7 +5,6 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
-import re
 import threading
 import time
 import uuid
@@ -13,6 +12,7 @@ import uuid
 from .clock_sync import measure_clocks
 from .distributed_merge import file_hash, merge_session, write_json
 from .ego_participant import EgoParticipant
+from .storage import valid_recording_subdirectory
 
 
 TERMINAL = {"saved", "done", "error"}
@@ -132,7 +132,7 @@ class DistributedRecordingManager:
             with self.local._lock:
                 self.local._refresh_recording_storage_unlocked()
             root = self.local.rosbag_root
-            if output_subdirectory and not re.fullmatch(r"[0-9A-Za-z_-]+", output_subdirectory):
+            if output_subdirectory and not valid_recording_subdirectory(output_subdirectory):
                 raise ValueError("Recording subdirectory must be a single safe task-set name.")
             name = bag_name or ("ego_capture_" + sid)
             if not name or any(c not in "-_" and not c.isalnum() for c in name):

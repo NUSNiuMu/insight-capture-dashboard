@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import struct
@@ -17,6 +16,7 @@ from rosbags.typesys import Stores, get_typestore
 import yaml
 
 from insight_capture.core.bag import MANIFEST_NAME, iter_messages, read_metadata
+from .storage import valid_recording_subdirectory
 
 RECORDING_TARGET_NAME = ".recording_target.json"
 
@@ -132,7 +132,7 @@ class RecordingRecovery:
         marker = staging / RECORDING_TARGET_NAME
         metadata = json.loads(marker.read_text()) if marker.is_file() else {}
         subdirectory = str(metadata.get("output_subdirectory") or "").strip()
-        if subdirectory and not re.fullmatch(r"[0-9A-Za-z_-]+", subdirectory):
+        if subdirectory and not valid_recording_subdirectory(subdirectory):
             raise ValueError("invalid recovery output subdirectory")
         root = self.owner.rosbag_root / subdirectory
         root.mkdir(parents=True, exist_ok=True)

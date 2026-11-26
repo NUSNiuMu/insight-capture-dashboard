@@ -18,7 +18,7 @@ from rosbags.rosbag2 import Reader
 
 from insight_capture.core.bag import MANIFEST_NAME, read_metadata
 from .clock_sync import ClockMonitor
-from .storage import probe_recording_root
+from .storage import probe_recording_root, valid_recording_subdirectory
 from .recorder import (
     _normalize_topics,
     build_recording_topic_catalog,
@@ -505,6 +505,7 @@ class RecordingManager:
         recording_mode: str = "capture",
         output_subdirectory: Optional[str] = None,
         require_global_pose: bool = True,
+        task: Optional[Dict] = None,
     ) -> Dict[str, object]:
         start_started = time.perf_counter()
         selected_topics = self.default_topics if topics is None else _normalize_topics(topics)
@@ -533,7 +534,7 @@ class RecordingManager:
             safe_subdirectory = ""
             if output_subdirectory:
                 candidate = str(output_subdirectory).strip()
-                if not re.fullmatch(r"[0-9A-Za-z_-]+", candidate):
+                if not valid_recording_subdirectory(candidate):
                     raise ValueError("Recording subdirectory must be a single safe task-set name.")
                 safe_subdirectory = candidate
             output_root = self.rosbag_root / safe_subdirectory if safe_subdirectory else self.rosbag_root
@@ -690,7 +691,7 @@ class RecordingManager:
                     "storage_id": "mcap",
                     "rmw_implementation": env.get("RMW_IMPLEMENTATION"),
                     "bag_name": name,
-                    "task_set_id": safe_subdirectory or None,
+                    "task_set_id": task["session_id"] if task else safe_subdirectory or None,
                     "recording_mode": self.recording_mode,
                     "require_global_pose": self.require_global_pose,
                     "selected_topics": list(selected_topics),
@@ -698,6 +699,11 @@ class RecordingManager:
                     "camera_configuration": json.loads(json.dumps(self.raw_config)),
                     "clock_start": self._clock_start,
                 }
+                if task is not None:
+                    self._recording_manifest.update(
+                        task_id=task["task_id"], task_name=task["task_name"],
+                        take_id=task["take_id"], recording_subdirectory=safe_subdirectory,
+                    )
                 self.merge_state = "idle"
                 self.merge_error = None
                 self.merge_timings = {}

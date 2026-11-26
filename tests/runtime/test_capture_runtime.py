@@ -281,9 +281,9 @@ class CaptureRuntimeTest(unittest.TestCase):
             store = SessionTakeStore(root, task_catalog=catalog)
             first_session = store.session_id
             self.assertEqual(first_session, "cup_stacking")
-            self.assertEqual(store.recording_subdirectory(), "cup_stacking")
+            self.assertTrue(store.recording_subdirectory().startswith("Cup_stacking~"))
             take = store.reserve_take()
-            self.assertTrue(take["bag_name"].startswith("cup_stacking_take_0001_"))
+            self.assertTrue(take["bag_name"].startswith("Cup_stacking_take_0001_"))
             store.mark_recording(root / "bags" / take["bag_name"])
             store.complete_current({"output_path": take["bag_name"]})
 

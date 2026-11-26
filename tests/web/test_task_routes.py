@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from insight_capture.api.routes.tasks import TaskRoutes  # noqa: E402
+from insight_capture.api.routes.mobile import MobileCaptureRoutes  # noqa: E402
 from insight_capture.api.routes.recording import RecordingRoutes  # noqa: E402
 from insight_capture.runtime.take import SessionTakeStore  # noqa: E402
 from insight_capture.runtime.tasks import CaptureTask, CaptureTaskCatalog  # noqa: E402
@@ -59,6 +60,51 @@ def _catalog(managed_root=None) -> CaptureTaskCatalog:
 
 
 class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
+    async def test_mobile_start_names_new_take_from_the_task_name(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            store = SessionTakeStore(root, task_catalog=_catalog(root / "tasks"))
+            for task_id in ("task_original", "task_same_name"):
+                store.create_task({
+                    "id": task_id, "name": "堆叠/杯子", "instruction": "Stack cups",
+                })
+            store.activate_task("task_original")
+            historical = store.reserve_take("task_original_take_0001_20260101_120000")
+            old_bag = root / "bags" / "task_original" / historical["bag_name"]
+            old_bag.mkdir(parents=True)
+            store.mark_recording(old_bag)
+            store.complete_current({"output_path": str(old_bag)})
+            metadata = store.takes_root / "take_0001.json"
+            old_take = json.loads(metadata.read_text())
+            old_take.pop("recording_subdirectory", None)
+            metadata.write_text(json.dumps(old_take))
+
+            manager = _RecordingManager(root / "bags")
+            context = SimpleNamespace(
+                results_root=root,
+                take_store=store,
+                recording_manager=manager,
+                capture_preflight=None,
+                node=SimpleNamespace(get_logger=lambda: mock.Mock()),
+            )
+            mobile = MobileCaptureRoutes(context, RecordingRoutes(context))
+            operation = {"command_id": "named-take", "task_id": "task_original"}
+            await mobile._run("start", operation, None)
+
+            self.assertEqual(operation.get("state"), "complete", operation)
+            output = Path(operation["output_path"])
+            self.assertTrue(output.parent.name.startswith("堆叠_杯子~"))
+            self.assertTrue(output.name.startswith("堆叠_杯子_take_0002_"))
+            self.assertEqual(output.parent.parent, root / "bags")
+            tasks = {task["task_id"]: task for task in store.list_tasks()}
+            self.assertNotEqual(
+                tasks["task_original"]["recording_subdirectory"],
+                tasks["task_same_name"]["recording_subdirectory"],
+            )
+            rows = store.task_recordings("task_original")["takes"]
+            self.assertEqual({row["bag_path"] for row in rows}, {str(old_bag), str(output)})
+            self.assertTrue(old_bag.is_dir())
+
     async def test_status_reports_task_counts_and_next_take(self):
         with tempfile.TemporaryDirectory() as temporary:
             store = SessionTakeStore(Path(temporary), task_catalog=_catalog())
@@ -125,11 +171,13 @@ class TaskRoutesTest(unittest.IsolatedAsyncioTestCase):
             payload = json.loads(response.text)
 
             self.assertEqual(response.status, 200)
+            folder = store.recording_subdirectory()
+            self.assertTrue(folder.startswith("Cup_stacking~"))
             self.assertEqual(
-                manager.start_calls[0]["output_subdirectory"], "cup_stacking"
+                manager.start_calls[0]["output_subdirectory"], folder
             )
             self.assertEqual(
-                Path(payload["output_path"]).parent.name, "cup_stacking"
+                Path(payload["output_path"]).parent.name, folder
             )
 
     async def test_created_and_edited_task_is_persisted_in_its_task_folder(self):

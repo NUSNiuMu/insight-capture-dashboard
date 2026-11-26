@@ -375,12 +375,9 @@ class RecordingRoutes:
         try:
             start_arguments = {"topics": topics, "bag_name": actual_name,
                                "require_global_pose": not relaxed_preflight}
-            if hasattr(self.context.recording_manager, "distributed_preflight"):
+            if take is not None:
                 start_arguments["task"] = take
-            if track_take and take_store is not None:
-                start_arguments["output_subdirectory"] = (
-                    take_store.recording_subdirectory()
-                )
+                start_arguments["output_subdirectory"] = take["recording_subdirectory"]
             if preflight_mode != "capture":
                 start_arguments["recording_mode"] = preflight_mode
             status = await asyncio.to_thread(

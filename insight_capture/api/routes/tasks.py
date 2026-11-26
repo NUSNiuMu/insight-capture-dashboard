@@ -131,20 +131,23 @@ class TaskRoutes:
                 playback = getattr(self.context, "prepared_playback_manager", None)
                 current = playback.status() if playback else {}
                 roots = self.context.recording_manager.storage_browse_roots()
-                selected = False
+                selected_path = None
                 missing_selection = False
                 if current.get("bag_name"):
                     try:
-                        path = await asyncio.to_thread(self.context.bag_library.resolve, current["bag_name"])
+                        selected_path = await asyncio.to_thread(
+                            self.context.bag_library.resolve, current["bag_name"]
+                        )
                     except FileNotFoundError:
                         missing_selection = True
-                    else:
-                        folder = self.context.take_store._task_set_id(task_id)
-                        selected = any(path.resolve().is_relative_to((root / folder).resolve()) for root in roots)
-                if selected and current.get("state") in {"preparing", "playing"}:
-                    return web.json_response({"message": "请先停止该任务的回放。"}, status=409)
+                protected = [selected_path] if selected_path and current.get("state") in {"preparing", "playing"} else []
                 removed = await asyncio.to_thread(self._delete_data, partial(
-                    self.context.take_store.delete_task, task_id, roots, count))
+                    self.context.take_store.delete_task, task_id, roots, count,
+                    protected_paths=protected))
+                paths = removed.pop("paths")
+                selected = selected_path and any(
+                    selected_path.resolve().is_relative_to(Path(path).resolve()) for path in paths
+                )
                 if (selected or missing_selection) and current.get("state") == "ready":
                     playback.stop()
                 return web.json_response({"status": "deleted", "task": removed})

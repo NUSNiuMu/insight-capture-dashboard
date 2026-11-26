@@ -60,7 +60,10 @@ def test_matching_native_task_preserves_recording_options(tmp_path, relaxed):
     response = asyncio.run(routes._handle_recording_start(Request({"task_id": "task_a", "native_relaxed_preflight": relaxed, "topics": ["/camera"], "bag_name": "named_take"})))
     assert response.status == 200
     assert store.current()["task_id"] == "task_a"
-    assert calls == [{"topics": ["/camera"], "bag_name": "named_take", "require_global_pose": not relaxed, "output_subdirectory": "task_a"}]
+    assert calls[0].pop("task")["task_id"] == "task_a"
+    assert calls == [{"topics": ["/camera"], "bag_name": "named_take",
+                      "require_global_pose": not relaxed,
+                      "output_subdirectory": store.recording_subdirectory()}]
     assert checks[0][1]["require_global_pose"] is not relaxed
     assert routes.context.recording_manager.preview_control.events == ["pause", "resume"]
 

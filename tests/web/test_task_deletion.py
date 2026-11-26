@@ -42,7 +42,7 @@ class TaskDeletionTest(unittest.IsolatedAsyncioTestCase):
 
     def record(self):
         take=self.store.reserve_take()
-        bag=self.raw / "builtin" / take["bag_name"]
+        bag=self.raw / take["recording_subdirectory"] / take["bag_name"]
         bag.mkdir(parents=True)
         (bag / "data.mcap").write_bytes(b"synthetic test data")
         self.store.mark_recording(bag)
@@ -51,18 +51,22 @@ class TaskDeletionTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_removes_recordings_and_builtin_persistently_preserves_other_task(self):
         bag=self.record()
-        self.store.create_task({"id":"other","name":"Other","instruction":"Keep"})
-        sentinel=self.raw / "other" / "keep";sentinel.parent.mkdir();sentinel.write_text("keep")
-        response=await self.delete(count=1)
+        self.store.update_task("builtin", {"name":"Renamed"})
+        renamed_bag=self.record()
+        self.store.create_task({"id":"other","name":"Builtin","instruction":"Keep"})
+        other = next(task for task in self.store.list_tasks() if task["task_id"] == "other")
+        sentinel=self.raw / other["recording_subdirectory"] / "keep";sentinel.parent.mkdir();sentinel.write_text("keep")
+        response=await self.delete(count=2)
         self.assertEqual(response.status,200,response.text)
-        self.assertFalse(bag.exists())
+        self.assertFalse(bag.parent.exists())
+        self.assertFalse(renamed_bag.parent.exists())
         self.assertFalse((self.sessions / "builtin").exists())
         self.assertEqual(sentinel.read_text(),"keep")
         catalog=CaptureTaskCatalog.load(self.config,managed_root=self.sessions)
         restored=SessionTakeStore(self.root / "results",task_catalog=catalog)
         self.assertFalse(restored.task_status()["active"])
         self.assertEqual([t["task_id"] for t in catalog.list()],["other"])
-        self.assertEqual((await self.delete(count=1)).status,404)
+        self.assertEqual((await self.delete(count=2)).status,404)
 
     async def test_managed_task_stays_deleted_after_reload(self):
         self.store.create_task({"id":"qa","name":"QA","instruction":"Test"})
@@ -105,8 +109,8 @@ class TaskDeletionTest(unittest.IsolatedAsyncioTestCase):
     async def test_cancelled_request_keeps_transition_until_worker_finishes(self):
         entered=threading.Event();finish=threading.Event()
         original=self.store.delete_task
-        def slow(*args):
-            entered.set();finish.wait(3);return original(*args)
+        def slow(*args, **kwargs):
+            entered.set();finish.wait(3);return original(*args, **kwargs)
         with patch.object(self.store,"delete_task",slow):
             request=asyncio.create_task(self.delete())
             await asyncio.to_thread(entered.wait,2)
@@ -249,7 +253,7 @@ class TaskDeletionTest(unittest.IsolatedAsyncioTestCase):
         (archive / "raw.mcap").write_bytes(b"original")
         (recovered / "recording_manifest.json").write_text(json.dumps({"recovered":True,"bag_name":recovered.name,"recovery_source":str(archive)}))
         staging=self.raw / "_staging" / bag.name;staging.mkdir()
-        (staging / ".recording_target.json").write_text(json.dumps({"output_subdirectory":"builtin"}))
+        (staging / ".recording_target.json").write_text(json.dumps({"output_subdirectory":bag.parent.name}))
         sentinel=self.raw / "_staging" / "unrelated";sentinel.mkdir()
         self.assertEqual((await self.delete_take(1,bag.name)).status,200)
         for path in [bag,recovered,archive,staging,meta]:self.assertFalse(path.exists(),path)
