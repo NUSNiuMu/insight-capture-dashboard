@@ -15,13 +15,14 @@ def preview_description(cameras, poses, *, paused=False):
     sources = []
     for camera in cameras:
         role = roles.get(camera.device_name, "")
+        uq2168 = getattr(camera, "uq2168", False)
         width = getattr(camera, "width", 0) or (1088 if role == "head" else 544)
         height = getattr(camera, "height", 0) or (1920 if role == "head" else 640)
         longest = max(width, height)
-        if longest > MAX_PREVIEW_SIDE:
+        if not uq2168 and longest > MAX_PREVIEW_SIDE:
             width = max(4, width * MAX_PREVIEW_SIDE // (longest * 4) * 4)
             height = max(4, height * MAX_PREVIEW_SIDE // (longest * 4) * 4)
-        label = camera.label if getattr(camera, "uq2168", False) else labels.get(role, camera.label)
+        label = camera.label if uq2168 else labels.get(role, camera.label)
         if role == "head" and head_count > 1:
             label = camera.label.removeprefix("EgoHalo ")
         sources.append({"id": camera.name, "topic": camera.topic, "width": width, "height": height,

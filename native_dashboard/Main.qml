@@ -311,6 +311,7 @@ ApplicationWindow {
                                 }
                                 NativeVideo {
                                     id: video; active: root.spatialActive; visible: root.spatialActive && !confirmDialog.visible && !task.popup.visible && !bag.popup.visible; anchors.left: parent.left; anchors.right: parent.right; anchors.top: cameraStatus.bottom; anchors.bottom: parent.bottom; anchors.topMargin: 6; anchors.bottomMargin: 6
+                                    fullResolution: !dashboard.playback && cameraCard.modelData.uq2168 === true
                                     sourceSize: Qt.size(cameraCard.modelData.width || 0, cameraCard.modelData.height || 0)
                                     sourceOnline: dashboard.playback || dashboard.cameraAvailability[cameraCard.modelData.name] !== false
                                     cameraName: cameraCard.modelData.name; endpoint: cameraCard.modelData.endpoint; nativeEndpoint: cameraCard.modelData.nativeEndpoint || ""; media: cameraCard.modelData.media; targetFps: root.previewFps

@@ -110,7 +110,7 @@ def test_uq2168_preview_keeps_wrists_out_of_the_four_view_overview(config):
     ]
     assert all((region["width"], region["height"]) == (480, 640) for region in overview["regions"])
     assert [(source["id"], source["label"], source["width"], source["height"])
-            for source in preview["sources"][-2:]] == [("uvc_left", "左腕", 1280, 800), ("uvc_right", "右腕", 1280, 800)]
+            for source in preview["sources"][-2:]] == [("uvc_left", "左腕", 1920, 1200), ("uvc_right", "右腕", 1920, 1200)]
 
 
 def test_scan_selects_two_uq2168_without_a_binding_file(config, monkeypatch):

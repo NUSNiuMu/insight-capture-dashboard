@@ -78,6 +78,13 @@ void NativeVideo::setSourceSize(const QSize &value) {
     emit sourceChanged();
     reconnect();
 }
+void NativeVideo::setFullResolution(bool value) {
+    if (value == m_fullResolution)
+        return;
+    m_fullResolution = value;
+    emit sourceChanged();
+    reconnect();
+}
 void NativeVideo::setActive(bool value) {
     if (m_active.exchange(value) == value) return;
     m_resumeFresh = false;
@@ -263,7 +270,7 @@ void NativeVideo::start() {
         const int longest = qMax(m_sourceSize.width(), m_sourceSize.height());
         QString caps = "video/x-raw(memory:NVMM),format=I420";
         if (longest > 0) {
-            const double factor = qMin(1.0, 720.0 / longest);
+            const double factor = m_fullResolution ? 1.0 : qMin(1.0, 720.0 / longest);
             const int width = qMax(2, int(m_sourceSize.width() * factor) / 2 * 2);
             const int height = qMax(2, int(m_sourceSize.height() * factor) / 2 * 2);
             caps += QString(",width=%1,height=%2").arg(width).arg(height);
@@ -390,7 +397,7 @@ void NativeVideo::startNativePipeline(int format, int width, int height) {
         source = QString("appsrc name=src is-live=true format=time block=false max-buffers=1 max-bytes=0 leaky-type=downstream "
                          "caps=video/x-raw,format=%1,width=%2,height=%3,framerate=%4/1 ! ")
                      .arg(format == 1 ? "GRAY8" : "NV12").arg(width).arg(height).arg(m_fps).toUtf8();
-    const double factor = qMin(1.0, 720.0 / qMax(width, height));
+    const double factor = m_fullResolution ? 1.0 : qMin(1.0, 720.0 / qMax(width, height));
     const int outWidth = qMax(2, int(width * factor) / 2 * 2);
     const int outHeight = qMax(2, int(height * factor) / 2 * 2);
     // VIC conversion also releases decoder surfaces before the display retains them.

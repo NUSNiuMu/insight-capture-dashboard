@@ -19,6 +19,7 @@ class NativeVideo : public QQuickItem {
     Q_PROPERTY(QUrl nativeEndpoint READ nativeEndpoint WRITE setNativeEndpoint NOTIFY sourceChanged)
     Q_PROPERTY(QUrl media READ media WRITE setMedia NOTIFY sourceChanged)
     Q_PROPERTY(QSize sourceSize READ sourceSize WRITE setSourceSize NOTIFY sourceChanged)
+    Q_PROPERTY(bool fullResolution READ fullResolution WRITE setFullResolution NOTIFY sourceChanged)
     Q_PROPERTY(QSize frameSize READ frameSize NOTIFY frameSizeChanged)
     Q_PROPERTY(bool active READ active WRITE setActive NOTIFY sourceChanged)
     Q_PROPERTY(bool sourceOnline READ sourceOnline WRITE setSourceOnline NOTIFY sourceChanged)
@@ -36,6 +37,7 @@ class NativeVideo : public QQuickItem {
     QUrl nativeEndpoint() const { return m_nativeEndpoint; }
     QUrl media() const { return m_media; }
     QSize sourceSize() const { return m_sourceSize; }
+    bool fullResolution() const { return m_fullResolution; }
     QSize frameSize() const { return m_displaySize; }
     bool active() const { return m_active; }
     void setActive(bool value);
@@ -52,6 +54,7 @@ class NativeVideo : public QQuickItem {
     void setMedia(const QUrl &value);
     void setTargetFps(int value);
     void setSourceSize(const QSize &value);
+    void setFullResolution(bool value);
     void setSourceOnline(bool value);
     void setPaused(bool value);
     Q_INVOKABLE void seek(double seconds);
@@ -87,6 +90,7 @@ class NativeVideo : public QQuickItem {
     QString m_name, m_status = "Disconnected";
     QUrl m_endpoint, m_media, m_nativeEndpoint;
     QSize m_sourceSize, m_displaySize;
+    bool m_fullResolution = false;
     QPointer<QWindow> m_surface;
     QWebSocket m_socket;
     QTimer m_timer, m_restart;
