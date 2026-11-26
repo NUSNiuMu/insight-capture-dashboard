@@ -44,11 +44,11 @@ def stream_camera(source, role, publisher, stop, gst, compressed_image):
             return
 
 
-def run_camera(node, role, publisher, stop, gst, compressed_image, gst_error, *, raw_publishers=None):
+def run_camera(node, role, publisher, stop, gst, compressed_image, gst_error, *, raw_publishers=None, bindings=None):
     path = PROJECT_ROOT / "config" / BINDINGS
     while not stop.is_set():
         try:
-            device = bound_uvc(uvc_devices(), read_json(path, {})).get(role)
+            device = bound_uvc(uvc_devices(), bindings or read_json(path, {})).get(role)
             if device is not None:
                 source = Path("/host-dev") / device["node"]
                 if raw_publishers is None:
@@ -71,7 +71,10 @@ def main():
     from std_msgs.msg import UInt8MultiArray, UInt64MultiArray
 
     config = json.loads((PROJECT_ROOT / "config" / "cameras.json").read_text())
-    native = {camera["name"] for camera in config["cameras"] if camera.get("uq2168")}
+    native = {camera["name"].removeprefix("uvc_"): camera.get("uvc_binding")
+              for camera in config["cameras"] if camera.get("uq2168")}
+    # Keep a running stream on its configured device even if other USB cameras appear.
+    bindings = native if set(native) == set(ROLES) and all(native.values()) else None
     Gst.init(None)
     rclpy.init()
     node = rclpy.create_node("uvc_wrist_inputs")
@@ -82,7 +85,7 @@ def main():
             prefix = f"/uvc_{role}/camera"
             publisher = node.create_publisher(CompressedImage, prefix + "/image_raw/compressed", 10)
             raw_publishers = None
-            if f"uvc_{role}" in native:
+            if role in native:
                 raw_publishers = {
                     "image": publisher,
                     "frame_timing": node.create_publisher(UInt64MultiArray, prefix + "/frame_timing", 10),
@@ -91,7 +94,7 @@ def main():
                 }
             worker = threading.Thread(target=run_camera, args=(
                 node, role, publisher, stop, Gst, CompressedImage, GLib.Error),
-                kwargs={"raw_publishers": raw_publishers}, name=f"uvc-{role}")
+                kwargs={"raw_publishers": raw_publishers, "bindings": bindings}, name=f"uvc-{role}")
             worker.start()
             workers.append(worker)
         rclpy.spin(node)

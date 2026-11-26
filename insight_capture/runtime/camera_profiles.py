@@ -164,8 +164,19 @@ def detect(network, usb):
 def scan(config):
     with ThreadPoolExecutor() as pool:
         network = [camera for camera in pool.map(probe, camera_links()) if camera]
-    binding = read_json(config / BINDINGS, {})
-    return detect(network, bound_uvc(uvc_devices(), binding))
+    devices = uvc_devices()
+    wrists = bound_uvc(devices, read_json(config / BINDINGS, {}))
+    automatic = False
+    if len(wrists) != len(ROLES):
+        uq2168 = sorted((device for device in devices if device["product"] == UQ2168_PRODUCT),
+                        key=lambda device: device["port"])
+        if len(uq2168) == len(ROLES) == len({device["port"] for device in uq2168}):
+            wrists = dict(zip(ROLES, uq2168))
+            automatic = True
+    candidate = detect(network, wrists)
+    if candidate and automatic:
+        candidate["automatic_uvc"] = True
+    return candidate
 
 
 def mono_stream(namespace, topics):
@@ -249,10 +260,16 @@ def render(config, candidate, status):
                     distributed.setdefault("required_aux_topics", []).extend(topics[:2])
                     distributed["image_rates"][stream["topic"]] = fps
     if uq2168:
-        bindings = read_json(config / BINDINGS, {})
+        automatic = candidate.get("automatic_uvc", False)
+        bindings = ({role: {key: device[key] for key in ("product", "port")}
+                     for role, device in candidate["usb"].items()} if automatic
+                    else read_json(config / BINDINGS, {}))
+        labels = {"left": "腕部 1", "right": "腕部 2"} if automatic else {}
         for camera in cameras["cameras"]:
             if camera.get("uq2168"):
-                camera["uvc_binding"] = bindings.get(camera["name"].removeprefix("uvc_"), {})
+                role = camera["name"].removeprefix("uvc_")
+                camera["uvc_binding"] = bindings.get(role, {})
+                camera["dashboard_label"] = labels.get(role, camera["name"])
     head = next(camera for camera in cameras["cameras"] if camera["teleop_role"] == "head")
     head["relay_host_address"] = peers[HEAD]["address"]
     distributed = cameras["distributed_recording"]

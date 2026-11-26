@@ -115,6 +115,42 @@ def test_uq2168_preview_puts_both_wrists_below_the_four_head_views(config):
             for source in preview["sources"][-2:]] == [("左腕", 1280, 800), ("右腕", 1280, 800)]
 
 
+def test_scan_selects_two_uq2168_without_a_binding_file(config, monkeypatch):
+    head = network("egohalo")[0]
+    first, second, third = (dict(uvc(port, node, "same-serial"), product=profiles.UQ2168_PRODUCT)
+                            for port, node in [("1-2.3", "video2"), ("1-2.4", "video0"), ("1-2.5", "video8")])
+    devices = [second, first, uvc("1-2.9", "video10")]
+    monkeypatch.setattr(profiles, "camera_links", lambda: [head])
+    monkeypatch.setattr(profiles, "probe", lambda link: link)
+    monkeypatch.setattr(profiles, "uvc_devices", lambda: devices)
+
+    candidate = profiles.scan(config)
+    assert candidate["profile"] == "jetson-nx-egohalo-uvc"
+    assert candidate["automatic_uvc"] is True
+    assert [candidate["usb"][role]["port"] for role in profiles.ROLES] == ["1-2.3", "1-2.4"]
+    devices.reverse()
+    assert profiles.scan(config) == candidate
+    settings = profiles.render(config, candidate, {})
+    wrists = {camera["name"]: camera for camera in settings["cameras"] if camera.get("uq2168")}
+    assert [wrists["uvc_" + role]["uvc_binding"] for role in profiles.ROLES] == [
+        {"product": profiles.UQ2168_PRODUCT, "port": "1-2.3"},
+        {"product": profiles.UQ2168_PRODUCT, "port": "1-2.4"},
+    ]
+    labels = {camera["name"]: camera["label"] for camera in build_dashboard_config(settings)["cameras"]}
+    assert (labels["uvc_left"], labels["uvc_right"]) == ("腕部 1", "腕部 2")
+    assert not (config / profiles.BINDINGS).exists()
+
+    for connected in ([first], [first, second, third]):
+        devices[:] = connected
+        assert profiles.scan(config) is None
+
+    devices[:] = [first, second]
+    profiles.bind_uvc(config / profiles.BINDINGS, second["port"], first["port"])
+    explicit = profiles.scan(config)
+    assert "automatic_uvc" not in explicit
+    assert explicit["usb"]["left"]["port"] == second["port"]
+
+
 def test_camera_set_and_capture_state_are_checked_under_the_existing_lock(config, monkeypatch):
     candidate = profiles.detect(network("egohalo", "insight3_a", "insight3_b"), {})
     idle = {"upgrade_lock_supported": True, "recording": False, "operation_in_progress": False,

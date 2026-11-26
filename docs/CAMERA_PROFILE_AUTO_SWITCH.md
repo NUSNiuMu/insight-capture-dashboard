@@ -7,13 +7,13 @@ Jetson 自动发现设备，连续两轮识别到唯一一套完整组合后才�
 | Insight9 + 双 Insight3 | `insight9_a`、`insight3_a`（右）、`insight3_b`（左） |
 | EgoHalo + 双 Insight3 | EgoHalo 采集服务声明的型号，以及同样两个 Insight3 namespace |
 | EgoHalo + 双 Insight1 | Insight1 固件型号接口，以及 `insight1_a`（右）、`insight1_b`（左）。Jetson 在 ROS 域 20 查找两台设备发布的图像话题和类型。 |
-| EgoHalo + 双单目 UVC | EgoHalo 加已绑定的两台 UVC |
+| EgoHalo + 双单目 UVC | EgoHalo 加自动识别的两台 UQ2168，或已绑定的两台 UVC |
 
 Insight1 使用相机端已有的左右 namespace。两台设备 namespace 重复或没有可用图像发布者时，系统等待。Insight1 和普通 UVC 腕部使用图像采集配置，保留 EgoHalo 头部定位。腕部 6DoF 需要相应设备的位姿接入和实机验证。时钟和图像预检仍适用。
 
-## 双 UVC 首次绑定
+## 手动指定 UVC 左右
 
-在 Jetson 安装目录运行以下命令。先只插左腕，用第一条命令记下其 `port`，然后插上右腕。按实际输出替换示例端口。
+普通 UVC 或需要固定左右时，在 Jetson 安装目录运行以下命令。先只插左腕，用第一条命令记下其 `port`，然后插上右腕。按实际输出替换示例端口。
 
 ```bash
 python3 -m insight_capture.runtime.camera_profiles uvc-devices
@@ -28,7 +28,9 @@ python3 -m insight_capture.runtime.camera_profiles bind-uvc --left 1-2.1 --right
 
 ## EgoHalo 与双 UQ2168
 
-左右腕都绑定为 UQ2168（`1bcf:28c4`）时，`jetson-nx-egohalo-uvc` 使用原生采集器协商 `1920×1200 MJPEG @ 90 fps`。按常规方式在手机或 Qt 进入任务、启停录制。EgoHalo 保存头部原件，Jetson 保存两腕，采集结束后在录制库按共同编号回传并合包。打开合成的 Take 可生成四路头部加两路腕部的同步回放。
+同时接入 EgoHalo 和两台 UQ2168（`1bcf:28c4`）时可自动选中 `jetson-nx-egohalo-uvc`。有效的手动绑定优先。自动模式按 USB 口排序，手机和 Qt 显示「腕部 1」「腕部 2」。当前配置记录两路对应的 USB 口，录制话题沿用原名称。
+
+UQ2168 原生采集器协商 `1920×1200 MJPEG @ 90 fps`。按常规方式在手机或 Qt 进入任务、启停录制。EgoHalo 保存头部原件，Jetson 保存两腕，采集结束后在录制库按共同编号回传并合包。打开合成的 Take 可生成四路头部加两路腕部的同步回放。
 
 每只腕的 `/uvc_{left,right}/camera/` 下有以下数据。
 
