@@ -3,8 +3,10 @@
 1. 静止分段（双臂同时静止 >= 2 s）切出 task 级的动作段，复位现场的停顿丢弃。
 2. VLM 服务（insight_capture.vlm_service）看全部动作段，认出整条录制的
    task（导入了动作表时从表中选），并写一句改写的英文说法。
-3. 每个动作段按 4 帧/秒送给服务，由模型切出带起止时间的 subtask；超过
-   45 s 的动作段再按 40 s 窗口（重叠 5 s）切开。
+3. 每个动作段按 40 s 窗口（重叠 5 s，不超过 45 s 的整段送）送头部相机
+   画面，由模型切出带起止时间的 subtask。帧率按每次请求的视觉 token 上限
+   定（最高 12 帧/秒），尽量多给画面；也可改为连同腕部鱼眼相机多路一起送
+   （WRIST_VIEWS，实测在同样上限下没有更准）。
 4. 用位姿修正：边界吸附到最近的运动起止点；左右前后上下与夹爪开合这类
    subtask 用位移方向和开合度变化校验，不符的标为存疑；参与手臂按位姿判断。
 
@@ -31,11 +33,23 @@ DRAFT = "segments_draft.json"
 # arm's moving time (the free hand still drifts a little while holding still).
 HANDS_RATIO = 0.3
 FRAME_MAX_SIDE = 448
+# Wrist cameras are fisheyes: the picture is the centre circle, so the frame is
+# cropped to its centre square and sent smaller than the head view.
+WRIST_MAX_SIDE = 256
 TASK_FPS = 1.0
 TASK_MAX_FRAMES = 200
-SEGMENT_FPS = 4.0
+# Frames per second sent for subtask timing: as many as the token budget
+# allows in a window, up to SEGMENT_FPS.
+SEGMENT_FPS = 12.0
+# Visual tokens per /v1/segments request, all views together (32k peaked at
+# 45 of 49 GB on the RTX 4090 48 GB running Qwen3.8-27B-FP8).
+SEGMENT_TOKEN_BUDGET = 32000
 MAX_WINDOW_S = 45.0
 WINDOW_S = 40.0
+# Also send the wrist fisheyes as synchronised videos. Off: measured on the
+# cup-stacking recordings, it gave no better boundaries for the same budget.
+WRIST_VIEWS = False
+TOKEN_PATCH = 32          # vision patch 16 x spatial merge 2 (Qwen3-VL family)
 WINDOW_OVERLAP_S = 5.0
 SNAP_S = 0.75
 MIN_DRAFT_S = 0.3
@@ -130,16 +144,57 @@ def windows(start, end):
         w0 = w1 - WINDOW_OVERLAP_S
 
 
-class HeadFrames:
-    """Nearest head-camera JPEGs from the session database, downscaled."""
+def view_label(name):
+    """头部相机 / 左夹爪腕部相机（上）… for a stored image stream name."""
+    if name == "head":
+        return "头部相机"
+    parts = name.split("_")   # rgb_left_up
+    side = {"left": "左", "right": "右"}.get(parts[1] if len(parts) > 1 else "", "")
+    where = {"up": "上", "down": "下"}.get(parts[2] if len(parts) > 2 else "", "_".join(parts[2:]))
+    return f"{side}夹爪腕部相机" + (f"（{where}）" if where else "") if side else name
 
-    def __init__(self, db):
-        self.db = db
+
+def view_tokens(size):
+    """Visual tokens one frame of a (width, height) view costs (two-frame patches)."""
+    w, h = (max(1, round(x / TOKEN_PATCH)) for x in size)
+    return w * h / 2
+
+
+class CameraFrames:
+    """Nearest JPEGs of one image stream from the session database, downscaled
+    (wrist fisheyes cropped to their centre square first)."""
+
+    def __init__(self, db, name="head"):
+        self.db, self.name = db, name
+        self.wrist = name != "head"
+        self.max_side = WRIST_MAX_SIDE if self.wrist else FRAME_MAX_SIDE
         self.stamps = np.array(
-            [r[0] for r in db.execute("SELECT t FROM samples WHERE kind='image' AND name='head' ORDER BY t")]
+            [r[0] for r in db.execute("SELECT t FROM samples WHERE kind='image' AND name=? ORDER BY t", (name,))]
         )
         if not len(self.stamps):
-            raise ValueError("录制中没有观察相机画面，无法预标注")
+            raise ValueError("录制中没有观察相机画面，无法预标注" if name == "head" else f"录制中没有 {name} 画面")
+        self.size = None
+        sample = self.image(float(self.stamps[len(self.stamps) // 2]))
+        self.size = sample.shape[1::-1] if sample is not None else (self.max_side, self.max_side)
+
+    def image(self, stamp):
+        payload = self.db.execute(
+            "SELECT payload FROM samples WHERE kind='image' AND name=? AND t=?", (self.name, stamp)
+        ).fetchone()[0]
+        buffer = np.frombuffer(payload, np.uint8)
+        # Halved while decoding: every view ends up well under 720 px anyway.
+        image = cv2.imdecode(buffer, cv2.IMREAD_REDUCED_COLOR_2 if self.wrist else cv2.IMREAD_COLOR)
+        if image is None:
+            return None
+        h, w = image.shape[:2]
+        if self.wrist and w > h:
+            x = (w - h) // 2
+            image = image[:, x : x + h]
+            w = h
+        scale = min(1.0, self.max_side / max(h, w))
+        if scale < 1:
+            image = cv2.resize(image, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
+        return image
 
     def encoded(self, times):
         frames = []
@@ -147,17 +202,9 @@ class HeadFrames:
             i = int(np.clip(np.searchsorted(self.stamps, t), 0, len(self.stamps) - 1))
             if i and abs(self.stamps[i - 1] - t) < abs(self.stamps[i] - t):
                 i -= 1
-            payload = self.db.execute(
-                "SELECT payload FROM samples WHERE kind='image' AND name='head' AND t=?",
-                (float(self.stamps[i]),),
-            ).fetchone()[0]
-            image = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+            image = self.image(float(self.stamps[i]))
             if image is None:
                 continue
-            h, w = image.shape[:2]
-            scale = min(1.0, FRAME_MAX_SIDE / max(h, w))
-            if scale < 1:
-                image = cv2.resize(image, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
             ok, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
             if ok:
                 frames.append(base64.b64encode(buffer.tobytes()).decode())
@@ -332,13 +379,21 @@ def run(path, url, table=None, model="", progress=lambda done, total: None, segm
     onsets, offsets = motion_edges(grid, moving["left"] | moving["right"])
     gravity = "reference_frame" in meta
     table = table if table and table.get("tasks") else None
-    plan = [(stretch, windows(*stretch)) for stretch in stretches]
-    total, done = 1 + sum(len(w) for _, w in plan), 0
-    progress(done, total)
     task = {"task_id": "", "task": "", "description": "", "flags": []}
     drafts = []
     with closing(connect(path)) as db:
-        frames = HeadFrames(db)
+        frames = CameraFrames(db)
+        wrists = [
+            CameraFrames(db, name)
+            for (name,) in db.execute(
+                "SELECT DISTINCT name FROM samples WHERE kind='image' AND name LIKE 'rgb%' ORDER BY name"
+            )
+        ] if WRIST_VIEWS else []
+        views = [frames] + wrists
+        per_instant = sum(view_tokens(v.size) for v in views)   # tokens per sampled instant
+        plan = [(stretch, windows(*stretch)) for stretch in stretches]
+        total, done = 1 + sum(len(w) for _, w in plan), 0
+        progress(done, total)
         if stretches:
             # 1. Which task the recording performs, from its motion only.
             active_s = sum(b - a for a, b in stretches)
@@ -357,11 +412,16 @@ def run(path, url, table=None, model="", progress=lambda done, total: None, segm
         for (start, end), parts in plan:
             found, failures = [], []
             for w0, w1 in parts:
-                times = sample_times(w0, w1, SEGMENT_FPS)
-                encoded = frames.encoded(times)
+                rate = min(SEGMENT_FPS, SEGMENT_TOKEN_BUDGET / (per_instant * (w1 - w0)))
+                times = sample_times(w0, w1, rate)
+                clips = [(view_label(v.name), v.encoded(times)) for v in views]
+                # A view that lost frames would drift against the others: leave it out.
+                clips = [c for c in clips if len(c[1]) == len(times)] or clips[:1]
+                encoded = clips[0][1]
                 answer = request_json(url, "/v1/segments", {
                     "frames": encoded, "fps": len(times) / (w1 - w0), "action_table": table,
                     "task_id": task.get("task_id", ""), "task": task.get("task", ""),
+                    "views": [{"label": label, "frames": f} for label, f in clips] if len(clips) > 1 else None,
                 }) if len(encoded) >= 2 else {"flags": ["可用画面不足，未送模型"]}
                 # Keep what lies in this window's half of each overlap.
                 lo = w0 + (WINDOW_OVERLAP_S / 2 if w0 > start else 0)

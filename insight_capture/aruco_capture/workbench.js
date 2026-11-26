@@ -1,5 +1,6 @@
 import { Trajectory, poseFromState } from "./trajectory.js";
 import { DevicePanel } from "./devices.js";
+import { LerobotPlayer } from "./lerobot.js";
 const $ = (id) => document.getElementById(id),
   sides = ["left", "right"];
 const names = {
@@ -33,6 +34,10 @@ let mode = "capture",
   review = null,
   parts = [],
   dirty = false,
+  // The segments are a generated draft (pause boundaries or the model's) that
+  // no one has edited yet: not saved, but nothing is lost by leaving, since the
+  // draft is on disk and loads again. Only edits make the segments `dirty`.
+  generated = false,
   editing = -1,
   // Segments picked for merging on the timeline, held by object so they
   // survive re-sorting; `anchor` is where a Shift-click range starts.
@@ -67,6 +72,7 @@ let mode = "capture",
   draftInfo = null,
   draftTimer = null;
 const scene = new Trajectory($("scene"), $("sceneEmpty"));
+const lerobot = new LerobotPlayer(notice);
 const devicePanel = new DevicePanel(api);
 const el = (tag, text, cls) => {
   const x = document.createElement(tag);
@@ -112,9 +118,19 @@ function title(name) {
 }
 function setDirty(value) {
   dirty = value;
+  generated = false;
   $("dirty").hidden = !value;
   clearTimeout(wipTimer);
   if (value && review && selectedName) wipTimer = setTimeout(saveWip, 2000);
+}
+// Segments replaced by a generated draft: an untouched replacement of nothing
+// (no segments, or an earlier untouched draft) is not an edit.
+function installGenerated(next) {
+  const replacing = dirty || (parts.length > 0 && !generated);
+  parts = next;
+  setDirty(replacing);
+  generated = !replacing;
+  return replacing;
 }
 // Unsaved edits are stashed on the server (segments_wip.json) two seconds after
 // the last change, so a reload or a crashed browser does not lose them;
@@ -546,6 +562,7 @@ function changeMode() {
   $("batchBar").hidden = mode !== "review";
   $("cameraTitle").textContent = mode === "capture" ? "相机画面" : "同步视频";
   scene.setVisible(mode !== "quality");
+  lerobot.setVisible(mode === "quality");
   if (mode === "capture") {
     videoCards(liveStreams);
     scene.setCameraView(status?.camera_view);
@@ -900,8 +917,14 @@ function installReview(data) {
   );
 }
 async function reloadReview() {
-  const t = currentTime;
+  const t = currentTime,
+    keep = generated ? parts : null;
   installReview(await api(base() + "/review"));
+  if (keep && !parts.length) {
+    parts = keep;
+    generated = true;
+    renderParts();
+  }
   seek(t);
 }
 function renderPose(pose) {
@@ -1329,7 +1352,7 @@ function renderGuide() {
   if (!review) return;
   const total = parts.length,
     missing = parts.filter(unfilled).length,
-    step = !total ? 1 : missing ? (editing >= 0 ? 3 : 2) : dirty ? 4 : 5;
+    step = !total ? 1 : missing ? (editing >= 0 ? 3 : 2) : dirty || generated ? 4 : 5;
   [...$("guideSteps").children].forEach((li, i) => {
     li.className = i + 1 < step ? "done" : i + 1 === step ? "current" : "";
   });
@@ -1800,6 +1823,7 @@ async function refreshDatasets() {
     select.add(new Option(`${d.name}（${d.episode_count} 段）`, d.name));
   select.value = datasets.some((d) => d.name === previous) ? previous : "__new__";
   $("newDatasetName").hidden = select.value !== "__new__";
+  lerobot.setDatasets(datasets);
   renderDatasetFolders();
 }
 function renderDatasetFolders() {
@@ -1823,10 +1847,13 @@ function renderDatasetFolders() {
     const view = el("button", datasetDetailName === d.name ? "收起" : "查看", "quiet");
     view.type = "button";
     view.onclick = () => toggleDatasetDetail(d.name);
+    const play = el("button", "回放", "quiet");
+    play.type = "button";
+    play.onclick = () => lerobot.open(d.name);
     const remove = el("button", "删除文件夹", "quiet");
     remove.type = "button";
     remove.onclick = () => deleteDatasetFolder(d.name);
-    actions.append(view, remove);
+    actions.append(view, play, remove);
     row.append(info, actions);
     wrap.append(row);
   }
@@ -2506,7 +2533,7 @@ function applyDraft(auto) {
   const draft = draftInfo?.draft;
   if (!draft) return;
   const previous = parts.map((p) => ({ ...p }));
-  parts = draft.segments.map((s) => ({
+  installGenerated(draft.segments.map((s) => ({
     start_s: s.start_s,
     end_s: s.end_s,
     task: s.task || "",
@@ -2517,9 +2544,8 @@ function applyDraft(auto) {
     note: s.description || "",
     flags: s.flags || [],
     confidence: s.confidence ?? null,
-  }));
+  })));
   selection = new Set();
-  setDirty(true);
   resetEditor();
   renderParts();
   const flagged = parts.filter((p) => p.flags.length).length;
@@ -2612,9 +2638,10 @@ bind("autoSegment", async () => {
     reviewBusy = false;
     updateControls();
   }
-  const previous = parts;
-  parts = suggestions;
-  setDirty(true);
+  const previous = parts,
+    wasDirty = dirty,
+    wasGenerated = generated;
+  installGenerated(suggestions);
   resetEditor();
   renderParts();
   focusUnfilled();
@@ -2627,7 +2654,8 @@ bind("autoSegment", async () => {
   undo.type = "button";
   undo.onclick = () => {
     parts = previous;
-    setDirty(true);
+    setDirty(wasDirty);
+    generated = wasGenerated;
     resetEditor();
     renderParts();
     notice("已撤销静止分段");
@@ -2978,7 +3006,23 @@ function typing(target) {
 // A focused button activates on Space keyup; swallow that so the keydown
 // handler's play / pause is not followed by a stray click.
 document.addEventListener("keyup", (e) => {
-  if (e.code === "Space" && mode === "review" && !typing(e.target)) e.preventDefault();
+  if (e.code === "Space" && (mode === "review" || (mode === "quality" && lerobot.loaded)) && !typing(e.target))
+    e.preventDefault();
+});
+// 处理与导出: Space / ← → drive the LeRobot player once an episode is loaded.
+document.addEventListener("keydown", (e) => {
+  if (mode !== "quality" || !lerobot.loaded || typing(e.target) || e.target.tagName === "SELECT") return;
+  if ($("deleteDialog").open || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.code === "Space") {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (e.target !== document.body) e.target.blur?.();
+    lerobot.toggle();
+  } else if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    if (e.target.type === "range") return; // the slider steps by itself
+    e.preventDefault();
+    lerobot.step(e.key === "ArrowLeft" ? -1 : 1);
+  }
 });
 document.addEventListener("keydown", (e) => {
   if (

@@ -10,9 +10,12 @@ POST /v1/task      {"frames": [base64 JPEG...], "fps": float, "action_table": {.
                 -> {"task_id", "task", "description", "flags", "raw"}
                    which task the whole recording performs
 POST /v1/segments  {"frames": [...], "fps": float, "action_table": {...} | null,
-                    "task_id": str, "task": str}
+                    "task_id": str, "task": str,
+                    "views": [{"label": str, "frames": [...]}, ...] (optional)}
                 -> {"segments": [{"start", "end", "subtask_id", "subtask", "flags"}], "flags", "raw"}
-                   timed subtasks in one stretch of motion; times are seconds from its first frame
+                   timed subtasks in one stretch of motion; times are seconds from its first frame.
+                   With "views", every view is a separate, time-synchronised video of the
+                   same span (head camera, wrist cameras...) and "frames" is ignored.
 POST /v1/ask       {"frames": [...], "fps": float, "question": str}
                 -> {"answer": "yes" | "no" | "unknown", "raw"}
                    yes/no answer about the last frames (a robot's subtask post-condition check)
@@ -84,23 +87,23 @@ class Model:
         self.model.eval()
         self.lock = threading.Lock()  # one GPU, one request at a time
 
-    def video_kwargs(self, video, fps):
+    def video_kwargs(self, videos, fps):
         if self.family == "qwen2_5_vl":
-            return {"fps": fps}
+            return {"fps": [fps] * len(videos)}
         # Qwen3-style processors place timestamps from the clip's metadata;
         # the frames are already sampled, so tell it not to resample them.
         from transformers.video_utils import VideoMetadata
 
-        count = len(video)
         return {
             "do_sample_frames": False,
             "video_metadata": [
                 VideoMetadata(
-                    total_num_frames=count,
+                    total_num_frames=len(video),
                     fps=fps,
-                    duration=count / fps,
-                    frames_indices=list(range(count)),
+                    duration=len(video) / fps,
+                    frames_indices=list(range(len(video))),
                 )
+                for video in videos
             ],
         }
 
@@ -111,12 +114,24 @@ class Model:
         frame = base64.b64encode(cv2.imencode(".jpg", image)[1].tobytes()).decode()
         self.task({"frames": [frame] * 8, "fps": 1.0})
         self.segments({"frames": [frame] * 16, "fps": 4.0, "task": "Move the box"})
+        wrist = base64.b64encode(cv2.imencode(".jpg", image[:, 280:1000])[1].tobytes()).decode()
+        self.segments({"fps": 4.0, "task": "Move the box", "views": [
+            {"label": "头部相机", "frames": [frame] * 16}, {"label": "腕部相机", "frames": [wrist] * 16},
+        ]})
 
-    def generate(self, frames, fps, prompt, max_new_tokens):
-        if not isinstance(frames, list) or len(frames) < 2:
-            raise ValueError("至少需要 2 帧图像")
-        video = prepare(frames, self.max_side, self.factor)
-        messages = [{"role": "user", "content": [{"type": "video"}, {"type": "text", "text": prompt}]}]
+    def generate(self, frames, fps, prompt, max_new_tokens, views=None):
+        """`views`: [(label, frames), ...] sent as separate, synchronised videos,
+        each introduced by its label; otherwise `frames` is the one video."""
+        views = views or [("", frames)]
+        content, videos = [], []
+        for label, clip in views:
+            if not isinstance(clip, list) or len(clip) < 2:
+                raise ValueError(f"{label or '视频'}至少需要 2 帧图像")
+            videos.append(prepare(clip, self.max_side, self.factor))
+            if label:
+                content.append({"type": "text", "text": f"{label}："})
+            content.append({"type": "video"})
+        messages = [{"role": "user", "content": content + [{"type": "text", "text": prompt}]}]
         # Thinking models answer straight away: the answers are JSON, and
         # reasoning would multiply the time per request.
         text = self.processor.apply_chat_template(
@@ -124,7 +139,7 @@ class Model:
         )
         with self.lock:
             inputs = self.processor(
-                text=[text], videos=[video], return_tensors="pt", **self.video_kwargs(video, fps)
+                text=[text], videos=videos, return_tensors="pt", **self.video_kwargs(videos, fps)
             ).to("cuda")
             with self.torch.inference_mode():
                 output = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
@@ -157,9 +172,15 @@ class Model:
         frames, fps = request.get("frames"), float(request.get("fps") or 4.0)
         table = request.get("action_table") or {}
         task = next((t for t in table.get("tasks", []) if t["id"] == request.get("task_id")), None)
+        views = request.get("views") or None
+        if views:
+            views = [(str(v.get("label") or ""), v.get("frames")) for v in views]
+            frames = views[0][1]
         duration = len(frames or []) / fps
-        prompt = build_segment_prompt(duration, task, str(request.get("task") or ""))
-        answer = self.generate(frames, fps, prompt, 2048)
+        prompt = build_segment_prompt(
+            duration, task, str(request.get("task") or ""), [label for label, _ in views or []]
+        )
+        answer = self.generate(frames, fps, prompt, 2048, views)
         return {**parse_segments_answer(answer, duration, task), "raw": answer}
 
 

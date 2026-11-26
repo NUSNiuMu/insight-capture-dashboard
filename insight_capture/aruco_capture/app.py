@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 from aiohttp import web
 
-from . import action_table, export_views, preannotate, segment_settings
+from . import action_table, export_views, lerobot_view, preannotate, segment_settings
 from .capture import Capture, write_json
 from .dataset import (
     align,
@@ -97,7 +97,7 @@ def create_app(capture, annotation_url=""):
                 Path(__file__).resolve().parents[2]
                 / "web_dashboard/dist/static/babylon.js"
             )
-        elif name in {"workbench.css", "workbench.js", "trajectory.js", "devices.js"}:
+        elif name in {"workbench.css", "workbench.js", "trajectory.js", "devices.js", "lerobot.js"}:
             path = Path(__file__).with_name(name)
         else:
             raise web.HTTPNotFound()
@@ -713,6 +713,25 @@ def create_app(capture, annotation_url=""):
             )
         )
 
+    # LeRobot playback on the 处理与导出 page: read-only, any v2.x / v3.0
+    # dataset folder (by name under lerobot_datasets, or an absolute path).
+    def lerobot_path(request):
+        return lerobot_view.resolve(capture.root.parent / "lerobot_datasets", request.query.get("path"))
+
+    async def lerobot_summary(request):
+        path = lerobot_path(request)
+        return web.json_response(await asyncio.to_thread(lerobot_view.summary, path))
+
+    async def lerobot_episode(request):
+        path = lerobot_path(request)
+        return web.json_response(
+            await asyncio.to_thread(lerobot_view.episode, path, int(request.query.get("index", 0)))
+        )
+
+    async def lerobot_video(request):
+        file = lerobot_view.video_file(lerobot_path(request), request.query.get("file"))
+        return web.FileResponse(file, headers={"Content-Type": "video/mp4"})
+
     async def datasets_delete(request):
         output_root = dataset_root(request)
         await asyncio.to_thread(delete_dataset, output_root)
@@ -769,6 +788,9 @@ def create_app(capture, annotation_url=""):
             web.post("/api/datasets/{name}/export", datasets_export),
             web.delete("/api/datasets/{name}/sessions/{session}", datasets_delete_session),
             web.delete("/api/datasets/{name}", datasets_delete),
+            web.get("/api/lerobot", lerobot_summary),
+            web.get("/api/lerobot/episode", lerobot_episode),
+            web.get("/api/lerobot/video", lerobot_video),
         ]
     )
     return app

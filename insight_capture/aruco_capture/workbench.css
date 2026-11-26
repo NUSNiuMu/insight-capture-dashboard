@@ -2363,3 +2363,193 @@ body.drawer-resizing .shell {
     display: none;
   }
 }
+
+/* ---- LeRobot 数据集回放（处理与导出） ---- */
+.lerobot-panel {
+  margin-top: 16px;
+}
+.lr-source {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 17px;
+  flex-wrap: wrap;
+}
+.lr-source select {
+  min-width: 220px;
+}
+.lr-source input {
+  flex: 1;
+  min-width: 260px;
+}
+.lr-body {
+  display: grid;
+  grid-template-columns: 270px minmax(0, 1fr);
+  border-top: 1px solid var(--line);
+  min-height: 520px;
+}
+.lr-episodes-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-right: 1px solid var(--line);
+  min-width: 0;
+}
+.lr-episodes {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  overflow-y: auto;
+  max-height: 760px;
+  padding-right: 2px;
+}
+.lr-episode {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  white-space: normal;
+  padding: 8px 10px;
+  background: #1a2c42;
+  border-color: var(--line);
+}
+.lr-episode.selected {
+  border-color: var(--cyan);
+  background: #22405c;
+}
+.lr-episode-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.lr-episode-text {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.lr-episode small {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.lr-player {
+  min-width: 0;
+}
+.lr-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 1fr);
+}
+.lr-videos.single {
+  grid-template-columns: 1fr;
+}
+.video-card video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #0d1724;
+}
+.lr-scene-wrap {
+  min-height: 300px;
+  border-left: 1px solid var(--line);
+}
+.lr-loop {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.lr-readout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  gap: 10px 16px;
+  padding: 0 18px 18px;
+}
+.lr-episode-info {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 12px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.lr-chart {
+  width: 100%;
+  height: 150px;
+  border-radius: 6px;
+  background: #142235;
+}
+.lr-legend {
+  grid-column: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.lr-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 3px;
+  margin-right: 5px;
+  vertical-align: middle;
+  background: var(--swatch);
+}
+.lr-state {
+  grid-column: 2;
+  grid-row: 2 / span 2;
+  align-self: start;
+  border-collapse: collapse;
+  font-size: 11px;
+  width: 100%;
+}
+.lr-state th,
+.lr-state td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  font-weight: 400;
+}
+.lr-state tr.left th {
+  color: var(--left);
+}
+.lr-state tr.right th {
+  color: var(--right);
+}
+.lr-state caption {
+  caption-side: bottom;
+  color: var(--amber);
+  padding-top: 6px;
+  text-align: left;
+}
+@media (max-width: 1200px) {
+  .lr-stage {
+    grid-template-columns: 1fr;
+  }
+  .lr-scene-wrap {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+@media (max-width: 900px) {
+  .lr-body {
+    grid-template-columns: 1fr;
+  }
+  .lr-episodes-panel {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .lr-episodes {
+    max-height: 260px;
+  }
+  .lr-readout {
+    grid-template-columns: 1fr;
+  }
+  .lr-legend,
+  .lr-state {
+    grid-column: 1;
+    grid-row: auto;
+  }
+}

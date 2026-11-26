@@ -49,8 +49,18 @@ def build_task_prompt(duration_s, table=None):
     )
 
 
-def build_segment_prompt(duration_s, task=None, task_text=""):
-    head = CONTEXT + f"下面是录制中连续动作的一段，共 {duration_s:.1f} 秒，画面里标注了从 0 开始的时间戳。"
+def build_segment_prompt(duration_s, task=None, task_text="", views=()):
+    """`views`: labels of the synchronised videos sent before the prompt
+    (head camera first, then wrist cameras); empty for one head-camera video."""
+    if views:
+        head = (
+            CONTEXT + f"上面依次给出同一段连续动作的 {len(views)} 路视频（{'、'.join(views)}），"
+            f"它们时间同步、都从 0 开始，共 {duration_s:.1f} 秒。头部相机看全局和物体位置；"
+            "腕部相机是装在夹爪上的鱼眼相机，看得清夹爪是否夹住、何时松开物体，"
+            "判断抓取与放下的时刻以腕部相机为准。"
+        )
+    else:
+        head = CONTEXT + f"下面是录制中连续动作的一段，共 {duration_s:.1f} 秒，画面里标注了从 0 开始的时间戳。"
     if task and task.get("subtasks"):
         body = (
             f"这段在执行这个 task：\n{_task_text(task)}\n{_subtasks_text(task)}\n\n"

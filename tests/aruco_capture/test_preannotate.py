@@ -15,6 +15,8 @@ from insight_capture.aruco_capture.preannotate import (
     save_url,
     segment_hands,
     snap,
+    view_label,
+    view_tokens,
     windows,
 )
 from insight_capture.vlm_service.prompt import (
@@ -68,6 +70,9 @@ class TaskAnswerTests(unittest.TestCase):
         self.assertIn("`close_gripper`", prompt)
         self.assertIn("每个运动间停顿", prompt)
         self.assertNotIn("subtask_id", build_segment_prompt(12.0, None, "Fold the towel"))
+        views = build_segment_prompt(80.0, TASK, "", ["头部相机", "左夹爪腕部相机（上）"])
+        self.assertIn("2 路视频", views)
+        self.assertIn("腕部相机为准", views)
 
 
 class SegmentsAnswerTests(unittest.TestCase):
@@ -98,6 +103,13 @@ class PlanningTests(unittest.TestCase):
     def test_windows_overlap_for_long_stretches(self):
         self.assertEqual(windows(0, 30), [(0, 30)])
         self.assertEqual(windows(0, 100), [(0, 40), (35, 75), (70, 100)])
+
+    def test_view_labels_and_tokens(self):
+        self.assertEqual(view_label("head"), "头部相机")
+        self.assertEqual(view_label("rgb_left_up"), "左夹爪腕部相机（上）")
+        self.assertEqual(view_label("rgb_right_down"), "右夹爪腕部相机（下）")
+        self.assertEqual(view_tokens((448, 252)), 14 * 8 / 2)
+        self.assertEqual(view_tokens((256, 256)), 32)
 
     def test_snap_to_nearby_motion_edge(self):
         grid = np.arange(100) / 10

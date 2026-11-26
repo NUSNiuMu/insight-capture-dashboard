@@ -621,6 +621,69 @@
             <div id="datasetFolders" class="dataset-folder-list"></div>
             <div id="datasetDetail" class="dataset-detail" hidden></div>
           </section>
+          <section id="lerobotPanel" class="panel lerobot-panel">
+            <div class="panel-heading">
+              <h3>LeRobot 数据集回放</h3>
+              <span id="lrSummary" class="muted">读取 v3.0 / v2.x 数据集，逐 episode 同步回放视频、轨迹与状态</span>
+            </div>
+            <div class="lr-source">
+              <label for="lrDataset">数据集</label>
+              <select id="lrDataset">
+                <option value="__path__">其他路径…</option>
+              </select>
+              <input
+                id="lrPath"
+                type="text"
+                placeholder="服务器上的绝对路径，如 /app/outputs/lerobot_datasets/my_dataset"
+                hidden
+              />
+              <button id="lrOpen" class="primary">读取</button>
+            </div>
+            <div id="lrBody" class="lr-body" hidden>
+              <aside class="lr-episodes-panel">
+                <input id="lrFilter" type="search" placeholder="按任务 / 子任务 / 录制筛选" />
+                <div id="lrEpisodeCount" class="muted"></div>
+                <div id="lrEpisodes" class="lr-episodes" role="listbox" aria-label="episode 列表"></div>
+              </aside>
+              <div class="lr-player">
+                <div class="lr-stage">
+                  <div id="lrVideos" class="videos lr-videos"></div>
+                  <div class="scene-wrap lr-scene-wrap">
+                    <canvas id="lrScene" aria-label="episode 双臂三维轨迹，拖动旋转，滚轮缩放"></canvas>
+                    <div id="lrSceneEmpty" class="scene-empty">
+                      <strong>没有可画的轨迹</strong
+                      ><span>状态不是本系统的 20 维双臂格式时只显示曲线</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="transport">
+                  <button id="lrPlay" class="primary" aria-label="播放或暂停">▶ 播放</button
+                  ><button id="lrPrev" class="quiet" aria-label="上一帧">上一帧</button
+                  ><button id="lrNext" class="quiet" aria-label="下一帧">下一帧</button
+                  ><button id="lrPrevEpisode" class="quiet">上一个 episode</button
+                  ><button id="lrNextEpisode" class="quiet">下一个 episode</button
+                  ><time id="lrTime">00:00.00 / 00:00.00</time
+                  ><label class="speed"
+                    >速度
+                    <select id="lrSpeed">
+                      <option value="0.5">0.5×</option>
+                      <option value="1" selected>1×</option>
+                      <option value="2">2×</option>
+                    </select></label
+                  ><label class="lr-loop"><input id="lrAutoNext" type="checkbox" />播完接着放下一个</label>
+                </div>
+                <div class="timeline-wrap">
+                  <input id="lrSeek" type="range" min="0" max="0" step="1" value="0" aria-label="帧" />
+                </div>
+                <div class="lr-readout">
+                  <div id="lrEpisodeInfo" class="lr-episode-info"></div>
+                  <canvas id="lrChart" class="lr-chart" height="150" aria-label="状态曲线，竖线为当前帧"></canvas>
+                  <div id="lrLegend" class="lr-legend"></div>
+                  <table id="lrState" class="lr-state"></table>
+                </div>
+              </div>
+            </div>
+          </section>
         </section>
         <footer class="page-footer">
           <span id="footerState">正在连接采集服务…</span
