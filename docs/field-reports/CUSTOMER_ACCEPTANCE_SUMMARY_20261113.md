@@ -88,13 +88,13 @@ The seven-page Chinese PDF separates historical evidence from current state:
 
 - Dynamic IP: left wrist really changed `.50.1/.50.2 -> .40.1/.40.2`, reusing
   the old head subnet after moving head to `.60`; 44.50 s to ready. Another
-  private `.17/.94` pair passed. See `MOBILE_EDGE_ACCEPTANCE_20261112.md` and
-  `MOBILE_PREVIEW_ACCEPTANCE_20261111.md`. Physical replacement remains distinct.
+  private `.17/.94` pair passed. See [`MOBILE_EDGE_ACCEPTANCE_20261112.md`](MOBILE_EDGE_ACCEPTANCE_20261112.md) and
+  [`MOBILE_PREVIEW_ACCEPTANCE_20261111.md`](MOBILE_PREVIEW_ACCEPTANCE_20261111.md). Physical replacement remains distinct.
 - Changed-IP warm reboot: USB 52.56 s, API 58.93 s, inputs 108.87 s, complete
   readiness 115.79 s. These do not establish physical power-loss behavior.
 - Real Android/offline: phone Take 3 started and stopped with no Jetson default
   routes, 7,328 MCAP messages, no empty/wrong-epoch records. Head VIO QC failed.
-  See `CUSTOMER_ANDROID_ACCEPTANCE_20261113.md`.
+  See [`CUSTOMER_ANDROID_ACCEPTANCE_20261113.md`](CUSTOMER_ANDROID_ACCEPTANCE_20261113.md).
 - DDS empty-message repair, recorder death detection, atomic clock flag,
   interrupted-file recovery, durable command receipts, live warnings, phone
   layout/native VIO status and live-node discovery are covered in sessions 06-15.

@@ -2,18 +2,9 @@
 
 项目共用 `main` 和一套后端：本地 Qt 提供完整桌面功能，手机网页负责现场采集控制。桌面网页版与浏览器 kiosk 已移除。
 
-## 日常启动
+## 使用手册
 
-后端通常已由 Docker 保持运行；需要手动启动时，在 Jetson 宿主机执行：
-
-```bash
-./scripts/run_dashboard.sh
-./native_dashboard/run.sh
-```
-
-Qt 默认连接 `http://127.0.0.1:8765`。退出 Qt 不停止后端，也不停止录制。启动脚本不会临时安装或编译依赖；源码开发时先执行 `./native_dashboard/build.sh`，客户机直接使用发布包里的程序和运行库。
-
-手机与 Jetson 连到可互通的网络后访问 `http://<Jetson-IP>:8765/mobile`，根路径 `/` 也打开同一手机页面。没有桌面 `/3d`、`/bags` 等页面。
+日常启动、手机采集、Qt 操作、硬件与维护指南统一从 [使用手册](docs/USAGE.md) 进入。
 
 ## 设备配置
 
@@ -65,7 +56,7 @@ node web_dashboard/build.js
 
 后端运行镜像不携带 Firefox、Chromium、Playwright 或 Qt 构建工具；COLMAP、CUDA 和媒体库仍供现有功能使用。原生建图镜像单独携带可执行文件、Ceres 和必要 OpenCV 库，不继承 Dashboard 或离线模型。Qt 程序和运行库随部署包交付，镜像升级也会同步宿主机 Qt 产物。
 
-[部署与升级](docs/DEPLOYMENT.md) 说明首次安装、镜像更新与离线使用。[硬件手册](docs/CAPTURE_BACKPACK_HARDWARE_MANUAL.pdf) 提供硬件操作说明。
+[部署与升级](docs/DEPLOYMENT.md) 说明首次安装、镜像更新与离线使用。
 
 ## 主要代码
 

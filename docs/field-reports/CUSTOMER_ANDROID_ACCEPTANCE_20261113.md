@@ -91,7 +91,7 @@ establish exposure synchronization, external UTC accuracy or spatial calibration
   are not covered by these short Android recordings.
 
 Previous `.50.1/.50.2 -> .40.1/.40.2` address reuse and software reboot evidence
-remains in `MOBILE_EDGE_ACCEPTANCE_20261112.md`; this phone session did not repeat
+remains in [`MOBILE_EDGE_ACCEPTANCE_20261112.md`](MOBILE_EDGE_ACCEPTANCE_20261112.md); this phone session did not repeat
 those network-address changes.
 
 ## Preserved state and evidence

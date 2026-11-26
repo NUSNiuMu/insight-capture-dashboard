@@ -4,7 +4,7 @@ Date: 2026-11-13, Asia/Hong_Kong. Evidence:
 `/home/niumu/workspaces/insight_capture_tests/customer-session-18/`.
 
 This follows the clock-service stop/recovery and crash tests in
-`CUSTOMER_CLOCK_DOMAIN_RECOVERY_20261113.md`. It tests actual network loss
+[`CUSTOMER_CLOCK_DOMAIN_RECOVERY_20261113.md`](CUSTOMER_CLOCK_DOMAIN_RECOVERY_20261113.md). It tests actual network loss
 without stopping the head acquisition or clock process. No application or
 firmware code changed, and no Take was created.
 

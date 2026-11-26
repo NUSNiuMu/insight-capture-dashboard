@@ -1,6 +1,6 @@
 # 必要录制话题偶发漏报：持续节点与临时查询对照
 
-日期：2026-11-13（香港时间）。现场功能提交 `6aa8a73`，证据在本机 `customer-session-15/`。本轮接续 `CUSTOMER_PHONE_VIO_STATUS_20261113.md` 中的一次短暂话题缺失观察。
+日期：2026-11-13（香港时间）。现场功能提交 `6aa8a73`，证据在本机 `customer-session-15/`。本轮接续 [`CUSTOMER_PHONE_VIO_STATUS_20261113.md`](CUSTOMER_PHONE_VIO_STATUS_20261113.md) 中的一次短暂话题缺失观察。
 
 ## 已确认问题
 

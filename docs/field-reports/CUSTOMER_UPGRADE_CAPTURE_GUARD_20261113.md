@@ -105,7 +105,7 @@ delivery change; do not claim field service updates imply the package does it.
 
 Follow-up: session 20 addresses the existing-hotspot host-file propagation path
 and tests its actual installation entry point. See
-`CUSTOMER_HOST_NETWORK_UPGRADE_20261113.md`; clean-host/full-package acceptance
+[`CUSTOMER_HOST_NETWORK_UPGRADE_20261113.md`](CUSTOMER_HOST_NETWORK_UPGRADE_20261113.md); clean-host/full-package acceptance
 remains separate and pending.
 
 The broader physical blockers remain: head illumination/VIO and complete

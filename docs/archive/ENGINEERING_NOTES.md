@@ -144,7 +144,7 @@
 - 主机独立发现服务读取每条 USB 的 DHCP server identifier，经相机 namespace 和 IP API 核对后提供角色到地址的映射；NTP 授权只跟随这些当前对端。不存在 .1/.2、三号网段或端口位置假设。
 - 相机 CycloneDDS 使用 `DontRoute=true`，仅选择直连的 Jetson 地址。2026-11-11 实测，原生改 IP 后默认路由可能消失，默认 DDS 行为仍尝试向其他 USB 网段回传，导致 NTP 可达但画面不恢复；启用直连选择后可自动恢复。该设置由本项目 `deploy/guard_camera_dds.sh` 安装，不包含 IP，原生改址会保留。
 - 录制 topic 查询使用 `--no-daemon`，不复用持有旧接口的 ROS CLI daemon。NTP 缓存也会在当前对端变化时失效，等待重新测量。
-- 旧版仅重新加入多播组的实现与 2026-09-20 同 IP 重连记录属于历史验证；不能用于声称任意改址已支持。当前改址、录制与重启证据见 [手机采集验收](MOBILE_PREVIEW_ACCEPTANCE_20261111.md)。
+- 旧版仅重新加入多播组的实现与 2026-09-20 同 IP 重连记录属于历史验证；不能用于声称任意改址已支持。当前改址、录制与重启证据见 [手机采集验收](../field-reports/MOBILE_PREVIEW_ACCEPTANCE_20261111.md)。
 
 ## WebRTC 与预览
 
@@ -317,7 +317,7 @@ Insight9 解码平均约 20–21 ms，高于两路红外的约 7–8 ms。各组
 
 页面功能回归覆盖缓冲区复用、容量 600/2/300 切换、可见性、清空/恢复、总开关和 Keep trail；6 组端点/开放/闭合轨迹的邻接数据与库原生结果一致。前一轮性能试验未证明稳定的端到端 FPS 增益，本次采用粗线不等于解除浏览器调度瓶颈。
 
-原生视频/3D 客户端的依赖检查与选型见 [NATIVE_PREVIEW_OPTIONS.md](NATIVE_PREVIEW_OPTIONS.md)。
+原生视频与 3D 客户端的构建依赖、预览链路见 [Qt 采集台说明](../../native_dashboard/README.md)。
 
 ## 2026-11-16 校准请求与采集切换
 

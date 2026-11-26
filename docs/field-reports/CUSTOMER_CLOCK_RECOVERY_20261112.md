@@ -1,7 +1,7 @@
 # Customer workflow: clock readiness race and truncated MCAP recovery
 
 Field code: `7f10784`. This follows the discoveries in
-`CUSTOMER_RECORDER_FAILURE_20261112.md`; that report remains a historical snapshot.
+[`CUSTOMER_RECORDER_FAILURE_20261112.md`](CUSTOMER_RECORDER_FAILURE_20261112.md); that report remains a historical snapshot.
 Only the InsightCapture branch and its owned camera clock adapter were changed.
 The camera acquisition firmware and system ROS libraries were not replaced.
 

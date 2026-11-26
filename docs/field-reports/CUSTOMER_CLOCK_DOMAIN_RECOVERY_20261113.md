@@ -88,7 +88,7 @@ packet-level NTP blackholes and actual recorded-MCAP verification of this
 firmware change are still pending.
 
 Follow-up: session 18 subsequently tested an actual NTP packet blackhole on
-the running head camera. See `CUSTOMER_NTP_PACKET_LOSS_20261113.md` for the
+the running head camera. See [`CUSTOMER_NTP_PACKET_LOSS_20261113.md`](CUSTOMER_NTP_PACKET_LOSS_20261113.md) for the
 separate results and limits; wrist, recorded-MCAP and long-drift acceptance
 remain pending.
 

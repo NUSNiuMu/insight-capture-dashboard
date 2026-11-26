@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Insight Capture 前端使用手册</title>
+  <style>
+    @page { size: A4; margin: 14mm 15mm 16mm; }
+    * { box-sizing: border-box; }
+    html { font-family: "Noto Sans CJK SC", "Droid Sans Fallback", sans-serif; color: #252a31; }
+    body { margin: 0; font-size: 10.2pt; line-height: 1.55; }
+    h1, h2, h3 { color: #17212b; page-break-after: avoid; }
+    h1 { margin: 0 0 6mm; font-size: 28pt; line-height: 1.16; letter-spacing: -.4pt; }
+    h2 { margin: 7mm 0 3mm; padding-bottom: 1.5mm; font-size: 16pt; border-bottom: 1px solid #d8dde3; }
+    h3 { margin: 5mm 0 2mm; font-size: 12pt; }
+    p { margin: 1.8mm 0; }
+    ul, ol { margin: 2mm 0 3mm; padding-left: 6mm; }
+    li { margin: 1mm 0; }
+    table { width: 100%; border-collapse: collapse; margin: 3mm 0 5mm; page-break-inside: avoid; }
+    th { background: #eef2f5; color: #1c2d3d; text-align: left; }
+    th, td { border: 1px solid #cfd6dc; padding: 2mm 2.4mm; vertical-align: top; }
+    code { font-family: "Noto Sans Mono CJK SC", monospace; font-size: 9pt; background: #f2f4f6; padding: .2mm 1mm; border-radius: 2px; }
+    pre { margin: 2.5mm 0 4mm; padding: 3mm 4mm; overflow-wrap: anywhere; white-space: pre-wrap; color: #e9eef2; background: #17212b; border-radius: 5px; page-break-inside: avoid; }
+    pre code { padding: 0; color: inherit; background: transparent; }
+    .cover { min-height: 260mm; display: flex; flex-direction: column; justify-content: space-between; page-break-after: always; }
+    .eyebrow { margin-top: 18mm; color: #a26a13; font-size: 10pt; font-weight: 700; letter-spacing: 1.5pt; }
+    .subtitle { max-width: 150mm; color: #56616b; font-size: 15pt; }
+    .choice { margin-top: 12mm; padding: 7mm; border-left: 4mm solid #d99725; background: #fff8e9; }
+    .choice strong { display: block; margin-bottom: 2mm; color: #744800; font-size: 15pt; }
+    .meta { color: #66717b; border-top: 1px solid #d8dde3; padding-top: 4mm; }
+    .note, .warn { margin: 3mm 0; padding: 3mm 4mm; border-radius: 4px; page-break-inside: avoid; }
+    .note { background: #eef5fb; border-left: 3px solid #4a83ad; }
+    .warn { background: #fff3ef; border-left: 3px solid #c85c45; }
+    .tag { display: inline-block; margin-right: 1.5mm; padding: .5mm 2mm; color: #fff; background: #9a6a18; border-radius: 9px; font-size: 8pt; }
+    .steps { counter-reset: step; list-style: none; padding: 0; }
+    .steps li { position: relative; min-height: 8mm; padding-left: 10mm; }
+    .steps li::before { counter-increment: step; content: counter(step); position: absolute; left: 0; top: .3mm; width: 6mm; height: 6mm; text-align: center; line-height: 6mm; color: #fff; background: #263b4c; border-radius: 50%; font-size: 8pt; font-weight: 700; }
+    .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+    .card { padding: 4mm; border: 1px solid #d8dde3; border-radius: 5px; page-break-inside: avoid; }
+    .card h3 { margin-top: 0; }
+    .page-break { page-break-before: always; }
+    .small { color: #66717b; font-size: 8.8pt; }
+    .checklist { list-style: none; padding-left: 0; }
+    .checklist li::before { content: "□"; margin-right: 2mm; color: #9a6a18; font-size: 13pt; }
+    .footer-note { margin-top: 10mm; padding-top: 3mm; color: #737d86; border-top: 1px solid #d8dde3; font-size: 8.5pt; }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div>
+      <p class="eyebrow">INSIGHT CAPTURE · FRONTEND GUIDE</p>
+      <h1>Insight Capture<br>前端使用手册</h1>
+      <p class="subtitle">本地 Native Qt 与网页版的选择、实时预览、录制、回放、质检和数据处理。</p>
+      <div class="choice">
+        <strong>只展示视频流和轨迹：推荐本地 Native Qt</strong>
+        Jetson 本机原生硬件解码，预览帧率更高、延迟更低。任务管理、质检、数据集导出和高级处理使用网页版。
+      </div>
+    </div>
+    <div class="meta">
+      <p><span class="tag">软件 2.0.7</span><span class="tag">2026-09-20</span></p>
+      <p>适用对象：数采员、演示人员、现场管理员和数据工程师</p>
+      <p>范围：只包含前端操作；不包含安装、镜像构建和代码开发。</p>
+    </div>
+  </section>
+
+  <h2>1　怎么选前端</h2>
+  <table>
+    <thead><tr><th>场景</th><th>推荐</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>三路视频 + 3D 轨迹展示</td><td><strong>Native Qt</strong></td><td>本机硬解，帧率和实时性更好</td></tr>
+      <tr><td>基础任务、录制和回放</td><td><strong>Native Qt</strong></td><td>同屏操作，适合现场采集</td></tr>
+      <tr><td>新建/编辑任务、检查 Take</td><td>网页</td><td>功能完整</td></tr>
+      <tr><td>rosbag 管理、质检、数据集导出</td><td>网页</td><td>Qt 未包含这些页面</td></tr>
+      <tr><td>手姿、COLMAP、系统设置</td><td>网页</td><td>高级处理入口</td></tr>
+    </tbody>
+  </table>
+  <p class="note"><strong>两套前端共用同一个 Dashboard 后端。</strong>切换前端不会改变原始录制格式；关闭前端也不等于停止录制。</p>
+  <p><strong>使用范围：</strong>只在 Jetson 本机运行和查看，不提供任何远程预览方式。</p>
+
+  <h2>2　启动</h2>
+  <h3>2.1　启动命令速查</h3>
+  <pre><code># 终端 1：源码目录，启动后端和本地网页；必须带 --jetson
+DISPLAY=:0 ./scripts/run_dashboard.sh --jetson
+
+# 客户部署包对应命令
+DISPLAY=:0 ./run_dashboard.sh --jetson
+
+# 终端 2：需要 Native Qt 时再执行
+DISPLAY=:0 ./native_dashboard/run.sh --fps 30 --fullscreen</code></pre>
+  <p><code>--jetson</code> 属于 Dashboard 启动脚本；Native Qt 在另一个终端启动，不接收该参数。</p>
+  <p>健康检查：<code>curl -s http://127.0.0.1:8765/healthz</code>，返回 <code>ok</code> 后再操作。</p>
+
+  <div class="columns">
+    <div class="card">
+      <h3>Native Qt（Jetson 本机）</h3>
+      <p>默认连接本机 <code>127.0.0.1:8765</code>。需要窗口模式时去掉 <code>--fullscreen</code>。</p>
+      <p><code>F11</code> 切换全屏；<code>Esc</code> 退出全屏。</p>
+    </div>
+    <div class="card">
+      <h3>网页版</h3>
+      <p>带 <code>--jetson</code> 的命令会自动打开本机全屏网页。</p>
+      <p>首页：<code>http://127.0.0.1:8765/</code></p>
+      <p>视频与轨迹：<code>http://127.0.0.1:8765/3d</code></p>
+    </div>
+  </div>
+  <p class="warn"><strong>停止整个后端：</strong><code>docker compose down</code>。执行前必须确认没有录制或处理任务。关闭 Qt 窗口或浏览器只关闭前端，不会自动停止录制。</p>
+  <p class="small">Native Qt 最新实现位于 <code>experiment/qt-live-frame-deadlines</code> 分支的 <code>native_dashboard/</code>。现场应使用已安装版本，不要在采集中切换分支或临时构建。</p>
+
+  <h2>3　Native Qt 操作</h2>
+  <table>
+    <thead><tr><th>区域</th><th>内容</th></tr></thead>
+    <tbody>
+      <tr><td>顶栏</td><td>姿态连接、实时/回放、25/30 FPS、3D FPS、全屏</td></tr>
+      <tr><td>左侧</td><td>三路相机视频、连接状态、实际输出 FPS</td></tr>
+      <tr><td>右侧</td><td>3D 模型、姿态与轨迹</td></tr>
+      <tr><td>底部左侧</td><td>任务、录制、作废、采集检查、新建地图</td></tr>
+      <tr><td>底部右侧</td><td>rosbag、载入、暂停、时间轴、返回实时</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.1　只看视频和轨迹</h3>
+  <ol class="steps">
+    <li>等待顶栏显示“姿态在线”。</li>
+    <li>确认三路视频有画面，右上角“输出 FPS”持续更新。</li>
+    <li>选择 30 FPS；资源紧张或录制期间不稳时改为 25 FPS。</li>
+    <li>确认右侧模型和轨迹随设备移动。</li>
+    <li>保持“实时”模式并全屏展示。</li>
+  </ol>
+  <p class="note">短时实机验证中，30 FPS 目标下三路输出约 28.6–29.4 FPS。实际帧率以界面显示为准。</p>
+
+  <h3>3.2　3D 视图</h3>
+  <table>
+    <tbody>
+      <tr><th>左键拖动</th><td>旋转</td><th>右键拖动</th><td>平移</td></tr>
+      <tr><th>滚轮</th><td>缩放</td><th>复位视角</th><td>恢复默认视角</td></tr>
+      <tr><th>保留轨迹</th><td>保留后续轨迹</td><th>清轨迹</th><td>只清显示，不删数据</td></tr>
+      <tr><th>角色复选框</th><td colspan="3">分别显示或隐藏头部、左手、右手轨迹</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.3　任务与录制</h3>
+  <ol class="steps">
+    <li>从“采集任务”选择任务，点“进入任务”。Qt 不能新建任务，需使用网页 Sessions。</li>
+    <li>确认视频、姿态和轨迹正常。</li>
+    <li>点“开始录制”；看到红色“录制中”后开始动作。</li>
+    <li>完成后点“停止录制”，等待状态回到空闲。</li>
+    <li>动作失败时点“作废最近一条”。该操作不删除原始 MCAP。</li>
+    <li>需要检测位复核时点“采集检查”。</li>
+  </ol>
+  <p class="warn"><strong>“新建地图”会清空旧地图。</strong>只在重新校准时使用，录制中不可操作。</p>
+
+  <h3>3.4　回放</h3>
+  <p>选择 rosbag → “刷新”（如需要）→ “载入” → 使用“暂停/继续”和时间轴 → “返回实时”。</p>
+  <p>Qt 只做快速查看；bag 删除、质检和导出使用网页。</p>
+
+  <h2>4　网页版操作</h2>
+  <table>
+    <thead><tr><th>页面</th><th>地址</th><th>操作要点</th></tr></thead>
+    <tbody>
+      <tr><td>Sessions</td><td><code>/</code></td><td>创建/编辑/进入任务；查看 Take；作废错误 Take</td></tr>
+      <tr><td>Spatial review</td><td><code>/3d</code></td><td>网页实时预览、地图状态、轨迹和回放</td></tr>
+      <tr><td>Rosbags</td><td><code>/bags</code></td><td>容量、时长、消息/topic、完整性、评分和删除</td></tr>
+      <tr><td>Datasets</td><td><code>/umi-dataset</code></td><td>LeRobot v3 / Legacy UMI Zarr 导出</td></tr>
+      <tr><td>Scoring</td><td><code>/scoring</code></td><td>完整性校验和轨迹评分</td></tr>
+      <tr><td>Hand pose</td><td><code>/handpose</code></td><td>离线提取与查看 3D 手部关键点</td></tr>
+      <tr><td>Optimization</td><td><code>/optimization</code></td><td>Insight9 彩色图 COLMAP 优化</td></tr>
+      <tr><td>Recorder</td><td><code>/recording</code></td><td>录制目录、topic、开始和停止</td></tr>
+      <tr><td>Settings</td><td><code>/settings</code></td><td>音量、遮罩、夹爪追踪、手部叠加</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.1　任务与 Take</h3>
+  <p><strong>Sessions：</strong>选择任务并点 <b>Enter task set</b>。<b>New task</b> 创建任务，
+  <b>Edit</b> 修改，<b>End current</b> 退出。未进入任务时，普通录制会被拒绝。作废 Take 不会删除原始数据。</p>
+
+  <h3>4.2　网页实时与 Recorder</h3>
+  <p><strong>Spatial：</strong><b>Play</b> 回放，<b>Stop</b> 停止，<b>Go live</b> 返回实时；
+  <b>Clear trail</b> 只清显示；<b>New map</b> 会清空旧地图。</p>
+  <p><strong>Recorder：</strong>确认 Task、目录和空间 → <b>Refresh topics</b> → 选择 topics →
+  <b>Start capture</b> → <b>Stop</b>。停止后等待缓存排空和 bag 发布完成。</p>
+
+  <h3>4.3　Rosbags 与 Scoring</h3>
+  <p>Rosbags 删除不可恢复，必须先备份。Scoring 选择 bag 后点 <b>Run analysis</b>：</p>
+  <ul>
+    <li><b>Complete</b>：topic 丢帧均在阈值内；<b>Incomplete</b>：至少一个 topic 超限；</li>
+    <li><b>scored</b> 只表示评分已运行，不代表数据完整；0–100 分用于同类录制比较。</li>
+  </ul>
+
+  <h3>4.4　数据处理</h3>
+  <ul>
+    <li><b>Datasets：</b>选 bags → 选格式 → 填英文任务指令 → 选布局/切分/分辨率 → Build。质量不合格的源 bag 可能加 <code>fail_</code> 前缀，但不会删除。</li>
+    <li><b>Hand pose：</b>选 bag → Extract hand pose → 等待完成 → 播放或拖动时间轴。</li>
+    <li><b>Optimization：</b>选 bag 和 Insight9 → 启动 COLMAP；运行期间不要录制。</li>
+    <li><b>Settings：</b>调整音量、遮罩和追踪显示。只有全部空闲时才能 Restart backend。</li>
+  </ul>
+
+  <h2>5　推荐工作流</h2>
+  <div class="columns">
+    <div class="card">
+      <h3>视频与轨迹展示</h3>
+      <p>后端就绪 → Native Qt → 30 FPS → 检查三路输出 → 全屏。</p>
+    </div>
+    <div class="card">
+      <h3>正式采集</h3>
+      <p>网页建任务 → Qt 进入任务并录制 → 网页 QC/Scoring → 网页导出。</p>
+    </div>
+  </div>
+
+  <h2>6　常见状态</h2>
+  <table>
+    <thead><tr><th>现象</th><th>处理</th></tr></thead>
+    <tbody>
+      <tr><td>姿态未连接</td><td>检查 <code>healthz</code>，再重启前端</td></tr>
+      <tr><td>视频无画面 / stale</td><td>检查相机和 Dashboard；恢复后重启前端，不要开始录制</td></tr>
+      <tr><td>Mapping unavailable</td><td>重新校准，让 Insight9 观察有纹理区域并产生平移</td></tr>
+      <tr><td>Localization 未就绪</td><td>让对应手部相机观察已建区域</td></tr>
+      <tr><td>录制被拒绝</td><td>查看 <code>/api/preflight</code>：任务、相机、定位、topic 或存储可能异常</td></tr>
+      <tr><td>Qt FPS 偏低</td><td>关闭浏览器实时页和重任务，改用 25 FPS，检查温度和负载</td></tr>
+      <tr><td>网页 FPS 偏低</td><td>关闭网页实时页，改用 Jetson 本机 Native Qt</td></tr>
+      <tr><td>回放载入失败</td><td>刷新列表；到 Rosbags 检查 bag 和回放准备状态</td></tr>
+      <tr><td>外接盘 fallback</td><td>当前写入 NVMe；空闲后修复挂载并重启后端</td></tr>
+    </tbody>
+  </table>
+  <pre><code>docker compose ps
+curl -s http://127.0.0.1:8765/healthz
+curl -s http://127.0.0.1:8765/api/preflight | python3 -m json.tool
+./scripts/system_doctor.sh</code></pre>
+
+  <h2>7　操作红线</h2>
+  <ul>
+    <li>录制中不要重启后端、相机或整机，不要拔插相机和录制盘；</li>
+    <li>录制时不要运行 COLMAP、批量导出或手姿提取；</li>
+    <li>关闭 Qt 或浏览器不等于停止录制，必须先点“停止录制”；</li>
+    <li>作废不删除数据；Rosbags 删除不可恢复；</li>
+    <li>停止后等状态完全回到空闲，再开始下一条；</li>
+    <li><code>_staging/</code> 是中断恢复区，不要手动清理。</li>
+  </ul>
+
+  <h2>8　最短检查表</h2>
+  <div class="columns">
+    <div class="card">
+      <h3>开始前</h3>
+      <ul class="checklist">
+        <li>三路视频正常，无 stale</li>
+        <li>姿态、Mapping、Localization 正常</li>
+        <li>已进入正确 Task</li>
+        <li>录制目录和空间正常</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>收班</h3>
+      <ul class="checklist">
+        <li>Recorder idle</li>
+        <li>Take 数量正确</li>
+        <li>完整性检查完成</li>
+        <li>原始 MCAP 已备份</li>
+      </ul>
+    </div>
+  </div>
+  <p class="footer-note">Insight Capture 前端使用手册 · Native Qt + Web · 2.0.7</p>
+</body>
+</html>

@@ -65,4 +65,4 @@ sudo nmcli connection down jetson-capture-hotspot
 
 2026-11-13 真实 OnePlus / Android 11 / Chrome 132 验证：手机通过 DHCP 获得 `10.77.0.106`；控制与 WebRTC 媒体均走 AP。旧脚本在断开 STA 时把 AP 从 157 改回 36，手机因此转投办公室网络。`5a1fb79` 修复后，在 STA/AP 均为 52 的窗口重复断开 STA，AP 保持原信道，同一 RTP 流继续解码；移除所有互联网默认路由后，手机仍完成开始、停止、保存与预览恢复。
 
-这是一次实机离线切换验证，不涵盖所有无线环境、iPhone 或物理冷启动。软件重启与改 IP 证据见 `MOBILE_EDGE_ACCEPTANCE_20261112.md`；本轮详细范围见 `CUSTOMER_ANDROID_ACCEPTANCE_20261113.md`。HTTP 文件下载在该手机 Chrome 中触发“无法安全地下载文件”，最终下载仍需用户处理浏览器确认后补验。
+这是一次实机离线切换验证，不涵盖所有无线环境、iPhone 或物理冷启动。软件重启与改 IP 证据见 [手机边界验收](field-reports/MOBILE_EDGE_ACCEPTANCE_20261112.md)；本轮详细范围见 [客户 Android 验收](field-reports/CUSTOMER_ANDROID_ACCEPTANCE_20261113.md)。HTTP 文件下载在该手机 Chrome 中触发“无法安全地下载文件”，最终下载仍需用户处理浏览器确认后补验。

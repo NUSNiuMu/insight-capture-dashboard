@@ -1,6 +1,6 @@
 # Mobile console edge validation - 2026-11-12
 
-This supplements `MOBILE_CONSOLE_ACCEPTANCE_20261112.md`. It records field tests
+This supplements [`MOBILE_CONSOLE_ACCEPTANCE_20261112.md`](MOBILE_CONSOLE_ACCEPTANCE_20261112.md). It records field tests
 on the Jetson with one Insight9 and two Insight3 cameras. It is not a claim of
 all-device, physical power-cycle, phone Safari, or indefinite endurance acceptance.
 

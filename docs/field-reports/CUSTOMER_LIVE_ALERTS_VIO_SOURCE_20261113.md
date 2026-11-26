@@ -83,7 +83,7 @@ Preview on/off/on phases, discarding five seconds at each boundary:
 Turning preview off did not restore the existing 99 Hz QC reference. These short
 windows do not prove no effect at every load or replace recording endurance.
 The previous MCAP/source comparison is documented in
-`CUSTOMER_VIO_AUDIT_20261112.md`; this session made no new MCAP recording.
+[`CUSTOMER_VIO_AUDIT_20261112.md`](CUSTOMER_VIO_AUDIT_20261112.md); this session made no new MCAP recording.
 
 Read-only inspection of the library mapped by the running head process confirms
 legacy `HobotFullNode::posePublishThread`, with a fresh loop start each iteration
