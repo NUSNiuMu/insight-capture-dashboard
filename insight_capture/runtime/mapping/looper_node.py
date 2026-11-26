@@ -787,7 +787,7 @@ def main():
     config = json.loads(args.config.read_text())
     os.environ["ROS_DOMAIN_ID"] = str(config["ros_domain_id"])
     from insight_capture.runtime.ros.network import configure_ros_network
-    configure_ros_network(config)
+    configure_ros_network(config, include_relay_links=True)
     rclpy.init()
     node = LooperNode(args)
     try:

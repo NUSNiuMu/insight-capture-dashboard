@@ -31,7 +31,7 @@ def main():
     # competes with capture, pose handling and inference on the Jetson cores.
     cv2.setNumThreads(max(1, int(settings.get("opencv_threads", 1))))
     os.environ["ROS_DOMAIN_ID"] = str(config["ros_domain_id"])
-    configure_ros_network(config)
+    configure_ros_network(config, include_relay_links=True)
     import rclpy
     from rclpy.time import Time
     from rclpy.qos import qos_profile_sensor_data

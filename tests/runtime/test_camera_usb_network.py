@@ -6,9 +6,36 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
+
+
+@pytest.mark.parametrize("module_name", ["egohalo_rectifier", "looper_node"])
+def test_mapping_processes_include_egohalo_relay_at_startup(tmp_path, monkeypatch, module_name):
+    pytest.importorskip("rclpy")
+    from importlib import import_module
+    from insight_capture.runtime.ros import network
+
+    class NetworkConfigured(Exception):
+        pass
+
+    def configure(config, *, include_relay_links=False):
+        assert config["ros_domain_id"] == 20
+        assert include_relay_links
+        raise NetworkConfigured
+
+    module = import_module(f"insight_capture.runtime.mapping.{module_name}")
+    path = tmp_path / "cameras.json"
+    path.write_text(json.dumps({"ros_domain_id": 20, "egohalo_rectification": {}}))
+    monkeypatch.setattr(sys, "argv", [module_name, "--config", str(path)])
+    monkeypatch.setenv("ROS_DOMAIN_ID", "20")
+    monkeypatch.setattr(network, "configure_ros_network", configure)
+    if module_name == "egohalo_rectifier":
+        monkeypatch.setattr(module, "configure_ros_network", configure)
+    with pytest.raises(NetworkConfigured):
+        module.main()
 
 NETWORK = '[Match]\nName=usb0\n[Network]\nAddress=169.254.40.1/24\n'
 BOOT = '#!/bin/bash\nifconfig usb0 169.254.40.1\nroute add default gw 169.254.40.2\n'
