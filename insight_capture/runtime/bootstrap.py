@@ -15,7 +15,7 @@ from insight_capture.core.paths import PROJECT_ROOT
 from insight_capture.runtime.recording import (
     RecordingManager,
     build_default_topics,
-    load_post_processing_config,
+    load_runtime_config,
 )
 from insight_capture.runtime.recording.storage import resolve_recording_root
 
@@ -75,7 +75,7 @@ def load_runtime_settings(
     runtime_config_path = runtime_config_path.resolve()
     project_root = config_path.parents[1]
     raw_config = load_setup(config_path)
-    runtime_config = load_post_processing_config(runtime_config_path)
+    runtime_config = load_runtime_config(runtime_config_path)
     ros_domain_id = int(raw_config.get("ros_domain_id", 10))
 
     rosbag_dir_value = (

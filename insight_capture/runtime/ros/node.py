@@ -43,7 +43,7 @@ from insight_capture.core.config import (
     build_dashboard_config,
     load_setup,
 )
-from insight_capture.core.paths import runtime_config_path
+from insight_capture.core.paths import runtime_config_path as default_runtime_config_path
 from insight_capture.media.jpeg import HwJpegCodec
 from insight_capture.core import performance as perf_tracker
 from insight_capture.runtime.recording import RecordingManager
@@ -90,7 +90,7 @@ class PoseBridgeNode(Node):
         config_path: Path,
         pose_publish_hz: float = 50.0,
         webrtc_port: int = 8766,
-        post_processing_config_path: Optional[Path] = None,
+        runtime_config_path: Optional[Path] = None,
     ) -> None:
         if rclpy is None:
             raise RuntimeError("rclpy is required to run the web dashboard backend")
@@ -104,10 +104,10 @@ class PoseBridgeNode(Node):
         self._mapping_stream = MappingStream(self)
         self.config_path = config_path
         self.project_root = config_path.resolve().parents[1]
-        self.post_processing_config_path = (
-            Path(post_processing_config_path).resolve()
-            if post_processing_config_path is not None
-            else runtime_config_path()
+        self.runtime_config_path = (
+            Path(runtime_config_path).resolve()
+            if runtime_config_path is not None
+            else default_runtime_config_path()
         )
         self.max_points = 300
 

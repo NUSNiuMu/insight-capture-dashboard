@@ -28,7 +28,7 @@ class SettingsRoutes:
         if "value" not in payload:
             raise ValueError("Field 'value' is required.")
         ratio = save_gripper_mask_height_ratio(
-            self.context.node.post_processing_config_path,
+            self.context.node.runtime_config_path,
             payload["value"],
         )
         self.context.node.get_logger().info(

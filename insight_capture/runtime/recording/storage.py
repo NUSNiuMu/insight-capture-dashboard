@@ -1,4 +1,4 @@
-"""Post-processing configuration loading."""
+"""Runtime configuration loading and recording storage helpers."""
 
 import json
 import os
@@ -8,7 +8,7 @@ import subprocess
 import time
 from typing import Dict, Optional
 
-DEFAULT_POST_PROCESSING_CONFIG = {
+DEFAULT_RUNTIME_CONFIG = {
     "rosbag_dir": "rosbags",
     "results_dir": "outputs/results",
     "max_cache_size": 1073741824,
@@ -36,10 +36,10 @@ def valid_recording_subdirectory(value: str) -> bool:
     return re.fullmatch(r"[0-9A-Za-z_-]+|[\w-]+~[0-9a-f]{16}", value) is not None
 
 
-def load_post_processing_config(config_path: Path) -> Dict:
+def load_runtime_config(config_path: Path) -> Dict:
     with config_path.open("r", encoding="utf-8") as f:
         payload = json.load(f)
-    merged = dict(DEFAULT_POST_PROCESSING_CONFIG)
+    merged = dict(DEFAULT_RUNTIME_CONFIG)
     merged.update(payload)
     return merged
 

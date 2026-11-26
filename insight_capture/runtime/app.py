@@ -128,11 +128,10 @@ def main() -> None:
     os.environ["RMW_IMPLEMENTATION"] = rclpy.get_rmw_implementation_identifier()
     node = PoseBridgeNode(
         settings.config_path,
-        post_processing_config_path=settings.runtime_config_path,
+        runtime_config_path=settings.runtime_config_path,
         pose_publish_hz=args.pose_publish_hz,
         webrtc_port=args.webrtc_port,
     )
-    node.post_processing_config = settings.runtime_config
     node.get_logger().info(f"View mode={args.view_mode}")
     _warn_for_storage_fallback(node, settings)
 

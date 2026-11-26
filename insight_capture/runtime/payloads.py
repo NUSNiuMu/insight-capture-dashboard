@@ -232,6 +232,6 @@ class PayloadBuilder:
         return {
             "poses": [{"name": pose.name, "role": pose.teleop_role} for pose in self.owner.poses],
             "insight3_gripper_mask_height_ratio": load_gripper_mask_height_ratio(
-                self.owner.post_processing_config_path
+                self.owner.runtime_config_path
             ),
         }
