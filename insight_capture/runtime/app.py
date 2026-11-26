@@ -40,6 +40,7 @@ from insight_capture.runtime.bootstrap import (
 from insight_capture.composition import build_runtime_services
 from insight_capture.runtime.ros import PoseBridgeNode, make_image_qos, make_qos
 from insight_capture.runtime.ros.network import configure_ros_network
+from insight_capture.runtime.upgrade import initialize_capture_lock
 
 __all__ = [
     "PoseBridgeNode",
@@ -61,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=str(PROJECT_ROOT / "config" / "cameras.json"))
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=os.environ.get("DASHBOARD_PORT", 8765))
     parser.add_argument("--webrtc-port", type=int, default=8766)
     parser.add_argument(
         "--web-root",
@@ -121,6 +122,8 @@ def main() -> None:
     if rclpy is None or MultiThreadedExecutor is None:
         raise RuntimeError("rclpy is not available in this environment")
 
+    if any(camera.get("uq2168") for camera in settings.raw_config["cameras"]):
+        initialize_capture_lock()
     os.environ.setdefault("ROS_DOMAIN_ID", str(settings.ros_domain_id))
     configure_ros_network(settings.raw_config, include_relay_links=True)
     rclpy.init(args=None)

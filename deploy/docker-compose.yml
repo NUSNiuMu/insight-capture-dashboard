@@ -38,8 +38,7 @@ services:
       - INSIGHT_ROSBAG_REQUIRED_SOURCE=${INSIGHT_ROSBAG_REQUIRED_SOURCE:-}
       - INSIGHT_ROSBAG_FALLBACK_DIR=/workspaces/insight_capture/rosbags
       - INSIGHT_MODE=capture
-      # Uncomment to override default port:
-      # - DASHBOARD_PORT=8765
+      - DASHBOARD_PORT=${DASHBOARD_PORT:-8765}
 
     volumes:
       - /run/insight-capture-network:/run/insight-capture-network:ro
@@ -201,6 +200,7 @@ services:
     init: true
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-20}
+      - DASHBOARD_PORT=${DASHBOARD_PORT:-8765}
     device_cgroup_rules:
       - 'c 81:* rw'
     volumes:

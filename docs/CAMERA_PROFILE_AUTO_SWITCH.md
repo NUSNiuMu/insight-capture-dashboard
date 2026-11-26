@@ -28,7 +28,9 @@ python3 -m insight_capture.runtime.camera_profiles bind-uvc --left 1-2.1 --right
 
 ## EgoHalo 与双 UQ2168
 
-同时接入 EgoHalo 和两台 UQ2168（`1bcf:28c4`）时可自动选中 `jetson-nx-egohalo-uvc`。有效的手动绑定优先。手机和 Qt 默认显示 EgoHalo 四路总览，可单独打开各腕部画面。自动模式按 USB 口排序，显示「腕部 1」「腕部 2」。当前配置记录两路对应的 USB 口，录制话题沿用原名称。
+同时接入 EgoHalo 和两台 UQ2168（`1bcf:28c4`）时可自动选中 `jetson-nx-egohalo-uvc`。有效的手动绑定优先。手机和 Qt 默认显示 EgoHalo 四路总览，可单独打开各腕部画面。
+
+自动模式将在线 UQ2168 分配给「腕部 1」「腕部 2」。空闲时可插到任意 USB 口，空出的通道会接入新识别的设备，仍在线的一路保持原编号。录制准备、录制和保存期间，每路保持原 USB 连接。掉线的通道会留空，重新枚举的设备等当前 Take 保存结束后才接入。录制话题沿用 `uvc_left` 和 `uvc_right`，腕部编号不代表解剖左右。
 
 UQ2168 原生采集器协商 `1920×1200 MJPEG @ 90 fps`。按常规方式在手机或 Qt 进入任务、启停录制。EgoHalo 保存头部原件，Jetson 保存两腕，采集结束后在录制库按共同编号回传并合包。打开合成的 Take 可生成四路头部加两路腕部的同步回放。
 

@@ -1,13 +1,50 @@
-"""Publish the two bound wrist cameras, reopening V4L2 after hotplug."""
+"""Publish wrist cameras and keep each automatic UQ2168 source stable during capture."""
 
 import json
+import os
 from pathlib import Path
 import threading
 import time
 
-from insight_capture.runtime.camera_profiles import BINDINGS, ROLES, bound_uvc, read_json, uvc_devices
+from insight_capture.runtime.camera_profiles import (
+    BINDINGS, ROLES, UQ2168_LABELS, bound_uvc, capture_lock, capture_status,
+    idle, read_json, uq2168_devices, uvc_devices,
+)
 from insight_capture.runtime import uq2168
 from insight_capture.core.paths import PROJECT_ROOT
+
+
+class AutomaticUvcSources:
+    def __init__(self, config, port):
+        self.config = config
+        self.port = port
+        self.assignments = {}
+        self.lock = threading.Lock()
+
+    def select(self, role):
+        with self.lock:
+            devices = {camera["attachment"]: camera for camera in uq2168_devices(uvc_devices())}
+            current = devices.get(self.assignments.get(role))
+            if current is not None:
+                return current
+            vacant = [slot for slot in ROLES if self.assignments.get(slot) not in devices]
+            available = [key for key in devices if key not in self.assignments.values()]
+            index = vacant.index(role)
+            if index >= len(available):
+                return None
+            try:
+                # Start holds the shared lock through preflight and recorder
+                # admission. Check actual capture state while excluding a new start.
+                with capture_lock(self.config):
+                    if idle(capture_status(self.port)):
+                        key = available[index]
+                        # Only the reader of this slot can replace it, after it
+                        # has stopped publishing from its previous device.
+                        self.assignments[role] = key
+                        return devices[key]
+            except (OSError, ValueError):
+                pass
+            return None
 
 
 def stream_camera(source, role, publisher, stop, gst, compressed_image):
@@ -44,17 +81,20 @@ def stream_camera(source, role, publisher, stop, gst, compressed_image):
             return
 
 
-def run_camera(node, role, publisher, stop, gst, compressed_image, gst_error, *, raw_publishers=None, bindings=None):
+def run_camera(node, role, publisher, stop, gst, compressed_image, gst_error, *,
+               raw_publishers=None, bindings=None, automatic_sources=None):
     path = PROJECT_ROOT / "config" / BINDINGS
     while not stop.is_set():
         try:
-            device = bound_uvc(uvc_devices(), bindings or read_json(path, {})).get(role)
+            device = (automatic_sources.select(role) if automatic_sources is not None
+                      else bound_uvc(uvc_devices(), bindings or read_json(path, {})).get(role))
             if device is not None:
                 source = Path("/host-dev") / device["node"]
                 if raw_publishers is None:
                     stream_camera(source, role, publisher, stop, gst, compressed_image)
                 else:
-                    uq2168.stream(source, role, raw_publishers, stop)
+                    attachment = device["attachment"] if automatic_sources is not None else None
+                    uq2168.stream(source, role, raw_publishers, stop, attachment=attachment)
         except (OSError, ValueError, KeyError, RuntimeError, gst_error) as exc:
             if not stop.is_set():
                 node.get_logger().warning(f"UVC {role}: {exc}")
@@ -71,10 +111,17 @@ def main():
     from std_msgs.msg import UInt8MultiArray, UInt64MultiArray
 
     config = json.loads((PROJECT_ROOT / "config" / "cameras.json").read_text())
-    native = {camera["name"].removeprefix("uvc_"): camera.get("uvc_binding")
+    native = {camera["name"].removeprefix("uvc_"): camera
               for camera in config["cameras"] if camera.get("uq2168")}
-    # Keep a running stream on its configured device even if other USB cameras appear.
-    bindings = native if set(native) == set(ROLES) and all(native.values()) else None
+    bindings = {role: camera.get("uvc_binding") for role, camera in native.items()}
+    has_pair = set(native) == set(ROLES)
+    automatic = has_pair and all(
+        not bindings[role] or camera.get("dashboard_label") == UQ2168_LABELS[role]
+        for role, camera in native.items()
+    )
+    automatic_sources = (AutomaticUvcSources(PROJECT_ROOT / "config", int(os.environ.get("DASHBOARD_PORT", 8765)))
+                         if automatic else None)
+    bindings = bindings if has_pair and all(bindings.values()) else None
     Gst.init(None)
     rclpy.init()
     node = rclpy.create_node("uvc_wrist_inputs")
@@ -94,7 +141,8 @@ def main():
                 }
             worker = threading.Thread(target=run_camera, args=(
                 node, role, publisher, stop, Gst, CompressedImage, GLib.Error),
-                kwargs={"raw_publishers": raw_publishers, "bindings": bindings}, name=f"uvc-{role}")
+                kwargs={"raw_publishers": raw_publishers, "bindings": bindings,
+                        "automatic_sources": automatic_sources}, name=f"uvc-{role}")
             worker.start()
             workers.append(worker)
         rclpy.spin(node)

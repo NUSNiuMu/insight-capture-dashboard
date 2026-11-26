@@ -8,7 +8,7 @@ import struct
 import subprocess
 import time
 
-from insight_capture.runtime.camera_profiles import UQ2168_MODE
+from insight_capture.runtime.camera_profiles import UQ2168_MODE, usb_attachment
 
 PACKET = struct.Struct("<IIQQ")
 
@@ -37,7 +37,7 @@ def packets(fd, stop):
         del pending[:offset]
 
 
-def stream(source, role, publishers, stop):
+def stream(source, role, publishers, stop, *, attachment=None):
     from sensor_msgs.msg import CompressedImage
     from std_msgs.msg import UInt8MultiArray, UInt64MultiArray
 
@@ -53,7 +53,17 @@ def stream(source, role, publishers, stop):
         stdout=subprocess.PIPE,
     )
     try:
+        verify_attachment = attachment is not None
         for kind, mono, aux, payload in packets(process.stdout.fileno(), stop):
+            if verify_attachment:
+                # The child has now opened both V4L2 handles. Check for a
+                # hotplug race before emitting any packet from those handles.
+                for name in (source.name, metadata[0]):
+                    node = video.with_name(name)
+                    usb = (node / "device").resolve(strict=True).parent
+                    if usb_attachment(usb) != attachment:
+                        raise RuntimeError(f"{node}: UQ2168 changed while opening")
+                verify_attachment = False
             if kind == 1:
                 utc_ns = mono + offset_ns
                 image = CompressedImage(format="jpeg", data=array("B", payload))

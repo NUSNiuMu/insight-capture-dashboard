@@ -9,6 +9,12 @@ from pathlib import Path
 LOCK_PATH = Path(__file__).resolve().parents[2] / "config" / ".capture-upgrade.lock"
 
 
+def initialize_capture_lock():
+    # The UVC reader mounts config read-only and needs this inode before the
+    # first recording or configuration change.
+    os.close(os.open(LOCK_PATH, os.O_RDONLY | os.O_CREAT | os.O_CLOEXEC, 0o644))
+
+
 @contextmanager
 def recording_start_lock():
     # Read-only descriptors can flock on the Linux deployment filesystem. This

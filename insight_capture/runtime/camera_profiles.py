@@ -23,6 +23,7 @@ ROLES = ("left", "right")
 UQ2168_PRODUCT = "1bcf:28c4"
 UQ2168_MODE = (1920, 1200, 90)
 UQ2168_DATA = ("frame_timing", "imu_raw", "uvc_metadata")
+UQ2168_LABELS = {"left": "腕部 1", "right": "腕部 2"}
 HEAD = "egohalo"
 BASE_EGO = "jetson-nx-egohalo"
 PROFILES = {
@@ -56,6 +57,11 @@ def write_json(path, data):
             temporary.unlink(missing_ok=True)
 
 
+def usb_attachment(usb):
+    """Identify this enumeration, including a different camera on the same port."""
+    return usb.name, (usb / "devnum").read_text().strip(), usb.stat().st_ino
+
+
 def uvc_devices(sysfs=Path("/sys/class/video4linux"), udev=Path("/run/udev/data")):
     """Select one image node per USB camera, excluding V4L2 metadata nodes."""
     devices = []
@@ -75,6 +81,7 @@ def uvc_devices(sysfs=Path("/sys/class/video4linux"), udev=Path("/run/udev/data"
             serial_file = usb / "serial"
             serial = serial_file.read_text().strip() if serial_file.exists() else ""
             devices.append({"node": node.name, "port": usb.name, "serial": serial, "product": product,
+                            "attachment": usb_attachment(usb),
                             "index": int((node / "index").read_text())})
         except (OSError, ValueError):
             continue  # The node may have disappeared or udev may still be initializing.
@@ -161,6 +168,11 @@ def detect(network, usb):
                     for role, device in usb.items()}}
 
 
+def uq2168_devices(devices):
+    return sorted((device for device in devices if device["product"] == UQ2168_PRODUCT),
+                  key=lambda device: device["port"])
+
+
 def scan(config):
     with ThreadPoolExecutor() as pool:
         network = [camera for camera in pool.map(probe, camera_links()) if camera]
@@ -168,8 +180,7 @@ def scan(config):
     wrists = bound_uvc(devices, read_json(config / BINDINGS, {}))
     automatic = False
     if len(wrists) != len(ROLES):
-        uq2168 = sorted((device for device in devices if device["product"] == UQ2168_PRODUCT),
-                        key=lambda device: device["port"])
+        uq2168 = uq2168_devices(devices)
         if len(uq2168) == len(ROLES) == len({device["port"] for device in uq2168}):
             wrists = dict(zip(ROLES, uq2168))
             automatic = True
@@ -261,15 +272,18 @@ def render(config, candidate, status):
                     distributed["image_rates"][stream["topic"]] = fps
     if uq2168:
         automatic = candidate.get("automatic_uvc", False)
-        bindings = ({role: {key: device[key] for key in ("product", "port")}
-                     for role, device in candidate["usb"].items()} if automatic
-                    else read_json(config / BINDINGS, {}))
-        labels = {"left": "腕部 1", "right": "腕部 2"} if automatic else {}
+        bindings = {} if automatic else read_json(config / BINDINGS, {})
         for camera in cameras["cameras"]:
             if camera.get("uq2168"):
                 role = camera["name"].removeprefix("uvc_")
-                camera["uvc_binding"] = bindings.get(role, {})
-                camera["dashboard_label"] = labels.get(role, camera["name"])
+                # Older automatic profiles already carry these labels and a
+                # saved port. Keeping the file as-is avoids restarting services
+                # just to remove a value the automatic reader no longer uses.
+                if automatic:
+                    camera["dashboard_label"] = UQ2168_LABELS[role]
+                else:
+                    camera["uvc_binding"] = bindings.get(role, {})
+                    camera["dashboard_label"] = camera["name"]
     head = next(camera for camera in cameras["cameras"] if camera["teleop_role"] == "head")
     head["relay_host_address"] = peers[HEAD]["address"]
     distributed = cameras["distributed_recording"]

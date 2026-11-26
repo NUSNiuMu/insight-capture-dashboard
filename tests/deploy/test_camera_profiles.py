@@ -1,6 +1,7 @@
 import fcntl
 from pathlib import Path
 import shutil
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -130,10 +131,7 @@ def test_scan_selects_two_uq2168_without_a_binding_file(config, monkeypatch):
     assert profiles.scan(config) == candidate
     settings = profiles.render(config, candidate, {})
     wrists = {camera["name"]: camera for camera in settings["cameras"] if camera.get("uq2168")}
-    assert [wrists["uvc_" + role]["uvc_binding"] for role in profiles.ROLES] == [
-        {"product": profiles.UQ2168_PRODUCT, "port": "1-2.3"},
-        {"product": profiles.UQ2168_PRODUCT, "port": "1-2.4"},
-    ]
+    assert all("uvc_binding" not in camera for camera in wrists.values())
     labels = {camera["name"]: camera["label"] for camera in build_dashboard_config(settings)["cameras"]}
     assert (labels["uvc_left"], labels["uvc_right"]) == ("腕部 1", "腕部 2")
     assert not (config / profiles.BINDINGS).exists()
@@ -147,6 +145,100 @@ def test_scan_selects_two_uq2168_without_a_binding_file(config, monkeypatch):
     explicit = profiles.scan(config)
     assert "automatic_uvc" not in explicit
     assert explicit["usb"]["left"]["port"] == second["port"]
+
+
+def test_automatic_uq2168_moves_ports_without_a_profile_restart(config, monkeypatch):
+    def candidate(left_port):
+        wrists = {
+            "left": dict(uvc(left_port, "video2"), product=profiles.UQ2168_PRODUCT),
+            "right": dict(uvc("1-2.4", "video0"), product=profiles.UQ2168_PRODUCT),
+        }
+        return {**profiles.detect(network("egohalo"), wrists), "automatic_uvc": True}
+
+    initial = candidate("1-2.3")
+    settings = profiles.render(config, initial, {})
+    # A deployment upgraded from the old automatic mode still stores port
+    # hints. A new USB attachment only needs to change the running reader.
+    for camera in settings["cameras"]:
+        if camera.get("uq2168"):
+            role = camera["name"].removeprefix("uvc_")
+            camera["uvc_binding"] = {"product": profiles.UQ2168_PRODUCT, "port": initial["usb"][role]["port"]}
+    profiles.write_json(config / "cameras.json", settings)
+    (config / ".device").write_text("jetson-nx-egohalo-uvc\n")
+    monkeypatch.setattr(profiles, "capture_status", lambda port: pytest.fail("USB move must not restart the profile"))
+    assert not profiles.activate(config, candidate("4-1"), 8765)
+
+
+def test_automatic_reader_keeps_each_take_on_its_original_attachment(config, monkeypatch):
+    def camera(port, node, generation):
+        return dict(uvc(port, node, "same-serial"), product=profiles.UQ2168_PRODUCT,
+                    attachment=(port, generation, generation))
+
+    first, other = camera("1-2.3", "video2", 7), camera("1-2.4", "video0", 8)
+    replacement = camera(first["port"], first["node"], 9)
+    moved = camera("4-1", "video8", 10)
+    devices = [other, first]
+    monkeypatch.setattr(uvc_bridge, "uvc_devices", lambda: devices)
+    status = {"upgrade_lock_supported": True, "recording": False, "operation_in_progress": False,
+              "merge_state": "idle"}
+    monkeypatch.setattr(uvc_bridge, "capture_status", lambda port: status)
+    sources = uvc_bridge.AutomaticUvcSources(config, 8765)
+    assert sources.select("right") == other
+    assert sources.select("left") == first
+
+    devices[:] = [other, replacement]
+    with (config / ".capture-upgrade.lock").open() as lock:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+        assert sources.select("left") is None  # Recording start admission owns this lock.
+
+    status["recording"] = True
+    assert sources.select("left") is None
+    assert sources.select("right") == other
+    assert uvc_bridge.AutomaticUvcSources(config, 8765).select("left") is None
+    devices[:] = [other, moved]
+    assert sources.select("left") is None
+
+    status.update(recording=False, merge_state="finalizing")
+    assert sources.select("left") is None
+    status["merge_state"] = "saved"
+    assert sources.select("left") == moved
+    assert sources.select("right") == other
+
+    devices[:] = [moved]
+    assert sources.select("left") == moved
+    assert sources.select("right") is None
+    fresh = uvc_bridge.AutomaticUvcSources(config, 8765)
+    assert fresh.select("right") is None
+    assert fresh.select("left") == moved
+
+
+def test_native_reader_rejects_a_reused_node_before_publishing(tmp_path, monkeypatch):
+    usb = tmp_path / "1-2.3"
+    interface = usb / "1-2.3:1.0"
+    siblings = interface / "video4linux"
+    (siblings / "video1").mkdir(parents=True)
+    (siblings / "video1/index").write_text("1")
+    (usb / "devnum").write_text("7")
+    attachment = profiles.usb_attachment(usb)
+    sysfs = tmp_path / "class"
+    for name in ("video0", "video1"):
+        (sysfs / name).mkdir(parents=True)
+        (sysfs / name / "device").symlink_to(interface)
+    native = uvc_bridge.uq2168
+    monkeypatch.setattr(native, "Path", lambda _: sysfs)
+    monkeypatch.setitem(sys.modules, "sensor_msgs.msg", SimpleNamespace(CompressedImage=object))
+    monkeypatch.setitem(sys.modules, "std_msgs.msg", SimpleNamespace(UInt8MultiArray=object, UInt64MultiArray=object))
+    process = SimpleNamespace(stdout=SimpleNamespace(fileno=lambda: 0, close=lambda: None),
+                              terminate=lambda: None, wait=lambda **_: None)
+    monkeypatch.setattr(native.subprocess, "Popen", lambda *args, **kwargs: process)
+
+    def packets(_fd, _stop):
+        (usb / "devnum").write_text("8")
+        yield 1, 0, 0, b"jpeg"
+
+    monkeypatch.setattr(native, "packets", packets)
+    with pytest.raises(RuntimeError, match="UQ2168 changed while opening"):
+        native.stream(Path("/host-dev/video0"), "left", {}, object(), attachment=attachment)
 
 
 def test_camera_set_and_capture_state_are_checked_under_the_existing_lock(config, monkeypatch):
@@ -237,7 +329,9 @@ def test_uvc_reader_reopens_new_video_node_on_same_ros_topic(monkeypatch):
                           StateChangeReturn=SimpleNamespace(FAILURE="failure"), SECOND=10**9,
                           CLOCK_TIME_NONE=-1)
     stop = SimpleNamespace(is_set=lambda: not active, wait=lambda delay: None)
-    image = lambda: SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
+    def image():
+        return SimpleNamespace(header=SimpleNamespace(stamp=SimpleNamespace()))
+
     uvc_bridge.run_camera(None, "left", SimpleNamespace(publish=publish), stop, gst, image, RuntimeError)
     assert opened == ["device=/host-dev/video0", "device=/host-dev/video8"]
     assert len(closed) == 2
