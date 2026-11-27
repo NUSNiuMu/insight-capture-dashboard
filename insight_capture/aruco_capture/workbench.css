@@ -2856,3 +2856,119 @@ body.drawer-resizing .shell {
 .lr-videos.lead .video-card:first-child .image-wrap {
   aspect-ratio: 2.15;
 }
+
+/* ---- 模型任务队列（右侧，回放与标注），与左侧录制栏同样可收起 ---- */
+.job-drawer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: var(--jobs-w, 260px);
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 12px 12px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  transition: transform 0.2s;
+}
+body.jobs-closed .job-drawer {
+  transform: translateX(100%);
+}
+body[data-mode="review"]:not(.jobs-closed) .shell {
+  margin-right: var(--jobs-w, 260px);
+}
+.job-toggle {
+  position: fixed;
+  top: 50%;
+  right: var(--jobs-w, 260px);
+  z-index: 11;
+  min-width: 18px;
+  height: 56px;
+  padding: 0 3px;
+  transform: translateY(-50%);
+  border: 1px solid var(--line);
+  border-right: 0;
+  border-radius: 6px 0 0 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  transition: right 0.2s;
+}
+body.jobs-closed .job-toggle {
+  right: 0;
+}
+.job-toggle.busy {
+  color: var(--cyan);
+  border-color: var(--cyan);
+}
+.job-hint {
+  margin: 0 4px;
+  font-size: 11px;
+}
+.job-item {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  border-left: 3px solid transparent;
+  border-radius: 5px;
+}
+.job-item.running {
+  border-left-color: var(--cyan);
+  background: rgba(105, 205, 228, 0.07);
+}
+.job-item.queued {
+  border-left-color: var(--amber);
+}
+.job-item.failed small {
+  color: var(--red);
+}
+.job-open {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  white-space: normal;
+  padding: 7px 8px;
+  border: 0;
+  background: transparent;
+}
+.job-open:hover,
+.job-open.active {
+  background: var(--surface);
+}
+.job-open strong {
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.job-open small {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.job-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--cyan) var(--p, 0%), #0f2033 var(--p, 0%));
+}
+.job-cancel {
+  align-self: center;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+@media (max-width: 600px) {
+  body[data-mode="review"]:not(.jobs-closed) .shell {
+    margin-right: 0;
+  }
+  .job-drawer {
+    width: min(var(--jobs-w, 260px), 85vw);
+    z-index: 30;
+  }
+  .job-toggle {
+    z-index: 31;
+    right: min(var(--jobs-w, 260px), 85vw);
+  }
+}

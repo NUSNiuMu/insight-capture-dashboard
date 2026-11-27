@@ -220,7 +220,15 @@ export class LerobotPlayer {
   }
   buildVideos() {
     const wrap = $("lrVideos");
-    for (const v of this.videos()) v.removeAttribute("src");
+    // Really let go of the old players: without load() each keeps its HTTP
+    // connection, and after a few episode switches the browser's six
+    // connections per server are all held, so new videos never start.
+    for (const v of this.videos()) {
+      v.pause();
+      v.removeAttribute("src");
+      v.load();
+    }
+    clearTimeout(this.videoWatch);
     wrap.replaceChildren();
     // Head-camera views (head_view, subtask_end_head_view…) lead, side by side
     // in one row; a single head view takes the whole row. Wrist views follow.
@@ -232,6 +240,7 @@ export class LerobotPlayer {
     wrap.classList.toggle("pair", entries.length === 2);
     wrap.classList.toggle("lead", heads === 1 && entries.length > 2);
     this.framed = [];
+    const cards = [];
     const playable = new Set(this.dataset.browser_codecs || []);
     for (const [key, info] of entries) {
       const name = key.replace(/^observation\.images\./, "");
@@ -259,7 +268,9 @@ export class LerobotPlayer {
         video.muted = true;
         video.playsInline = true;
         video.disablePictureInPicture = true; // its overlay button sat on the picture
-        video.preload = "auto";
+        // Metadata only: the files are hundreds of MB (many episodes each);
+        // the frames shown are fetched by range when the player seeks there.
+        video.preload = "metadata";
         video.dataset.from = info.from;
         video.dataset.to = info.to;
         video.src =
@@ -267,14 +278,29 @@ export class LerobotPlayer {
         video.addEventListener("loadedmetadata", () => this.place(video, this.frame), { once: true });
         video.onerror = () => {
           video.removeAttribute("src");
+          video.load();
           toFrames();
         };
         box.append(video);
+        cards.push({ video, toFrames });
       }
       card.append(box, label);
       wrap.append(card);
     }
     if (!entries.length) wrap.append(el("div", "这个 episode 没有视频文件", "empty-state"));
+    // A player still without a picture after 5 s (stalled download, slow
+    // network) switches to frames decoded on the server instead of staying black.
+    const episode = this.episode;
+    this.videoWatch = setTimeout(() => {
+      if (this.episode !== episode) return;
+      for (const { video, toFrames } of cards)
+        if (video.isConnected && video.readyState < 2) {
+          video.pause();
+          video.removeAttribute("src");
+          video.load();
+          toFrames();
+        }
+    }, 5000);
   }
   // One request in flight per frame-by-frame camera; when it lands, ask for
   // the frame the clock has reached by then (frames in between are skipped).

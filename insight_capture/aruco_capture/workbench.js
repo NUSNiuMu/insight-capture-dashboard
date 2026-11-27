@@ -38,8 +38,11 @@ let mode = "capture",
   // no one has edited yet: not saved, but nothing is lost by leaving, since the
   // draft is on disk and loads again. Only edits make the segments `dirty`.
   generated = false,
-  // A 模型逐段标注 / 中文转英文 request is running.
+  // A 模型逐段标注 request is being queued / a 中文转英文 request is running.
   labelBusy = false,
+  translateBusy = false,
+  // Model jobs of every recording (GET /api/jobs), for the queue panel.
+  jobList = [],
   editing = -1,
   // Segments picked for merging on the timeline, held by object so they
   // survive re-sorting; `anchor` is where a Shift-click range starts.
@@ -628,6 +631,8 @@ function changeMode() {
     mode !== "capture" || !$("sourceAlerts").textContent;
   $("sessionBar").hidden = mode !== "review";
   $("sessionDrawer").hidden = $("drawerToggle").hidden = mode !== "review";
+  $("jobDrawer").hidden = $("jobToggle").hidden = mode !== "review";
+  if (mode === "review") pollJobs();
   $("poseTools").hidden = mode !== "review";
   $("trailToggle").hidden = mode !== "capture";
   $("clearTrail").hidden = mode !== "capture";
@@ -693,6 +698,96 @@ async function refresh() {
   renderQualitySessions();
   renderDrawer();
 }
+// ---- 模型任务队列（右侧，回放与标注） ----
+let jobsOpen = true,
+  jobTimer = null,
+  jobSeen = {}; // "kind:session" -> running, to notice a job of the open recording finish
+try {
+  jobsOpen = localStorage.getItem("jobDrawer") !== "closed";
+} catch {}
+function applyJobsDrawer() {
+  document.body.classList.toggle("jobs-closed", !jobsOpen);
+  const active = jobList.filter((j) => j.running).length;
+  $("jobToggle").textContent = (jobsOpen ? "›" : "‹") + (!jobsOpen && active ? ` ${active}` : "");
+  $("jobToggle").classList.toggle("busy", active > 0);
+}
+$("jobToggle").onclick = () => {
+  jobsOpen = !jobsOpen;
+  try {
+    localStorage.setItem("jobDrawer", jobsOpen ? "open" : "closed");
+  } catch {}
+  applyJobsDrawer();
+};
+const JOB_KIND = { draft: "预标注", label: "逐段标注", pause: "静止检测" };
+function jobState(j) {
+  if (j.running && j.cancel) return "取消中…（当前一步做完后停止）";
+  if (j.running && j.queued) return `排队中 · 第 ${j.position || "?"} 位`;
+  if (j.running) return j.kind === "pause" ? "进行中" : `进行中 ${j.done} / ${j.total || "…"}`;
+  const at = j.finished ? new Date(j.finished * 1000).toLocaleTimeString("zh-CN", { hour12: false }) : "";
+  if (j.cancelled) return `已取消 ${at}`;
+  if (j.error) return `失败 ${at}：${j.error}`;
+  return `完成 ${at}` + (j.kind === "label" ? (j.applied ? " · 已处理" : " · 待填入") : "");
+}
+function renderJobs() {
+  const active = jobList.filter((j) => j.running).length;
+  $("jobCount").textContent = active ? `${active} 个进行或排队` : "空闲";
+  $("jobList").replaceChildren(
+    ...(jobList.length
+      ? jobList.map((j) => {
+          const row = el("div", undefined, "job-item" + (j.running ? (j.queued ? " queued" : " running") : j.error ? " failed" : " done"));
+          row.setAttribute("role", "listitem");
+          const open = el("button", undefined, "job-open" + (j.session === selectedName ? " active" : ""));
+          open.type = "button";
+          open.title = "打开这条录制";
+          open.append(
+            el("strong", j.session),
+            el("small", `${JOB_KIND[j.kind] || j.kind}${j.count ? ` · ${j.count} 段` : ""} · ${jobState(j)}`),
+          );
+          if (j.running && !j.queued && j.total)
+            open.append(Object.assign(el("span", undefined, "job-bar"), { style: `--p:${(100 * j.done) / j.total}%` }));
+          open.onclick = () => selectSession(j.session).catch((e) => notice(e.message, true));
+          row.append(open);
+          if (j.running && j.kind !== "pause" && !j.cancel) {
+            const cancel = el("button", "取消", "quiet job-cancel");
+            cancel.type = "button";
+            cancel.onclick = async () => {
+              try {
+                await api(`/api/jobs/${j.kind}/${encodeURIComponent(j.session)}`, "DELETE");
+              } catch (e) {
+                notice(e.message, true);
+              }
+              pollJobs();
+            };
+            row.append(cancel);
+          }
+          return row;
+        })
+      : [el("div", "还没有模型任务。点「预标注」或「模型逐段标注」后会出现在这里。", "empty-state")]),
+  );
+  applyJobsDrawer();
+}
+async function pollJobs() {
+  clearTimeout(jobTimer);
+  jobTimer = null;
+  try {
+    jobList = (await api("/api/jobs")).jobs;
+  } catch {
+    jobList = [];
+  }
+  // A job of the open recording that just finished: bring its result in.
+  for (const j of jobList) {
+    const key = `${j.kind}:${j.session}`,
+      was = jobSeen[key];
+    jobSeen[key] = j.running;
+    if (!was || j.running || j.session !== selectedName || !review) continue;
+    if (j.kind === "label") api(base() + "/label").then((job) => applyLabelJob(job, false)).catch(() => {});
+    else if (j.kind === "draft") loadDraft(selectedName, true);
+  }
+  renderJobs();
+  updateModelButtons();
+  if (mode === "review") jobTimer = setTimeout(pollJobs, jobList.some((j) => j.running) ? 2000 : 8000);
+}
+applyJobsDrawer();
 // ---- 录制记录侧边栏 ----
 let drawerOpen = true,
   drawerSelection = new Set(); // recordings ticked for batch processing
@@ -934,8 +1029,14 @@ async function selectSession(name) {
     if (selectedName !== token) return;
     installReview(data);
     loadService();
-    loadDraft(name, true);
+    // A finished labelling job is offered once the draft is in: its labels
+    // go onto segments by their bounds, and its notice must not be replaced.
+    loadDraft(name, true)
+      .then(() => (name === selectedName ? api(base() + "/label") : null))
+      .then((job) => applyLabelJob(job, true))
+      .catch(() => {});
     offerWip(name);
+    renderJobs();
     $("sessionMeta").textContent =
       `${seconds(data.duration_s, 1)} · ${data.streams.length} 路视频 · ${data.fps} Hz`;
     notice("");
@@ -1387,17 +1488,24 @@ function updateModelButtons() {
     targets = review ? labelTargets() : [],
     chinese = parts.filter(hasChinese).length;
   $("labelParts").hidden = !configured || !review;
-  $("labelParts").disabled = !up || reviewBusy || labelBusy || !targets.length;
-  $("labelParts").textContent = labelBusy
-    ? "逐段标注中…"
+  // This recording's own labelling job, if one is queued or running.
+  const mine = jobList.find((j) => j.kind === "label" && j.session === selectedName && j.running);
+  $("labelParts").disabled = !up || reviewBusy || labelBusy || !!mine || !targets.length;
+  $("labelParts").textContent = mine
+    ? mine.queued
+      ? `逐段标注排队中（第 ${mine.position || "?"} 位）`
+      : `逐段标注中 ${mine.done} / ${mine.total || "…"}`
     : selection.size
       ? `模型标注选中的 ${targets.length} 段`
       : `模型标注空白的 ${targets.length} 段`;
-  if (!targets.length && !labelBusy)
-    $("labelParts").title = "所有片段都已填写：先 Ctrl / Shift 点击选中要重标的片段";
+  $("labelParts").title = mine
+    ? "这条录制的逐段标注在右侧「模型任务」队列里，完成后自动填入"
+    : !targets.length
+      ? "所有片段都已填写：先 Ctrl / Shift 点击选中要重标的片段"
+      : "分段不动，让模型逐段填写 task / subtask：有选中的片段（Ctrl / Shift 点击）就标选中的并覆盖，否则只标还没填写的。加入右侧队列，不用等待";
   $("translateParts").hidden = !configured || !review || !chinese;
-  $("translateParts").disabled = !up || reviewBusy || labelBusy;
-  $("translateParts").textContent = labelBusy ? "转换中…" : `中文转英文（${chinese} 段）`;
+  $("translateParts").disabled = !up || reviewBusy || translateBusy;
+  $("translateParts").textContent = translateBusy ? "转换中…" : `中文转英文（${chinese} 段）`;
   $("translateForm").hidden =
     !configured || !(CJK.test($("task").value) || CJK.test($("subtask").value));
 }
@@ -1409,11 +1517,10 @@ bind("labelParts", async () => {
   const counts = {};
   for (const p of parts) if (p.task_id) counts[p.task_id] = (counts[p.task_id] || 0) + 1;
   const taskId = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || "";
-  const name = selectedName;
   labelBusy = true;
   updateModelButtons();
   try {
-    let job = await api(base() + "/label", "POST", {
+    const job = await api(base() + "/label", "POST", {
       segments: targets.map((p) => ({ start_s: p.start_s, end_s: p.end_s })),
       task_id: taskId,
       // Labels already on the page: the one before each group is the model's context.
@@ -1421,23 +1528,29 @@ bind("labelParts", async () => {
         .filter((p) => !targets.includes(p) && p.subtask)
         .map((p) => ({ start_s: p.start_s, end_s: p.end_s, subtask: p.subtask })),
     });
-    while (job?.running) {
-      notice(
-        job.queued
-          ? "逐段标注排队中（推理服务正在处理别的录制）…"
-          : `模型逐段标注中：第 ${job.done} / ${job.total || "…"} 步（先认 task，再按相邻片段分组标注）…`,
-      );
-      await new Promise((r) => setTimeout(r, 1500));
-      if (name !== selectedName) return;
-      job = await api(base() + "/label");
-    }
-    if (job?.error) throw Error("逐段标注失败：" + job.error);
+    notice(
+      `已把 ${targets.length} 段加入右侧「模型任务」队列` +
+        (job.queued ? "，前面还有任务在跑" : "") +
+        "；可以继续标别的录制，完成后回到这条录制会填入结果。",
+    );
+    await pollJobs();
+  } finally {
+    labelBusy = false;
+    updateModelButtons();
+  }
+});
+// A finished labelling job of the open recording: fill its labels in (only
+// segments whose bounds still match), once. `offer`: ask first instead.
+async function applyLabelJob(job, offer) {
+  if (!job || job.running || job.applied || job.error || !job.labels || job.session !== selectedName) return;
+  const name = selectedName;
+  const acknowledge = () => api(base() + "/label/applied", "POST").catch(() => {});
+  const apply = () => {
     if (name !== selectedName) return;
     const previous = parts.map((p) => ({ ...p })),
       near = (a, b) => Math.abs(a - b) < 2e-3;
     let applied = 0;
-    for (const label of job.labels || []) {
-      // Segments moved or deleted meanwhile keep what they have.
+    for (const label of job.labels) {
       const p = parts.find((x) => near(x.start_s, label.start_s) && near(x.end_s, label.end_s));
       if (!p) continue;
       Object.assign(p, {
@@ -1450,16 +1563,30 @@ bind("labelParts", async () => {
       });
       applied++;
     }
+    acknowledge();
+    job.applied = true;
+    if (!applied) {
+      notice("模型逐段标注已完成，但这些片段的起止已经改过，没有可填入的");
+      return;
+    }
     setDirty(true);
     resetEditor();
     renderParts();
     notice(`模型已标注 ${applied} 段（标为待复核）：按 Enter 逐段核对，全部确认后点「保存全部标注」。`);
     offerUndo("撤销模型标注", previous);
-  } finally {
-    labelBusy = false;
-    updateModelButtons();
-  }
-});
+  };
+  if (!offer && !editorDirty) return apply();
+  notice(`这条录制的模型逐段标注已完成（${job.labels.length} 段）。`);
+  const yes = el("button", "填入结果", "quiet"),
+    no = el("button", "不用了", "quiet");
+  yes.onclick = () => (editorDirty ? notice("请先更新正在编辑的片段", true) : apply());
+  no.onclick = () => {
+    acknowledge();
+    job.applied = true;
+    notice("");
+  };
+  $("message").append(yes, no);
+}
 async function translateItems(items) {
   const reply = await api("/api/annotation/translate", "POST", { items });
   return reply.items;
@@ -1470,7 +1597,7 @@ bind("translateParts", async () => {
   if (!targets.length) return;
   // Each distinct (task, subtask) pair once: drafts repeat the same text a lot.
   const keys = [...new Set(targets.map((p) => JSON.stringify([p.task || "", p.subtask || ""])))];
-  labelBusy = true;
+  translateBusy = true;
   updateModelButtons();
   notice(`正在把 ${targets.length} 段（${keys.length} 种）中文标注转成英文…`);
   try {
@@ -1493,12 +1620,12 @@ bind("translateParts", async () => {
     notice(`已转换 ${targets.length - left} 段` + (left ? `，${left} 段仍含中文（悬停“存疑”查看原因）` : "") + "，保存后生效。");
     offerUndo("撤销中文转英文", previous);
   } finally {
-    labelBusy = false;
+    translateBusy = false;
     updateModelButtons();
   }
 });
 bind("translateForm", async () => {
-  labelBusy = true;
+  translateBusy = true;
   updateModelButtons();
   try {
     const [r] = await translateItems([{ task: $("task").value, subtask: $("subtask").value }]);
@@ -1513,7 +1640,7 @@ bind("translateForm", async () => {
         : "已转成英文" + (r.subtask_id || r.task_id ? "，并对上了动作表条目" : "") + "：确认后点「更新片段」",
     );
   } finally {
-    labelBusy = false;
+    translateBusy = false;
     updateModelButtons();
   }
 });

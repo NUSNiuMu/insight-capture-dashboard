@@ -53,6 +53,26 @@ def create_app(capture, annotation_url=""):
     # and never blocks recording: it is mostly waiting on the service.
     draft_jobs, draft_tasks = {}, set()
     label_jobs = {}
+
+    class Cancelled(Exception):
+        pass
+
+    def job_progress(job):
+        """Progress callback that also stops a job cancelled from the queue
+        (between model requests: the one in flight finishes first)."""
+        def progress(done, total):
+            if job.get("cancel"):
+                raise Cancelled()
+            job.update(done=done, total=total)
+        return progress
+
+    def finish(job, exc=None):
+        if isinstance(exc, Cancelled):
+            job["error"], job["cancelled"] = "已取消", True
+        elif exc is not None:
+            job["error"] = str(exc) or type(exc).__name__
+        job["running"] = False
+        job["finished"] = time.time()
     draft_lock = asyncio.Lock()
     # Settable from the page; the env/CLI value is only the first default.
     service = {"url": preannotate.load_url(capture.root, annotation_url)}
@@ -211,6 +231,7 @@ def create_app(capture, annotation_url=""):
         job = draft_jobs[path.name] = {
             "running": True, "queued": False, "done": 0, "total": 0,
             "error": None, "model": "", "stage": "pause",
+            "kind": "pause", "session": path.name, "created": time.time(),
         }
         try:
             segmentation = await asyncio.to_thread(segment_settings.load, capture.root)
@@ -219,6 +240,7 @@ def create_app(capture, annotation_url=""):
             job["error"] = "静止检测失败：" + (str(exc) or type(exc).__name__)
         finally:
             job["running"] = False
+            job["finished"] = time.time()
         if service["url"]:
             await start_draft(path, required=False)
 
@@ -241,24 +263,27 @@ def create_app(capture, annotation_url=""):
         job = draft_jobs[path.name] = {
             "running": True, "queued": True, "done": 0, "total": 0,
             "error": None, "model": health.get("model", ""),
+            "kind": "draft", "session": path.name, "created": time.time(),
         }
-
-        def progress(done, total):
-            job.update(done=done, total=total)
+        progress = job_progress(job)
 
         async def run():
+            error = None
             try:
                 async with draft_lock:
+                    if job.get("cancel"):
+                        raise Cancelled()
                     job["queued"] = False
+                    job["started"] = time.time()
                     table = await asyncio.to_thread(action_table.load, capture.root)
                     segmentation = await asyncio.to_thread(segment_settings.load, capture.root)
                     await asyncio.to_thread(
                         preannotate.run, path, url, table, job["model"], progress, segmentation
                     )
             except Exception as exc:  # reported to the page, not raised
-                job["error"] = str(exc) or type(exc).__name__
+                error = exc
             finally:
-                job["running"] = False
+                finish(job, error)
 
         task = asyncio.get_running_loop().create_task(run())
         draft_tasks.add(task)
@@ -300,15 +325,19 @@ def create_app(capture, annotation_url=""):
             job = label_jobs[path.name] = {
                 "running": True, "queued": True, "done": 0, "total": 0,
                 "error": None, "model": health.get("model", ""), "labels": None,
+                "kind": "label", "session": path.name, "created": time.time(),
+                "count": len(segments), "applied": False,
             }
-
-            def progress(done, total):
-                job.update(done=done, total=total)
+            progress = job_progress(job)
 
             async def run():
+                error = None
                 try:
                     async with draft_lock:
+                        if job.get("cancel"):
+                            raise Cancelled()
                         job["queued"] = False
+                        job["started"] = time.time()
                         table = await asyncio.to_thread(action_table.load, capture.root)
                         segmentation = await asyncio.to_thread(segment_settings.load, capture.root)
                         job["labels"] = await asyncio.to_thread(
@@ -317,14 +346,44 @@ def create_app(capture, annotation_url=""):
                             body.get("context") or [],
                         )
                 except Exception as exc:  # reported to the page, not raised
-                    job["error"] = str(exc) or type(exc).__name__
+                    error = exc
                 finally:
-                    job["running"] = False
+                    finish(job, error)
 
             task = asyncio.get_running_loop().create_task(run())
             draft_tasks.add(task)
             task.add_done_callback(draft_tasks.discard)
         return web.json_response(label_jobs.get(path.name))
+
+    async def label_applied(request):
+        """The page applied (or dismissed) a finished job's labels: stop offering them."""
+        job = label_jobs.get(session(request).name)
+        if job and not job["running"]:
+            job["applied"] = True
+        return web.json_response(job)
+
+    # 模型任务队列 (right-hand panel on 回放与标注): every pre-annotation and
+    # per-segment labelling job, running and queued first, then recent ones.
+    async def jobs(request):
+        rows = [
+            {k: v for k, v in job.items() if k != "labels"}
+            for job in [*draft_jobs.values(), *label_jobs.values()]
+            if job.get("kind")
+        ]
+        waiting = sorted((r for r in rows if r["running"] and r.get("queued")), key=lambda r: r["created"])
+        for position, row in enumerate(waiting, 1):
+            row["position"] = position
+        active = [r for r in rows if r["running"] and not r.get("queued")]
+        done = sorted((r for r in rows if not r["running"]), key=lambda r: r.get("finished", 0), reverse=True)
+        return web.json_response({"jobs": active + waiting + done[:30]})
+
+    async def cancel_job(request):
+        kind, name = request.match_info["kind"], request.match_info["name"]
+        job = {"draft": draft_jobs, "label": label_jobs}.get(kind, {}).get(name)
+        if not job or not job["running"]:
+            raise ValueError("任务已结束或不存在")
+        job["cancel"] = True
+        return web.json_response({k: v for k, v in job.items() if k != "labels"})
 
     async def translate(request):
         body = await request.json()
@@ -863,6 +922,9 @@ def create_app(capture, annotation_url=""):
             web.get("/api/sessions/{name}/draft", draft),
             web.get("/api/sessions/{name}/label", label),
             web.post("/api/sessions/{name}/label", label),
+            web.post("/api/sessions/{name}/label/applied", label_applied),
+            web.get("/api/jobs", jobs),
+            web.delete("/api/jobs/{kind}/{name}", cancel_job),
             web.post("/api/annotation/translate", translate),
             web.post("/api/sessions/{name}/draft", draft),
             web.get("/api/preview/{stream}", preview),
