@@ -238,3 +238,50 @@ def test_undecodable_frames_are_replaced_not_dropped():
     assert encoded[0] == encoded[1] and encoded[2] == encoded[1] and encoded[5] == encoded[4]
     assert encoded[3] != encoded[1]
 
+
+
+def test_label_prompt_and_answer():
+    from insight_capture.vlm_service.prompt import build_label_prompt, parse_label_answer
+
+    prompt = build_label_prompt([(0.0, 3.0), (3.0, 7.5)], TASK, previous="Close the left gripper")
+    assert "片段 2：3.0–7.5 秒" in prompt and "close_gripper" in prompt and "不要改动" in prompt
+    labels = parse_label_answer(
+        '{"segments": [{"index": 2, "subtask_id": "move_left", "subtask": "Move left", "confidence": 0.9}, '
+        '{"index": 1, "subtask": "Close the left gripper"}]}', 2, TASK)
+    assert [l["subtask_id"] for l in labels] == ["close_gripper", "move_left"]   # matched by index, then text
+    assert labels[1]["confidence"] == 0.9
+    skipped = parse_label_answer('{"segments": [{"index": 1, "subtask_id": "fly", "subtask": "Fly"}]}', 2, TASK)
+    assert skipped[0]["subtask_id"] == "" and skipped[0]["flags"] and skipped[1]["flags"] == ["模型没有标注这一段"]
+    assert parse_label_answer("not json", 1, TASK)[0]["flags"] == ["模型输出无法解析"]
+
+
+def test_label_groups_follow_time_and_window():
+    from insight_capture.aruco_capture.preannotate import label_groups
+
+    spans = [(20, 30), (0, 5), (5, 12), (12, 20), (30, 60), (90, 95)]
+    assert label_groups(spans) == [[1, 2, 3, 0], [4], [5]]   # 0–30 s; 30–60 alone (would pass 45 s); 30 s gap
+
+
+def test_translate_answer_keeps_order_ids_and_untranslated_text():
+    from insight_capture.vlm_service.prompt import build_translate_prompt, parse_translate_answer
+
+    items = [{"task": "左手开合", "subtask": "闭合夹爪"}, {"task": "平铺毛巾", "subtask": ""}]
+    assert "a16_flatten_towel" in build_translate_prompt(items, TABLE)
+    answer = (
+        '{"items": [{"task": "Open and close the left gripper", "subtask": "Close the gripper", '
+        '"task_id": "a01_move_gripper_left", "subtask_id": "close_gripper"}, '
+        '{"task": "铺平毛巾", "subtask": "Extra", "task_id": "a16_flatten_towel", "subtask_id": "close_gripper"}]}'
+    )
+    first, second = parse_translate_answer(answer, items, TABLE)["items"]
+    assert (first["task"], first["task_id"], first["subtask_id"]) == ("Open and close the left gripper", "a01_move_gripper_left", "close_gripper")
+    assert second["task"] == "平铺毛巾" and second["flags"]        # still Chinese: kept, flagged
+    assert second["subtask"] == ""                                # empty source stays empty
+    assert second["subtask_id"] == ""                             # not a subtask of that task
+    assert parse_translate_answer('{"items": []}', items, TABLE)["items"] == []
+
+
+def test_translate_skips_items_without_chinese():
+    from insight_capture.aruco_capture.preannotate import translate
+
+    out = translate("http://unused", [{"task": "Pick the cup", "subtask": ""}])
+    assert out == [{"task": "Pick the cup", "subtask": "", "task_id": "", "subtask_id": "", "flags": []}]

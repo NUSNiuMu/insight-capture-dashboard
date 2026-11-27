@@ -38,6 +38,8 @@ let mode = "capture",
   // no one has edited yet: not saved, but nothing is lost by leaving, since the
   // draft is on disk and loads again. Only edits make the segments `dirty`.
   generated = false,
+  // A 模型逐段标注 / 中文转英文 request is running.
+  labelBusy = false,
   editing = -1,
   // Segments picked for merging on the timeline, held by object so they
   // survive re-sorting; `anchor` is where a Shift-click range starts.
@@ -71,6 +73,7 @@ let mode = "capture",
   service = null,
   draftInfo = null,
   draftTimer = null;
+const CJK = /[\u3400-\u9fff]/;
 const scene = new Trajectory($("scene"), $("sceneEmpty"));
 const lerobot = new LerobotPlayer(notice);
 const devicePanel = new DevicePanel(api);
@@ -197,6 +200,7 @@ function bind(id, fn) {
   });
 }
 function updateControls() {
+  updateModelButtons();
   const active = !!status?.recording;
   $("start").hidden = active;
   $("stop").hidden = !active;
@@ -1370,6 +1374,150 @@ function edgeToPlayhead(start) {
   editPart(i, true);
   offerUndo(start ? "撤销调整起点" : "撤销调整终点", previous);
 }
+// ---- 模型逐段标注 / 中文转英文 -------------------------------------------
+const hasChinese = (p) => CJK.test(p.task || "") || CJK.test(p.subtask || "");
+// Which segments 模型逐段标注 works on: the picked ones (relabelled), else
+// those without a task yet.
+function labelTargets() {
+  return selection.size ? selectedParts() : parts.filter(unfilled);
+}
+function updateModelButtons() {
+  const configured = !!service?.configured,
+    up = !!service?.health,
+    targets = review ? labelTargets() : [],
+    chinese = parts.filter(hasChinese).length;
+  $("labelParts").hidden = !configured || !review;
+  $("labelParts").disabled = !up || reviewBusy || labelBusy || !targets.length;
+  $("labelParts").textContent = labelBusy
+    ? "逐段标注中…"
+    : selection.size
+      ? `模型标注选中的 ${targets.length} 段`
+      : `模型标注空白的 ${targets.length} 段`;
+  if (!targets.length && !labelBusy)
+    $("labelParts").title = "所有片段都已填写：先 Ctrl / Shift 点击选中要重标的片段";
+  $("translateParts").hidden = !configured || !review || !chinese;
+  $("translateParts").disabled = !up || reviewBusy || labelBusy;
+  $("translateParts").textContent = labelBusy ? "转换中…" : `中文转英文（${chinese} 段）`;
+  $("translateForm").hidden =
+    !configured || !(CJK.test($("task").value) || CJK.test($("subtask").value));
+}
+bind("labelParts", async () => {
+  if (editorDirty) throw Error("请先添加或更新正在编辑的片段，再让模型标注");
+  const targets = labelTargets();
+  if (!targets.length) throw Error("没有要标注的片段：先选中片段，或留空任务文本");
+  // The task the person already chose for most segments; else the model names it.
+  const counts = {};
+  for (const p of parts) if (p.task_id) counts[p.task_id] = (counts[p.task_id] || 0) + 1;
+  const taskId = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0] || "";
+  const name = selectedName;
+  labelBusy = true;
+  updateModelButtons();
+  try {
+    let job = await api(base() + "/label", "POST", {
+      segments: targets.map((p) => ({ start_s: p.start_s, end_s: p.end_s })),
+      task_id: taskId,
+      // Labels already on the page: the one before each group is the model's context.
+      context: parts
+        .filter((p) => !targets.includes(p) && p.subtask)
+        .map((p) => ({ start_s: p.start_s, end_s: p.end_s, subtask: p.subtask })),
+    });
+    while (job?.running) {
+      notice(
+        job.queued
+          ? "逐段标注排队中（推理服务正在处理别的录制）…"
+          : `模型逐段标注中：第 ${job.done} / ${job.total || "…"} 步（先认 task，再按相邻片段分组标注）…`,
+      );
+      await new Promise((r) => setTimeout(r, 1500));
+      if (name !== selectedName) return;
+      job = await api(base() + "/label");
+    }
+    if (job?.error) throw Error("逐段标注失败：" + job.error);
+    if (name !== selectedName) return;
+    const previous = parts.map((p) => ({ ...p })),
+      near = (a, b) => Math.abs(a - b) < 2e-3;
+    let applied = 0;
+    for (const label of job.labels || []) {
+      // Segments moved or deleted meanwhile keep what they have.
+      const p = parts.find((x) => near(x.start_s, label.start_s) && near(x.end_s, label.end_s));
+      if (!p) continue;
+      Object.assign(p, {
+        task: label.task || p.task,
+        task_id: label.task ? label.task_id : p.task_id,
+        subtask: label.subtask || p.subtask,
+        subtask_id: label.subtask ? label.subtask_id : p.subtask_id,
+        confidence: label.confidence ?? null,
+        flags: label.flags || [],
+      });
+      applied++;
+    }
+    setDirty(true);
+    resetEditor();
+    renderParts();
+    notice(`模型已标注 ${applied} 段（标为待复核）：按 Enter 逐段核对，全部确认后点「保存全部标注」。`);
+    offerUndo("撤销模型标注", previous);
+  } finally {
+    labelBusy = false;
+    updateModelButtons();
+  }
+});
+async function translateItems(items) {
+  const reply = await api("/api/annotation/translate", "POST", { items });
+  return reply.items;
+}
+bind("translateParts", async () => {
+  if (editorDirty) throw Error("请先添加或更新正在编辑的片段，再转换");
+  const targets = parts.filter(hasChinese);
+  if (!targets.length) return;
+  // Each distinct (task, subtask) pair once: drafts repeat the same text a lot.
+  const keys = [...new Set(targets.map((p) => JSON.stringify([p.task || "", p.subtask || ""])))];
+  labelBusy = true;
+  updateModelButtons();
+  notice(`正在把 ${targets.length} 段（${keys.length} 种）中文标注转成英文…`);
+  try {
+    const results = await translateItems(keys.map((k) => ({ task: JSON.parse(k)[0], subtask: JSON.parse(k)[1] })));
+    const byKey = Object.fromEntries(keys.map((k, i) => [k, results[i]]));
+    const previous = parts.map((p) => ({ ...p }));
+    for (const p of targets) {
+      const r = byKey[JSON.stringify([p.task || "", p.subtask || ""])];
+      if (!r) continue;
+      p.task = r.task;
+      p.subtask = r.subtask;
+      if (r.task_id) p.task_id = r.task_id;
+      if (r.subtask_id) p.subtask_id = r.subtask_id;
+      if (r.flags?.length) p.flags = [...new Set([...(p.flags || []), ...r.flags])];
+    }
+    setDirty(true);
+    resetEditor();
+    renderParts();
+    const left = parts.filter(hasChinese).length;
+    notice(`已转换 ${targets.length - left} 段` + (left ? `，${left} 段仍含中文（悬停“存疑”查看原因）` : "") + "，保存后生效。");
+    offerUndo("撤销中文转英文", previous);
+  } finally {
+    labelBusy = false;
+    updateModelButtons();
+  }
+});
+bind("translateForm", async () => {
+  labelBusy = true;
+  updateModelButtons();
+  try {
+    const [r] = await translateItems([{ task: $("task").value, subtask: $("subtask").value }]);
+    if (r.task_id) fillTaskOptions(r.task_id);
+    if (r.subtask_id) fillSubtaskOptions(r.subtask_id);
+    $("task").value = r.task;
+    $("subtask").value = r.subtask;
+    editorDirty = true;
+    notice(
+      r.flags?.length
+        ? "部分没能转成英文：" + r.flags.join("；")
+        : "已转成英文" + (r.subtask_id || r.task_id ? "，并对上了动作表条目" : "") + "：确认后点「更新片段」",
+    );
+  } finally {
+    labelBusy = false;
+    updateModelButtons();
+  }
+});
+for (const id of ["task", "subtask"]) $(id).addEventListener("input", () => updateModelButtons());
 // B: the first segment boundary after the playhead moves back onto it;
 // Shift+B: the last one before it moves forward. A boundary shared by two
 // touching segments moves for both; it may not pass the far edge of either
@@ -1460,6 +1608,7 @@ function highlightParts() {
     );
   }
   updateMerge();
+  updateModelButtons();
 }
 function updateMerge() {
   const picked = selectedParts().length;
@@ -2641,6 +2790,7 @@ function renderDraft() {
   $("runDraft").hidden = !configured;
   $("runDraft").disabled = !review || reviewBusy || running || !up;
   $("runDraft").textContent = draft && draft.source !== "pause" ? "重新预标注" : "预标注";
+  updateModelButtons();
   $("runDraft").title = up
     ? `用推理服务（${service.health.model}）重新生成这条录制的预标注草稿`
     : `推理服务未启动或连不上：${service?.url || ""}`;

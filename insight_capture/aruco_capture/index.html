@@ -489,7 +489,9 @@
                 name="subtask"
                 autocomplete="off"
                 placeholder="例如：抓取杯子"
-              /><label for="hands">参与手臂</label
+              /><button id="translateForm" type="button" class="quiet fill-all" hidden>
+                把本段的中文转成英文</button
+              ><label for="hands">参与手臂</label
               ><select id="hands" name="hands">
                 <option value="both">双手</option>
                 <option value="left">左手</option>
@@ -512,6 +514,22 @@
                   hidden
                 >
                   预标注</button
+                ><button
+                  id="labelParts"
+                  type="button"
+                  class="primary"
+                  title="分段不动，让模型逐段填写 task / subtask：有选中的片段（Ctrl / Shift 点击）就标选中的并覆盖，否则只标还没填写的"
+                  hidden
+                >
+                  模型逐段标注</button
+                ><button
+                  id="translateParts"
+                  type="button"
+                  class="quiet"
+                  title="让模型把含中文的 task / subtask 改写成英文，含义与动作表一致时同时对上 id"
+                  hidden
+                >
+                  中文转英文</button
                 ><button id="add" type="submit" class="primary">添加片段</button
                 ><button id="cancelEdit" type="button" class="quiet" hidden>
                   取消编辑</button

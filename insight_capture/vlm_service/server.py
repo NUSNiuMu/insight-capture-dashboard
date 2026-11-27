@@ -16,6 +16,14 @@ POST /v1/segments  {"frames": [...], "fps": float, "action_table": {...} | null,
                    timed subtasks in one stretch of motion; times are seconds from its first frame.
                    With "views", every view is a separate, time-synchronised video of the
                    same span (head camera, wrist cameras...) and "frames" is ignored.
+POST /v1/label     {"frames": [...], "fps": float, "spans": [[start, end], ...],
+                    "action_table": {...} | null, "task_id": str, "task": str, "previous": str}
+                -> {"labels": [{"subtask_id", "subtask", "confidence", "flags"}, ...], "raw"}
+                   the subtask of each segment a person cut (spans: seconds from the first
+                   frame, in order; boundaries stay as cut), seen together for the sequence
+POST /v1/translate {"items": [{"task": str, "subtask": str}, ...], "action_table": {...} | null}
+                -> {"items": [{"task", "subtask", "task_id", "subtask_id", "flags"}], "flags", "raw"}
+                   Chinese labels typed by a person rewritten as English (text only, no frames)
 POST /v1/ask       {"frames": [...], "fps": float, "question": str}
                 -> {"answer": "yes" | "no" | "unknown", "raw"}
                    yes/no answer about the last frames (a robot's subtask post-condition check)
@@ -33,10 +41,14 @@ import cv2
 import numpy as np
 
 from .prompt import (
+    build_label_prompt,
     build_segment_prompt,
     build_task_prompt,
+    build_translate_prompt,
+    parse_label_answer,
     parse_segments_answer,
     parse_task_answer,
+    parse_translate_answer,
 )
 
 
@@ -147,6 +159,40 @@ class Model:
             output[:, inputs.input_ids.shape[1]:], skip_special_tokens=True
         )[0].strip()
 
+    def generate_text(self, prompt, max_new_tokens):
+        """A text-only request (no frames)."""
+        messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+        text = self.processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+        with self.lock:
+            inputs = self.processor(text=[text], return_tensors="pt").to("cuda")
+            with self.torch.inference_mode():
+                output = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        return self.processor.batch_decode(
+            output[:, inputs.input_ids.shape[1]:], skip_special_tokens=True
+        )[0].strip()
+
+    def label(self, request):
+        frames, fps = request.get("frames"), float(request.get("fps") or 4.0)
+        table = request.get("action_table") or {}
+        task = next((t for t in table.get("tasks", []) if t["id"] == request.get("task_id")), None)
+        spans = [(float(a), float(b)) for a, b in request.get("spans") or []]
+        if not spans:
+            spans = [(0.0, len(frames or []) / fps)]
+        prompt = build_label_prompt(spans, task, str(request.get("task") or ""), str(request.get("previous") or ""))
+        answer = self.generate(frames, fps, prompt, 120 * len(spans) + 200)
+        return {"labels": parse_label_answer(answer, len(spans), task), "raw": answer}
+
+    def translate(self, request):
+        items = request.get("items")
+        if not isinstance(items, list) or not items:
+            raise ValueError("items 须为非空列表")
+        items = [{"task": str(i.get("task") or ""), "subtask": str(i.get("subtask") or "")} for i in items]
+        table = request.get("action_table") or None
+        answer = self.generate_text(build_translate_prompt(items, table), 160 * len(items) + 200)
+        return {**parse_translate_answer(answer, items, table), "raw": answer}
+
     def task(self, request):
         frames, fps = request.get("frames"), float(request.get("fps") or 1.0)
         table = request.get("action_table") or None
@@ -200,7 +246,10 @@ def serve(model, host, port):
             self.reply(200, {"status": "ok", "model": model.name, "busy": model.lock.locked()})
 
         def do_POST(self):
-            handler = {"/v1/task": model.task, "/v1/segments": model.segments, "/v1/ask": model.ask}.get(self.path)
+            handler = {
+                "/v1/task": model.task, "/v1/segments": model.segments, "/v1/ask": model.ask,
+                "/v1/label": model.label, "/v1/translate": model.translate,
+            }.get(self.path)
             if handler is None:
                 return self.reply(404, {"error": "not found"})
             started = time.monotonic()

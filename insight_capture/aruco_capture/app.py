@@ -52,6 +52,7 @@ def create_app(capture, annotation_url=""):
     # Pre-annotation runs one session at a time (one GPU behind the service)
     # and never blocks recording: it is mostly waiting on the service.
     draft_jobs, draft_tasks = {}, set()
+    label_jobs = {}
     draft_lock = asyncio.Lock()
     # Settable from the page; the env/CLI value is only the first default.
     service = {"url": preannotate.load_url(capture.root, annotation_url)}
@@ -278,6 +279,67 @@ def create_app(capture, annotation_url=""):
                 raise ValueError("录制结束后才能预标注")
             await start_draft(path, required=True)
         return web.json_response(await asyncio.to_thread(draft_state, path))
+
+    # 模型逐段标注: the person's own segments, one model request each; the page
+    # polls GET and applies the labels to segments whose bounds still match.
+    async def label(request):
+        path = session(request)
+        if request.method == "POST":
+            if path.name == capture.active:
+                raise ValueError("录制结束后才能标注")
+            if label_jobs.get(path.name, {}).get("running"):
+                raise ValueError("这条录制正在逐段标注，请稍候")
+            body = await request.json()
+            segments = body.get("segments")
+            if not isinstance(segments, list) or not segments:
+                raise ValueError("没有要标注的片段")
+            url = service["url"]
+            health = await asyncio.to_thread(preannotate.probe, url)
+            if health is None:
+                raise ValueError("推理服务未配置或无法连接" + (f"（{url}）" if url else ""))
+            job = label_jobs[path.name] = {
+                "running": True, "queued": True, "done": 0, "total": 0,
+                "error": None, "model": health.get("model", ""), "labels": None,
+            }
+
+            def progress(done, total):
+                job.update(done=done, total=total)
+
+            async def run():
+                try:
+                    async with draft_lock:
+                        job["queued"] = False
+                        table = await asyncio.to_thread(action_table.load, capture.root)
+                        segmentation = await asyncio.to_thread(segment_settings.load, capture.root)
+                        job["labels"] = await asyncio.to_thread(
+                            preannotate.label_segments, path, url, table, segments,
+                            str(body.get("task_id") or ""), progress, segmentation,
+                            body.get("context") or [],
+                        )
+                except Exception as exc:  # reported to the page, not raised
+                    job["error"] = str(exc) or type(exc).__name__
+                finally:
+                    job["running"] = False
+
+            task = asyncio.get_running_loop().create_task(run())
+            draft_tasks.add(task)
+            task.add_done_callback(draft_tasks.discard)
+        return web.json_response(label_jobs.get(path.name))
+
+    async def translate(request):
+        body = await request.json()
+        items = body.get("items")
+        if not isinstance(items, list) or not items:
+            raise ValueError("没有要转换的标注")
+        url = service["url"]
+        if not url:
+            raise ValueError("未配置推理服务，不能转换")
+        table = await asyncio.to_thread(action_table.load, capture.root)
+        try:
+            result = await asyncio.to_thread(preannotate.translate, url, items, table)
+        except preannotate.ServiceDown as exc:  # a RuntimeError: would be a bare 500
+            raise ValueError(str(exc)) from exc
+        return web.json_response({"items": result})
 
     async def annotation_service(request):
         if request.method == "POST":
@@ -799,6 +861,9 @@ def create_app(capture, annotation_url=""):
             web.post("/api/sessions/{name}/wip", wip),
             web.delete("/api/sessions/{name}/wip", wip),
             web.get("/api/sessions/{name}/draft", draft),
+            web.get("/api/sessions/{name}/label", label),
+            web.post("/api/sessions/{name}/label", label),
+            web.post("/api/annotation/translate", translate),
             web.post("/api/sessions/{name}/draft", draft),
             web.get("/api/preview/{stream}", preview),
             web.get("/api/sessions/{name}/frame/{stream}", frame),

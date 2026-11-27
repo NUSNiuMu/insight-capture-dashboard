@@ -25,6 +25,8 @@ import urllib.request
 import cv2
 import numpy as np
 
+from insight_capture.vlm_service.prompt import CJK
+
 from .capture import write_json
 from .dataset import align, arm_stationary, connect, suggest_pause_segments
 
@@ -498,3 +500,125 @@ def run(path, url, table=None, model="", progress=lambda done, total: None, segm
     }
     write_json(path / DRAFT, draft)
     return draft
+
+
+MODEL_LABEL_FLAG = "模型逐段标注，待确认"
+
+
+GROUP_GAP_S = 10.0
+
+
+def label_groups(spans):
+    """Indices of ``spans`` (sorted by start) in groups sent as one clip: up to
+    MAX_WINDOW_S from the first start to the last end, with no gap over
+    GROUP_GAP_S; a longer segment is a group of its own."""
+    order = sorted(range(len(spans)), key=lambda i: spans[i][0])
+    groups = []
+    for i in order:
+        a, b = spans[i]
+        if groups:
+            first, last = spans[groups[-1][0]], spans[groups[-1][-1]]
+            if b - first[0] <= MAX_WINDOW_S and a - last[1] <= GROUP_GAP_S:
+                groups[-1].append(i)
+                continue
+        groups.append([i])
+    return groups
+
+
+def label_segments(path, url, table, segments, task_id="", progress=lambda done, total: None, segmentation=None,
+                   context=()):
+    """Label segments a person cut, one model request per segment; boundaries
+    stay exactly as given. The task: ``task_id`` (what the person already chose
+    for most segments), else the one the model draft found for the whole
+    recording, else the model names it from every stretch of motion in the
+    recording — a few short segments alone are too little to tell tasks apart.
+    Neighbouring segments go to the model together (label_groups) so it can
+    follow the sequence; ``context`` (every segment on the page, with its
+    subtask text) supplies the label just before each group.
+    Returns one label per segment, in order."""
+    table = table if table and table.get("tasks") else None
+    tasks = {t["id"]: t for t in (table or {}).get("tasks", [])}
+    spans = [(float(s["start_s"]), float(s["end_s"])) for s in segments]
+    if not spans or any(b <= a for a, b in spans):
+        raise ValueError("片段起止时间无效")
+    groups = label_groups(spans)
+    total, done = len(groups) + 1, 0
+    progress(done, total)
+    if task_id not in tasks and has_model_draft(path):
+        task_id = (json.loads((path / DRAFT).read_text()).get("task") or {}).get("task_id", "")
+    whole = spans
+    if task_id not in tasks:
+        meta, grid, state, _video, good, report, _reasons = align(path)
+        whole = [(s["start_s"], s["end_s"]) for s in suggest_pause_segments(
+            grid, state, good, report["fps"], duration_s=float(meta["duration_s"]), **(segmentation or {})
+        )] or spans
+    with closing(connect(path)) as db:
+        frames = CameraFrames(db)
+        per_frame = view_tokens(frames.size)
+        if task_id in tasks:
+            task = {"task_id": task_id, "task": tasks[task_id]["text"], "flags": []}
+        else:
+            active_s = sum(b - a for a, b in whole)
+            rate = min(TASK_FPS, TASK_MAX_FRAMES / active_s)
+            times = np.concatenate([sample_times(a, b, rate) for a, b in whole])
+            task = {"task_id": "", "task": "", "flags": [], **request_json(url, "/v1/task", {
+                "frames": frames.encoded(times), "fps": rate, "action_table": table,
+            })}
+        done += 1
+        progress(done, total)
+        labels = [None] * len(spans)
+        known = [(float(c["start_s"]), float(c["end_s"]), (c.get("subtask") or "").strip()) for c in context]
+        for group in groups:
+            g0, g1 = spans[group[0]][0], spans[group[-1]][1]
+            # The label just before this group: a fresh one from this run wins.
+            before = [(e, text) for s0, e, text in known if e <= g0 + 2e-3 and text]
+            before += [(spans[i][1], labels[i]["subtask"]) for i in range(len(spans))
+                       if labels[i] and labels[i]["subtask"] and spans[i][1] <= g0 + 2e-3]
+            previous = max(before)[1] if before else ""
+            rate = min(SEGMENT_FPS, SEGMENT_TOKEN_BUDGET / (per_frame * (g1 - g0)))
+            times = sample_times(g0, g1, rate)
+            encoded = frames.encoded(times)
+            base = times[0]   # the service counts seconds from the first frame
+            answer = request_json(url, "/v1/label", {
+                "frames": encoded, "fps": len(times) / (g1 - g0), "action_table": table,
+                "spans": [[round(spans[i][0] - base, 3), round(spans[i][1] - base, 3)] for i in group],
+                "task_id": task.get("task_id", ""), "task": task.get("task", ""), "previous": previous,
+            }) if len(encoded) >= 2 else {"flags": ["可用画面不足，未送模型"]}
+            results = answer.get("labels") or [{"flags": answer.get("flags", [])}] * len(group)
+            for i, result in zip(group, results):
+                a, b = spans[i]
+                flags = [MODEL_LABEL_FLAG] + list(task.get("flags", [])) + list(result.get("flags", []))
+                subtask = (result.get("subtask") or "").strip()
+                labels[i] = {
+                    "start_s": a, "end_s": b,
+                    "task": (task.get("task") or "").strip(),
+                    "task_id": task.get("task_id", "") if (task.get("task") or "").strip() else "",
+                    "subtask": subtask,
+                    "subtask_id": result.get("subtask_id", "") if subtask else "",
+                    "confidence": result.get("confidence"),
+                    "flags": list(dict.fromkeys(flags)),
+                }
+            done += 1
+            progress(done, total)
+    return labels
+
+
+def translate(url, items, table=None):
+    """Chinese task / subtask text -> English, matched to the action table when
+    the meaning is the same. Items without Chinese are returned unchanged."""
+    if not items:
+        return []
+    asks = [i for i, item in enumerate(items) if any(CJK.search(item.get(k) or "") for k in ("task", "subtask"))]
+    out = [{"task": item.get("task", ""), "subtask": item.get("subtask", ""), "task_id": "", "subtask_id": "",
+            "flags": []} for item in items]
+    if not asks:
+        return out
+    answer = request_json(url, "/v1/translate", {
+        "items": [{"task": items[i].get("task", ""), "subtask": items[i].get("subtask", "")} for i in asks],
+        "action_table": table if table and table.get("tasks") else None,
+    }, timeout=300)
+    if not answer.get("items"):
+        raise ValueError("模型没能完成转换：" + ("；".join(answer.get("flags", [])) or "未知原因"))
+    for i, row in zip(asks, answer["items"]):
+        out[i] = {k: row.get(k, "") for k in ("task", "subtask", "task_id", "subtask_id")} | {"flags": row.get("flags", [])}
+    return out

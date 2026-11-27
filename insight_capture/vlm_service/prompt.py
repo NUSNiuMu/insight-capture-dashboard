@@ -193,3 +193,128 @@ def parse_segments_answer(answer, duration_s, task=None):
             middle = round((current["start"] + previous["end"]) / 2, 2)
             previous["end"], current["start"] = middle, middle
     return {"segments": [s for s in segments if s["end"] - s["start"] >= 0.2], "flags": []}
+
+
+def build_label_prompt(spans, task=None, task_text="", previous=""):
+    """Segments a person cut (``spans``: [start, end] seconds in the clip, in
+    order): name each one's single subtask. Seen together so the model can
+    follow the sequence (which cup, which repetition); the times are fixed."""
+    listing = "；".join(f"片段 {i + 1}：{a:.1f}–{b:.1f} 秒" for i, (a, b) in enumerate(spans))
+    head = (
+        CONTEXT + "下面的视频画面里标注了从 0 开始的时间戳。其中有人工切好的 "
+        f"{len(spans)} 个动作片段，按时间先后为：{listing}。"
+        "每个片段只包含一个动作步骤（subtask），起止时间已经确定，不要改动或再切分；片段之间的画面只作参考。"
+    )
+    context = f"紧挨在这些片段之前的一段已标注为：{previous}。" if previous else ""
+    if task and task.get("subtasks"):
+        body = (
+            f"录制在执行这个 task：\n{_task_text(task)}\n{_subtasks_text(task)}\n" + context
+            + "这些 subtask 通常按上面列出的顺序依次执行，并可能整组重复多次；请结合先后顺序判断每个片段是哪个 subtask，"
+            "subtask_id 只能从上面选择，都不符合时为空字符串。"
+        )
+        item = (
+            '{"index": 片段序号, "subtask_id": "subtask id", '
+            f'"subtask": "用你自己的英文措辞写这一步，{IMPERATIVE}", "confidence": 0 到 1 之间的小数}}'
+        )
+    else:
+        body = (f"整条录制的任务是：{task_text}\n" if task_text else "") + context + "请写出每个片段在做的动作步骤。"
+        item = f'{{"index": 片段序号, "subtask": "这一步，{IMPERATIVE}", "confidence": 0 到 1 之间的小数}}'
+    return (
+        head + body + f"每个片段输出一条，共 {len(spans)} 条。输出一个 JSON 对象，不要输出其他内容：\n"
+        f'{{"segments": [{item}, ...]}}'
+    )
+
+
+def _label_item(raw, subtasks):
+    flags = []
+    text = _english(raw.get("subtask"), "subtask", flags)
+    sub_id = str(raw.get("subtask_id") or "").strip()
+    sub = subtasks.get(sub_id)
+    if subtasks:
+        if sub is None and sub_id:
+            flags.append(f"subtask_id {sub_id} 不属于所选 task")
+        elif sub is None:
+            sub = _by_text(subtasks.values(), text)
+            if sub is None:
+                flags.append("模型未能匹配动作表中的 subtask")
+    text = text or (sub["text"] if sub else "")
+    if not text:
+        flags.append("模型没有给出子任务文本")
+    try:
+        confidence = round(min(max(float(raw.get("confidence")), 0.0), 1.0), 2)
+    except (TypeError, ValueError):
+        confidence = None
+    return {"subtask_id": sub["id"] if sub else "", "subtask": text, "confidence": confidence, "flags": flags}
+
+
+def parse_label_answer(answer, count, task=None):
+    """One label per segment, in order; a segment the model skipped gets a flag."""
+    parsed = _json_object(answer)
+    rows = parsed.get("segments") if parsed else None
+    missing = {"subtask_id": "", "subtask": "", "confidence": None}
+    if not isinstance(rows, list):
+        return [{**missing, "flags": ["模型输出无法解析"]} for _ in range(count)]
+    subtasks = {s["id"]: s for s in (task or {}).get("subtasks", [])}
+    by_index = {}
+    for k, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        try:
+            index = int(row.get("index", k + 1)) - 1
+        except (TypeError, ValueError):
+            index = k
+        if 0 <= index < count and index not in by_index:
+            by_index[index] = row
+    return [
+        _label_item(by_index[i], subtasks) if i in by_index else {**missing, "flags": ["模型没有标注这一段"]}
+        for i in range(count)
+    ]
+
+
+def build_translate_prompt(items, table=None):
+    """Chinese labels typed by a person -> English training text."""
+    lines = "\n".join(
+        f"{i + 1}. task：{item.get('task') or '（空）'}；subtask：{item.get('subtask') or '（空）'}"
+        for i, item in enumerate(items)
+    )
+    listing = ""
+    if table and table.get("tasks"):
+        listing = (
+            "\n动作表如下。如果某条标注的含义与动作表中的 task / subtask 一致，同时给出对应 id"
+            "（subtask_id 必须属于所给的 task_id）；不一致就留空字符串：\n"
+            + "\n".join(_task_text(t) + "\n" + _subtasks_text(t) for t in table["tasks"])
+        )
+    return (
+        "下面是机器人示教数据的人工标注，可能是中文或中英混写。请把每条的 task 和 subtask 改写成英文，"
+        f"保持原意，不增删信息；写成{IMPERATIVE}。已经是英文的保持不变，空的保持为空字符串。\n"
+        + lines + listing
+        + f"\n\n按原顺序输出 {len(items)} 条，输出一个 JSON 对象，不要输出其他内容：\n"
+        '{"items": [{"task": "英文 task", "subtask": "英文 subtask", "task_id": "", "subtask_id": ""}, ...]}'
+    )
+
+
+def parse_translate_answer(answer, items, table=None):
+    parsed = _json_object(answer)
+    rows = parsed.get("items") if parsed else None
+    if not isinstance(rows, list) or len(rows) != len(items):
+        return {"items": [], "flags": ["模型输出无法解析或条数不符"]}
+    tasks = {t["id"]: t for t in (table or {}).get("tasks", [])}
+    out = []
+    for item, row in zip(items, rows):
+        row = row if isinstance(row, dict) else {}
+        flags = []
+        result = {}
+        for key in ("task", "subtask"):
+            text = _english(row.get(key), key, flags)
+            # An empty source stays empty; a source the model dropped keeps its text.
+            result[key] = text if (item.get(key) or "").strip() else ""
+            if (item.get(key) or "").strip() and not text:
+                flags.append(f"{key} 未能转成英文，保留原文")
+                result[key] = item.get(key)
+        task = tasks.get(str(row.get("task_id") or "").strip())
+        sub_id = str(row.get("subtask_id") or "").strip()
+        result["task_id"] = task["id"] if task else ""
+        result["subtask_id"] = sub_id if task and any(s["id"] == sub_id for s in task.get("subtasks", [])) else ""
+        result["flags"] = flags
+        out.append(result)
+    return {"items": out, "flags": []}
