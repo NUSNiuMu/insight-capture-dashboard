@@ -29,12 +29,10 @@ NativeVideo::NativeVideo(QQuickItem *parent) : QQuickItem(parent) {
     m_socket.setMaxAllowedIncomingMessageSize(16 * 1024 * 1024);
     connect(&m_socket, QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error), this,
             [this](QAbstractSocket::SocketError) {
-                if (!m_stopping && m_media.isEmpty())
-                    fail(m_socket.errorString());
+                signalingLost(m_socket.errorString());
             });
     connect(&m_socket, &QWebSocket::disconnected, this, [this] {
-        if (!m_stopping && m_media.isEmpty())
-            fail("Signaling lost · Reconnecting");
+        signalingLost("Signaling lost · Reconnecting");
     });
     connect(this, &QQuickItem::windowChanged, this, [this] { syncWindow(); });
     connect(this, &QQuickItem::visibleChanged, this, &NativeVideo::syncWindow);
@@ -213,6 +211,8 @@ void NativeVideo::stop() {
     m_appsrc = nullptr;
     m_nativeReceived = 0;
     m_waitNativeIdr = false;
+    m_sharedRequested = false;
+    m_sharedVideo = false;
     m_playbackReady = false;
     m_position = 0;
     m_nativeFormat = 0;
@@ -246,6 +246,15 @@ void NativeVideo::start() {
         QUrlQuery query;
         query.addQueryItem("camera", m_name);
         query.addQueryItem("fps", QString::number(m_fps));
+        if (m_fps == 30 && !m_fullResolution && m_clock.elapsed() >= m_sharedRetryAfter &&
+            qEnvironmentVariable("INSIGHT_NATIVE_SHARED_DECODE") != "0") {
+            auto *factory = gst_element_factory_find("nvunixfdsrc");
+            if (factory) {
+                gst_object_unref(factory);
+                m_sharedRequested = true;
+                query.addQueryItem("shared_nvmm", "1");
+            }
+        }
         url.setQuery(query);
         m_socket.open(url);
         m_timer.start(m_active ? 33 : 250);
@@ -425,6 +434,37 @@ void NativeVideo::startNativePipeline(int format, int width, int height) {
     startPipeline();
 }
 
+void NativeVideo::startSharedNativePipeline(const QString &path) {
+    m_sharedVideo = true;
+    if (path != QStringLiteral("/dev/shm/insight-egohalo-nvmm/") + m_name + QStringLiteral(".sock")) {
+        fail("Invalid shared video socket");
+        return;
+    }
+    const auto sink = qEnvironmentVariable("INSIGHT_NATIVE_VIDEO_SINK") == "nveglglessink"
+                          ? QByteArray("nveglglessink") : QByteArray("nv3dsink");
+    const auto description = QByteArray(
+        "nvunixfdsrc name=shared connection-attempts=8 connection-interval=50000 buffer-timestamp-copy=true ! "
+        "video/x-raw(memory:NVMM),format=I420 ! "
+        "queue name=latestFrame max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream ! ")
+        + sink + " name=display sync=false qos=false enable-last-sample=false";
+    GError *error = nullptr;
+    m_pipeline = gst_parse_launch(description.constData(), &error);
+    if (!m_pipeline || error) {
+        const auto reason = error ? QString::fromUtf8(error->message) : QStringLiteral("Cannot open shared video");
+        g_clear_error(&error);
+        fail(reason);
+        return;
+    }
+    auto *source = gst_bin_get_by_name(GST_BIN(m_pipeline), "shared");
+    g_object_set(source, "socket-path", path.toUtf8().constData(), nullptr);
+    gst_object_unref(source);
+    auto *latest = gst_bin_get_by_name(GST_BIN(m_pipeline), "latestFrame");
+    g_signal_connect(latest, "overrun", G_CALLBACK(latestFrameOverrun), this);
+    gst_object_unref(latest);
+    m_nativeSize = m_sourceSize;
+    startPipeline();
+}
+
 static bool hasCompleteH264Idr(const uchar *payload, qsizetype size) {
     bool sps = false, pps = false;
     // Annex B start codes end in 00 00 01, with an optional leading zero.
@@ -441,7 +481,7 @@ static bool hasCompleteH264Idr(const uchar *payload, qsizetype size) {
 }
 
 void NativeVideo::handleNativeFrame(const QByteArray &message) {
-    if (!m_useNative || !m_media.isEmpty() || message.size() <= 32)
+    if (!m_useNative || m_sharedVideo || !m_media.isEmpty() || message.size() <= 32)
         return;
     const auto *header = reinterpret_cast<const uchar *>(message.constData());
     const int format = header[5];
@@ -501,9 +541,30 @@ void NativeVideo::handleNativeFrame(const QByteArray &message) {
     if (gst_app_src_push_buffer(GST_APP_SRC(m_appsrc), buffer) != GST_FLOW_OK)
         fail("Cannot deliver native video");
 }
+void NativeVideo::signalingLost(const QString &message) {
+    if (m_stopping || !m_media.isEmpty())
+        return;
+    if (!m_sharedVideo) {
+        fail(message);
+        return;
+    }
+    // A preview pause closes the controlling socket, but leaves the shared transport healthy.
+    stop();
+    m_status = message;
+    emit statsChanged();
+    m_restart.start(250);
+}
 void NativeVideo::fail(const QString &message) {
     if (m_stopping)
         return;
+    if (m_sharedVideo) {
+        m_sharedRetryAfter = m_clock.elapsed() + 10000;
+        stop();
+        m_status = message;
+        emit statsChanged();
+        m_restart.start(250);
+        return;
+    }
     m_status = message;
     m_renderedFps = 0;
     emit statsChanged();
@@ -515,9 +576,13 @@ void NativeVideo::send(const QJsonObject &message) {
         m_socket.sendTextMessage(QString::fromUtf8(QJsonDocument(message).toJson(QJsonDocument::Compact)));
 }
 void NativeVideo::handleMessage(const QString &text) {
+    const auto data = QJsonDocument::fromJson(text.toUtf8()).object();
+    if (data["type"] == "shared_nvmm" && m_useNative && m_sharedRequested && !m_pipeline) {
+        startSharedNativePipeline(data["socket"].toString());
+        return;
+    }
     if (!m_peer)
         return;
-    auto data = QJsonDocument::fromJson(text.toUtf8()).object();
     if (data["type"] == "offer") {
         GstSDPMessage *sdp = nullptr;
         gst_sdp_message_new(&sdp);
@@ -626,6 +691,11 @@ void NativeVideo::poll() {
             return;
         }
         if (GST_MESSAGE_TYPE(message) == GST_MESSAGE_EOS) {
+            if (m_sharedVideo) {
+                gst_message_unref(message);
+                fail("Shared video source disconnected");
+                return;
+            }
             m_paused = true;
             m_status = "Playback ended";
             emit statsChanged();
@@ -674,7 +744,7 @@ void NativeVideo::poll() {
         m_lastPoll = now;
         syncWindow();
         emit statsChanged();
-        if (m_active && m_media.isEmpty() && now - m_lastProgress > 12000)
+        if (m_active && m_media.isEmpty() && now - m_lastProgress > (m_sharedVideo ? 2000 : 12000))
             fail("Video stalled · Reconnecting");
     }
 }
@@ -733,9 +803,17 @@ GstPadProbeReturn NativeVideo::sinkTiming(GstPad *, GstPadProbeInfo *info, gpoin
     if (!self->m_traceFrames) return GST_PAD_PROBE_OK;
     const quint64 now = gst_util_get_timestamp();
     QMutexLocker lock(&self->m_timingMutex);
-    auto it = self->m_frameTrace.find(GST_BUFFER_PTS(buffer));
-    if (it != self->m_frameTrace.end())
+    const auto pts = GST_BUFFER_PTS(buffer);
+    if (self->m_sharedVideo) {
+        self->m_frameTrace[pts]["source_stamp_ns"] = qulonglong(pts);
+        while (self->m_frameTrace.size() > 120)
+            self->m_frameTrace.erase(self->m_frameTrace.begin());
+    }
+    auto it = self->m_frameTrace.find(pts);
+    if (it != self->m_frameTrace.end()) {
         it.value()["sink_input_ns"] = qulonglong(now);
+        it.value()["sink_wall_ns"] = qulonglong(g_get_real_time()) * 1000;
+    }
     return GST_PAD_PROBE_OK;
 }
 
@@ -787,6 +865,7 @@ QVariantMap NativeVideo::diagnostics() const {
     return {{"camera", m_name},
             {"instance_age_ms", m_clock.elapsed()},
             {"transport", !m_media.isEmpty() ? "replay" : m_useNative ? "local" : "webrtc"},
+            {"shared_nvmm", m_sharedVideo.load()},
             {"native_received", qulonglong(m_nativeReceived)},
             {"frame_trace", frameTrace},
             {"display_width", m_displaySize.width()},

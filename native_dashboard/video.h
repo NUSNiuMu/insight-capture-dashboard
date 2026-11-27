@@ -77,7 +77,9 @@ class NativeVideo : public QQuickItem {
     void handleMessage(const QString &text);
     void handleNativeFrame(const QByteArray &data);
     void startNativePipeline(int format, int width, int height);
+    void startSharedNativePipeline(const QString &path);
     void startPipeline();
+    void signalingLost(const QString &message);
     void fail(const QString &message);
     void send(const QJsonObject &message);
     static void incomingPad(GstElement *, GstPad *, gpointer);
@@ -100,6 +102,9 @@ class NativeVideo : public QQuickItem {
     GstElement *m_appsrc = nullptr;
     bool m_useNative = false, m_playbackReady = false;
     bool m_waitNativeIdr = false;
+    bool m_sharedRequested = false;
+    std::atomic<bool> m_sharedVideo{false};
+    qint64 m_sharedRetryAfter = 0;
     int m_nativeFormat = 0;
     QSize m_nativeSize;
     quint64 m_nativeEpoch = 0, m_nativeReceived = 0;

@@ -3,8 +3,11 @@
 import asyncio
 import contextlib
 import ipaddress
+import os
 
 from aiohttp import web
+
+from insight_capture.media.shared_decode import hold_preview_demand, ready_preview_socket
 
 try:
     from asyncio import timeout
@@ -33,12 +36,35 @@ class NativePreviewRoutes:
             fps = 30
         if self.context.node._preview_manager.paused:
             raise web.HTTPConflict(text="Preview paused during capture")
+        shared = None
+        if (fps == 30 and request.query.get("shared_nvmm") == "1"
+                and name in getattr(self.context.node, "shared_decode_sources", ())):
+            shared = ready_preview_socket(name)
         ws = web.WebSocketResponse(heartbeat=20, compress=False)
-        await ws.prepare(request)
-        client = hub.connect(name, fps, asyncio.get_running_loop())
+        demand_fd = None
+        if shared is not None:
+            try:
+                demand_fd = hold_preview_demand(shared)
+            except OSError:
+                shared = None
+        try:
+            client = hub.connect(name, fps, asyncio.get_running_loop(), shared=shared is not None)
+        except RuntimeError:
+            if demand_fd is not None:
+                os.close(demand_fd)
+            raise web.HTTPConflict(text="Preview paused during capture") from None
+        try:
+            await ws.prepare(request)
+        except BaseException:
+            hub.disconnect(client)
+            if demand_fd is not None:
+                os.close(demand_fd)
+            raise
         self.context.node.viewer_connected()
 
         async def send():
+            if shared is not None:
+                await ws.send_json({"type": "shared_nvmm", "socket": str(shared)})
             while not ws.closed:
                 await client.event.wait()
                 client.event.clear()
@@ -58,6 +84,8 @@ class NativePreviewRoutes:
             await asyncio.wait((sender, reader), return_when=asyncio.FIRST_COMPLETED)
         finally:
             hub.disconnect(client)
+            if demand_fd is not None:
+                os.close(demand_fd)
             self.context.node.viewer_disconnected()
             for task in (sender, reader):
                 task.cancel()

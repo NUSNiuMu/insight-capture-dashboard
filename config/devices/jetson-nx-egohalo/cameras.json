@@ -230,6 +230,10 @@
     "output_height": 640,
     "output_hz": 5.0,
     "source_fps": 30.0,
+    "shared_preview_sources": [
+      "egohalo_stereo_left",
+      "egohalo_stereo_right"
+    ],
     "horizontal_fov_deg": 90.0,
     "opencv_threads": 1
   },

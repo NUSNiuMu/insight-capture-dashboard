@@ -110,3 +110,35 @@ def test_native_client_coalesces_wakeups_until_packets_are_drained():
     assert len(client.packets()) == 1
     client.offer(frame)
     assert len(callbacks) == 2
+
+
+def test_shared_preview_session_sends_socket_and_honors_pause(monkeypatch):
+    from insight_capture.api.routes import native
+
+    name = "egohalo_stereo_left"
+    path = Path("/dev/shm/insight-egohalo-nvmm") / f"{name}.sock"
+    monkeypatch.setattr(native, "ready_preview_socket", lambda name: path)
+    from os import devnull, open as open_fd, O_RDONLY
+    monkeypatch.setattr(native, "hold_preview_demand", lambda path: open_fd(devnull, O_RDONLY))
+
+    async def check():
+        hub = NativePreviewHub([SimpleNamespace(name=name, topic_type="h264", width=1200, height=1600)])
+        node = SimpleNamespace(native_preview=hub, shared_decode_sources={name},
+                               _preview_manager=SimpleNamespace(paused=False),
+                               viewer_connected=lambda: None, viewer_disconnected=lambda: None)
+        app = web.Application()
+        app.router.add_get("/ws/native", NativePreviewRoutes(SimpleNamespace(node=node))._handle_stream)
+        async with TestClient(TestServer(app)) as client:
+            async with client.ws_connect(f"/ws/native?camera={name}&fps=30&shared_nvmm=1") as ws:
+                assert await ws.receive_json(timeout=2) == {"type": "shared_nvmm", "socket": str(path)}
+                assert hub.status(name)["shared_sessions"] == 1
+                hub.submit(name, SimpleNamespace())
+                assert hub.status(name)["received"] == 1
+                assert hub.status(name)["sent_packets"] == 0
+                hub.pause()
+                message = await ws.receive(timeout=2)
+                assert message.type == WSMsgType.CLOSE
+            hub.resume()
+            async with client.ws_connect(f"/ws/native?camera={name}&fps=15&shared_nvmm=1"):
+                assert hub.status(name).get("shared_sessions", 0) == 0
+    asyncio.run(check())

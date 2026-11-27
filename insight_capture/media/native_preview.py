@@ -52,8 +52,9 @@ def image_packet(message, topic_type, width, height, received_ns):
 
 
 class NativePreviewClient:
-    def __init__(self, spec, fps, loop):
+    def __init__(self, spec, fps, loop, *, shared=False):
         self.spec, self.fps, self.loop = spec, fps, loop
+        self.shared = shared
         self.event = asyncio.Event()
         self.lock = threading.Lock()
         self.closed = False
@@ -62,13 +63,15 @@ class NativePreviewClient:
         self.wake_pending = False
         self.latest = None
         self.next_frame_at = 0.0
-        self.h264 = H264Queue(max_age_sec=MAX_FRAME_AGE_NS / 1e9) if spec.topic_type == "h264" else None
+        self.h264 = H264Queue(max_age_sec=MAX_FRAME_AGE_NS / 1e9) if spec.topic_type == "h264" and not shared else None
 
     def offer(self, message):
         with self.lock:
             if self.closed:
                 return
             self.received += 1
+            if self.shared:
+                return
             if self.h264 is not None:
                 stamp = int(message.header.stamp.sec) * 1_000_000_000 + int(message.header.stamp.nanosec)
                 if not self.h264.push(bytes(message.data), stamp):
@@ -149,8 +152,8 @@ class NativePreviewHub:
         with self._lock:
             self.paused = False
 
-    def connect(self, name, fps, loop):
-        client = NativePreviewClient(self.specs[name], fps, loop)
+    def connect(self, name, fps, loop, *, shared=False):
+        client = NativePreviewClient(self.specs[name], fps, loop, shared=shared)
         with self._lock:
             if self.paused:
                 raise RuntimeError("Preview paused during capture")
@@ -177,6 +180,8 @@ class NativePreviewHub:
             clients = tuple(self._clients.get(name, ()))
         counters = ("received", "selected_packets", "sent_packets", "replaced", "expired", "stale_h264_batches")
         result = {"sessions": len(clients), **dict.fromkeys(counters, 0)}
+        if any(c.shared for c in clients):
+            result["shared_sessions"] = sum(c.shared for c in clients)
         for client in clients:
             with client.lock:
                 for key in counters:

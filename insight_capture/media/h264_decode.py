@@ -9,7 +9,7 @@ from insight_capture.media.h264 import H264Gate
 
 
 class H264Decoder:
-    def __init__(self, hardware=True, pixel_format="BGR", low_latency=False, frame_selector=None):
+    def __init__(self, hardware=True, pixel_format="BGR", low_latency=False, frame_selector=None, shared_preview=None):
         if pixel_format not in {"BGR", "GRAY8"}:
             raise ValueError("Decoder output must be BGR or GRAY8")
         self.channels = 3 if pixel_format == "BGR" else 1
@@ -27,7 +27,17 @@ class H264Decoder:
         self._selection_probe = None
         if hardware:
             # Only verified I/P live sources may bypass DPB; replay keeps normal ordering.
-            decoder = "nvv4l2decoder name=decoder " + ("disable-dpb=true enable-max-performance=true " if low_latency else "") + "! nvvidconv ! "
+            decoder = "nvv4l2decoder name=decoder " + ("disable-dpb=true enable-max-performance=true " if low_latency else "") + "! "
+            if shared_preview is not None:
+                # Separate scaled surfaces and a leaky queue isolate the decoder pool from a slow viewer.
+                decoder += (
+                    "tee name=surfaces surfaces. ! queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 "
+                    "leaky=downstream ! identity name=preview_gate ! nvvidconv ! "
+                    f"video/x-raw(memory:NVMM),format=I420,width={shared_preview.width},height={shared_preview.height} ! "
+                    "nvunixfdsink name=shared sync=false async=false enable-last-sample=false buffer-timestamp-copy=true "
+                    "surfaces. ! queue max-size-buffers=8 max-size-bytes=0 max-size-time=0 ! identity name=select_decoded ! "
+                )
+            decoder += "nvvidconv ! "
             if pixel_format == "BGR":
                 decoder += "video/x-raw,format=BGRx ! videoconvert ! "
         else:
@@ -40,6 +50,11 @@ class H264Decoder:
         )
         self.source = self.pipeline.get_by_name("source")
         self.sink = self.pipeline.get_by_name("sink")
+        if shared_preview is not None:
+            self.pipeline.get_by_name("shared").set_property("socket-path", str(shared_preview.path))
+            preview_pad = self.pipeline.get_by_name("preview_gate").get_static_pad("sink")
+            preview_pad.add_probe(Gst.PadProbeType.BUFFER, lambda *_:
+                                  Gst.PadProbeReturn.OK if shared_preview.has_viewers() else Gst.PadProbeReturn.DROP)
         if frame_selector is not None:
             # All encoded reference frames are decoded. Reject unused decoded
             # frames before VIC conversion and transfer to system memory.
@@ -57,11 +72,17 @@ class H264Decoder:
                     if not selected:
                         self._discarded.append(stamp)
                 return Gst.PadProbeReturn.OK if selected else Gst.PadProbeReturn.DROP
-            self._selection_pad = self.pipeline.get_by_name("decoder").get_static_pad("src")
+            branch = "select_decoded" if shared_preview is not None else "decoder"
+            self._selection_pad = self.pipeline.get_by_name(branch).get_static_pad("src")
             self._selection_probe = self._selection_pad.add_probe(Gst.PadProbeType.BUFFER, select_decoded)
-        if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+        try:
+            if self.pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
+                raise RuntimeError("H.264 decoder failed to start")
+            if shared_preview is not None:
+                shared_preview.allow_client()
+        except BaseException:
             self.close()
-            raise RuntimeError("H.264 decoder failed to start")
+            raise
 
     def push(self, data, stamp_ns):
         data = self.gate.accept(data)

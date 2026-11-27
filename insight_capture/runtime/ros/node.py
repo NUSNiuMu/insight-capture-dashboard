@@ -52,6 +52,7 @@ from insight_capture.runtime.ros.topics import playback_topic
 from insight_capture.core.models import CameraFrame, CameraSpec, PoseSample, PoseSpec
 from insight_capture.media.image_pipeline import ImagePipeline
 from insight_capture.media.native_preview import NativePreviewHub
+from insight_capture.media.shared_decode import shared_decode_sources
 from insight_capture.media.shared_preview import PreviewReader, preview_path, shared_preview_topics
 from insight_capture.media.preview_manager import PreviewManager
 from insight_capture.media.worker_supervisor import WorkerSupervisor
@@ -113,6 +114,7 @@ class PoseBridgeNode(Node):
         self.max_points = 300
 
         raw_config = load_setup(config_path)
+        self.shared_decode_sources = shared_decode_sources(raw_config)
         self.recording_h264_inputs = raw_config.get("recording_h264", {}).get("input_topics", [])
         self.recording_h264_port = raw_config.get("recording_h264", {}).get("control_port")
         self.shared_preview_topics = shared_preview_topics(raw_config.get("recording_h264", {}))

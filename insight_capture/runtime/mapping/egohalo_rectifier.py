@@ -15,6 +15,7 @@ import cv2
 
 from insight_capture.media.h264_decode import H264Decoder
 from insight_capture.media.h264 import H264ReferenceSequence
+from insight_capture.media.shared_decode import SharedDecodeSocket, shared_decode_sources
 from insight_capture.runtime.mapping.fisheye import FisheyeRectification
 from insight_capture.runtime.mapping.geometry import matrix_from_transform
 from insight_capture.runtime.mapping.rig import calibration_identity, stereo_views
@@ -52,6 +53,9 @@ def main():
                           "left_image_topic", "right_image_topic", "left_info_topic", "right_info_topic",
                           "left_frame", "right_frame")})]
     sources = list(dict.fromkeys(v[side + "_source"] for v in views for side in ("left", "right")))
+    shared_sources = shared_decode_sources(config)
+    if shared_sources - set(sources):
+        raise ValueError("Shared decode preview requires a configured stereo rectification source")
     buffer = Buffer()
     _listener = TransformListener(buffer, node)
     broadcaster = StaticTransformBroadcaster(node)
@@ -132,6 +136,7 @@ def main():
 
     def worker(index):
         decoder = None
+        shared = None
         headers = {}
         last_output = None
         last_input = None
@@ -140,8 +145,22 @@ def main():
         def selected(pts):
             bucket = int(round(pts / period))
             return calibration[0] is not None and bucket != last_output and abs(pts - bucket * period) <= sample_tolerance_ns
+        def open_decoder():
+            nonlocal shared
+            if index in shared_sources:
+                try:
+                    spec = streams[index]
+                    shared = SharedDecodeSocket(index, spec["width"], spec["height"])
+                    return H264Decoder(pixel_format="GRAY8", low_latency=True, frame_selector=selected,
+                                       shared_preview=shared)
+                except Exception as exc:
+                    if shared is not None:
+                        shared.close()
+                        shared = None
+                    node.get_logger().warning(f"{index}: using the normal decoder after shared preview failed: {exc}")
+            return H264Decoder(pixel_format="GRAY8", low_latency=True, frame_selector=selected)
         try:
-            decoder = H264Decoder(pixel_format="GRAY8", low_latency=True, frame_selector=selected)
+            decoder = open_decoder()
             while not stop.is_set():
                 try:
                     message = queues[index].get(timeout=.1)
@@ -156,7 +175,10 @@ def main():
                     decoder.gate.reset()
                     if last_input is not None and stamp <= last_input:
                         decoder.close()
-                        decoder = H264Decoder(pixel_format="GRAY8", low_latency=True, frame_selector=selected)
+                        if shared is not None:
+                            shared.close()
+                            shared = None
+                        decoder = open_decoder()
                         headers.clear()
                         last_output = None
                     reset[index].clear()
@@ -223,6 +245,8 @@ def main():
         finally:
             if decoder is not None:
                 decoder.close()
+            if shared is not None:
+                shared.close()
 
     threads = []
     for index in sources:
