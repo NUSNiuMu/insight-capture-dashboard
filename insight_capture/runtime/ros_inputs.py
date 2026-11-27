@@ -21,7 +21,7 @@ class CameraInputs:
         self.lock = threading.RLock()
         self.closed = threading.Event()
         self.generation = 0
-        self.thread = None
+        self.threads = []
         self.links = camera_transport_links()
         self._link_generations = camera_link_generations(self.links)
         self._create_node(self.links)
@@ -30,13 +30,27 @@ class CameraInputs:
         refresh_ros_network(links)
         self.context = Context()
         self.context.init(domain_id=self.domain)
-        self.node = Node(self.owner.get_name() + "_inputs", context=self.context)
-        self.executor = SingleThreadedExecutor(context=self.context)
-        self.executor.add_node(self.node)
+        self.node, self.executor = self._make_endpoint("_inputs")
+        self.raw_input = None
+
+    def _make_endpoint(self, suffix):
+        node = Node(self.owner.get_name() + suffix, context=self.context)
+        executor = SingleThreadedExecutor(context=self.context)
+        executor.add_node(node)
+        return node, executor
 
     def create_subscription(self, *args, **kwargs):
+        subscription = self._subscribe(args, kwargs)
         self.specs.append((args, kwargs))
-        return self.node.create_subscription(*args, **kwargs)
+        return subscription
+
+    def _subscribe(self, args, kwargs):
+        if not kwargs.get("raw"):
+            return self.node.create_subscription(*args, **kwargs)
+        # Let ordered encoded frames drain even when raw image callbacks are busy.
+        if self.raw_input is None:
+            self.raw_input = self._make_endpoint("_encoded_inputs")
+        return self.raw_input[0].create_subscription(*args, **kwargs)
 
     def published_topics(self, *, with_types=False):
         """Read the live input participant, including after a USB/IP renewal."""
@@ -47,27 +61,37 @@ class CameraInputs:
                       if self.node.count_publishers(name) > 0}
             return topics if with_types else list(topics)
 
-    def _spin(self):
+    def _spin(self, executor):
         try:
-            self.executor.spin()
+            executor.spin()
         except Exception:
             if not self.closed.is_set():
                 self.owner.get_logger().fatal("Camera input executor failed:\n" + traceback.format_exc())
                 os._exit(1)
 
     def _start_executor(self):
-        self.thread = threading.Thread(target=self._spin, name="camera_inputs", daemon=True)
-        self.thread.start()
+        for node, executor in self._endpoints():
+            thread = threading.Thread(target=self._spin, args=(executor,), name=node.get_name(), daemon=True)
+            self.threads.append(thread)
+            thread.start()
+
+    def _endpoints(self):
+        yield self.node, self.executor
+        if self.raw_input is not None:
+            yield self.raw_input
 
     def start(self):
         self._start_executor()
         threading.Thread(target=self._monitor, name="camera_network", daemon=True).start()
 
     def _stop_executor(self):
-        self.executor.shutdown()
-        if self.thread is not None:
-            self.thread.join()
-        self.node.destroy_node()
+        for _, executor in self._endpoints():
+            executor.shutdown()
+        for thread in self.threads:
+            thread.join()
+        self.threads.clear()
+        for node, _ in self._endpoints():
+            node.destroy_node()
         self.context.try_shutdown()
 
     def refresh(self, links):
@@ -77,7 +101,7 @@ class CameraInputs:
             self._stop_executor()
             self._create_node(links)
             for args, kwargs in self.specs:
-                self.node.create_subscription(*args, **kwargs)
+                self._subscribe(args, kwargs)
             self.generation += 1
             self.links = links
             self._link_generations = camera_link_generations(links)

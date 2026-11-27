@@ -15,6 +15,7 @@ from .rate import select_frame
 # height, source timestamp and host receipt time. Payload is one complete frame.
 HEADER = struct.Struct("!4sBBHIIQQ")
 FORMATS = {"GRAY8": 1, "NV12": 2, "JPEG": 3, "H264": 4}
+MAX_FRAME_AGE_NS = 150_000_000
 
 
 def image_packet(message, topic_type, width, height, received_ns):
@@ -57,9 +58,11 @@ class NativePreviewClient:
         self.lock = threading.Lock()
         self.closed = False
         self.received = self.selected_packets = self.replaced = self.expired = 0
+        self.sent_packets = self.stale_h264_batches = 0
+        self.wake_pending = False
         self.latest = None
         self.next_frame_at = 0.0
-        self.h264 = H264Queue(max_age_sec=0.15) if spec.topic_type == "h264" else None
+        self.h264 = H264Queue(max_age_sec=MAX_FRAME_AGE_NS / 1e9) if spec.topic_type == "h264" else None
 
     def offer(self, message):
         with self.lock:
@@ -73,6 +76,9 @@ class NativePreviewClient:
             else:
                 self.replaced += int(self.latest is not None)
                 self.latest = (message, time.monotonic_ns())
+            if self.wake_pending:
+                return
+            self.wake_pending = True
         try:
             self.loop.call_soon_threadsafe(self.event.set)
         except RuntimeError:
@@ -80,6 +86,7 @@ class NativePreviewClient:
 
     def packets(self):
         with self.lock:
+            self.wake_pending = False
             if self.closed:
                 return []
             if self.h264 is not None:
@@ -94,7 +101,7 @@ class NativePreviewClient:
         message, received = latest
         now = time.monotonic()
         selected, self.next_frame_at = select_frame(now, self.next_frame_at, self.fps)
-        expired = time.monotonic_ns() - received > 150_000_000
+        expired = time.monotonic_ns() - received > MAX_FRAME_AGE_NS
         if not selected or expired:
             self.expired += int(expired)
             return []
@@ -103,6 +110,14 @@ class NativePreviewClient:
             return []
         self.selected_packets += 1
         return [packet]
+
+    def discard_stale_h264(self, packet):
+        if self.h264 is None or time.monotonic_ns() - HEADER.unpack_from(packet)[-1] <= MAX_FRAME_AGE_NS:
+            return False
+        with self.lock:
+            self.stale_h264_batches += 1
+            self.h264.reset()
+        return True
 
     def close(self):
         with self.lock:
@@ -160,10 +175,11 @@ class NativePreviewHub:
     def status(self, name):
         with self._lock:
             clients = tuple(self._clients.get(name, ()))
-        result = {"sessions": len(clients), "received": 0, "selected_packets": 0, "replaced": 0, "expired": 0}
+        counters = ("received", "selected_packets", "sent_packets", "replaced", "expired", "stale_h264_batches")
+        result = {"sessions": len(clients), **dict.fromkeys(counters, 0)}
         for client in clients:
             with client.lock:
-                for key in ("received", "selected_packets", "replaced", "expired"):
+                for key in counters:
                     result[key] += getattr(client, key)
                 if client.h264 is not None:
                     result["h264"] = client.h264.stats()

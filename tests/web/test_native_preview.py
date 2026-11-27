@@ -70,3 +70,43 @@ def test_default_jetson_head_streams_jpeg_to_local_qt_without_webrtc():
                 assert message.data[HEADER.size:] == JPEG
 
     asyncio.run(check())
+
+
+def test_expired_h264_batch_resets_gate_without_closing_stream(monkeypatch):
+    from insight_capture.media import native_preview
+    from insight_capture.media.native_preview import MAX_FRAME_AGE_NS, NativePreviewClient
+
+    clock = MAX_FRAME_AGE_NS * 3
+    monkeypatch.setattr(native_preview.time, "monotonic_ns", lambda: clock)
+    client = NativePreviewClient(
+        SimpleNamespace(topic_type="h264", width=1200, height=1600), 30, None,
+    )
+    client.h264._gate.waiting = False
+    old = HEADER.pack(b"INPV", 1, FORMATS["H264"], 0, 1200, 1600, 1, clock - MAX_FRAME_AGE_NS - 1)
+    fresh = HEADER.pack(b"INPV", 1, FORMATS["H264"], 0, 1200, 1600, 2, clock)
+
+    assert not client.discard_stale_h264(fresh)
+    assert not client.h264.stats()["waiting_for_idr"]
+    assert client.discard_stale_h264(old)
+    assert client.h264.stats()["waiting_for_idr"]
+    assert not client.closed
+    assert client.stale_h264_batches == 1
+
+
+def test_native_client_coalesces_wakeups_until_packets_are_drained():
+    from insight_capture.media.native_preview import NativePreviewClient
+
+    callbacks = []
+    loop = SimpleNamespace(call_soon_threadsafe=callbacks.append)
+    client = NativePreviewClient(
+        SimpleNamespace(topic_type="compressed", width=0, height=0), 30, loop,
+    )
+    stamp = SimpleNamespace(sec=1, nanosec=2)
+    frame = SimpleNamespace(header=SimpleNamespace(stamp=stamp), data=JPEG)
+    client.offer(frame)
+    client.offer(frame)
+
+    assert len(callbacks) == 1
+    assert len(client.packets()) == 1
+    client.offer(frame)
+    assert len(callbacks) == 2

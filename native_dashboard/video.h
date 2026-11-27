@@ -99,6 +99,7 @@ class NativeVideo : public QQuickItem {
     GstBus *m_bus = nullptr;
     GstElement *m_appsrc = nullptr;
     bool m_useNative = false, m_playbackReady = false;
+    bool m_waitNativeIdr = false;
     int m_nativeFormat = 0;
     QSize m_nativeSize;
     quint64 m_nativeEpoch = 0, m_nativeReceived = 0;

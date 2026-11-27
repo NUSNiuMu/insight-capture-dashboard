@@ -212,6 +212,7 @@ void NativeVideo::stop() {
     m_pipeline = m_peer = m_decode = m_sink = nullptr;
     m_appsrc = nullptr;
     m_nativeReceived = 0;
+    m_waitNativeIdr = false;
     m_playbackReady = false;
     m_position = 0;
     m_nativeFormat = 0;
@@ -424,6 +425,21 @@ void NativeVideo::startNativePipeline(int format, int width, int height) {
     startPipeline();
 }
 
+static bool hasCompleteH264Idr(const uchar *payload, qsizetype size) {
+    bool sps = false, pps = false;
+    // Annex B start codes end in 00 00 01, with an optional leading zero.
+    for (qsizetype i = 2; i + 1 < size; ++i) {
+        if (payload[i] != 1 || payload[i - 1] != 0 || payload[i - 2] != 0)
+            continue;
+        switch (payload[++i] & 0x1f) {
+        case 7: sps = true; break;
+        case 8: pps = true; break;
+        case 5: return sps && pps;
+        }
+    }
+    return false;
+}
+
 void NativeVideo::handleNativeFrame(const QByteArray &message) {
     if (!m_useNative || !m_media.isEmpty() || message.size() <= 32)
         return;
@@ -446,11 +462,6 @@ void NativeVideo::handleNativeFrame(const QByteArray &message) {
         m_restart.start(0);
         return;
     }
-    if (format == 4 && gst_app_src_get_current_level_buffers(GST_APP_SRC(m_appsrc)) >= 8) {
-        // Reconnect at a complete IDR instead of dropping dependent H.264 pictures.
-        m_restart.start(0);
-        return;
-    }
     if (!m_active && format != 4) {
         // Raw/JPEG inputs have no reference chain; skip their hidden VIC work.
         ++m_hiddenRawSkips;
@@ -458,15 +469,23 @@ void NativeVideo::handleNativeFrame(const QByteArray &message) {
     }
     const auto now = gst_util_get_timestamp();
     const auto received = qFromBigEndian<quint64>(header + 24);
-    if (now > received && now - received > 150 * GST_MSECOND) {
+    const bool expired = now > received && now - received > 150 * GST_MSECOND;
+    if (expired || (format == 4 && gst_app_src_get_current_level_buffers(GST_APP_SRC(m_appsrc)) >= 8)) {
         if (format == 4)
-            m_restart.start(0);
+            m_waitNativeIdr = true;
         return;
     }
+    const bool recovering = format == 4 && m_waitNativeIdr;
+    if (recovering && !hasCompleteH264Idr(header + 32, message.size() - 32))
+        return;
     auto *owned = new QByteArray(message);
     auto *buffer = gst_buffer_new_wrapped_full(GST_MEMORY_FLAG_READONLY, const_cast<char *>(owned->constData() + 32),
                                                owned->size() - 32, 0, owned->size() - 32, owned,
                                                [](gpointer data) { delete static_cast<QByteArray *>(data); });
+    if (recovering) {
+        GST_BUFFER_FLAG_SET(buffer, GST_BUFFER_FLAG_DISCONT);
+        m_waitNativeIdr = false;
+    }
     const quint64 pts = now - m_nativeEpoch;
     GST_BUFFER_PTS(buffer) = pts;
     GST_BUFFER_DTS(buffer) = pts;

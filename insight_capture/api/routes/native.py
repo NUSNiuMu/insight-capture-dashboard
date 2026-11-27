@@ -6,6 +6,11 @@ import ipaddress
 
 from aiohttp import web
 
+try:
+    from asyncio import timeout
+except ImportError:  # Python 3.10 uses aiohttp's timeout dependency.
+    from async_timeout import timeout
+
 
 class NativePreviewRoutes:
     def __init__(self, context):
@@ -40,8 +45,12 @@ class NativePreviewRoutes:
                 if client.closed:
                     return
                 for packet in client.packets():
-                    # A stalled local viewer must not retain a growing TCP backlog.
-                    await asyncio.wait_for(ws.send_bytes(packet), timeout=0.15)
+                    # One expired reference invalidates the rest of this H.264 batch.
+                    if client.discard_stale_h264(packet):
+                        break
+                    async with timeout(0.15):
+                        await ws.send_bytes(packet)
+                    client.sent_packets += 1
 
         sender = asyncio.create_task(send())
         reader = asyncio.create_task(self._read(ws))
