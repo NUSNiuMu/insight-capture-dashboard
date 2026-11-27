@@ -53,6 +53,7 @@ def create_app(capture, annotation_url=""):
     # and never blocks recording: it is mostly waiting on the service.
     draft_jobs, draft_tasks = {}, set()
     label_jobs = {}
+    translate_jobs = {}
 
     class Cancelled(Exception):
         pass
@@ -367,7 +368,7 @@ def create_app(capture, annotation_url=""):
     async def jobs(request):
         rows = [
             {k: v for k, v in job.items() if k != "labels"}
-            for job in [*draft_jobs.values(), *label_jobs.values()]
+            for job in [*draft_jobs.values(), *label_jobs.values(), *translate_jobs.values()]
             if job.get("kind")
         ]
         waiting = sorted((r for r in rows if r["running"] and r.get("queued")), key=lambda r: r["created"])
@@ -394,10 +395,24 @@ def create_app(capture, annotation_url=""):
         if not url:
             raise ValueError("未配置推理服务，不能转换")
         table = await asyncio.to_thread(action_table.load, capture.root)
+        # Listed in the 模型任务 panel, but not queued behind pre-annotation: a
+        # translation is one short text request, it only waits for the model
+        # request in flight.
+        session_name = str(body.get("session") or "")
+        job = translate_jobs[session_name or f"_{time.time()}"] = {
+            "running": True, "queued": False, "done": 0, "total": 1, "error": None,
+            "kind": "translate", "session": session_name, "created": time.time(), "count": len(items),
+        }
         try:
             result = await asyncio.to_thread(preannotate.translate, url, items, table)
         except preannotate.ServiceDown as exc:  # a RuntimeError: would be a bare 500
+            finish(job, exc)
             raise ValueError(str(exc)) from exc
+        except Exception as exc:
+            finish(job, exc)
+            raise
+        job["done"] = 1
+        finish(job)
         return web.json_response({"items": result})
 
     async def annotation_service(request):

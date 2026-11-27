@@ -718,11 +718,11 @@ $("jobToggle").onclick = () => {
   } catch {}
   applyJobsDrawer();
 };
-const JOB_KIND = { draft: "预标注", label: "逐段标注", pause: "静止检测" };
+const JOB_KIND = { draft: "预标注", label: "逐段标注", pause: "静止检测", translate: "中文转英文" };
 function jobState(j) {
   if (j.running && j.cancel) return "取消中…（当前一步做完后停止）";
   if (j.running && j.queued) return `排队中 · 第 ${j.position || "?"} 位`;
-  if (j.running) return j.kind === "pause" ? "进行中" : `进行中 ${j.done} / ${j.total || "…"}`;
+  if (j.running) return j.kind === "pause" || j.kind === "translate" ? "进行中" : `进行中 ${j.done} / ${j.total || "…"}`;
   const at = j.finished ? new Date(j.finished * 1000).toLocaleTimeString("zh-CN", { hour12: false }) : "";
   if (j.cancelled) return `已取消 ${at}`;
   if (j.error) return `失败 ${at}：${j.error}`;
@@ -741,13 +741,13 @@ function renderJobs() {
           open.title = "打开这条录制";
           open.append(
             el("strong", j.session),
-            el("small", `${JOB_KIND[j.kind] || j.kind}${j.count ? ` · ${j.count} 段` : ""} · ${jobState(j)}`),
+            el("small", `${JOB_KIND[j.kind] || j.kind}${j.count ? ` · ${j.count} ${j.kind === "translate" ? "条" : "段"}` : ""} · ${jobState(j)}`),
           );
           if (j.running && !j.queued && j.total)
             open.append(Object.assign(el("span", undefined, "job-bar"), { style: `--p:${(100 * j.done) / j.total}%` }));
-          open.onclick = () => selectSession(j.session).catch((e) => notice(e.message, true));
+          open.onclick = () => j.session && selectSession(j.session).catch((e) => notice(e.message, true));
           row.append(open);
-          if (j.running && j.kind !== "pause" && !j.cancel) {
+          if (j.running && (j.kind === "draft" || j.kind === "label") && !j.cancel) {
             const cancel = el("button", "取消", "quiet job-cancel");
             cancel.type = "button";
             cancel.onclick = async () => {
@@ -1620,9 +1620,19 @@ async function applyLabelJob(job, offer) {
   };
   $("message").append(yes, no);
 }
+// Shown in the 模型任务 panel while it runs; the result belongs to the
+// recording it was asked for, so it is dropped if the page moved on.
 async function translateItems(items) {
-  const reply = await api("/api/annotation/translate", "POST", { items });
-  return reply.items;
+  const name = selectedName;
+  const request = api("/api/annotation/translate", "POST", { items, session: name });
+  setTimeout(pollJobs, 300);
+  try {
+    const reply = await request;
+    if (name !== selectedName) throw Error("转换期间切换了录制，结果没有填入（可回到原录制重新转换）");
+    return reply.items;
+  } finally {
+    pollJobs();
+  }
 }
 bind("translateParts", async () => {
   if (editorDirty) throw Error("请先添加或更新正在编辑的片段，再转换");
