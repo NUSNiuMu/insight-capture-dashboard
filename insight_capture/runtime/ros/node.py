@@ -52,6 +52,7 @@ from insight_capture.runtime.ros.topics import playback_topic
 from insight_capture.core.models import CameraFrame, CameraSpec, PoseSample, PoseSpec
 from insight_capture.media.image_pipeline import ImagePipeline
 from insight_capture.media.native_preview import NativePreviewHub
+from insight_capture.media.shared_preview import PreviewReader, preview_path, shared_preview_topics
 from insight_capture.media.preview_manager import PreviewManager
 from insight_capture.media.worker_supervisor import WorkerSupervisor
 from insight_capture.runtime.mapping.stream import MappingStream
@@ -114,6 +115,9 @@ class PoseBridgeNode(Node):
         raw_config = load_setup(config_path)
         self.recording_h264_inputs = raw_config.get("recording_h264", {}).get("input_topics", [])
         self.recording_h264_port = raw_config.get("recording_h264", {}).get("control_port")
+        self.shared_preview_topics = shared_preview_topics(raw_config.get("recording_h264", {}))
+        self._shared_preview_stop = threading.Event()
+        self._shared_preview_threads = []
         config = build_dashboard_config(raw_config)
         trajectory_config = config.get("trajectory", {})
         # Reliable image QoS prevents whole-frame loss from fragmented UDP samples.
@@ -143,6 +147,8 @@ class PoseBridgeNode(Node):
             )
             for item in config.get("cameras", [])
         ]
+        if self.shared_preview_topics - {camera.topic for camera in self.cameras if camera.topic_type == "image"}:
+            raise ValueError("Shared recording preview requires a matching raw Dashboard stream")
         self.poses: List[PoseSpec] = [
             PoseSpec(
                 name=item["name"],
@@ -264,6 +270,8 @@ class PoseBridgeNode(Node):
         self._create_camera_status_subscriptions()
         self._create_dashboard_image_subscriptions()
         self.camera_inputs.start()
+        for thread in self._shared_preview_threads:
+            thread.start()
         threading.Thread(
             target=self._participant_watchdog.run,
             daemon=True,
@@ -385,15 +393,16 @@ class PoseBridgeNode(Node):
                 if camera.topic_type == "h264" else self.ros_callback_group
             )
             msg_type = CompressedImage if camera.topic_type in ("compressed", "h264") else RosImage
-            self.camera_inputs.create_subscription(
-                msg_type,
-                camera.topic,
-                self._make_dashboard_image_callback(camera.name, camera.topic_type),
-                image_qos,
-                callback_group=image_group,
-                raw=camera.topic_type == "h264",
-                event_callbacks=self.subscription_event_callbacks,
-            )
+            live_callback = self._make_dashboard_image_callback(camera.name, camera.topic_type)
+            live_options = dict(callback_group=image_group, raw=camera.topic_type == "h264",
+                                event_callbacks=self.subscription_event_callbacks)
+            if camera.topic in self.shared_preview_topics:
+                self._shared_preview_threads.append(threading.Thread(
+                    target=self._shared_preview_loop, name=f"shared_preview_{camera.name}", daemon=True,
+                    args=(camera.topic, msg_type, image_qos, live_callback, live_options),
+                ))
+            else:
+                self.camera_inputs.create_subscription(msg_type, camera.topic, live_callback, image_qos, **live_options)
             # Playback shadow: PlaybackManager remaps `ros2 bag play` onto
             # /bagplay/... so replayed frames never share a topic with a
             # still-connected live camera (see _make_dashboard_image_callback).
@@ -430,6 +439,34 @@ class PoseBridgeNode(Node):
                 image_qos, callback_group=self.ros_callback_group,
                 event_callbacks=self.subscription_event_callbacks,
             )
+
+    def _shared_preview_loop(self, topic, message_type, qos, callback, options):
+        reader = PreviewReader(preview_path(self.camera_inputs.domain, topic))
+        fallback = threading.Event()
+        last_frame = time.monotonic()
+
+        def fallback_callback(message):
+            if fallback.is_set():
+                callback(message)
+
+        try:
+            while not self._shared_preview_stop.wait(0.01):
+                try:
+                    message = reader.take()
+                except (OSError, ValueError) as exc:
+                    self.get_logger().warning(f"{topic}: shared preview unavailable: {exc}", throttle_duration_sec=5)
+                    message = None
+                if message is not None:
+                    last_frame = time.monotonic()
+                    if fallback.is_set():
+                        fallback.clear()
+                        self.camera_inputs.set_preview_fallback(topic)
+                    callback(message)
+                elif not fallback.is_set() and time.monotonic() - last_frame > 0.75:
+                    fallback.set()
+                    self.camera_inputs.set_preview_fallback(topic, (message_type, topic, fallback_callback, qos), options)
+        finally:
+            reader.close()
 
     def _log_perf_summary(self) -> None:
         snapshot = perf_tracker.snapshot_and_reset()
@@ -563,6 +600,9 @@ class PoseBridgeNode(Node):
         """Stop node-owned network and media resources before ROS destruction."""
 
         self._participant_watchdog.close()
+        self._shared_preview_stop.set()
+        for thread in self._shared_preview_threads:
+            thread.join()
         self.camera_inputs.close()
         self._preview_manager.close()
         self.stop_webrtc_worker()

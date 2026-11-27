@@ -10,6 +10,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from insight_capture.media.h264_encode import H264Encoder
+from insight_capture.media.shared_preview import PreviewWriter, preview_path, shared_preview_topics
 from insight_capture.runtime.ros.network import configure_ros_network
 
 
@@ -20,6 +21,7 @@ def main():
     config = json.loads(args.config.read_text())
     settings = config["recording_h264"]
     inputs = settings["input_topics"]
+    shared_topics = shared_preview_topics(settings)
     if not inputs or len(set(inputs)) != len(inputs):
         raise ValueError("Recording encoder inputs must be nonempty and unique")
     bitrate = int(settings["bitrate_bps"])
@@ -68,6 +70,12 @@ def main():
 
     def encode(topic):
         encoder = encoders[topic]
+        preview = None
+        if topic in shared_topics:
+            try:
+                preview = PreviewWriter(preview_path(config["ros_domain_id"], topic), *encoder.shape)
+            except OSError as exc:
+                node.get_logger().warning(f"{topic}: shared preview unavailable: {exc}")
         pending = {}
         last_stamp = None
         try:
@@ -94,6 +102,13 @@ def main():
                         keyframes[topic].clear()
                     encoder.push(message.data, stamp)
                     metrics[topic]["submitted"] += 1
+                    if preview is not None:
+                        try:
+                            preview.offer(message.data, stamp, int(received * 1e9))
+                        except OSError as exc:
+                            node.get_logger().warning(f"{topic}: shared preview stopped: {exc}")
+                            preview.close()
+                            preview = None
                 output = encoder.pull()
                 while output is not None:
                     stamp, data = output
@@ -109,6 +124,8 @@ def main():
             stop.set()
         finally:
             encoder.close()
+            if preview is not None:
+                preview.close()
 
     subscriptions = [node.create_subscription(Image, topic,
                      lambda message, topic=topic: receive(topic, message), qos) for topic in inputs]

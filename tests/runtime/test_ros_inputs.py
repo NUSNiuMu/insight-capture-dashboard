@@ -41,6 +41,7 @@ def test_raw_input_has_its_own_executor_across_participant_refresh(monkeypatch):
     raw_args = (object(), "/head/h264", Mock(), Mock())
     wrist_args = (object(), "/wrist/image", Mock(), Mock())
     group = object()
+    fallback_args = (object(), "/wrist/shared", Mock(), Mock())
     inputs.create_subscription(*wrist_args)
     assert len(executors) == 1
     inputs.create_subscription(*raw_args, raw=True, callback_group=group)
@@ -50,11 +51,17 @@ def test_raw_input_has_its_own_executor_across_participant_refresh(monkeypatch):
     inputs._start_executor()
     assert [kwargs["args"] for _, kwargs in threads] == [(executors[0],), (executors[1],)]
 
+    inputs.set_preview_fallback("/wrist/shared", fallback_args, {})
+    inputs.set_preview_fallback("/wrist/shared", fallback_args, {})
+    assert nodes[0][0].create_subscription.call_args_list.count(call(*fallback_args)) == 1
+
     inputs.refresh(frozenset())
     for previous in executors[:2]:
         previous.shutdown.assert_called_once()
     assert all(value.join.called for value, _ in threads[:2])
-    assert nodes[2][0].create_subscription.call_args == call(*wrist_args)
+    assert nodes[2][0].create_subscription.call_args_list == [call(*wrist_args), call(*fallback_args)]
+    inputs.set_preview_fallback("/wrist/shared")
+    nodes[2][0].destroy_subscription.assert_called_once()
     assert nodes[3][0].create_subscription.call_args == call(*raw_args, raw=True, callback_group=group)
     inputs.close()
     assert all(value.destroy_node.call_count == 1 for value, _ in nodes)

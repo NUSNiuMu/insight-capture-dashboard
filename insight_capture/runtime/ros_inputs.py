@@ -18,6 +18,7 @@ class CameraInputs:
         self.owner = owner
         self.domain = owner.context.get_domain_id()
         self.specs = []
+        self.preview_fallbacks = {}
         self.lock = threading.RLock()
         self.closed = threading.Event()
         self.generation = 0
@@ -51,6 +52,17 @@ class CameraInputs:
         if self.raw_input is None:
             self.raw_input = self._make_endpoint("_encoded_inputs")
         return self.raw_input[0].create_subscription(*args, **kwargs)
+
+    def set_preview_fallback(self, topic, args=None, kwargs=None):
+        with self.lock:
+            if self.closed.is_set():
+                return
+            if args is None:
+                previous = self.preview_fallbacks.pop(topic, None)
+                if previous is not None:
+                    self.node.destroy_subscription(previous[2])
+            elif topic not in self.preview_fallbacks:
+                self.preview_fallbacks[topic] = (args, kwargs, self.node.create_subscription(*args, **kwargs))
 
     def published_topics(self, *, with_types=False):
         """Read the live input participant, including after a USB/IP renewal."""
@@ -102,6 +114,8 @@ class CameraInputs:
             self._create_node(links)
             for args, kwargs in self.specs:
                 self._subscribe(args, kwargs)
+            for topic, (args, kwargs, _) in self.preview_fallbacks.items():
+                self.preview_fallbacks[topic] = (args, kwargs, self.node.create_subscription(*args, **kwargs))
             self.generation += 1
             self.links = links
             self._link_generations = camera_link_generations(links)
