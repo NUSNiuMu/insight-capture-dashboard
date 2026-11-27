@@ -19,6 +19,7 @@ class PoseSpec:
     avatar_scale: float
     avatar_rotation_deg_xyz: Tuple[float, float, float]
     avatar_offset_xyz: Tuple[float, float, float]
+    visual_only: bool = False
 
 
 @dataclass

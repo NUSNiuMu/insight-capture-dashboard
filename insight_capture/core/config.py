@@ -83,7 +83,8 @@ def dashboard_streams(camera: Dict) -> List[Dict]:
         if item.get("type") not in {"image", "compressed", "h264"}:
             raise ValueError(f"Unsupported image stream type: {item.get('type')}")
         info = item.get("camera_info_topic", "")
-        if (info or camera.get("dashboard_pose_stream", "vio_100hz")) and not str(info).startswith("/"):
+        requires_info = not camera.get("local_uvc") and camera.get("dashboard_pose_stream", "vio_100hz")
+        if (info or requires_info) and not str(info).startswith("/"):
             raise ValueError("Every image stream needs an absolute camera_info_topic")
         item.update(namespace=camera["namespace"], device_name=camera["name"])
         item.setdefault("label", camera.get("dashboard_label", item["name"]))
@@ -118,6 +119,7 @@ def build_dashboard_config(config: Dict) -> Dict:
             {
                 "name": camera["name"],
                 "topic": pose_topic,
+                "visual_only": bool(camera.get("local_uvc")),
                 "teleop_role": camera.get("teleop_role", camera["name"]),
                 "avatar_model": avatar_model,
                 "avatar_scale": float(camera.get("avatar_scale", model_defaults.get("avatar_scale", 1.0))),

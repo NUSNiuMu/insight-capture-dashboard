@@ -25,6 +25,8 @@ config/runtime.json
 config/.device
 config/.capture-upgrade.lock
 config/uvc-bindings.json
+config/uvc-localization.json
+config/uvc-calibrations/
 
 .native-build/
 config/.camera-profile-*

@@ -15,6 +15,7 @@ import traceback
 import uuid
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 from scipy.spatial.transform import Rotation
 import rclpy
@@ -22,7 +23,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from rclpy.time import Time
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, TransformStamped
-from sensor_msgs.msg import CameraInfo, Image, Imu, PointCloud2, PointField
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu, PointCloud2, PointField
 from std_msgs.msg import String, Header
 from std_srvs.srv import Empty
 from tf2_msgs.msg import TFMessage
@@ -31,6 +32,7 @@ from tf2_ros import Buffer, TransformBroadcaster, StaticTransformBroadcaster, Tr
 from .geometry import PoseSample, matrix_from_pose, matrix_from_transform
 from .looper_backend import LooperBackend
 from .looper_features import stereo_arrays, query_arrays
+from .mono_wrist import wrist_rectification
 from .pose_correction_filter import PoseCorrectionFilter
 from .frame_odometry import FrameOdometry
 from .superglue_backend import IpcSuperGlueBackend, InferenceUnavailable
@@ -58,6 +60,9 @@ def gray(message):
 
 @dataclass
 class CameraState:
+    mono: bool = False
+    mono_maps: tuple | None = None
+    last_mono_frame: float = 0.
     buffer: PoseBuffer = field(default_factory=PoseBuffer)
     odometry: FrameOdometry = field(default_factory=FrameOdometry)
     fusion: PoseCorrectionFilter = field(default_factory=PoseCorrectionFilter)
@@ -91,8 +96,9 @@ class LooperNode(Node):
         self.runtime_config = args.runtime_config
         load_gripper_mask_height_ratio(self.runtime_config)
         self.head = next(c["name"] for c in config["cameras"] if c.get("teleop_role") == "head")
-        wrists = [c["name"] for c in config["cameras"] if c.get("enabled", True)
-                  and c.get("teleop_role") in {"right_hand", "left_hand"} and c.get("dashboard_pose_stream")]
+        wrists = {c["name"]: c for c in config["cameras"] if c.get("enabled", True)
+                  and c.get("teleop_role") in {"right_hand", "left_hand"}
+                  and (c.get("dashboard_pose_stream") or c.get("local_uvc"))}
         self.names = (self.head, *wrists)
         self.inputs = {name: {
             "left_info_topic": f"/{name}/camera/infra1/camera_info",
@@ -103,7 +109,8 @@ class LooperNode(Node):
             "center_right_frame": name + "_camera_right",
         } for name in self.names[1:]}
         self.inputs[self.head] = config["mapping"]
-        self.cameras = {name: CameraState() for name in self.names}
+        self.cameras = {name: CameraState(mono=bool(wrists.get(name, {}).get("local_uvc")))
+                        for name in self.names}
         self.frames = {name: name + "_global_camera_center" for name in self.names}
         self.frames[self.head] = self.inputs[self.head]["mapping_camera_frame"]
         self.backend = LooperBackend(args.socket)
@@ -153,6 +160,14 @@ class LooperNode(Node):
             base = "/insight9_sparse_map" if name == self.head else f"/insight_global/{name}"
             self.pose_publishers[name] = self.create_publisher(PoseStamped, base + "/pose", 1)
             self.status_publishers[name] = self.create_publisher(String, base + "/status", 1)
+            if self.cameras[name].mono:
+                source = f"/{name}/map_query"
+                self.camera_inputs.create_subscription(CameraInfo, source + "/camera_info",
+                    partial(self.on_mono_info, name), geometry_qos)
+                self.camera_inputs.create_subscription(CompressedImage, source + "/image/compressed",
+                    partial(self.on_mono_image, name),
+                    QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+                continue
             inputs = self.inputs[name]
             self.camera_inputs.create_subscription(CameraInfo, inputs["left_info_topic"],
                                      lambda m, n=name: setattr(self.cameras[n], "info", m), qos_profile_sensor_data)
@@ -248,6 +263,7 @@ class LooperNode(Node):
                     for wrist in self.names[1:]:
                         self.cameras[wrist].geometry_id = None
                         self.cameras[wrist].center = None
+                    self.head_image_size = (models[0]["width"], models[0]["height"])
                     self.ready = True
                 else:
                     if state.geometry_id is not None:
@@ -304,6 +320,31 @@ class LooperNode(Node):
                 self.backend.request("reset")
             self.clear()
         return response
+
+    def on_mono_info(self, name, info):
+        with self.lock:
+            state = self.cameras[name]
+            if state.info is not None and state.info.header.frame_id == info.header.frame_id:
+                return
+            state.info = info
+            state.tracking_epoch += 1
+            state.last_pose_reset_wall_ns = max(self.last_reset_wall_ns, stamp_ns(info.header.stamp))
+            state.geometry_id = None
+            state.last_match = state.last_mono_frame = 0.
+            state.diagnostics = {}
+
+    def on_mono_image(self, name, image):
+        stamp = stamp_ns(image.header.stamp)
+        with self.lock:
+            state = self.cameras[name]
+            if (state.info is None or image.header.frame_id != state.info.header.frame_id
+                    or stamp < max(self.last_reset_wall_ns, state.last_pose_reset_wall_ns)
+                    or not 0 <= self.get_clock().now().nanoseconds - stamp <= 2_000_000_000):
+                return
+            received = time.monotonic()
+            state.last_mono_frame = received
+            self.work.put_nowait(SimpleNamespace(view=name, stamp_ns=stamp, images=(image,),
+                generation=self.generation, tracking_epoch=state.tracking_epoch, received=received))
 
     def on_image(self, name, eye, message):
         state = self.cameras[name]
@@ -510,20 +551,23 @@ class LooperNode(Node):
                     if pose is None:
                         continue
                     transform = correction[1] @ matrix_from_pose(pose) @ state.center
-                    output = PoseStamped()
-                    output.header.stamp = Time(nanoseconds=stamp).to_msg()
-                    output.header.frame_id = "insight9_map"
-                    output.pose.position.x, output.pose.position.y, output.pose.position.z = map(float, transform[:3, 3])
-                    q = Rotation.from_matrix(transform[:3, :3]).as_quat()
-                    output.pose.orientation.x, output.pose.orientation.y, output.pose.orientation.z, output.pose.orientation.w = map(float, q)
-                    self.pose_publishers[name].publish(output)
+                    transforms.append(self.publish_camera_pose(name, stamp, transform))
                     state.last_pose_tick = tick
-                    tf = TransformStamped(header=output.header, child_frame_id=self.frames[name])
-                    tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = map(float, transform[:3, 3])
-                    tf.transform.rotation = output.pose.orientation
-                    transforms.append(tf)
             if transforms:
                 self.tf_broadcaster.sendTransform(transforms)
+
+    def publish_camera_pose(self, name, stamp, transform):
+        output = PoseStamped()
+        output.header.stamp = Time(nanoseconds=stamp).to_msg()
+        output.header.frame_id = "insight9_map"
+        output.pose.position.x, output.pose.position.y, output.pose.position.z = map(float, transform[:3, 3])
+        q = Rotation.from_matrix(transform[:3, :3]).as_quat()
+        output.pose.orientation.x, output.pose.orientation.y, output.pose.orientation.z, output.pose.orientation.w = map(float, q)
+        self.pose_publishers[name].publish(output)
+        tf = TransformStamped(header=output.header, child_frame_id=self.frames[name])
+        tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = map(float, transform[:3, 3])
+        tf.transform.rotation = output.pose.orientation
+        return tf
 
     def request(self, item, command, **metadata):
         with self.processing:
@@ -597,6 +641,13 @@ class LooperNode(Node):
                     wrist = self.cameras[self.names[int(update["camera_id"]) - 1]]
                     if update["tracking_epoch"] != wrist.tracking_epoch:
                         continue
+                    if wrist.mono:
+                        if wrist.diagnostics.get("confirmed"):
+                            wrist.map_revision = update["map_revision"]
+                            if not update["localized"]:
+                                wrist.diagnostics.update(state="searching", geometric_match=False,
+                                                         confirmed=False, reason=update["reason"])
+                        continue
                     wrist.map_revision = update["map_revision"]
                     if (wrist.resume_after_ns is not None or wrist.stationary_correction is not None
                             or wrist.tracking == "TRACKING_STATIC"):
@@ -642,6 +693,10 @@ class LooperNode(Node):
             state.tracking == "TRACKING_STATIC" and state.correction is None)
 
     def prepare(self, item):
+        state = self.cameras[item.view]
+        if state.mono:
+            self.prepare_mono(item, state)
+            return
         try:
             configured = self.configure(item.view)
         except TransformException as exc:
@@ -650,7 +705,6 @@ class LooperNode(Node):
         if (not configured or item.generation != self.generation
                 or item.tracking_epoch != self.cameras[item.view].tracking_epoch):
             return
-        state = self.cameras[item.view]
         if item.view != self.head and not self.wrist_match_allowed(state, item.stamp_ns):
             return
         infos = (state.info, self.right_info)
@@ -684,8 +738,77 @@ class LooperNode(Node):
         self.events.changed("inference", item.view, "available")
         self.prepared.put_nowait(item)
 
+    def prepare_mono(self, item, state):
+        with self.lock:
+            if item.generation != self.generation or item.tracking_epoch != state.tracking_epoch:
+                return
+            if not self.ready or self.stats["state"] != "mapping":
+                state.diagnostics = {"state": "searching", "reason": "map_not_ready"}
+                return
+            info = state.info
+            identity = (info.header.frame_id, self.head_image_size)
+            configured = state.geometry_id == identity
+        if not configured:
+            rotation = np.asarray(info.r).reshape(3, 3)
+            model, maps, center = wrist_rectification(info.k, info.d, rotation, identity[1])
+            with self.processing, self.lock:
+                if item.generation != self.generation or item.tracking_epoch != state.tracking_epoch:
+                    return
+                self.backend.request("camera", camera_id=self.names.index(item.view) + 1, camera=model)
+                state.geometry_id, state.mono_maps, state.center = identity, maps, center
+        try:
+            image = cv2.imdecode(np.frombuffer(item.images[0].data, np.uint8), cv2.IMREAD_GRAYSCALE)
+        except cv2.error:
+            image = None
+        if image is None or image.shape != (info.height, info.width):
+            with self.lock:
+                if item.generation == self.generation and item.tracking_epoch == state.tracking_epoch:
+                    state.diagnostics = {"state": "waiting_for_inputs", "reason": "uvc_image_calibration_mismatch"}
+            return
+        rectified = cv2.remap(image, *state.mono_maps, cv2.INTER_LINEAR)
+        features = self.features.extract(rectified)
+        item.gray = [rectified]
+        item.arrays = (features.keypoints, features.descriptors)
+        self.events.changed("inference", item.view, "available")
+        self.prepared.put_nowait(item)
+
+    def process_mono(self, item, state):
+        if time.monotonic() - item.received >= 1.:
+            return
+        camera_id = self.names.index(item.view) + 1
+        result = self.request(item, "localize", images=item.gray, arrays=item.arrays,
+                              camera_id=camera_id, stamp_ns=item.stamp_ns, tracking_epoch=item.tracking_epoch,
+                              odom_from_imu=np.eye(4).tolist())
+        with self.lock:
+            if (result is None or item.generation != self.generation or item.tracking_epoch != state.tracking_epoch
+                    or time.monotonic() - item.received >= 1.):
+                return
+            head_correction = self.cameras[self.head].correction
+            geometric_match = result["localized"]
+            verified = geometric_match and result["verified_relocalization"]
+            confirmed = verified and head_correction is not None and self.head_raw_correction is not None
+            reason = result.get("reason") if not geometric_match else (
+                "unverified_relocalization" if not verified else None if confirmed else "map_not_ready")
+            state.map_revision = result["map_revision"]
+            state.diagnostics = {"state": "tracking" if confirmed else "searching", "confirmed": confirmed,
+                                 "geometric_match": geometric_match, "reason": reason,
+                                 **{key: result[key] for key in ("matches", "inliers", "grid_cells",
+                                    "reprojection_rms_px") if key in result}}
+            if not confirmed:
+                return
+            pose = np.asarray(result["map_from_imu"]) @ state.center
+            pose = head_correction @ np.linalg.solve(self.head_raw_correction, pose)
+            tf = self.publish_camera_pose(item.view, item.stamp_ns, pose)
+            self.tf_broadcaster.sendTransform(tf)
+            state.last_match = item.received
+        self.request(item, "accept", camera_id=camera_id, stamp_ns=item.stamp_ns,
+                     tracking_epoch=item.tracking_epoch)
+
     def process(self, item):
         state = self.cameras[item.view]
+        if state.mono:
+            self.process_mono(item, state)
+            return
         metadata = {"stamp_ns": item.stamp_ns, "odom_from_imu": item.odom.tolist(),
                     "tracking_epoch": item.tracking_epoch}
         if item.view == self.head:
@@ -726,7 +849,8 @@ class LooperNode(Node):
                 with self.lock:
                     state = self.cameras[item.view]
                     state.diagnostics = {"state": "waiting_for_inference", "error": str(exc)}
-                    self.stats = {**self.stats, **state.diagnostics}
+                    if not state.mono:
+                        self.stats = {**self.stats, **state.diagnostics}
                 self.events.changed("inference", item.view, "unavailable", str(exc), level="warning")
             except Exception as exc:
                 with self.lock:
@@ -742,6 +866,9 @@ class LooperNode(Node):
             now = self.get_clock().now().nanoseconds
             for name, state in self.cameras.items():
                 payload = self.stats if name == self.head else state.diagnostics
+                if state.mono:
+                    self.publish_mono_status(name, state)
+                    continue
                 localized = (state.correction is not None and state.clock.ready
                              and state.tracking in {"TRACKING", "TRACKING_STATIC"}
                              and 0 <= now - state.last_vio_received_ns <= 2_000_000_000)
@@ -766,6 +893,24 @@ class LooperNode(Node):
                         "map_match" if state.stationary_correction is None and payload.get("confirmed")
                             and age is not None and age < 1. else "vio_only")
                 self.status_publishers[name].publish(String(data=json.dumps(payload)))
+
+    def publish_mono_status(self, name, state):
+        now = time.monotonic()
+        recent = state.last_mono_frame > 0. and now - state.last_mono_frame < 1.
+        age = now - state.last_match if state.last_match else None
+        payload = state.diagnostics.copy()
+        if state.info is not None and state.info.k[0] <= 0:
+            payload = {"state": "waiting_for_inputs", "reason": "uvc_calibration_missing_or_invalid"}
+        elif not recent:
+            payload = {"state": "waiting_for_inputs", "reason": "uvc_image_unavailable"}
+        localized = bool(recent and payload.get("confirmed") and age is not None and age < 1.)
+        payload.update(camera=name, algorithm="LooperVIO", visual_only=True, localized=localized,
+                       confirmed=localized, clock_ready=recent, clock_method="jetson_capture_stamp",
+                       tracking_mode="map_match" if localized else "unlocalized", match_age_sec=age,
+                       map_revision=state.map_revision, generation=self.generation, session_id=self.session_id,
+                       tracking_epoch=state.tracking_epoch, last_pose_reset_wall_ns=state.last_pose_reset_wall_ns,
+                       last_reset_wall_ns=self.last_reset_wall_ns, last_map_source_ns=self.last_map_source_ns)
+        self.status_publishers[name].publish(String(data=json.dumps(payload)))
 
     def destroy_node(self):
         self.stop.set()

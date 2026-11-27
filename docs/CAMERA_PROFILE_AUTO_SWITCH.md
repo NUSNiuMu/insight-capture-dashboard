@@ -9,7 +9,7 @@ Jetson 自动发现设备，连续两轮识别到唯一一套完整组合后才�
 | EgoHalo + 双 Insight1 | Insight1 固件型号接口，以及 `insight1_a`（右）、`insight1_b`（左）。Jetson 在 ROS 域 20 查找两台设备发布的图像话题和类型。 |
 | EgoHalo + 双单目 UVC | EgoHalo 加自动识别的两台 UQ2168，或已绑定的两台 UVC |
 
-Insight1 使用相机端已有的左右 namespace。两台设备 namespace 重复或没有可用图像发布者时，系统等待。Insight1 和普通 UVC 腕部使用图像采集配置，保留 EgoHalo 头部定位。腕部 6DoF 需要相应设备的位姿接入和实机验证。时钟和图像预检仍适用。
+Insight1 使用相机端已有的左右 namespace。两台设备 namespace 重复或没有可用图像发布者时，系统等待。切换到双 UVC 配置后，EgoHalo 前置双目继续在线建图，已登记鱼眼标定的两只腕分别匹配这张地图。时钟和图像预检仍适用。
 
 ## 手动指定 UVC 左右
 
@@ -21,6 +21,19 @@ python3 -m insight_capture.runtime.camera_profiles bind-uvc --left 1-2.1 --right
 ```
 
 绑定保存在 `config/uvc-bindings.json`。有唯一 USB 序列号的相机可换口插回。无唯一序列号的相机需插回原 USB 口。视频节点号改变时，原左右预览和录制话题仍会恢复。拔掉一只腕部时，另一只继续采集。拔插期间缺失的帧无法补回，正在录制的 Take 仍按现有断流规则处理。
+
+## 双 UVC 在线地图匹配
+
+在 Jetson 安装目录的 `config/uvc-localization.json` 为每台实体相机登记鱼眼标定。`product` 和 `serial` 或 `port` 可从 `uvc-devices` 查询。优先使用唯一序列号。序列号为空或重复时按物理端口登记，换相机或交换 USB 口时要更新这两项对应关系。标定文件放在 `config/` 下，使用与实际采集分辨率一致的 `mono.calibration.json`。修改后重插对应相机即可加载。
+
+```json
+[
+  {"product": "1bcf:28c4", "port": "1-2.3", "calibration": "uvc-calibrations/wrist-1.json", "rotation_deg": 0},
+  {"product": "1bcf:28c4", "port": "1-2.4", "calibration": "uvc-calibrations/wrist-2.json", "rotation_deg": 180}
+]
+```
+
+`rotation_deg` 按安装方向填写 `0` 或 `180`，缺省为 `0`。头部地图就绪后，每腕最多每秒查询四帧。几何验证通过时，`/insight_global/uvc_left/pose` 和 `/insight_global/uvc_right/pose` 分别发布对应曝光时刻的光学位姿。各自的 `/status` 和 `/api/mapping` 可查看匹配结果。缺少标定、掉线或看不到已建图的场景时，该腕等待下一次有效匹配，预览和原始录制仍可使用。
 
 安装或升级启用主机上的 `insight-capture-camera-profiles.service`。可用 `python3 -m insight_capture.runtime.camera_profiles scan` 查当前匹配结果，用 `cat config/.device` 查已启用的配置。
 
@@ -43,7 +56,7 @@ UQ2168 原生采集器协商 `1920×1200 MJPEG @ 90 fps`。按常规方式在手
 
 合包要求两腕均有图像、时序和 IMU 数据，原始两端文件随 Take 保留。先用三设备同时工作的一条 60 秒诊断 Take 核对六路画面，再录实际任务长度，检查每腕的实收帧率、帧序号缺口、IMU 连续性和共同有效区间。曝光同步精度需单独测量。
 
-在 Jetson 空闲时，用该条合包 Take 和左右相机各自的鱼眼标定做离线定位。后两个参数是左右的图像安装旋转，可省略，默认都是 0°。
+如需复核，在 Jetson 空闲时用该条合包 Take 和左右相机各自的鱼眼标定做离线定位。后两个参数是左右的图像安装旋转，可省略，默认都是 0°。
 
 ```bash
 ./scripts/localize_egohalo_uq2168.sh /path/to/Take /path/to/new-report.json \

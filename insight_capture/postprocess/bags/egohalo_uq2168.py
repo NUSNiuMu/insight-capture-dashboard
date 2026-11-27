@@ -27,6 +27,7 @@ from insight_capture.runtime.mapping.fisheye import FisheyeRectification
 from insight_capture.runtime.mapping.geometry import matrix_from_transform
 from insight_capture.runtime.mapping.looper_backend import LooperBackend
 from insight_capture.runtime.mapping.looper_features import stereo_arrays
+from insight_capture.runtime.mapping.mono_wrist import load_intrinsics, optical_rotation, wrist_rectification
 from insight_capture.runtime.mapping.rig import calibration_identity
 from insight_capture.runtime.mapping.superglue_backend import IpcSuperGlueBackend
 from insight_capture.runtime.mapping.synchronization import StereoPairSynchronizer, select_timestamp
@@ -136,21 +137,10 @@ def stereo_images(take, streams, hardware):
 
 def wrist_geometry(path, degrees, size):
     raw = path.read_bytes()
-    info = json.loads(raw)["camera_calibrations"][0]["intrinsics"]
-    width, height, _ = UQ2168_MODE
-    if info["camera_model"].upper() != "FISHEYE" or (info["width"], info["height"]) != (width, height):
-        raise ValueError(f"Expected UQ2168 fisheye calibration at {width}×{height}: {path}")
-    k = np.array([[info["fx"], 0, info["cx"]], [0, info["fy"], info["cy"]], [0, 0, 1]], dtype=float)
-    d = np.asarray(info["distortion_coef"], dtype=float).reshape(4)
-    if not np.isfinite(k).all() or not np.isfinite(d).all() or min(k[0, 0], k[1, 1]) <= 0:
-        raise ValueError(f"Invalid UQ2168 intrinsics: {path}")
-    f = min(size) / 2
-    new_k = np.array([[f, 0, (size[0] - 1) / 2], [0, f, (size[1] - 1) / 2], [0, 0, 1]])
-    virtual_from_optical = np.eye(4)
-    if degrees == 180:
-        virtual_from_optical[:2, :2] *= -1
-    maps = cv2.fisheye.initUndistortRectifyMap(k, d, virtual_from_optical[:3, :3], new_k, size, cv2.CV_16SC2)
-    return camera_model(size, new_k, np.eye(4)), maps, virtual_from_optical, hashlib.sha256(raw).hexdigest()
+    width, height, k, d = load_intrinsics(json.loads(raw))
+    if (width, height) != UQ2168_MODE[:2]:
+        raise ValueError(f"UQ2168 calibration size does not match {UQ2168_MODE[:2]}: {path}")
+    return (*wrist_rectification(k, d, optical_rotation(degrees), size), hashlib.sha256(raw).hexdigest())
 
 
 def wrist_audit(take, start, end):

@@ -85,7 +85,10 @@ def test_uvc_profile_records_jpeg_without_synthetic_vio(config):
     settings = profiles.render(config, candidate, {})
     dashboard = build_dashboard_config(settings)
     wrist_poses = [pose for pose in dashboard["poses"] if pose["teleop_role"] != "head"]
-    assert all(not pose["topic"] for pose in wrist_poses)
+    assert {pose["topic"] for pose in wrist_poses} == {
+        "/insight_global/uvc_left/pose", "/insight_global/uvc_right/pose",
+    }
+    assert all(pose["visual_only"] for pose in wrist_poses)
     for side in ("left", "right"):
         root = f"/uvc_{side}/camera"
         topics = [topic for topic in build_default_topics(settings) if topic.startswith(root)]

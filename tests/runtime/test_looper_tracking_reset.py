@@ -1,9 +1,11 @@
 """Replay VIO lifecycle events through the actual ROS mapper in its runtime image."""
 from collections import deque
 from functools import partial
+import json
 import threading
 from types import SimpleNamespace as S
 
+import cv2
 import numpy as np
 import pytest
 pytest.importorskip("rclpy")
@@ -13,6 +15,7 @@ from insight_capture.runtime.diagnostics import DiagnosticEvents
 from insight_capture.runtime.mapping.looper_node import CameraState, LooperNode
 from insight_capture.runtime.mapping.rig import LatestViewQueue
 from insight_capture.runtime.mapping.synchronization import StereoPairSynchronizer
+from insight_capture.runtime.uvc_bridge import mapping_frames
 
 RESET_STATES = ["NOT_INITED", "NO_CALIBRATION", "RESTARTING", "STOPPED"]
 
@@ -30,6 +33,99 @@ def message(seconds, x=0.):
     value.pose.position.x = x
     value.pose.orientation.w = 1.
     return value
+
+
+def test_two_uvc_wrists_query_the_live_head_map_at_their_exposure_stamps(mapper, tmp_path):
+    from array import array
+    from sensor_msgs.msg import CompressedImage
+
+    mapper.names = ("head", "uvc_left", "uvc_right")
+    mapper.cameras = {"head": mapper.cameras["head"], "uvc_left": CameraState(mono=True),
+                      "uvc_right": CameraState(mono=True)}
+    mapper.work, mapper.prepared = LatestViewQueue(mapper.names), LatestViewQueue(mapper.names)
+    mapper.frames.update({name: name + "_global" for name in mapper.names[1:]})
+    mapper.pose_publishers.update({name: Sink() for name in mapper.names[1:]})
+    mapper.status_publishers.update({name: Sink() for name in mapper.names[1:]})
+    mapper.head_image_size = (48, 64)
+    mapper.features = S(extract=lambda gray: S(keypoints=np.empty((0, 2)), descriptors=np.empty((0, 256))))
+    devices = [{"product": "1bcf:28c4", "serial": role, "port": str(index)}
+               for index, role in enumerate(("left", "right"))]
+    entries = []
+    for index, device in enumerate(devices):
+        path = tmp_path / f"{device['serial']}.json"
+        path.write_text(json.dumps({"camera_calibrations": [{"intrinsics": {
+            "camera_model": "FISHEYE", "width": 64, "height": 48, "fx": 25 + index,
+            "fy": 27, "cx": 32, "cy": 24, "distortion_coef": [0., 0., 0., 0.],
+        }}]}))
+        entries.append({"product": device["product"], "serial": device["serial"],
+                        "calibration": path.name, "rotation_deg": 180 * index})
+    (tmp_path / "uvc-localization.json").write_text(json.dumps(entries))
+
+    result_pose = np.eye(4)
+    result_pose[0, 3] = 2.
+    verified = True
+
+    def request(command, **metadata):
+        mapper.backend_calls.append((command, metadata))
+        if command == "localize":
+            return {"localized": True, "verified_relocalization": verified, "map_revision": 12,
+                    "map_from_imu": result_pose.tolist(), "inliers": 22}
+
+    mapper.backend.request = request
+    jpeg = cv2.imencode(".jpg", np.zeros((48, 64), np.uint8))[1]
+
+    def push(device, elapsed=0):
+        role = device["serial"]
+        name = "uvc_" + role
+        infos, frames = Sink(), Sink()
+        publish = mapping_frames(mapper, tmp_path, role, device, devices, (infos, frames))
+        value = CompressedImage(format="jpeg", data=array("B", jpeg.tobytes()))
+        value.header.frame_id = name + "_optical"
+        value.header.stamp.sec, value.header.stamp.nanosec = divmod(mapper.now - elapsed, 10**9)
+        publish(value)
+        publish(value)
+        assert value.header.frame_id == name + "_optical"
+        assert len(infos.values) == len(frames.values) == 1
+        mapper.on_mono_info(name, infos.values[0])
+        mapper.on_mono_image(name, frames.values[0])
+        return mapper.work.get_nowait()
+
+    left, right = push(devices[0]), push(devices[1], 80_000_000)
+    mapper.stats["state"] = "building"
+    mapper.prepare(left)
+    assert mapper.cameras[left.view].diagnostics["reason"] == "map_not_ready"
+    assert not mapper.backend_calls
+    mapper.stats["state"] = "mapping"
+    for item in (left, right):
+        mapper.prepare(item)
+        mapper.process(mapper.prepared.get_nowait())
+    assert [command for command, _ in mapper.backend_calls] == ["camera", "localize", "accept"] * 2
+    requests = [params for command, params in mapper.backend_calls if command == "localize"]
+    assert [params["camera_id"] for params in requests] == [2, 3]
+    assert all(params["images"][0].shape == (64, 48) for params in requests)
+    for item in (left, right):
+        pose, = mapper.pose_publishers[item.view].values
+        assert pose.header.frame_id == "insight9_map"
+        assert pose.header.stamp.sec * 10**9 + pose.header.stamp.nanosec == item.stamp_ns
+        assert pose.pose.position.x == 2.
+    assert abs(mapper.pose_publishers[right.view].values[0].pose.orientation.z) == pytest.approx(1.)
+
+    # A new attachment invalidates work and poses from the previous attachment.
+    replacement = push(devices[1])
+    mapper.process(right)
+    assert len(mapper.pose_publishers[right.view].values) == 1
+    verified = False
+    mapper.prepare(replacement)
+    mapper.process(mapper.prepared.get_nowait())
+    assert len(mapper.pose_publishers[right.view].values) == 1
+    mapper.publish_status()
+    assert json.loads(mapper.status_publishers[left.view].values[-1].data)["tracking_mode"] == "map_match"
+    right_status = json.loads(mapper.status_publishers[right.view].values[-1].data)
+    assert not right_status["localized"]
+    assert right_status["reason"] == "unverified_relocalization"
+    mapper.reset_map(None, None)
+    mapper.publish_status()
+    assert not json.loads(mapper.status_publishers[left.view].values[-1].data)["localized"]
 
 @pytest.fixture
 def mapper():

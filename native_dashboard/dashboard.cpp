@@ -276,7 +276,8 @@ QVariantMap Dashboard::localizationSummary(const QVariantMap &status, bool vioFr
         return QVariantMap{{"mode", mode}, {"label", label}, {"color", color}};
     };
     const QString waiting = "#84775f", warning = "#aa741b", good = "#417b51", bad = "#b45d51";
-    if (!vioFresh)
+    const bool visualOnly = status.value("visual_only").toBool();
+    if (!vioFresh && !visualOnly)
         return result("waiting_pose", "Pose input lost", warning);
     if (!status.value("online").toBool())
         return result("service_offline", head ? "Mapper offline" : "Localizer offline", bad);
@@ -289,7 +290,7 @@ QVariantMap Dashboard::localizationSummary(const QVariantMap &status, bool vioFr
     if (status.value("state") == "waiting_for_inputs")
         return result("waiting_inputs", "Waiting for mapping input", waiting);
     const auto tracking = status.value("tracking_status").toString();
-    if (tracking != "TRACKING" && tracking != "TRACKING_STATIC")
+    if (!visualOnly && tracking != "TRACKING" && tracking != "TRACKING_STATIC")
         return result("waiting_tracking", "SDK tracking lost", warning);
     if (!status.value("clock_ready").toBool())
         return result("waiting_clock", "Synchronizing clock", waiting);
@@ -319,7 +320,7 @@ void Dashboard::updateLocalization() {
     const auto now = m_clock.elapsed();
     for (auto it = counts.begin(); it != counts.end(); ++it) {
         const auto device = it.key();
-        const bool head = !device.startsWith("insight3_");
+        const bool head = !device.startsWith("insight3_") && !device.startsWith("uvc_");
         auto status = statuses.value(head ? "insight9" : device).toMap();
         if (m_lastMappingUpdate < 0 || now - m_lastMappingUpdate > 2500)
             status["online"] = false;

@@ -1,7 +1,7 @@
 """把独立 ROS 建图进程的状态桥接为 Dashboard 使用的轻量快照。
 
-Dashboard 不订阅稀疏点云和完整 Path，只接收三个 JSON 状态话题并调用统一 reset
-服务。这样网页状态查询不会复制高维描述子点云，也不会给录制主进程增加几何负载。
+Dashboard 接收头部与腕部的 JSON 状态话题，并调用统一 reset 服务。
+网页状态查询无需复制稀疏点云或完整 Path。
 """
 
 from __future__ import annotations
@@ -25,8 +25,6 @@ STATUS_TOPICS = {
     "insight3_a": "/insight_global/insight3_a/status",
     "insight3_b": "/insight_global/insight3_b/status",
 }
-POSE_TOPICS = {name: topic.removesuffix("/status") + "/pose"
-               for name, topic in STATUS_TOPICS.items()}
 
 
 class MappingStream:
@@ -34,6 +32,7 @@ class MappingStream:
 
     def __init__(self, owner) -> None:
         self.owner = owner
+        self.status_topics = dict(STATUS_TOPICS)
         self._lock = threading.Lock()
         self._map_point_count = 0
         self._statuses: Dict[str, Dict[str, object]] = {
@@ -56,7 +55,12 @@ class MappingStream:
             "callback_group": self.owner.ros_callback_group,
             "event_callbacks": self.owner.subscription_event_callbacks,
         }
-        for name, topic in STATUS_TOPICS.items():
+        for pose in self.owner.poses:
+            if getattr(pose, "visual_only", False) and pose.topic:
+                self.status_topics[pose.name] = pose.topic.removesuffix("/pose") + "/status"
+                self._statuses[pose.name] = {"state": "unavailable"}
+                self._last_received[pose.name] = 0.
+        for name, topic in self.status_topics.items():
             self._subscriptions.append(
                 self.owner.create_subscription(
                     String, topic, self._status_callback(name), 1, **kwargs
@@ -93,7 +97,8 @@ class MappingStream:
                     self._retired_sessions.append(previous_world[0])
                     self._camera_epochs.clear()
                 self._world_epoch = world
-                names = [p.name for p in self.owner.poses if p.topic in POSE_TOPICS.values()]
+                topics = {topic.removesuffix("/status") + "/pose" for topic in self.status_topics.values()}
+                names = [p.name for p in self.owner.poses if p.topic in topics]
                 self.owner.set_common_pose_epoch(names, stamp, reset=previous_world is not None)
         elif self._world_epoch is not None and world != self._world_epoch:
             # A new wrist status can precede the authoritative head status.
@@ -107,7 +112,8 @@ class MappingStream:
         current = (session, epoch)
         if previous_camera != current:
             self._camera_epochs[name] = current
-            names = [p.name for p in self.owner.poses if p.topic == POSE_TOPICS[name]]
+            topic = self.status_topics[name].removesuffix("/status") + "/pose"
+            names = [p.name for p in self.owner.poses if p.topic == topic]
             # A newer camera epoch is authoritative even when ROS time moved
             # backwards; a max() with the old world time would lock out recovery.
             floor = reset_stamp if epoch > 0 or reset_stamp > 0 else stamp

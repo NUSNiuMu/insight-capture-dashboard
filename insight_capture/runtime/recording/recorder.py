@@ -77,7 +77,7 @@ def build_default_topics(raw_config: Dict) -> List[str]:
         pose_topic = _camera_pose_topic(namespace, str(camera.get("dashboard_pose_stream", "vio_100hz")))
         if pose_topic:
             topics.append(pose_topic)
-        else:
+        if not pose_topic or camera.get("local_uvc"):
             for stream in dashboard_streams(camera):
                 topics.append(stream["topic"])
             topics.extend(camera.get("record_topics", []))

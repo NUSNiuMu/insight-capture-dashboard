@@ -147,6 +147,7 @@ class PoseBridgeNode(Node):
             PoseSpec(
                 name=item["name"],
                 topic=item["topic"],
+                visual_only=item["visual_only"],
                 teleop_role=str(item.get("teleop_role", item["name"])),
                 avatar_model=item.get("avatar_model"),
                 avatar_scale=float(item.get("avatar_scale", 1.0)),

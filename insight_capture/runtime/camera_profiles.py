@@ -270,6 +270,10 @@ def render(config, candidate, status):
                     camera["record_topics"].extend(topics)
                     distributed.setdefault("required_aux_topics", []).extend(topics[:2])
                     distributed["image_rates"][stream["topic"]] = fps
+    if is_uvc:
+        for camera in cameras["cameras"]:
+            if camera.get("local_uvc"):
+                camera["dashboard_pose_stream"] = f"/insight_global/{camera['name']}/pose"
     if uq2168:
         automatic = candidate.get("automatic_uvc", False)
         bindings = {} if automatic else read_json(config / BINDINGS, {})

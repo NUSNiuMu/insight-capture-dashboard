@@ -5,10 +5,11 @@ import os
 from pathlib import Path
 import threading
 import time
+import uuid
 
 from insight_capture.runtime.camera_profiles import (
     BINDINGS, ROLES, UQ2168_LABELS, bound_uvc, capture_lock, capture_status,
-    idle, read_json, uq2168_devices, uvc_devices,
+    idle, read_json, uq2168_devices, usb_attachment, uvc_devices,
 )
 from insight_capture.runtime import uq2168
 from insight_capture.core.paths import PROJECT_ROOT
@@ -47,7 +48,7 @@ class AutomaticUvcSources:
             return None
 
 
-def stream_camera(source, role, publisher, stop, gst, compressed_image):
+def stream_camera(source, role, publisher, stop, gst, compressed_image, *, on_frame=None, attachment=None):
     sink_spec = "appsink name=frames sync=false max-buffers=2 drop=true"
     # Keep camera-produced JPEG bytes when possible. Raw-only UVC cameras use jpegenc.
     for conversion in ("image/jpeg", "videoconvert ! jpegenc quality=85"):
@@ -73,7 +74,13 @@ def stream_camera(source, role, publisher, stop, gst, compressed_image):
                 message.header.stamp.sec, message.header.stamp.nanosec = divmod(stamp, 10**9)
                 message.format = "jpeg"
                 message.data = buffer.extract_dup(0, buffer.get_size())
+                if not delivered and attachment is not None:
+                    video = Path("/sys/class/video4linux") / source.name
+                    if usb_attachment((video / "device").resolve(strict=True).parent) != attachment:
+                        raise RuntimeError(f"{source}: UVC camera changed while opening")
                 publisher.publish(message)
+                if on_frame is not None:
+                    on_frame(message)
                 delivered = True
         finally:
             pipeline.set_state(gst.State.NULL)
@@ -81,20 +88,65 @@ def stream_camera(source, role, publisher, stop, gst, compressed_image):
             return
 
 
+def mapping_frames(node, config, role, device, devices, publishers):
+    from sensor_msgs.msg import CameraInfo, CompressedImage
+    from std_msgs.msg import Header
+    from insight_capture.runtime.mapping.mono_wrist import device_calibration
+    from insight_capture.runtime.mapping.synchronization import select_timestamp
+
+    info = CameraInfo()
+    info.header.frame_id = f"uvc_{role}_optical_{uuid.uuid4().hex}"
+    try:
+        calibration = device_calibration(config, device, devices)
+        if calibration is not None:
+            info.width, info.height, info.k, info.d, rotation = calibration
+            info.r = rotation.ravel().tolist()
+            info.distortion_model = "equidistant"
+    except (OSError, ValueError, TypeError, KeyError, IndexError, AttributeError) as exc:
+        node.get_logger().warning(f"UVC {role} localization calibration: {exc}")
+
+    next_image = 0
+    sent_info = False
+
+    def publish(message):
+        nonlocal next_image, sent_info
+        stamp = message.header.stamp
+        if not sent_info:
+            info.header.stamp = stamp
+            publishers[0].publish(info)
+            sent_info = True
+        if info.k[0] <= 0:
+            return
+        due, next_image = select_timestamp(stamp.sec * 10**9 + stamp.nanosec, next_image, 4.)
+        if due:
+            header = Header(stamp=stamp, frame_id=info.header.frame_id)
+            publishers[1].publish(CompressedImage(header=header, format=message.format, data=message.data))
+
+    return publish
+
+
 def run_camera(node, role, publisher, stop, gst, compressed_image, gst_error, *,
-               raw_publishers=None, bindings=None, automatic_sources=None):
+               raw_publishers=None, bindings=None, automatic_sources=None, localization=None):
     path = PROJECT_ROOT / "config" / BINDINGS
     while not stop.is_set():
         try:
+            devices = uvc_devices() if automatic_sources is None else None
             device = (automatic_sources.select(role) if automatic_sources is not None
-                      else bound_uvc(uvc_devices(), bindings or read_json(path, {})).get(role))
+                      else bound_uvc(devices, bindings or read_json(path, {})).get(role))
             if device is not None:
                 source = Path("/host-dev") / device["node"]
+                on_frame = None
+                if localization is not None:
+                    devices = uvc_devices() if devices is None else devices
+                    if device not in devices:
+                        raise RuntimeError(f"{source}: UVC camera disappeared before opening")
+                    on_frame = mapping_frames(node, path.parent, role, device, devices, localization)
+                attachment = device.get("attachment")
                 if raw_publishers is None:
-                    stream_camera(source, role, publisher, stop, gst, compressed_image)
+                    stream_camera(source, role, publisher, stop, gst, compressed_image,
+                                  on_frame=on_frame, attachment=attachment)
                 else:
-                    attachment = device["attachment"] if automatic_sources is not None else None
-                    uq2168.stream(source, role, raw_publishers, stop, attachment=attachment)
+                    uq2168.stream(source, role, raw_publishers, stop, attachment=attachment, on_frame=on_frame)
         except (OSError, ValueError, KeyError, RuntimeError, gst_error) as exc:
             if not stop.is_set():
                 node.get_logger().warning(f"UVC {role}: {exc}")
@@ -107,7 +159,8 @@ def main():
     from gi.repository import GLib, Gst
     import rclpy
     from rclpy.executors import ExternalShutdownException
-    from sensor_msgs.msg import CompressedImage
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+    from sensor_msgs.msg import CameraInfo, CompressedImage
     from std_msgs.msg import UInt8MultiArray, UInt64MultiArray
 
     config = json.loads((PROJECT_ROOT / "config" / "cameras.json").read_text())
@@ -139,10 +192,17 @@ def main():
                     "imu_raw": node.create_publisher(UInt8MultiArray, prefix + "/imu_raw", 10),
                     "uvc_metadata": node.create_publisher(UInt8MultiArray, prefix + "/uvc_metadata", 10),
                 }
+            mapping = f"/uvc_{role}/map_query"
+            localization = (
+                node.create_publisher(CameraInfo, mapping + "/camera_info",
+                                      QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)),
+                node.create_publisher(CompressedImage, mapping + "/image/compressed",
+                                      QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT)),
+            )
             worker = threading.Thread(target=run_camera, args=(
                 node, role, publisher, stop, Gst, CompressedImage, GLib.Error),
                 kwargs={"raw_publishers": raw_publishers, "bindings": bindings,
-                        "automatic_sources": automatic_sources}, name=f"uvc-{role}")
+                        "automatic_sources": automatic_sources, "localization": localization}, name=f"uvc-{role}")
             worker.start()
             workers.append(worker)
         rclpy.spin(node)

@@ -109,7 +109,8 @@ class CapturePreflight:
         # from each stereo image topic before starting the recorder.
 
         mapping = self.node.build_mapping_payload() if global_capture else {}
-        global_poses = [pose for pose in self.node.poses if pose.topic] if global_capture else ()
+        global_poses = [pose for pose in self.node.poses
+                        if global_capture and pose.topic and not getattr(pose, "visual_only", False)]
         statuses = mapping.get("statuses") if isinstance(mapping, dict) else {}
         statuses = statuses if isinstance(statuses, dict) else {}
         insight9 = statuses.get("insight9") if isinstance(statuses.get("insight9"), dict) else {}

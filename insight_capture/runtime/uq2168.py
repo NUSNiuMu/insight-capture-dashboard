@@ -37,7 +37,7 @@ def packets(fd, stop):
         del pending[:offset]
 
 
-def stream(source, role, publishers, stop, *, attachment=None):
+def stream(source, role, publishers, stop, *, attachment=None, on_frame=None):
     from sensor_msgs.msg import CompressedImage
     from std_msgs.msg import UInt8MultiArray, UInt64MultiArray
 
@@ -71,6 +71,8 @@ def stream(source, role, publishers, stop, *, attachment=None):
                 image.header.stamp.sec, image.header.stamp.nanosec = divmod(utc_ns, 10**9)
                 publishers["image"].publish(image)
                 publishers["frame_timing"].publish(UInt64MultiArray(data=[aux, mono, time.monotonic_ns(), utc_ns]))
+                if on_frame is not None:
+                    on_frame(image)
             else:
                 message = UInt8MultiArray(data=array("B", struct.pack("<QQ", aux, mono) + payload))
                 key = "imu_raw" if kind == 2 else "uvc_metadata"
