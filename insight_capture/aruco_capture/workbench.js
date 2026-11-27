@@ -80,10 +80,18 @@ const el = (tag, text, cls) => {
   if (cls) x.className = cls;
   return x;
 };
+// Messages float over the page (see #message in the CSS): showing, growing or
+// hiding one never shifts the layout under the timeline or the video.
 function notice(text, error = false) {
   $("message").hidden = !text;
   $("message").textContent = text;
   $("message").className = error ? "error" : "";
+  if (!text) return;
+  const close = el("button", "×", "quiet toast-close");
+  close.type = "button";
+  close.setAttribute("aria-label", "关闭提示");
+  close.onclick = () => notice("");
+  $("message").append(close);
 }
 async function api(path, method = "GET", body) {
   const r = await fetch(path, {
@@ -196,7 +204,7 @@ function updateControls() {
     actionBusy || exportBusy || !status || status?.reconfiguring;
   $("stop").disabled = actionBusy;
   $("play").disabled = !review;
-  for (const id of ["prevFrame", "nextFrame", "qc", "save", "add", "autoSegment", "splitPart"])
+  for (const id of ["prevFrame", "nextFrame", "qc", "save", "add", "autoSegment", "splitPart", "moveBoundary"])
     $(id).disabled = !review || reviewBusy;
   $("sessions").disabled = reviewBusy || exportBusy;
   for (const id of ["from", "to", "task", "taskId", "subtask", "hands"])
@@ -521,6 +529,71 @@ async function pollLive() {
   }
   setTimeout(pollLive, livePeriodMs());
 }
+// 处理与导出: 采集质量 sits beside the recordings list (right), collapsible and
+// resizable; 回放与标注 keeps it in its own place below the playback.
+const qualityHome = { parent: $("qualityPanel").parentNode, next: $("qualityPanel").nextSibling },
+  QUALITY_WIDTH = 560,
+  QUALITY_MIN = 420;
+function stored(key, fallback) {
+  try {
+    return localStorage.getItem(key) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+function store(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* private window: the layout just is not remembered */
+  }
+}
+function placeQuality() {
+  const panel = $("qualityPanel");
+  if (mode === "quality") {
+    if (panel.parentNode !== $("qualitySlot")) $("qualitySlot").append(panel);
+  } else if (panel.parentNode !== qualityHome.parent)
+    qualityHome.parent.insertBefore(panel, qualityHome.next);
+  $("qualityCollapse").hidden = mode !== "quality";
+  setQualityCollapsed(stored("qualityCollapsed", "0") === "1");
+  setQualityWidth(Number(stored("qualityWidth", QUALITY_WIDTH)));
+}
+function setQualityCollapsed(collapsed) {
+  $("exportSplit").classList.toggle("quality-collapsed", collapsed);
+  $("qualityExpand").hidden = !collapsed;
+  store("qualityCollapsed", collapsed ? "1" : "0");
+}
+function setQualityWidth(width) {
+  const total = $("exportSplit").clientWidth || window.innerWidth;
+  const value = Math.round(Math.max(QUALITY_MIN, Math.min(width || QUALITY_WIDTH, total * 0.65)));
+  $("exportSplit").style.setProperty("--quality-width", value + "px");
+  return value;
+}
+$("qualityCollapse").onclick = () => setQualityCollapsed(true);
+$("qualityExpand").onclick = () => setQualityCollapsed(false);
+$("qualityResizer").addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  const handle = $("qualityResizer");
+  handle.setPointerCapture(e.pointerId);
+  handle.classList.add("dragging");
+  const move = (ev) => setQualityWidth($("exportSplit").getBoundingClientRect().right - ev.clientX);
+  const up = (ev) => {
+    handle.releasePointerCapture(ev.pointerId);
+    handle.classList.remove("dragging");
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", up);
+    store("qualityWidth", parseInt(getComputedStyle($("exportSplit")).getPropertyValue("--quality-width")));
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", up);
+});
+$("qualityResizer").addEventListener("dblclick", () => store("qualityWidth", setQualityWidth(QUALITY_WIDTH)));
+$("qualityResizer").addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  e.preventDefault();
+  const now = parseInt(getComputedStyle($("exportSplit")).getPropertyValue("--quality-width")) || QUALITY_WIDTH;
+  store("qualityWidth", setQualityWidth(now + (e.key === "ArrowLeft" ? 20 : -20)));
+});
 function changeMode() {
   const requested = location.hash.slice(1).split("?")[0];
   mode = ["capture", "review", "quality"].includes(requested)
@@ -563,6 +636,7 @@ function changeMode() {
   $("cameraTitle").textContent = mode === "capture" ? "相机画面" : "同步视频";
   scene.setVisible(mode !== "quality");
   lerobot.setVisible(mode === "quality");
+  placeQuality();
   if (mode === "capture") {
     videoCards(liveStreams);
     scene.setCameraView(status?.camera_view);
@@ -691,7 +765,7 @@ function renderDrawer() {
       return row;
     }),
   );
-  $("drawerList").querySelector(".active")?.scrollIntoView({ block: "nearest" });
+  revealIn($("drawerList"), $("drawerList").querySelector(".active"));
 }
 // Drag the drawer's right edge to resize it; the width is remembered.
 const DRAWER_MIN = 200,
@@ -1129,7 +1203,9 @@ function resetEditor() {
   highlightParts();
   renderGuide();
 }
-function editPart(i) {
+// `keepTime`: leave the playhead where it is (boundary moved to it) instead of
+// jumping to the segment's start.
+function editPart(i, keepTime = false) {
   const p = parts[i];
   editing = i;
   editorDirty = false;
@@ -1147,11 +1223,22 @@ function editPart(i) {
   $("task").placeholder = unfilled(p)
     ? "填写后按回车：更新本段并跳到下一段未填写"
     : "例如：左手拿起杯子，交给右手…";
-  seek(p.start_s);
+  if (!keepTime) seek(p.start_s);
   renderGuide();
-  document
-    .querySelector(`#segments .segment-row[data-index="${i}"]`)
-    ?.scrollIntoView({ block: "nearest" });
+  revealRow(i);
+}
+// Bring segment row `i` into view inside the list's own scroll box only:
+// scrollIntoView would also scroll the page, pulling the view away from the
+// video and timeline the segment was picked on.
+function revealRow(i) {
+  revealIn($("segments"), $("segments").querySelector(`.segment-row[data-index="${i}"]`));
+}
+function revealIn(list, row) {
+  if (!list || !row) return;
+  const box = list.getBoundingClientRect(),
+    r = row.getBoundingClientRect();
+  if (r.top < box.top) list.scrollTop -= box.top - r.top;
+  else if (r.bottom > box.bottom) list.scrollTop += r.bottom - box.bottom;
 }
 function unfilled(p) {
   return !p?.task?.trim();
@@ -1280,8 +1367,62 @@ function edgeToPlayhead(start) {
   }
   setDirty(true);
   renderParts();
-  editPart(i);
+  editPart(i, true);
   offerUndo(start ? "撤销调整起点" : "撤销调整终点", previous);
+}
+// B: the first segment boundary after the playhead moves back onto it;
+// Shift+B: the last one before it moves forward. A boundary shared by two
+// touching segments moves for both; it may not pass the far edge of either
+// neighbour (that would swallow a segment: merge first).
+function nearestBoundaryToPlayhead(before = false) {
+  if (!review || reviewBusy) return;
+  if (editorDirty) {
+    notice("请先更新正在编辑的片段，再移动分隔点", true);
+    return;
+  }
+  if (!parts.length) {
+    notice("还没有片段，没有可移动的分隔点", true);
+    return;
+  }
+  const t = Math.round(currentTime * 1000) / 1000,
+    // 2 ms: drafts written before both ends were rounded alike are 1 ms apart.
+    near = (a, b) => Math.abs(a - b) < 2e-3;
+  // Each boundary: the segment ending there (left) and / or starting there (right).
+  const bounds = [];
+  parts.forEach((p, i) => {
+    const touching = i > 0 && near(parts[i - 1].end_s, p.start_s);
+    if (!touching) bounds.push({ at: p.start_s, left: -1, right: i });
+    const next = parts[i + 1];
+    if (next && near(p.end_s, next.start_s)) bounds.push({ at: p.end_s, left: i, right: i + 1 });
+    else bounds.push({ at: p.end_s, left: i, right: -1 });
+  });
+  const side = bounds.filter((x) => (before ? x.at < t - 2e-3 : x.at > t + 2e-3));
+  if (!side.length) {
+    notice(before ? "播放头之前没有分隔点" : "播放头之后没有分隔点", true);
+    return;
+  }
+  const b = side.reduce((best, x) => (Math.abs(x.at - t) < Math.abs(best.at - t) ? x : best));
+  const L = parts[b.left],
+    R = parts[b.right],
+    frame = 1 / (review.fps || 30),
+    lo = L ? L.start_s : (parts[b.right - 1]?.end_s ?? 0),
+    hi = R ? R.end_s : (parts[b.left + 1]?.start_s ?? review.duration_s);
+  if (!(t > lo + (L ? frame : 0) - 1e-9 && t < hi - (R ? frame : 0) + 1e-9)) {
+    notice(
+      `${before ? "之前" : "之后"}最近的分隔点在 ${seconds(b.at)}，移到 ${seconds(t)} 会越过相邻片段的另一端：请先合并（M / Shift+M）或把播放头移近一些`,
+      true,
+    );
+    return;
+  }
+  const previous = parts.map((x) => ({ ...x }));
+  if (L) L.end_s = t;
+  if (R) R.start_s = t;
+  setDirty(true);
+  renderParts();
+  if (editing >= 0) editPart(editing, true);
+  else highlightParts();
+  notice(`已把${before ? "之前" : "之后"} ${seconds(b.at)} 处的分隔点${before ? "后移" : "前移"}到 ${seconds(t)}`);
+  offerUndo("撤销移动分隔点", previous);
 }
 // One colour per subtask on the timeline, so mis-cuts and gaps stand out.
 function labelHue(p) {
@@ -1300,7 +1441,7 @@ function focusUnfilled(after) {
   const i = nextUnfilled(after);
   if (i < 0) return false;
   editPart(i);
-  $("task").focus();
+  $("task").focus({ preventScroll: true });
   return true;
 }
 // Three independent states: unfilled (amber, set when rendering), active =
@@ -2126,7 +2267,7 @@ function commitEditor() {
     error = "片段与已有标注重叠，请调整起止时间";
   if (error) {
     $("formError").textContent = error;
-    (p.task ? $("from") : $("task")).focus();
+    (p.task ? $("from") : $("task")).focus({ preventScroll: true });
     return null;
   }
   if (editing >= 0) parts[editing] = p;
@@ -2154,7 +2295,7 @@ $("fillAll").onclick = () => {
     taskId = $("taskId").value;
   if (!task) {
     $("formError").textContent = "请先在上面填写任务文本";
-    $("task").focus();
+    $("task").focus({ preventScroll: true });
     return;
   }
   const previous = parts.map((p) => ({ ...p }));
@@ -2197,6 +2338,7 @@ function offerUndo(label, previous) {
   };
   $("message").append(undo);
 }
+$("moveBoundary").onclick = (e) => nearestBoundaryToPlayhead(e.shiftKey);
 $("splitPart").onclick = () => {
   if (!review || reviewBusy) return;
   if (editorDirty) {
@@ -3012,7 +3154,8 @@ document.addEventListener("keyup", (e) => {
 // 处理与导出: Space / ← → drive the LeRobot player once an episode is loaded.
 document.addEventListener("keydown", (e) => {
   if (mode !== "quality" || !lerobot.loaded || typing(e.target) || e.target.tagName === "SELECT") return;
-  if ($("deleteDialog").open || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target.id === "qualityResizer") return; // arrows resize the quality column there
+  if ($("deleteDialog").open || $("lrBrowser").open || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.code === "Space") {
     e.preventDefault();
     if (e.repeat) return;
@@ -3070,6 +3213,9 @@ document.addEventListener("keydown", (e) => {
   } else if ((e.key === "[" || e.key === "]") && plain) {
     e.preventDefault();
     edgeToPlayhead(e.key === "[");
+  } else if (e.key.toLowerCase() === "b" && plain) {
+    e.preventDefault();
+    nearestBoundaryToPlayhead(e.shiftKey);
   } else if (e.key === "ArrowLeft") {
     e.preventDefault();
     $("prevFrame").click();

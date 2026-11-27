@@ -104,3 +104,23 @@ class LerobotViewTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BrowseTests(unittest.TestCase):
+    def test_lists_folders_marks_datasets_and_stays_inside_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_v3(root / "data" / "ds")
+            (root / "data" / "plain").mkdir()
+            (root / "data" / ".hidden").mkdir()
+            (root / "data" / "file.txt").write_text("x")
+            top = lerobot_view.browse("", [root])
+            self.assertEqual([e["path"] for e in top["entries"]], [str(root.resolve())])
+            listing = lerobot_view.browse(str(root / "data"), [root])
+            self.assertEqual([e["name"] for e in listing["entries"]], ["ds", "plain"])
+            self.assertEqual(listing["entries"][0]["dataset"]["version"], "v3.0")
+            self.assertIsNone(listing["entries"][1]["dataset"])
+            self.assertEqual(listing["parent"], str(root.resolve()))
+            self.assertEqual(lerobot_view.browse(str(root), [root])["parent"], "")   # a root: back to the roots
+            with self.assertRaises(ValueError):
+                lerobot_view.browse(str(root.parent), [root])

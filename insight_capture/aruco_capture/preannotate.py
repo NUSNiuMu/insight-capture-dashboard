@@ -197,17 +197,26 @@ class CameraFrames:
         return image
 
     def encoded(self, times):
-        frames = []
+        """One JPEG per time, in order. A frame that does not decode is
+        replaced by its neighbour rather than dropped: dropping would shift
+        every later frame against the time axis the service assumes."""
+        frames, missing = [], 0
         for t in times:
             i = int(np.clip(np.searchsorted(self.stamps, t), 0, len(self.stamps) - 1))
             if i and abs(self.stamps[i - 1] - t) < abs(self.stamps[i] - t):
                 i -= 1
             image = self.image(float(self.stamps[i]))
-            if image is None:
+            ok, buffer = (False, None) if image is None else cv2.imencode(
+                ".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if not ok:
+                if frames:
+                    frames.append(frames[-1])
+                else:
+                    missing += 1
                 continue
-            ok, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
-            if ok:
-                frames.append(base64.b64encode(buffer.tobytes()).decode())
+            encoded = base64.b64encode(buffer.tobytes()).decode()
+            frames += [encoded] * (missing + 1)   # leading failures take the first good frame
+            missing = 0
         return frames
 
 
@@ -426,8 +435,11 @@ def run(path, url, table=None, model="", progress=lambda done, total: None, segm
                 # Keep what lies in this window's half of each overlap.
                 lo = w0 + (WINDOW_OVERLAP_S / 2 if w0 > start else 0)
                 hi = w1 - (WINDOW_OVERLAP_S / 2 if w1 < end else 0)
+                # The service counts seconds from the first frame sent (its
+                # timestamps are 2k/fps-based: frame 0 is time 0), and the first
+                # frame sits half a frame interval after the window start.
                 for item in answer.get("segments", []):
-                    a, b = w0 + item["start"], w0 + item["end"]
+                    a, b = times[0] + item["start"], times[0] + item["end"]
                     if lo <= (a + b) / 2 < hi:
                         found.append({**item, "start": a, "end": b})
                 if not answer.get("segments"):
@@ -461,8 +473,10 @@ def run(path, url, table=None, model="", progress=lambda done, total: None, segm
                 if not task_text.strip() or not subtask_text.strip():
                     flags.append(UNSURE_FLAG)
                 stretch_drafts.append({
+                    # Both ends rounded the same way, so a boundary shared by two
+                    # segments stays one value (not 1 ms apart).
                     "start_s": round(a, 3),
-                    "end_s": math.floor(min(b, duration) * 1000) / 1000,
+                    "end_s": min(round(b, 3), math.floor(duration * 1000) / 1000),
                     "task": task_text.strip() or OTHER,
                     "task_id": "" if not task_text.strip() else task.get("task_id", ""),
                     "subtask": subtask_text.strip() or OTHER,

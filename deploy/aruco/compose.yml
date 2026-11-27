@@ -13,6 +13,8 @@ services:
       # Pre-annotation service (insight_capture.vlm_service), e.g. http://10.198.1.229:8780;
       # set it in deploy/aruco/.env. Empty: recordings are not pre-annotated.
       ARUCO_ANNOTATION_URL: ${ARUCO_ANNOTATION_URL:-}
+      # Host folder mounted read-only below, offered by the dataset folder picker.
+      LEROBOT_BROWSE_DIR: ${LEROBOT_BROWSE_DIR:-/home}
     device_cgroup_rules:
       - "c 81:* rw"
       - "c 188:* rw"
@@ -21,3 +23,6 @@ services:
       - /dev:/host-dev:ro
       - ../../config/devices/x86-aruco/capture.json:/app/config/devices/x86-aruco/capture.json
       - ../../outputs:/app/outputs
+      # Read-only, same path inside: LeRobot datasets elsewhere on the host can
+      # be opened for playback by their host path (处理与导出 → 其他路径).
+      - ${LEROBOT_BROWSE_DIR:-/home}:${LEROBOT_BROWSE_DIR:-/home}:ro

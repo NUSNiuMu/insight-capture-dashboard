@@ -35,7 +35,7 @@ const ARM_CURVES = [
   { index: 2, label: "左 z", color: "#69cde4", dash: [4, 3] },
   { index: 12, label: "右 z", color: "#f3c46b", dash: [4, 3] },
 ];
-const PALETTE = ["#83abff", "#ffb77d", "#7cd8b2", "#f3c46b", "#ff9b9b", "#69cde4"];
+const PALETTE = ["#83abff", "#ffb77d", "#7cd8b2", "#ff9b9b", "#f3c46b", "#69cde4"];
 const DRIFT_S = 0.08;
 
 export class LerobotPlayer {
@@ -50,12 +50,22 @@ export class LerobotPlayer {
     this.scene = null;
     $("lrDataset").onchange = () => {
       $("lrPath").hidden = $("lrDataset").value !== "__path__";
-      if (!$("lrPath").hidden) $("lrPath").focus();
+      if (!$("lrPath").hidden) $("lrPath").focus({ preventScroll: true });
     };
     $("lrPath").addEventListener("keydown", (e) => {
       if (e.key === "Enter") this.openSelected();
     });
     $("lrOpen").onclick = () => this.openSelected();
+    this.picker = new FolderPicker((path) => {
+      $("lrDataset").value = "__path__";
+      $("lrPath").hidden = false;
+      $("lrPath").value = path;
+      this.open(path);
+    });
+    $("lrBrowse").onclick = () => {
+      const typed = $("lrDataset").value === "__path__" ? $("lrPath").value.trim() : "";
+      this.picker.show(typed || this.dataset?.path || "");
+    };
     $("lrFilter").oninput = () => this.renderEpisodes();
     $("lrPlay").onclick = () => this.toggle();
     $("lrPrev").onclick = () => this.step(-1);
@@ -195,7 +205,15 @@ export class LerobotPlayer {
     this.buildVideos();
     this.buildTrajectory();
     this.renderEpisodes();
-    $("lrEpisodes").querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+    // Inside the list only: scrolling the page would yank the player away.
+    const list = $("lrEpisodes"),
+      row = list.querySelector(".selected");
+    if (row) {
+      const box = list.getBoundingClientRect(),
+        r = row.getBoundingClientRect();
+      if (r.top < box.top) list.scrollTop -= box.top - r.top;
+      else if (r.bottom > box.bottom) list.scrollTop += r.bottom - box.bottom;
+    }
     this.renderInfo();
     this.seek(0);
     if (play) this.play();
@@ -204,31 +222,78 @@ export class LerobotPlayer {
     const wrap = $("lrVideos");
     for (const v of this.videos()) v.removeAttribute("src");
     wrap.replaceChildren();
-    const entries = Object.entries(this.episode.videos);
+    // Head-camera views (head_view, subtask_end_head_view…) lead, side by side
+    // in one row; a single head view takes the whole row. Wrist views follow.
+    const isHead = ([key]) => /head/i.test(key.replace(/^observation\.images\./, ""));
+    const all = Object.entries(this.episode.videos),
+      entries = [...all.filter(isHead), ...all.filter((e) => !isHead(e))],
+      heads = all.filter(isHead).length;
     wrap.classList.toggle("single", entries.length === 1);
+    wrap.classList.toggle("pair", entries.length === 2);
+    wrap.classList.toggle("lead", heads === 1 && entries.length > 2);
+    this.framed = [];
+    const playable = new Set(this.dataset.browser_codecs || []);
     for (const [key, info] of entries) {
       const name = key.replace(/^observation\.images\./, "");
       const card = el("div", undefined, "video-card");
       const box = el("div", undefined, "image-wrap");
-      const video = el("video");
-      video.muted = true;
-      video.playsInline = true;
-      video.preload = "auto";
-      video.dataset.from = info.from;
-      video.dataset.to = info.to;
-      video.src =
-        `/api/lerobot/video?path=${encodeURIComponent(this.source)}&file=${encodeURIComponent(info.file)}`;
-      video.addEventListener("loadedmetadata", () => this.place(video, this.frame), { once: true });
-      video.onerror = () => {
-        box.append(el("div", "视频无法播放（浏览器不支持此编码？）", "video-empty"));
-      };
-      box.append(video);
       const label = el("div", undefined, "video-label");
-      label.append(el("strong", CAMERA_NAMES[name] || name), el("span", name, "video-rate"));
+      const rate = el("span", name, "video-rate");
+      label.append(el("strong", CAMERA_NAMES[name] || name), rate);
+      const codec = String(this.dataset.codecs?.[key] || "").toLowerCase();
+      // A codec <video> cannot play (MPEG-4 Part 2 in many v2.x datasets) is
+      // decoded on the server and shown frame by frame instead.
+      const toFrames = () => {
+        box.replaceChildren();
+        const img = el("img");
+        img.alt = name;
+        box.append(img);
+        rate.textContent = `${name} · ${codec || "未知编码"} · 逐帧解码`;
+        const item = { img, info, loading: false, want: -1, shown: -1 };
+        this.framed.push(item);
+        this.requestFrame(item, this.frame);
+      };
+      if (codec && !playable.has(codec)) toFrames();
+      else {
+        const video = el("video");
+        video.muted = true;
+        video.playsInline = true;
+        video.disablePictureInPicture = true; // its overlay button sat on the picture
+        video.preload = "auto";
+        video.dataset.from = info.from;
+        video.dataset.to = info.to;
+        video.src =
+          `/api/lerobot/video?path=${encodeURIComponent(this.source)}&file=${encodeURIComponent(info.file)}`;
+        video.addEventListener("loadedmetadata", () => this.place(video, this.frame), { once: true });
+        video.onerror = () => {
+          video.removeAttribute("src");
+          toFrames();
+        };
+        box.append(video);
+      }
       card.append(box, label);
       wrap.append(card);
     }
     if (!entries.length) wrap.append(el("div", "这个 episode 没有视频文件", "empty-state"));
+  }
+  // One request in flight per frame-by-frame camera; when it lands, ask for
+  // the frame the clock has reached by then (frames in between are skipped).
+  requestFrame(item, i) {
+    item.want = i;
+    if (item.loading || item.shown === i) return;
+    item.loading = true;
+    const target = i,
+      t = item.info.from + target / this.episode.fps;
+    const done = () => {
+      item.loading = false;
+      item.shown = target;
+      if (item.want !== target && this.framed?.includes(item)) this.requestFrame(item, item.want);
+    };
+    item.img.onload = done;
+    item.img.onerror = done;
+    item.img.src =
+      `/api/lerobot/frame?path=${encodeURIComponent(this.source)}` +
+      `&file=${encodeURIComponent(item.info.file)}&t=${t.toFixed(4)}`;
   }
   // The 20-dim two-arm state of this system's exports (left 0–9, right 10–19).
   armState() {
@@ -246,14 +311,22 @@ export class LerobotPlayer {
           },
         }))
       : [];
+    // No two-arm trajectory to draw: give the videos the whole width.
+    document.querySelector(".lr-stage").classList.toggle("no-scene", !this.trajectory.length);
+    this.scene.setVisible(this.trajectory.length > 0);
     this.scene.setCameraView(null);
     this.scene.setData(this.trajectory, true);
     this.scene.view("free");
+    const names = (this.dataset.names?.["observation.state"] || []).map(String);
+    // Other layouts: grippers and heights tell the most at a glance.
+    let picked = names
+      .map((label, index) => ({ label, index }))
+      .filter(({ label }) => /gripper/i.test(label) || /(^|[._])z$/i.test(label))
+      .slice(0, 4);
+    if (!picked.length) picked = names.slice(0, 6).map((label, index) => ({ label, index }));
     this.curves = this.armState()
       ? ARM_CURVES
-      : (this.dataset.names?.["observation.state"] || [])
-          .slice(0, 6)
-          .map((label, i) => ({ index: i, label: String(label), color: PALETTE[i % PALETTE.length] }));
+      : picked.map((c, k) => ({ ...c, color: PALETTE[k % PALETTE.length] }));
     if (!this.curves.length && rows[0]?.["observation.state"])
       this.curves = rows[0]["observation.state"]
         .slice(0, 6)
@@ -305,6 +378,7 @@ export class LerobotPlayer {
     const ep = this.episode,
       row = ep.rows[this.frame];
     $("lrSeek").value = this.frame;
+    for (const item of this.framed || []) this.requestFrame(item, this.frame);
     $("lrTime").textContent =
       `${clock(this.frame / ep.fps)} / ${clock((ep.length - 1) / ep.fps)} · 第 ${this.frame + 1} / ${ep.length} 帧`;
     this.scene?.cursor(this.trajectory?.[this.frame] || null);
@@ -449,5 +523,83 @@ export class LerobotPlayer {
   setVisible(value) {
     if (!value) this.pause();
     this.scene?.setVisible(value && !!this.dataset);
+  }
+}
+
+// Server-side folder picker for 其他路径: the browser's own file dialog only
+// sees the viewer's computer, and the datasets live on the capture server.
+class FolderPicker {
+  constructor(onOpen) {
+    this.onOpen = onOpen;
+    this.current = null;
+    this.picked = "";
+    $("lrBrowserClose").onclick = $("lrBrowserCancel").onclick = () => $("lrBrowser").close();
+    $("lrBrowserUp").onclick = () => this.current && this.go(this.current.parent ?? "");
+    $("lrBrowserRoots").onclick = () => this.go("");
+    $("lrBrowserOpen").onclick = () => this.finish(this.picked);
+    $("lrBrowserPath").addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      this.go($("lrBrowserPath").value.trim());
+    });
+  }
+  async show(start) {
+    $("lrBrowser").showModal();
+    // A typed path that is not a folder (or is outside the roots) falls back to the roots.
+    if (!(await this.go(start, true))) await this.go("");
+  }
+  async go(path, quiet = false) {
+    let listing;
+    try {
+      listing = await api("/api/lerobot/browse?path=" + encodeURIComponent(path));
+    } catch (e) {
+      if (!quiet) $("lrBrowserPick").textContent = e.message;
+      return false;
+    }
+    this.current = listing;
+    $("lrBrowserPath").value = listing.path;
+    $("lrBrowserUp").disabled = listing.parent === null;
+    this.pick(listing.dataset ? listing.path : "", listing.dataset);
+    const list = $("lrBrowserList");
+    list.replaceChildren();
+    list.scrollTop = 0;
+    if (!listing.entries.length) list.append(el("div", "这个文件夹下没有子文件夹", "empty-state"));
+    for (const entry of listing.entries) {
+      const row = el("button", undefined, "folder-row" + (entry.dataset ? " dataset" : ""));
+      row.type = "button";
+      row.setAttribute("role", "option");
+      row.append(el("span", entry.dataset ? "▣" : "▸", "folder-icon"), el("span", entry.name, "folder-name"));
+      if (entry.dataset)
+        row.append(
+          el(
+            "span",
+            `LeRobot ${entry.dataset.version}` + (entry.dataset.episodes != null ? ` · ${entry.dataset.episodes} 个 episode` : ""),
+            "folder-badge",
+          ),
+        );
+      row.onclick = () => {
+        for (const r of list.querySelectorAll(".folder-row.selected")) r.classList.remove("selected");
+        row.classList.add("selected");
+        this.pick(entry.dataset ? entry.path : "", entry.dataset, entry.path);
+      };
+      row.ondblclick = () => (entry.dataset ? this.finish(entry.path) : this.go(entry.path));
+      list.append(row);
+    }
+    if (listing.truncated) list.append(el("div", "文件夹太多，只列出前 1000 个；可在上方直接输入路径", "muted"));
+    return true;
+  }
+  pick(path, dataset, folder = "") {
+    this.picked = path;
+    $("lrBrowserOpen").disabled = !path;
+    $("lrBrowserPick").textContent = path
+      ? `已选：${path}（LeRobot ${dataset.version}）`
+      : folder
+        ? "不是 LeRobot 数据集（缺少 meta/info.json），双击进入"
+        : "选择一个数据集文件夹（带 ▣ 标记）";
+  }
+  finish(path) {
+    if (!path) return;
+    $("lrBrowser").close();
+    this.onOpen(path);
   }
 }

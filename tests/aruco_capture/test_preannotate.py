@@ -224,3 +224,17 @@ def test_unlabelled_time_joins_previous_subtask_and_leading_is_dropped():
     ]
     assert out[0]["flags"] == [MERGED_FLAG] and out[1]["flags"] == [MERGED_FLAG]
     assert fold_unsure([seg(0, 5, OTHER)]) == []
+
+
+def test_undecodable_frames_are_replaced_not_dropped():
+    from insight_capture.aruco_capture.preannotate import CameraFrames
+
+    frames = CameraFrames.__new__(CameraFrames)
+    frames.stamps = np.arange(6) / 10
+    colours = {0.0: None, 0.1: 10, 0.2: None, 0.3: 30, 0.4: 40, 0.5: None}
+    frames.image = lambda t: None if colours[round(t, 1)] is None else np.full((4, 4, 3), colours[round(t, 1)], np.uint8)
+    encoded = frames.encoded(frames.stamps)
+    assert len(encoded) == 6   # one per requested time: later frames keep their place
+    assert encoded[0] == encoded[1] and encoded[2] == encoded[1] and encoded[5] == encoded[4]
+    assert encoded[3] != encoded[1]
+

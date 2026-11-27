@@ -295,7 +295,7 @@
                 <option value="1" selected>1×</option>
                 <option value="2">2×</option>
               </select></label
-            ><span class="key-hint">空格播放 · ← → 逐帧 · I / O 设起止 · Enter 确认并跳到下一段待复核 · 1–9 选 subtask · [ / ] 起止对齐播放头 · M / Shift+M 向前 / 向后合并</span>
+            ><span class="key-hint">空格播放 · ← → 逐帧 · I / O 设起止 · Enter 确认并跳到下一段待复核 · 1–9 选 subtask · [ / ] 起止对齐播放头 · B / Shift+B 后 / 前侧分隔点移到播放头 · M / Shift+M 向前 / 向后合并</span>
           </div>
           <div class="timeline-wrap">
             <div id="timelineMarks" class="timeline-marks"></div>
@@ -322,6 +322,13 @@
                   title="在播放位置把所在片段切成两段：前段保留原属性，后段为空白待填写"
                 >
                   分隔</button
+                ><button
+                  id="moveBoundary"
+                  type="button"
+                  class="quiet"
+                  title="把播放位置之后最近的分隔点前移到播放位置（快捷键 B）；按住 Shift 点击则把之前最近的分隔点后移到播放位置（Shift+B）。相邻片段共用的边界两段一起移"
+                >
+                  移动分隔点</button
                 ><button
                   id="mergeParts"
                   type="button"
@@ -541,7 +548,8 @@
                 ><button type="button" data-scope="video" role="radio">全部视频</button>
               </div>
               <select id="qualitySegment" aria-label="选择分段" hidden></select>
-              <button id="qc">重新评估</button>
+              <button id="qc">重新评估</button
+              ><button id="qualityCollapse" class="quiet" title="收起采集质量，录制列表占满宽度" hidden>收起</button>
             </div>
           </div>
           <div id="qualitySummary" class="quality-summary"></div>
@@ -565,6 +573,7 @@
           </section>
         </section>
         <section id="exportPanel" hidden>
+          <div id="exportSplit" class="export-split">
           <section class="panel quality-sessions-panel">
             <div class="panel-heading">
               <h3>录制记录 · 导出到 LeRobot v3</h3>
@@ -613,6 +622,21 @@
             </div>
             <div id="exportResult" role="status" aria-live="polite"></div>
           </section>
+          <div
+            id="qualityResizer"
+            class="split-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="拖动调整采集质量的宽度，双击恢复默认"
+            tabindex="0"
+            title="拖动调整宽度 · 双击恢复默认"
+          ></div>
+          <aside id="qualitySlot" class="quality-slot">
+            <button id="qualityExpand" class="quality-rail" type="button" title="展开采集质量" hidden>
+              采集质量 ◂
+            </button>
+          </aside>
+          </div>
           <section class="panel dataset-manager-panel">
             <div class="panel-heading">
               <h3>数据集文件夹管理</h3>
@@ -634,10 +658,11 @@
               <input
                 id="lrPath"
                 type="text"
-                placeholder="服务器上的绝对路径，如 /app/outputs/lerobot_datasets/my_dataset"
+                placeholder="服务器上的绝对路径，如 /home/dm/datasets/my_dataset"
                 hidden
               />
-              <button id="lrOpen" class="primary">读取</button>
+              <button id="lrBrowse" class="quiet" type="button" title="在服务器上逐级选择数据集文件夹">浏览…</button
+              ><button id="lrOpen" class="primary">读取</button>
             </div>
             <div id="lrBody" class="lr-body" hidden>
               <aside class="lr-episodes-panel">
@@ -697,6 +722,26 @@
       <div class="form-actions">
         <button id="keepEditing" class="primary">继续编辑</button
         ><button id="discardChanges">丢弃修改并切换</button>
+      </div>
+    </dialog>
+    <dialog id="lrBrowser" class="folder-dialog" aria-labelledby="lrBrowserTitle">
+      <div class="folder-head">
+        <h2 id="lrBrowserTitle">选择 LeRobot 数据集文件夹</h2>
+        <button id="lrBrowserClose" class="quiet" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="folder-bar">
+        <button id="lrBrowserUp" class="quiet" type="button" title="上一级">↑ 上一级</button
+        ><button id="lrBrowserRoots" class="quiet" type="button" title="回到可浏览的根目录">根目录</button>
+        <input id="lrBrowserPath" type="text" aria-label="当前文件夹，可直接输入路径后回车" />
+      </div>
+      <p class="folder-hint muted">单击选中 · 双击进入文件夹 · 双击数据集直接打开。只能浏览服务器上的 /home 与采集输出目录（只读）。</p>
+      <div id="lrBrowserList" class="folder-list" role="listbox" aria-label="文件夹"></div>
+      <div class="folder-foot">
+        <span id="lrBrowserPick" class="muted">未选择</span>
+        <div class="form-actions">
+          <button id="lrBrowserCancel" type="button">取消</button
+          ><button id="lrBrowserOpen" class="primary" type="button" disabled>打开</button>
+        </div>
       </div>
     </dialog>
     <dialog id="deleteDialog">

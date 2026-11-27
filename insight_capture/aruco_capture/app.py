@@ -718,19 +718,54 @@ def create_app(capture, annotation_url=""):
     def lerobot_path(request):
         return lerobot_view.resolve(capture.root.parent / "lerobot_datasets", request.query.get("path"))
 
+    lerobot_frames = lerobot_view.FrameReader()
+
+    def readable(handler):
+        """Datasets come from other tools: any failure reading one is reported
+        as a message, not a bare 500."""
+        async def wrapped(request):
+            try:
+                return await handler(request)
+            except web.HTTPException:
+                raise
+            except (ValueError, OSError) as exc:
+                return web.json_response({"error": str(exc)}, status=400)
+            except Exception as exc:  # noqa: BLE001 - shown to the user as text
+                return web.json_response({"error": f"{type(exc).__name__}: {exc}"}, status=400)
+        return wrapped
+
+    # Folder picker for 其他路径: the host folders mounted read-only into the
+    # container (LEROBOT_BROWSE_DIR, /home by default) and the output folder.
+    browse_roots = [os.environ.get("LEROBOT_BROWSE_DIR", "/home"), str(capture.root.parent)]
+
+    @readable
+    async def lerobot_browse(request):
+        return web.json_response(
+            await asyncio.to_thread(lerobot_view.browse, request.query.get("path", ""), browse_roots)
+        )
+
+    @readable
     async def lerobot_summary(request):
         path = lerobot_path(request)
         return web.json_response(await asyncio.to_thread(lerobot_view.summary, path))
 
+    @readable
     async def lerobot_episode(request):
         path = lerobot_path(request)
         return web.json_response(
             await asyncio.to_thread(lerobot_view.episode, path, int(request.query.get("index", 0)))
         )
 
+    @readable
     async def lerobot_video(request):
         file = lerobot_view.video_file(lerobot_path(request), request.query.get("file"))
         return web.FileResponse(file, headers={"Content-Type": "video/mp4"})
+
+    @readable
+    async def lerobot_frame(request):
+        file = lerobot_view.video_file(lerobot_path(request), request.query.get("file"))
+        body = await asyncio.to_thread(lerobot_frames.jpeg, file, float(request.query.get("t", 0)))
+        return web.Response(body=body, content_type="image/jpeg", headers={"Cache-Control": "max-age=3600"})
 
     async def datasets_delete(request):
         output_root = dataset_root(request)
@@ -791,6 +826,8 @@ def create_app(capture, annotation_url=""):
             web.get("/api/lerobot", lerobot_summary),
             web.get("/api/lerobot/episode", lerobot_episode),
             web.get("/api/lerobot/video", lerobot_video),
+            web.get("/api/lerobot/frame", lerobot_frame),
+            web.get("/api/lerobot/browse", lerobot_browse),
         ]
     )
     return app

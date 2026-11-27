@@ -3,13 +3,19 @@
 Only reads: the dataset folder is never written. The page asks for the
 summary (episodes, cameras, state names), then one episode at a time (its
 state / action rows and, per camera, which mp4 holds it and from what time),
-and streams the mp4 files themselves.
+and streams the mp4 files themselves. Codecs a browser cannot play (MPEG-4
+Part 2, common in v2.x datasets) are decoded here and sent frame by frame.
 """
 
 import json
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
+import cv2
+
 import numpy as np
+import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
@@ -45,10 +51,17 @@ def _jsonl(file):
 def _tasks(path, info):
     """task_index -> task text."""
     if (path / "meta/tasks.parquet").is_file():
-        table = pq.read_table(path / "meta/tasks.parquet").to_pandas()
-        if "task" not in table.columns:   # v3 keeps the text as the index
-            table = table.reset_index().rename(columns={"index": "task"})
-        return {int(r["task_index"]): str(r["task"]) for _, r in table.iterrows()}
+        # pyarrow only (pandas is not installed in the capture image). v3 writes
+        # the task text as the pandas index, stored as __index_level_0__.
+        table = pq.read_table(path / "meta/tasks.parquet")
+        names = table.column_names
+        text = "task" if "task" in names else next(
+            (n for n in names if n != "task_index" and pa.types.is_string(table.schema.field(n).type)), None
+        )
+        if text is None or "task_index" not in names:
+            return {}
+        return dict(zip((int(i) for i in table["task_index"].to_pylist()),
+                        (str(t) for t in table[text].to_pylist())))
     if (path / "meta/tasks.jsonl").is_file():
         return {int(r["task_index"]): str(r["task"]) for r in _jsonl(path / "meta/tasks.jsonl")}
     return {}
@@ -86,6 +99,22 @@ def _clean(value):
     return value
 
 
+def _names(value):
+    """Feature names as one flat list: v2.x often writes {"motors": [...]}."""
+    if isinstance(value, dict):
+        return [n for part in value.values() for n in (_names(part) or [])]
+    if isinstance(value, (list, tuple)):
+        flat = []
+        for item in value:
+            flat += _names(item) if isinstance(item, (list, tuple, dict)) else [item]
+        return [str(n) for n in flat]
+    return None
+
+
+# What <video> plays in Chrome and Firefox; anything else goes frame by frame.
+BROWSER_CODECS = {"h264", "avc1", "libx264", "av1", "libsvtav1", "libaom-av1", "vp9", "libvpx-vp9", "vp8"}
+
+
 def summary(path):
     info = _info(path)
     if not _version(info).startswith(("2", "3")):
@@ -117,7 +146,11 @@ def summary(path):
         "total_episodes": len(episodes),
         "total_frames": int(info.get("total_frames", sum(e["length"] for e in episodes))),
         "video_keys": _video_keys(info),
-        "names": {k: _clean(features[k].get("names")) for k in ROW_KEYS if k in features},
+        "names": {k: _names(features[k].get("names")) for k in ROW_KEYS if k in features},
+        # "" when the dataset does not say: the page tries <video> first.
+        "codecs": {k: str((features[k].get("info") or features[k].get("video_info") or {}).get("video.codec", ""))
+                   for k in _video_keys(info)},
+        "browser_codecs": sorted(BROWSER_CODECS),
         "tasks": {str(k): v for k, v in tasks.items()},
         "episodes": episodes,
     }
@@ -189,3 +222,92 @@ def video_file(path, relative):
     if file.suffix != ".mp4" or path not in file.parents or not file.is_file():
         raise ValueError("视频文件不存在")
     return file
+
+
+class FrameReader:
+    """JPEG frames of dataset videos for codecs the browser cannot play.
+    Keeps a few files open: playback asks for the next frame, which is a plain
+    read; anything else seeks."""
+
+    def __init__(self, keep=8, max_width=960):
+        self.keep, self.max_width = keep, max_width
+        self.open = OrderedDict()   # path -> [capture, next frame index, lock]
+        self.lock = threading.Lock()
+
+    def jpeg(self, file, seconds):
+        with self.lock:
+            entry = self.open.pop(file, None)
+            if entry is None:
+                capture = cv2.VideoCapture(str(file))
+                if not capture.isOpened():
+                    raise ValueError("无法打开视频文件")
+                entry = [capture, 0, threading.Lock()]
+            self.open[file] = entry
+            while len(self.open) > self.keep:
+                self.open.popitem(last=False)[1][0].release()
+        capture, _, lock = entry
+        with lock:
+            fps = capture.get(cv2.CAP_PROP_FPS) or 30.0
+            index = max(0, int(round(float(seconds) * fps)))
+            if index != entry[1]:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+            ok, image = capture.read()
+            entry[1] = index + 1 if ok else -1
+        if not ok:
+            raise ValueError("此时刻没有视频帧")
+        h, w = image.shape[:2]
+        if w > self.max_width:
+            image = cv2.resize(image, (self.max_width, round(h * self.max_width / w)), interpolation=cv2.INTER_AREA)
+        return cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 85])[1].tobytes()
+
+
+MAX_ENTRIES = 1000
+
+
+def dataset_badge(folder):
+    """{"version", "episodes"} when ``folder`` is a LeRobot dataset, else None."""
+    info = folder / "meta/info.json"
+    if not info.is_file():
+        return None
+    try:
+        value = json.loads(info.read_text())
+    except (OSError, ValueError):
+        return {"version": "?", "episodes": None}
+    return {"version": str(value.get("codebase_version", "")), "episodes": value.get("total_episodes")}
+
+
+def browse(value, roots):
+    """Sub-folders of ``value`` for the folder picker, confined to ``roots``
+    (names only, read-only; hidden folders skipped). An empty ``value`` lists
+    the roots themselves."""
+    roots = [Path(r).resolve() for r in roots if Path(r).is_dir()]
+    if not str(value or "").strip():
+        return {"path": "", "parent": None, "dataset": None, "truncated": False,
+                "entries": [{"name": str(r), "path": str(r), "dataset": dataset_badge(r)} for r in roots]}
+    path = Path(str(value)).expanduser().resolve()
+    if not any(path == r or r in path.parents for r in roots):
+        raise ValueError(f"只能浏览 {'、'.join(map(str, roots))} 之下的文件夹")
+    if not path.is_dir():
+        raise ValueError(f"{path} 不是文件夹")
+    entries = []
+    try:
+        children = sorted((c for c in path.iterdir() if not c.name.startswith(".")), key=lambda c: c.name.lower())
+    except PermissionError:
+        raise ValueError(f"没有权限读取 {path}") from None
+    for child in children:
+        try:
+            if not child.is_dir():
+                continue
+        except OSError:
+            continue
+        entries.append({"name": child.name, "path": str(child), "dataset": dataset_badge(child)})
+        if len(entries) >= MAX_ENTRIES:
+            break
+    parent = path.parent if path not in roots else None
+    return {
+        "path": str(path),
+        "parent": "" if parent is None else str(parent),
+        "dataset": dataset_badge(path),
+        "truncated": len(entries) >= MAX_ENTRIES,
+        "entries": entries,
+    }

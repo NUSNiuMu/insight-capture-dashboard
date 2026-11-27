@@ -2553,3 +2553,306 @@ body.drawer-resizing .shell {
     grid-row: auto;
   }
 }
+
+/* ---- 处理与导出：录制列表 | 采集质量（可拖宽、可收起） ---- */
+.export-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 12px var(--quality-width, 560px);
+  align-items: start;
+  margin-bottom: 18px;
+}
+#exportSplit > .panel {
+  margin-bottom: 0;
+}
+.split-handle {
+  align-self: stretch;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none;
+}
+.split-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 5px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background 0.12s;
+}
+.split-handle:hover::after,
+.split-handle:focus-visible::after,
+.split-handle.dragging::after {
+  background: var(--cyan);
+}
+.quality-slot {
+  min-width: 0;
+  container-type: inline-size;
+}
+.quality-slot #qualityPanel {
+  margin-top: 0;
+}
+.quality-slot .quality-header {
+  margin-bottom: 14px;
+}
+.quality-slot .quality-header h2 {
+  font-size: 17px;
+}
+.export-split.quality-collapsed {
+  grid-template-columns: minmax(0, 1fr) 12px 44px;
+}
+.export-split.quality-collapsed .split-handle {
+  visibility: hidden;
+}
+.export-split.quality-collapsed #qualityPanel {
+  display: none;
+}
+.quality-rail {
+  writing-mode: vertical-rl;
+  width: 44px;
+  min-height: 180px;
+  padding: 14px 0;
+  letter-spacing: 0.15em;
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: 10px;
+}
+@container (max-width: 760px) {
+  .quality-summary {
+    grid-template-columns: 1fr 1fr;
+    gap: 14px 0;
+  }
+  .quality-stat:nth-child(2) {
+    border: 0;
+  }
+  .quality-stat strong {
+    font-size: 22px;
+  }
+  .quality-row {
+    grid-template-columns: 84px 1fr 42px 64px;
+    padding: 10px 12px;
+    gap: 6px;
+  }
+  .quality-row.paired {
+    grid-template-columns: 62px 10px 1fr 40px 10px 1fr 40px 58px;
+    padding: 10px 10px;
+    gap: 4px;
+  }
+  .quality-row button {
+    font-size: 9px;
+    padding: 3px 4px;
+  }
+  #dimensions {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 1100px) {
+  .export-split,
+  .export-split.quality-collapsed {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .split-handle,
+  .quality-rail {
+    display: none;
+  }
+  .export-split.quality-collapsed #qualityPanel {
+    display: block;
+  }
+  #qualityCollapse {
+    display: none;
+  }
+}
+.lr-stage.no-scene {
+  grid-template-columns: 1fr;
+}
+.lr-stage.no-scene .lr-scene-wrap {
+  display: none;
+}
+.lr-videos.pair .video-card:first-child {
+  grid-column: auto;
+}
+.lr-videos.pair .video-card:first-child .image-wrap {
+  aspect-ratio: 16/9;
+}
+/* The recordings list is long: keep 采集质量 in view while it scrolls. */
+@media (min-width: 1101px) {
+  .quality-slot {
+    position: sticky;
+    top: 12px;
+    max-height: calc(100vh - 24px);
+    overflow-y: auto;
+  }
+}
+@container (max-width: 760px) {
+  .quality-row {
+    grid-template-columns: 96px 1fr 42px 64px;
+  }
+}
+/* Legend right above its chart, whatever the height of the value table. */
+.lr-legend {
+  grid-row: 2;
+  align-self: start;
+}
+.lr-chart {
+  grid-column: 1;
+  grid-row: 3;
+  align-self: start;
+}
+@media (max-width: 900px) {
+  .lr-legend,
+  .lr-chart {
+    grid-row: auto;
+  }
+}
+.lr-readout {
+  grid-template-rows: auto auto 1fr;
+}
+
+/* Messages float at the bottom instead of pushing the page down: a shortcut's
+   message (B, M, [ ], Enter…) must not move the timeline or video. */
+#message {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 60;
+  width: max-content;
+  max-width: min(820px, calc(100vw - 32px));
+  margin: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  box-shadow: 0 8px 28px rgba(5, 12, 22, 0.55);
+}
+#message[hidden] {
+  display: none;
+}
+#message button {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+#message .toast-close {
+  order: 99;
+  margin-left: 4px;
+  padding: 1px 8px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* ---- 数据集文件夹选择弹窗 ---- */
+.folder-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-width: none;
+  max-height: min(720px, calc(100vh - 48px));
+  padding: 0;
+  display: none;
+  flex-direction: column;
+}
+.folder-dialog[open] {
+  display: flex;
+}
+.folder-head,
+.folder-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+}
+.folder-head h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.folder-foot {
+  border-top: 1px solid var(--line);
+}
+.folder-foot > span {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.folder-bar {
+  display: flex;
+  gap: 8px;
+  padding: 0 18px;
+}
+.folder-bar input {
+  flex: 1;
+  min-width: 0;
+}
+.folder-hint {
+  margin: 8px 18px;
+  font-size: 11px;
+}
+.folder-list {
+  flex: 1;
+  min-height: 240px;
+  overflow-y: auto;
+  margin: 0 18px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  align-content: start;
+}
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-bottom: 1px solid #263750;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.folder-row:hover {
+  background: #22344c;
+}
+.folder-row.selected {
+  background: #22405c;
+  box-shadow: inset 3px 0 0 var(--cyan);
+}
+.folder-icon {
+  color: var(--muted);
+  width: 14px;
+}
+.folder-row.dataset .folder-icon {
+  color: var(--green);
+}
+.folder-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.folder-badge {
+  font-size: 11px;
+  color: var(--green);
+  white-space: nowrap;
+}
+.folder-foot .form-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  margin: 0;
+}
+/* LeRobot player: no card spans the row by default (head views share the
+   first row); only a lone head view in front of wrist views does. */
+.lr-videos .video-card:first-child {
+  grid-column: auto;
+}
+.lr-videos .video-card:first-child .image-wrap {
+  aspect-ratio: 16/9;
+}
+.lr-videos.lead .video-card:first-child,
+.lr-videos.single .video-card:first-child {
+  grid-column: 1 / -1;
+}
+.lr-videos.lead .video-card:first-child .image-wrap {
+  aspect-ratio: 2.15;
+}
