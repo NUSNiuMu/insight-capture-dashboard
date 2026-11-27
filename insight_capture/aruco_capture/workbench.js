@@ -788,6 +788,39 @@ async function pollJobs() {
   if (mode === "review") jobTimer = setTimeout(pollJobs, jobList.some((j) => j.running) ? 2000 : 8000);
 }
 applyJobsDrawer();
+// Drag the queue's left edge to resize it, like the recordings list; remembered.
+const JOBS_MIN = 200,
+  JOBS_MAX = 560,
+  JOBS_DEFAULT = 260;
+function setJobsWidth(px, save) {
+  const w = Math.round(Math.max(JOBS_MIN, Math.min(JOBS_MAX, px)));
+  document.documentElement.style.setProperty("--jobs-w", w + "px");
+  if (save)
+    try {
+      localStorage.setItem("jobDrawerWidth", String(w));
+    } catch {}
+}
+try {
+  const saved = Number(localStorage.getItem("jobDrawerWidth"));
+  if (saved) setJobsWidth(saved, false);
+} catch {}
+$("jobResize").addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  const right = $("jobDrawer").getBoundingClientRect().right,
+    handle = $("jobResize");
+  handle.setPointerCapture(e.pointerId);
+  document.body.classList.add("drawer-resizing");
+  const move = (ev) => setJobsWidth(right - ev.clientX, false);
+  const up = (ev) => {
+    setJobsWidth(right - ev.clientX, true);
+    document.body.classList.remove("drawer-resizing");
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", up);
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", up);
+});
+$("jobResize").ondblclick = () => setJobsWidth(JOBS_DEFAULT, true);
 // ---- 录制记录侧边栏 ----
 let drawerOpen = true,
   drawerSelection = new Set(); // recordings ticked for batch processing

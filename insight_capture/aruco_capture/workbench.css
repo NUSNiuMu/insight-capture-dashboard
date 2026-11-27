@@ -2972,3 +2972,12 @@ body.jobs-closed .job-toggle {
     right: min(var(--jobs-w, 260px), 85vw);
   }
 }
+/* The queue's handle sits on its left edge (the recordings list's on its right). */
+.job-resize {
+  right: auto;
+  left: -4px;
+}
+body.drawer-resizing .job-drawer,
+body.drawer-resizing .job-toggle {
+  transition: none;
+}
